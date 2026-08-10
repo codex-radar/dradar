@@ -10,6 +10,8 @@ from dradar.providers import deepseek_catalog_path
 
 
 OFFICIAL_BASE_URL = "https://api.deepseek.com/"
+OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+UNKNOWN_BASE_URL = "https://third-party.example/v1"
 
 
 def _load_adapter(monkeypatch):
@@ -68,14 +70,32 @@ def _load_adapter(monkeypatch):
     return module, calls
 
 
-def test_adapter_rejects_non_official_provider_url(monkeypatch):
+def test_adapter_rejects_unknown_provider_url(monkeypatch):
     module, _calls = _load_adapter(monkeypatch)
 
     with pytest.raises(ValueError, match="unsupported DeepSeek provider URL"):
         module.DeepSeekCodex(
             model_catalog_json_file=str(deepseek_catalog_path()),
-            provider_base_url="https://opencode.ai/zen/go/v1",
+            provider_base_url=UNKNOWN_BASE_URL,
         )
+
+
+@pytest.mark.parametrize(
+    "provider_base_url",
+    [OFFICIAL_BASE_URL, OPENCODE_GO_BASE_URL],
+)
+def test_adapter_accepts_only_the_two_authorized_deepseek_urls(
+    monkeypatch,
+    provider_base_url,
+):
+    module, calls = _load_adapter(monkeypatch)
+    adapter = module.DeepSeekCodex(
+        model_catalog_json_file=str(deepseek_catalog_path()),
+        provider_base_url=provider_base_url,
+    )
+
+    assert adapter.network_allowlist() == "sentinel-allowlist"
+    assert calls == [([provider_base_url], [])]
 
 
 def test_allowlist_uses_constructor_snapshot_not_local_config(
@@ -89,8 +109,8 @@ def test_allowlist_uses_constructor_snapshot_not_local_config(
     module, calls = _load_adapter(monkeypatch)
     adapter = module.DeepSeekCodex(
         model_catalog_json_file=str(deepseek_catalog_path()),
-        provider_base_url=OFFICIAL_BASE_URL,
+        provider_base_url=OPENCODE_GO_BASE_URL,
     )
 
     assert adapter.network_allowlist() == "sentinel-allowlist"
-    assert calls == [([OFFICIAL_BASE_URL], [])]
+    assert calls == [([OPENCODE_GO_BASE_URL], [])]

@@ -21,11 +21,15 @@ from dradar.providers import (
     DEEPSEEK_CATALOG_SHA256,
     DEEPSEEK_CODEX_VERSION,
     DEEPSEEK_MODEL,
+    DEEPSEEK_OPENCODE_BASE_URL,
+    DEEPSEEK_OPENCODE_CAPABILITY,
+    DEEPSEEK_OPENCODE_PROVIDER,
     DEEPSEEK_PROVIDER,
     advertised_capabilities,
     assignment_codex_provider,
     deepseek_catalog_error,
     deepseek_catalog_path,
+    create_provider_auth_json,
 )
 from dradar.runner import RunnerError
 
@@ -71,9 +75,13 @@ def _command(tmp_path: Path, monkeypatch, assignment=None) -> tuple[list[str], P
 
 
 def test_capability_advertises_software_support_before_first_key_setup():
-    assert advertised_capabilities({}) == (DEEPSEEK_CAPABILITY,)
+    assert advertised_capabilities({}) == (
+        DEEPSEEK_CAPABILITY,
+        DEEPSEEK_OPENCODE_CAPABILITY,
+    )
     assert advertised_capabilities({DEEPSEEK_API_KEY_ENV: "key"}) == (
         DEEPSEEK_CAPABILITY,
+        DEEPSEEK_OPENCODE_CAPABILITY,
     )
 
 
@@ -183,6 +191,65 @@ def test_command_uses_one_official_endpoint_snapshot(
     assert [
         item for item in command if item.startswith("provider_base_url=")
     ] == [f"provider_base_url={config_url}"]
+
+
+def test_command_uses_opencode_go_endpoint_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+):
+    command, _home = _command(
+        tmp_path, monkeypatch,
+        _assignment(provider=DEEPSEEK_OPENCODE_PROVIDER),
+    )
+    config_arg = next(
+        item for item in command if item.startswith("config_toml_file=")
+    )
+    parsed = tomllib.loads(Path(config_arg.split("=", 1)[1]).read_text())
+    config_url = parsed["model_providers"][DEEPSEEK_PROVIDER]["base_url"]
+
+    # The gateway URL is written to Codex config and handed to the adapter
+    # from the same runner snapshot; the provider table keeps the shared
+    # "deepseek" identity because the catalog models are the same.
+    assert config_url == DEEPSEEK_OPENCODE_BASE_URL
+    assert parsed["model_provider"] == DEEPSEEK_PROVIDER
+    assert [
+        item for item in command if item.startswith("provider_base_url=")
+    ] == [f"provider_base_url={config_url}"]
+
+
+def test_opencode_run_rejects_missing_runtime_credential(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    with pytest.raises(RunnerError, match="runtime credential"):
+        runner.build_pier_command(
+            _assignment(provider=DEEPSEEK_OPENCODE_PROVIDER),
+            tasks,
+            tmp_path / "jobs",
+            "job",
+            home,
+        )
+
+
+def test_opencode_run_fails_closed_without_opencode_credential(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "official-only-secret")
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/pier")
+
+    with pytest.raises(RunnerError, match="OpenCode Go API key is not configured"):
+        runner.run_trial(
+            _assignment(provider=DEEPSEEK_OPENCODE_PROVIDER),
+            tmp_path / "tasks",
+            tmp_path / "work",
+        )
 
 
 def test_deepseek_shared_inputs_are_reused_and_owner_only(
@@ -384,20 +451,37 @@ def test_pier_process_isolates_deepseek_secret_and_adapter_path(
     monkeypatch,
 ):
     monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "sentinel-deepseek-secret")
+    monkeypatch.setenv("OPENCODE_API_KEY", "sentinel-opencode-secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://third-party.example/v1")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://third-party.example/v1")
     monkeypatch.setenv("PYTHONPATH", "/private/pier")
     monkeypatch.setenv("PYTHONHOME", "/private/python")
 
     deepseek_env = runner._pier_process_env(
         _assignment(), deepseek_module_dir=tmp_path,
     )
+    opencode_env = runner._pier_process_env(
+        _assignment(provider=DEEPSEEK_OPENCODE_PROVIDER),
+        deepseek_module_dir=tmp_path,
+    )
     openai_env = runner._pier_process_env(
         _assignment(provider=DEFAULT_CODEX_PROVIDER, model="gpt-5.5")
     )
 
     assert DEEPSEEK_API_KEY_ENV not in deepseek_env
+    assert "OPENCODE_API_KEY" not in deepseek_env
+    assert "OPENAI_BASE_URL" not in deepseek_env
+    assert "OPENAI_API_BASE" not in deepseek_env
     assert deepseek_env["PYTHONPATH"] == str(tmp_path)
     assert "PYTHONHOME" not in deepseek_env
+    assert DEEPSEEK_API_KEY_ENV not in opencode_env
+    assert "OPENCODE_API_KEY" not in opencode_env
+    assert "OPENAI_BASE_URL" not in opencode_env
+    assert "OPENAI_API_BASE" not in opencode_env
+    assert opencode_env["PYTHONPATH"] == str(tmp_path)
     assert openai_env[DEEPSEEK_API_KEY_ENV] == "sentinel-deepseek-secret"
+    assert openai_env["OPENCODE_API_KEY"] == "sentinel-opencode-secret"
+    assert openai_env["OPENAI_BASE_URL"] == "https://third-party.example/v1"
     assert openai_env["PYTHONPATH"] == "/private/pier"
     assert openai_env["PYTHONHOME"] == "/private/python"
 
@@ -408,14 +492,14 @@ def test_run_removes_temporary_auth_when_command_build_fails(
 ):
     monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "sentinel-deepseek-secret")
     created = []
-    original = runner.create_deepseek_auth_json
+    original = runner.create_provider_auth_json
 
-    def create(directory):
-        path = original(directory)
+    def create(directory, provider):
+        path = original(directory, provider)
         created.append(path)
         return path
 
-    monkeypatch.setattr(runner, "create_deepseek_auth_json", create)
+    monkeypatch.setattr(runner, "create_provider_auth_json", create)
     monkeypatch.setattr(
         runner,
         "build_pier_command",

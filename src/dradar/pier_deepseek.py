@@ -26,6 +26,15 @@ _CATALOG_SHA256 = (
 )
 
 _OFFICIAL_DEEPSEEK_BASE_URL = "https://api.deepseek.com/"
+_OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+
+# Exactly the two server-authorized DeepSeek model endpoints. This standalone
+# module never reads DRadar configuration; anything outside this immutable set
+# fails before the task can make a paid provider request.
+_SUPPORTED_DEEPSEEK_BASE_URLS = frozenset({
+    _OFFICIAL_DEEPSEEK_BASE_URL,
+    _OPENCODE_GO_BASE_URL,
+})
 
 
 class DeepSeekCodex(Codex):
@@ -54,7 +63,7 @@ class DeepSeekCodex(Codex):
         provider_base_url: str,
         **kwargs: Any,
     ):
-        if provider_base_url != _OFFICIAL_DEEPSEEK_BASE_URL:
+        if provider_base_url not in _SUPPORTED_DEEPSEEK_BASE_URLS:
             raise ValueError(
                 f"unsupported DeepSeek provider URL: {provider_base_url!r}"
             )

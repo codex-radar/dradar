@@ -33,12 +33,16 @@ from .providers import (
     DEEPSEEK_CODEX_VERSION,
     DEEPSEEK_MIN_CODEX_VERSION,
     DEEPSEEK_MODEL,
+    DEEPSEEK_OPENCODE_API_KEY_ENV,
+    DEEPSEEK_OPENCODE_BASE_URL,
+    DEEPSEEK_OPENCODE_PROVIDER,
     DEEPSEEK_PROVIDER,
     DEEPSEEK_SUPPORTED_EFFORTS,
     assignment_codex_provider,
-    create_deepseek_auth_json,
+    create_provider_auth_json,
     deepseek_catalog_error,
     deepseek_catalog_path,
+    is_deepseek_family,
 )
 
 # The egress allowlist alone does NOT stop the agent from searching the web:
@@ -413,11 +417,18 @@ def _pier_process_env(
     """Keep provider secrets out of Pier's inherited environment."""
 
     env = dict(os.environ)
-    if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
+    if is_deepseek_family(assignment_codex_provider(assignment)):
         # The key has already been materialized in a private auth.json file.
         # Removing the ambient variable prevents accidental fallback to the
         # old ``docker compose exec -e KEY=value`` path.
         env.pop(DEEPSEEK_API_KEY_ENV, None)
+        env.pop(DEEPSEEK_OPENCODE_API_KEY_ENV, None)
+        # Stock Pier's Codex agent propagates an ambient OPENAI_BASE_URL into
+        # the container config.toml (datacurve-pier codex.py). The DeepSeek
+        # provider table pins its own base_url, so this is defense in depth:
+        # no ambient variable may hint at a third-party endpoint.
+        env.pop("OPENAI_BASE_URL", None)
+        env.pop("OPENAI_API_BASE", None)
         # uvx's public Pier environment must see only the copied, standalone
         # adapter module. An ambient PYTHONPATH/PYTHONHOME could accidentally
         # shadow datacurve-pier with another local Pier installation.
@@ -510,7 +521,7 @@ def build_pier_command(
         # A developer override from another agent family predates provider
         # support and must retain the original OpenAI behavior.
         provider = DEFAULT_CODEX_PROVIDER
-    if provider == DEEPSEEK_PROVIDER:
+    if is_deepseek_family(provider):
         # Keep the provider independent of DRadar's legacy checkpoint Pier
         # build. uvx resolves this exact public PyPI release in an isolated
         # tool environment; PYTHONPATH later exposes only the narrow catalog
@@ -540,9 +551,13 @@ def build_pier_command(
         pier_command = [pier]
     deepseek_catalog = None
     deepseek_provider_base_url = None
-    if provider == DEEPSEEK_PROVIDER:
+    if is_deepseek_family(provider):
         _validate_deepseek_assignment(assignment)
-        deepseek_provider_base_url = DEEPSEEK_BASE_URL
+        deepseek_provider_base_url = (
+            DEEPSEEK_OPENCODE_BASE_URL
+            if provider == DEEPSEEK_OPENCODE_PROVIDER
+            else DEEPSEEK_BASE_URL
+        )
         deepseek_catalog = _validated_deepseek_catalog()
         _ensure_deepseek_agent_module(home)
         if resume_checkpoint is not None:
@@ -611,11 +626,17 @@ def build_pier_command(
                 "starting the task container"
             )
         cmd += ["--ak", f"version={version}"]
-    elif agent == "codex" and provider == DEEPSEEK_PROVIDER:
+    elif agent == "codex" and is_deepseek_family(provider):
         if provider_auth_path is None or not provider_auth_path.is_file():
+            setup_provider = (
+                "deepseek"
+                if provider == DEEPSEEK_PROVIDER
+                else DEEPSEEK_OPENCODE_PROVIDER
+            )
             raise RunnerError(
                 "DeepSeek runtime credential is unavailable; run "
-                "`dradar provider setup deepseek` in your own interactive Terminal"
+                f"`dradar provider setup {setup_provider}` in your own "
+                "interactive Terminal"
             )
         if deepseek_provider_base_url is None:
             raise RunnerError("DeepSeek provider URL was not prepared")
@@ -1345,7 +1366,7 @@ def run_trial(
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER
         )
-        if codex_provider == DEEPSEEK_PROVIDER:
+        if is_deepseek_family(codex_provider):
             _validate_deepseek_assignment(assignment)
             codex_cli_version = _deepseek_codex_version(assignment)
             print(f"verified pinned DeepSeek Codex CLI: {codex_cli_version}")
@@ -1385,14 +1406,16 @@ def run_trial(
 
     provider_auth_path = None
     try:
-        if codex_provider == DEEPSEEK_PROVIDER:
+        if is_deepseek_family(codex_provider):
             try:
-                provider_auth_path = create_deepseek_auth_json(work_dir)
+                provider_auth_path = create_provider_auth_json(
+                    work_dir, codex_provider
+                )
             except (OSError, ValueError) as exc:
                 raise RunnerError(str(exc)) from exc
         provider_kwargs = (
             {"provider_auth_path": provider_auth_path}
-            if codex_provider == DEEPSEEK_PROVIDER
+            if is_deepseek_family(codex_provider)
             else {}
         )
         if resume_checkpoint is None:
@@ -1409,7 +1432,7 @@ def run_trial(
         env = _pier_process_env(
             effective_assignment,
             deepseek_module_dir=(
-                work_dir if codex_provider == DEEPSEEK_PROVIDER else None
+                work_dir if is_deepseek_family(codex_provider) else None
             ),
         )
         if on_started is not None:

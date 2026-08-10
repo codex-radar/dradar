@@ -14,9 +14,12 @@ from .identity import _client
 from .local_config import _load_config, tasks_root_from_config
 from .providers import (
     DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_OPENCODE_API_KEY_ENV,
     deepseek_api_key,
     deepseek_catalog_error,
     deepseek_opted_in,
+    opencode_api_key,
+    opencode_opted_in,
 )
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 
@@ -225,9 +228,11 @@ def cmd_doctor(args) -> int:
     claude_ready = bool(shutil.which("claude")) and bool(runner.claude_oauth_token())
     deepseek_requested = deepseek_opted_in()
     deepseek_key_ready = bool(deepseek_api_key())
+    opencode_requested = opencode_opted_in()
+    opencode_key_ready = bool(opencode_api_key())
+    catalog_issue = deepseek_catalog_error()
+    catalog_ready = catalog_issue is None
     if deepseek_requested:
-        catalog_issue = deepseek_catalog_error()
-        catalog_ready = catalog_issue is None
         all_ok &= _check(
             "DeepSeek API key — local provider credential",
             deepseek_key_ready,
@@ -241,19 +246,28 @@ def cmd_doctor(args) -> int:
         )
         if deepseek_key_ready and catalog_ready:
             _check("DeepSeek V4 Flash — Codex provider ready", True)
-    elif codex_ready:
-        _check("codex — agent ready", True)
-    elif claude_ready:
-        _check("claude — agent ready", True)
-    else:
-        _check("codex CLI", bool(codex), _CODEX_HINTS[plat])
-        _check("codex auth.json", auth.is_file(), "run: codex login")
-        _check("claude CLI (alternative to codex)", bool(shutil.which("claude")),
-               "npm install -g @anthropic-ai/claude-code")
-        _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
-               bool(runner.claude_oauth_token()),
-               "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
-    if not deepseek_requested:
+    if opencode_requested:
+        all_ok &= _check(
+            "OpenCode Go API key — local provider credential",
+            opencode_key_ready,
+            "run `dradar provider setup opencode-go` in your own interactive "
+            f"Terminal, or temporarily export {DEEPSEEK_OPENCODE_API_KEY_ENV}",
+        )
+        if opencode_key_ready and catalog_ready:
+            _check("DeepSeek V4 Flash via OpenCode Go — Codex provider ready", True)
+    if not (deepseek_requested or opencode_requested):
+        if codex_ready:
+            _check("codex — agent ready", True)
+        elif claude_ready:
+            _check("claude — agent ready", True)
+        else:
+            _check("codex CLI", bool(codex), _CODEX_HINTS[plat])
+            _check("codex auth.json", auth.is_file(), "run: codex login")
+            _check("claude CLI (alternative to codex)", bool(shutil.which("claude")),
+                   "npm install -g @anthropic-ai/claude-code")
+            _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
+                   bool(runner.claude_oauth_token()),
+                   "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
         all_ok &= (codex_ready or claude_ready)
 
     # The task repo is auto-cloned on `dradar go`; do it here too so a missing

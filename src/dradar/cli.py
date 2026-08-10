@@ -237,11 +237,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="provider_command", required=True)
     p_provider_setup = provider_sub.add_parser(
         "setup", help="securely enter and save a provider API key")
-    p_provider_setup.add_argument("provider", choices=("deepseek",))
+    p_provider_setup.add_argument(
+        "provider", choices=("deepseek", "opencode-go"),
+    )
     p_provider_setup.set_defaults(func=cmd_provider_setup)
     p_provider_status = provider_sub.add_parser(
         "status", help="check provider readiness without displaying its key")
-    p_provider_status.add_argument("provider", choices=("deepseek",))
+    p_provider_status.add_argument(
+        "provider", choices=("deepseek", "opencode-go"),
+    )
     p_provider_status.set_defaults(func=cmd_provider_status)
 
     p_refill = sub.add_parser("refill", help="inspect or stop continuous auto-refill")

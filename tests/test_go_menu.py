@@ -13,6 +13,9 @@ from dradar import runloop
 from dradar.api_client import ApiError
 from dradar.providers import (
     DEEPSEEK_CATALOG_SHA256,
+    DEEPSEEK_OPENCODE_BASE_URL,
+    DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
+    DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
 )
@@ -589,6 +592,33 @@ def test_deepseek_submission_attests_catalog_and_runtime_profile(
     assert meta["model_config_version"] == DEEPSEEK_RUN_CONFIG_VERSION
     assert meta["model_catalog_sha256"] == DEEPSEEK_CATALOG_SHA256
     assert meta["model_runtime_profile"] == DEEPSEEK_RUNTIME_PROFILE
+
+
+def test_opencode_go_submission_attests_endpoint_and_runtime_profile(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    art = _fake_art(tmp_path, rc=0, codex_cli_version="0.146.0")
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": "codex",
+        "provider": "opencode-go",
+        "model": "deepseek-v4-flash",
+        "effort": "high",
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "submitted"
+    meta = client.submissions[0]["meta"]
+    assert meta["model_config_version"] == DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION
+    assert meta["model_catalog_sha256"] == DEEPSEEK_CATALOG_SHA256
+    assert meta["model_runtime_profile"] == DEEPSEEK_OPENCODE_RUNTIME_PROFILE
+    assert meta["model_endpoint"] == DEEPSEEK_OPENCODE_BASE_URL
 
 
 def test_nonzero_pier_rc_submits_outcome_interrupted_with_meta(monkeypatch, tmp_path: Path):

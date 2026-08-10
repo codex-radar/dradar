@@ -33,10 +33,14 @@ from .local_config import (
 from .machine import acquire_run_lock, sweep_orphan_compose
 from .providers import (
     DEEPSEEK_CATALOG_SHA256,
-    DEEPSEEK_PROVIDER,
+    DEEPSEEK_OPENCODE_BASE_URL,
+    DEEPSEEK_OPENCODE_PROVIDER,
+    DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
+    DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
     assignment_codex_provider,
+    is_deepseek_family,
 )
 from .runner import (
     DIAG_ADVICE, BuildFlakeError, RunnerError, build_codex_trajectory_bundle,
@@ -1044,15 +1048,29 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "codex_cli_version": art.codex_cli_version,
         **stats,
     }
-    if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
-        # Server-side audit/gating can distinguish corrected official-catalog
-        # runs from the earlier fallback-metadata benchmark without deleting
-        # either history.
-        meta.update({
-            "model_config_version": DEEPSEEK_RUN_CONFIG_VERSION,
-            "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
-            "model_runtime_profile": DEEPSEEK_RUNTIME_PROFILE,
-        })
+    provider = assignment_codex_provider(assignment)
+    if is_deepseek_family(provider):
+        if provider == DEEPSEEK_OPENCODE_PROVIDER:
+            # OpenCode Go runs carry their own config/runtime identity plus
+            # the exact gateway endpoint, so aggregation can prove which
+            # endpoint produced a result.
+            meta.update({
+                "model_config_version": DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
+                "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
+                "model_runtime_profile": DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
+                "model_endpoint": DEEPSEEK_OPENCODE_BASE_URL,
+            })
+        else:
+            # Server-side audit/gating can distinguish corrected official
+            # runs from the earlier fallback-metadata benchmark without
+            # deleting either history. The official endpoint stays implicit
+            # in the official config version so existing submissions keep a
+            # byte-identical metadata shape.
+            meta.update({
+                "model_config_version": DEEPSEEK_RUN_CONFIG_VERSION,
+                "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
+                "model_runtime_profile": DEEPSEEK_RUNTIME_PROFILE,
+            })
 
     if item is not None and item.job_dir == art.job_dir:
         checkpoints.prune_superseded(HOME, assignment["assignment_id"], item)
@@ -1196,7 +1214,7 @@ def _resume_one_checkpoint(
                 ):
                     return "discarded"
                 return "paused"
-            if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
+            if is_deepseek_family(assignment_codex_provider(assignment)):
                 # The public DeepSeek path deliberately uses stock Pier and
                 # does not resume provider-ambiguous Codex checkpoints. This
                 # prevents an old OpenAI checkpoint from ever being restored

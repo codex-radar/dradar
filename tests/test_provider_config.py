@@ -9,12 +9,18 @@ import pytest
 from dradar import provider_config
 from dradar.providers import (
     DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_OPENCODE_API_KEY_ENV,
     create_deepseek_auth_json,
+    create_provider_auth_json,
     deepseek_api_key,
     deepseek_credential_source,
     deepseek_secret_error,
     deepseek_secret_path,
+    opencode_api_key,
+    opencode_credential_source,
+    opencode_secret_path,
     store_deepseek_api_key,
+    store_opencode_api_key,
 )
 
 
@@ -141,3 +147,79 @@ def test_status_reports_source_without_secret(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert str(deepseek_secret_path()) in output
     assert "sentinel-provider-secret" not in output
+
+
+def test_opencode_setup_and_status_use_their_own_secret_path(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        provider_config.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(
+        provider_config.getpass,
+        "getpass",
+        lambda _prompt: "sentinel-opencode-token",
+    )
+
+    rc = provider_config.cmd_provider_setup(
+        SimpleNamespace(provider="opencode-go")
+    )
+
+    assert rc == 0
+    assert opencode_api_key() == "sentinel-opencode-token"
+    assert deepseek_api_key() is None
+    assert "sentinel-opencode-token" not in capsys.readouterr().out
+
+    rc = provider_config.cmd_provider_status(
+        SimpleNamespace(provider="opencode-go")
+    )
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert str(opencode_secret_path()) in output
+    assert "sentinel-opencode-token" not in output
+
+
+def test_provider_auth_json_never_mixes_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+
+    # OpenCode Go run: only the opencode token may enter its auth.json.
+    monkeypatch.setenv(DEEPSEEK_OPENCODE_API_KEY_ENV, "sentinel-opencode-token")
+    monkeypatch.delenv(DEEPSEEK_API_KEY_ENV, raising=False)
+    path = create_provider_auth_json(tmp_path, "opencode-go")
+    assert json.loads(path.read_text()) == {
+        "OPENAI_API_KEY": "sentinel-opencode-token",
+    }
+
+    # Fail closed: an official key alone can never satisfy an opencode run.
+    monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "sentinel-official-secret")
+    monkeypatch.delenv(DEEPSEEK_OPENCODE_API_KEY_ENV, raising=False)
+    with pytest.raises(ValueError, match="OpenCode Go API key is not configured"):
+        create_provider_auth_json(tmp_path, "opencode-go")
+
+    # Official run: only the official key may enter its auth.json, and an
+    # opencode token alone can never satisfy it.
+    monkeypatch.setenv(DEEPSEEK_OPENCODE_API_KEY_ENV, "sentinel-opencode-token")
+    monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "sentinel-official-secret")
+    path = create_provider_auth_json(tmp_path, "deepseek")
+    assert json.loads(path.read_text()) == {
+        "OPENAI_API_KEY": "sentinel-official-secret",
+    }
+    monkeypatch.delenv(DEEPSEEK_API_KEY_ENV, raising=False)
+    with pytest.raises(ValueError, match="DeepSeek API key is not configured"):
+        create_provider_auth_json(tmp_path, "deepseek")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_opencode_secret_symlink_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path / "home"))
+    target = tmp_path / "outside-secret"
+    target.write_text("must-not-be-read\n")
+    path = opencode_secret_path()
+    path.parent.mkdir(parents=True)
+    path.symlink_to(target)
+
+    assert opencode_api_key() is None
+    assert opencode_credential_source() is None
