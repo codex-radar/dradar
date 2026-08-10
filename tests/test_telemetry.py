@@ -51,11 +51,11 @@ def test_payload_is_one_session_not_one_per_assignment_and_stays_small():
 
 def test_target_worker_count_is_bounded():
     client = FakeClient()
-    for value in (0, 33):
+    for value in (0, 41):
         try:
             RunnerTelemetry(client, target_workers=value)
         except ValueError as exc:
-            assert "between 1 and 32" in str(exc)
+            assert "between 1 and 40" in str(exc)
         else:
             raise AssertionError("out-of-range target worker count was accepted")
 

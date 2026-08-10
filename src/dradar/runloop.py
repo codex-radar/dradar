@@ -1683,8 +1683,8 @@ def cmd_go(args) -> int:
         sys.exit("--auto N requires N >= 1")
     workers = getattr(args, "workers", 1)
     auto_workers = workers == "auto"
-    if not auto_workers and (workers < 1 or workers > 32):
-        sys.exit("--workers N requires 1 <= N <= 32")
+    if not auto_workers and (workers < 1 or workers > 40):
+        sys.exit("--workers N requires 1 <= N <= 40")
     if getattr(args, "worker_child", False) and (
         workers != 1
         or not getattr(args, "parallel", False)
@@ -1737,7 +1737,7 @@ def cmd_go(args) -> int:
         target_workers = int(os.environ.get("DRADAR_POOL_SIZE", "1"))
     except ValueError:
         target_workers = 1
-    if not 1 <= target_workers <= 32:
+    if not 1 <= target_workers <= 40:
         target_workers = 1
     telemetry = RunnerTelemetry(client, target_workers=target_workers)
     telemetry.start()

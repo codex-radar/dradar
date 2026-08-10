@@ -286,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--workers", type=_workers_value, default=1, metavar="N|auto",
             help="run up to N tasks concurrently, or use 'auto' for a "
-                 "conservative Docker-based recommendation (default: 1; maximum: 32)",
+                 "conservative Docker-based recommendation (default: 1; maximum: 40)",
         )
         p.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
         p.add_argument(

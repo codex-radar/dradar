@@ -45,8 +45,8 @@ class RunnerTelemetry:
         jitter: bool = True,
         target_workers: int = 1,
     ):
-        if not 1 <= target_workers <= 32:
-            raise ValueError("target_workers must be between 1 and 32")
+        if not 1 <= target_workers <= 40:
+            raise ValueError("target_workers must be between 1 and 40")
         self.client = client
         self.target_workers = target_workers
         self.session_id = uuid.uuid4().hex

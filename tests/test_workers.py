@@ -34,10 +34,17 @@ def test_cli_accepts_auto_workers(monkeypatch):
     assert seen[0].workers == "auto"
 
 
-@pytest.mark.parametrize("workers", [0, 33])
+@pytest.mark.parametrize("workers", [0, 41])
 def test_worker_count_is_bounded_before_any_setup(workers):
-    with pytest.raises(SystemExit, match="1 <= N <= 32"):
+    with pytest.raises(SystemExit, match="1 <= N <= 40"):
         runloop.cmd_go(_args(workers=workers))
+
+
+def test_worker_count_accepts_40(monkeypatch):
+    seen = []
+    monkeypatch.setattr(runloop, "_run_worker_pool", lambda args: seen.append(args.workers) or 0)
+    assert runloop.cmd_go(_args(workers=40)) == 0
+    assert seen == [40]
 
 
 def test_workers_cannot_mix_with_manual_parallel():
