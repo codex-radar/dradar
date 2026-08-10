@@ -168,6 +168,23 @@ def test_command_uses_official_catalog_adapter_and_auth_without_secret_env(
     }
 
 
+def test_command_uses_one_official_endpoint_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+):
+    command, _home = _command(tmp_path, monkeypatch)
+    config_arg = next(
+        item for item in command if item.startswith("config_toml_file=")
+    )
+    parsed = tomllib.loads(Path(config_arg.split("=", 1)[1]).read_text())
+    config_url = parsed["model_providers"][DEEPSEEK_PROVIDER]["base_url"]
+
+    assert config_url == "https://api.deepseek.com/"
+    assert [
+        item for item in command if item.startswith("provider_base_url=")
+    ] == [f"provider_base_url={config_url}"]
+
+
 def test_deepseek_shared_inputs_are_reused_and_owner_only(
     tmp_path: Path,
     monkeypatch,
@@ -178,7 +195,9 @@ def test_deepseek_shared_inputs_are_reused_and_owner_only(
         home / runner.DEEPSEEK_AGENT_MODULE_FILENAME: (
             Path(runner.__file__).with_name("pier_deepseek.py").read_bytes()
         ),
-        home / "codex-deepseek-v4-flash.toml": runner.DEEPSEEK_TOML.encode(),
+        home / "codex-deepseek-v4-flash.toml": runner.deepseek_toml(
+            providers.DEEPSEEK_BASE_URL
+        ).encode(),
         home / "codex-submission-prompt.j2": (
             runner.CODEX_SUBMISSION_PROMPT.encode()
         ),
@@ -197,7 +216,9 @@ def test_deepseek_shared_inputs_are_reused_and_owner_only(
         lambda *_args: pytest.fail("matching shared inputs must be reused"),
     )
     assert runner._ensure_deepseek_agent_module(home) in expected
-    assert runner._ensure_deepseek_config(home) in expected
+    assert runner._ensure_deepseek_config(
+        home, providers.DEEPSEEK_BASE_URL
+    ) in expected
     assert runner._ensure_codex_submission_prompt(home) in expected
     assert runner._ensure_allowlist(home) in expected
 

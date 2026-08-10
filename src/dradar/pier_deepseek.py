@@ -25,6 +25,8 @@ _CATALOG_SHA256 = (
     "b459a6e438d6a9939d01fd0dbb4693f165ed732bc8e4fd58d7145d9d94bd49a4"
 )
 
+_OFFICIAL_DEEPSEEK_BASE_URL = "https://api.deepseek.com/"
+
 
 class DeepSeekCodex(Codex):
     """Stock Codex plus a fail-closed, container-local model catalog."""
@@ -37,10 +39,11 @@ class DeepSeekCodex(Codex):
         Stock Pier's Codex allowlist always includes api.openai.com as a
         default. DeepSeek does not need that endpoint, and apps, remote plugin,
         and web search are intentionally disabled for benchmark isolation.
+        The allowed egress is restricted to the validated official endpoint.
         """
 
         return allowlist_from_urls(
-            ["https://api.deepseek.com/"],
+            [self._provider_base_url],
             default_domains=[],
         )
 
@@ -48,8 +51,14 @@ class DeepSeekCodex(Codex):
         self,
         *args: Any,
         model_catalog_json_file: str,
+        provider_base_url: str,
         **kwargs: Any,
     ):
+        if provider_base_url != _OFFICIAL_DEEPSEEK_BASE_URL:
+            raise ValueError(
+                f"unsupported DeepSeek provider URL: {provider_base_url!r}"
+            )
+        self._provider_base_url = provider_base_url
         catalog = Path(model_catalog_json_file)
         try:
             digest = hashlib.sha256(catalog.read_bytes()).hexdigest()

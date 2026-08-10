@@ -28,6 +28,7 @@ from .manifest import task_content_hash
 from .providers import (
     DEFAULT_CODEX_PROVIDER,
     DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_BASE_URL,
     DEEPSEEK_CATALOG_REMOTE_PATH,
     DEEPSEEK_CODEX_VERSION,
     DEEPSEEK_MIN_CODEX_VERSION,
@@ -67,22 +68,25 @@ ALLOWLIST_TOML = (
 # because DeepSeek's official setup script explicitly removes them when the
 # catalog is active. Codex reads the provider credential from an uploaded
 # auth.json because ``requires_openai_auth`` is true; no API-key value is
-# passed through argv or ``docker compose exec -e``.
-DEEPSEEK_TOML = (
-    'web_search = "disabled"\n'
-    'model_provider = "deepseek"\n'
-    'preferred_auth_method = "apikey"\n'
-    'forced_login_method = "api"\n'
-    f'model_catalog_json = "{DEEPSEEK_CATALOG_REMOTE_PATH}"\n'
-    '[features]\n'
-    'apps = false\n'
-    'remote_plugin = false\n'
-    '[model_providers.deepseek]\n'
-    'name = "deepseek"\n'
-    'base_url = "https://api.deepseek.com/"\n'
-    'wire_api = "responses"\n'
-    'requires_openai_auth = true\n'
-)
+# passed through argv or ``docker compose exec -e``. Command construction
+# snapshots the official base URL and uses the same value for this TOML and
+# the standalone Pier adapter.
+def deepseek_toml(base_url: str) -> str:
+    return (
+        'web_search = "disabled"\n'
+        'model_provider = "deepseek"\n'
+        'preferred_auth_method = "apikey"\n'
+        'forced_login_method = "api"\n'
+        f'model_catalog_json = "{DEEPSEEK_CATALOG_REMOTE_PATH}"\n'
+        '[features]\n'
+        'apps = false\n'
+        'remote_plugin = false\n'
+        '[model_providers.deepseek]\n'
+        'name = "deepseek"\n'
+        f'base_url = "{base_url}"\n'
+        'wire_api = "responses"\n'
+        'requires_openai_auth = true\n'
+    )
 DEEPSEEK_AGENT_IMPORT_PATH = "_dradar_pier_deepseek:DeepSeekCodex"
 DEEPSEEK_AGENT_MODULE_FILENAME = "_dradar_pier_deepseek.py"
 
@@ -335,9 +339,9 @@ def _ensure_codex_submission_prompt(
     return _materialize_shared_file(path, prompt.encode())
 
 
-def _ensure_deepseek_config(home: Path) -> Path:
+def _ensure_deepseek_config(home: Path, base_url: str) -> Path:
     path = home / "codex-deepseek-v4-flash.toml"
-    return _materialize_shared_file(path, DEEPSEEK_TOML.encode())
+    return _materialize_shared_file(path, deepseek_toml(base_url).encode())
 
 
 def _validated_deepseek_catalog() -> Path:
@@ -535,8 +539,10 @@ def build_pier_command(
             )
         pier_command = [pier]
     deepseek_catalog = None
+    deepseek_provider_base_url = None
     if provider == DEEPSEEK_PROVIDER:
         _validate_deepseek_assignment(assignment)
+        deepseek_provider_base_url = DEEPSEEK_BASE_URL
         deepseek_catalog = _validated_deepseek_catalog()
         _ensure_deepseek_agent_module(home)
         if resume_checkpoint is not None:
@@ -611,7 +617,9 @@ def build_pier_command(
                 "DeepSeek runtime credential is unavailable; run "
                 "`dradar provider setup deepseek` in your own interactive Terminal"
             )
-        config_path = _ensure_deepseek_config(home)
+        if deepseek_provider_base_url is None:
+            raise RunnerError("DeepSeek provider URL was not prepared")
+        config_path = _ensure_deepseek_config(home, deepseek_provider_base_url)
         submission_prompt = _ensure_codex_submission_prompt(
             home, assignment.get("benchmark_id")
         )
@@ -622,6 +630,7 @@ def build_pier_command(
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"config_toml_file={config_path}",
             "--ak", f"model_catalog_json_file={deepseek_catalog}",
+            "--ak", f"provider_base_url={deepseek_provider_base_url}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ae", f"CODEX_AUTH_JSON_PATH={provider_auth_path}",
             "--ak", f"version={_deepseek_codex_version(assignment)}",

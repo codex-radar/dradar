@@ -225,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     p_config_show.set_defaults(func=cmd_config_show)
     p_config_set = config_sub.add_parser("set", help="change a supported local setting")
     p_config_set.add_argument(
-        "key", choices=("image-cache-mode", "image-cache-limit-gb"),
+        "key",
+        choices=("image-cache-mode", "image-cache-limit-gb"),
     )
     p_config_set.add_argument("value")
     p_config_set.set_defaults(func=cmd_config_set)
