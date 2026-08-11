@@ -959,6 +959,63 @@ def test_bundle_422_retries_completed_result_without_optional_bundle(
     assert client.stopped == []
 
 
+def test_bundle_rejection_then_required_fallback_is_terminal(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    sessions = trial_dir / "agent" / "sessions"
+    _write_codex_session(sessions / "root.jsonl", "root-1", "user", 100)
+
+    class IncompatibleServerClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            if trajectory_bundle is not None:
+                raise ApiError(
+                    "server returned 422: trajectory_bundle.json is incomplete",
+                    status_code=422,
+                )
+            raise ApiError(
+                "server returned 422: complete trajectory_bundle.json is required",
+                status_code=422,
+            )
+
+    client = IncompatibleServerClient(lambda _aid: None)
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "rejected"
+    assert client.calls == [True, False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == ["a1"]
+    assert trial_dir.is_dir()
+
+
+def test_persisted_bundle_omission_required_by_server_is_terminal(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    entry = _entry(trial_dir)
+    entry["omit_trajectory_bundle"] = True
+
+    class StrictServerClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            assert trajectory_bundle is None
+            raise ApiError(
+                "server returned 422: complete trajectory_bundle.json is required",
+                status_code=422,
+            )
+
+    client = StrictServerClient(lambda _aid: None)
+    assert runloop._upload_trial(client, entry) == "rejected"
+    assert client.calls == [False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == ["a1"]
+
+
 def test_oversized_projected_request_omits_bundle_before_submit(
     tmp_path: Path, monkeypatch, capsys,
 ):

@@ -127,6 +127,26 @@ def _is_trajectory_bundle_rejection(exc: ApiError) -> bool:
     return "trajectory_bundle" in detail or "trajectory bundle" in detail
 
 
+def _is_trajectory_bundle_required(exc: ApiError) -> bool:
+    """Whether the server rejected a reduced upload for lacking the bundle.
+
+    This is a terminal protocol mismatch for the current payload: the client
+    already tried the bundle (or omitted it because it exceeded the safe body
+    budget), while the server refuses an answer without one.  Keeping such an
+    entry in the pending ledger causes every public worker to retry it forever
+    and gradually consumes all real-concurrency slots.
+    """
+    if exc.status_code != 422:
+        return False
+    if exc.code == "trajectory_bundle_required":
+        return True
+    detail = str(exc).lower()
+    return (
+        "complete trajectory_bundle.json is required" in detail
+        or ("trajectory bundle" in detail and "required" in detail)
+    )
+
+
 def _estimated_upload_body_bytes(
     patch: Path,
     trajectory: Path | None,
@@ -785,6 +805,27 @@ def _upload_trial(
                         "result without it"
                     )
                     continue
+
+                if (submit_bundle is None
+                        and _is_trajectory_bundle_required(exc)):
+                    # An older/strict server can reject the optional bundle
+                    # and then reject the one-shot reduced request for not
+                    # carrying that same bundle.  No retry can change this
+                    # completed payload.  Reopen the cell instead of pinning
+                    # a paid worker slot behind an immortal pending entry.
+                    print(
+                        f"  {task_id}: the server requires a complete trajectory "
+                        "bundle after rejecting/omitting this run's bundle; "
+                        "releasing the incompatible assignment instead of "
+                        "retrying forever"
+                    )
+                    pending.remove(HOME, assignment_id)
+                    settle_terminal_local_failure()
+                    print(
+                        "  rejected artifacts kept for diagnosis: "
+                        f"{patch.parent.parent}"
+                    )
+                    return "rejected"
 
                 if exc.status_code == 409 and "already submitted" in str(exc).lower():
                     # Some earlier attempt actually landed server-side even
