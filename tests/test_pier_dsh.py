@@ -226,5 +226,5 @@ def test_run_supports_model_effort_matrix_without_logging_secret(
     assert dsh_call["cwd"] == "/app"
     assert (dsh_call.get("env") or {})["DSH_MODEL"] == RUNTIME_MODELS[model]
     assert (dsh_call.get("env") or {})["DSH_REASONING_EFFORT"] == effort
-    assert "NODE_USE_ENV_PROXY" not in (dsh_call.get("env") or {})
+    assert (dsh_call.get("env") or {})["NODE_USE_ENV_PROXY"] == "1"
     assert agent.SUPPORTS_ATIF is False

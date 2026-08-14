@@ -421,6 +421,7 @@ class DshMinimal(BaseInstalledAgent):
                 "DSH_TELEMETRY_MODE": "DISABLED",
                 "DSH_TOOLS_MODE": "native",
                 "DSH_CREDENTIALS_FILE": remote_credentials,
+                "NODE_USE_ENV_PROXY": "1",
             }
         )
         runtime_dirs = (remote_home, remote_config_dir, remote_secret_dir)
