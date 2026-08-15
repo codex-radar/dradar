@@ -19,15 +19,19 @@ from pathlib import Path
 
 DEFAULT_CODEX_PROVIDER = "openai"
 DEEPSEEK_PROVIDER = "deepseek"
+DEEPSEEK_OPENCODE_PROVIDER = "opencode-go"
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
 # Backwards-compatible import used by older extensions and Flash-only tests.
 DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
 DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL)
 DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEEPSEEK_OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY"
 DEEPSEEK_ENABLE_ENV = "DRADAR_ENABLE_DEEPSEEK"
 DEEPSEEK_SECRET_RELATIVE_PATH = Path("secrets") / "deepseek_api_key"
+DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH = Path("secrets") / "opencode_api_key"
 DEEPSEEK_CAPABILITY = "codex-deepseek-v4-flash-v2"
+DEEPSEEK_OPENCODE_CAPABILITY = "codex-deepseek-v4-flash-opencode-go-v1"
 DEEPSEEK_PRO_CAPABILITY = "codex-deepseek-v4-pro-v1"
 DEEPSEEK_FLASH_OFF_CAPABILITY = "codex-deepseek-v4-flash-off-v1"
 DEEPSEEK_PRO_OFF_CAPABILITY = "codex-deepseek-v4-pro-off-v1"
@@ -48,6 +52,11 @@ DEEPSEEK_CATALOG_SOURCE = (
 DEEPSEEK_CATALOG_SOURCE_VERSION = "1.1.0+dradar-off"
 DEEPSEEK_RUN_CONFIG_VERSION = "deepseek-codex-official-catalog-v2"
 DEEPSEEK_RUNTIME_PROFILE = "public-pier-0.3.0-catalog-v1"
+DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION = "deepseek-opencode-go-catalog-v1"
+DEEPSEEK_OPENCODE_RUNTIME_PROFILE = "public-pier-0.3.0-opencode-go-catalog-v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/"
+DEEPSEEK_OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+
 
 # DSH Minimal is a separate Pier agent, not a Codex provider alias. It reuses
 # the same local DeepSeek credential while preserving DSH rc.6's native effort
@@ -145,6 +154,12 @@ def assignment_codex_provider(assignment: dict) -> str | None:
     return value if isinstance(value, str) and value else DEFAULT_CODEX_PROVIDER
 
 
+def is_deepseek_family(provider: str | None) -> bool:
+    """True for any DeepSeek-model Codex provider (official or OpenCode Go)."""
+
+    return provider in (DEEPSEEK_PROVIDER, DEEPSEEK_OPENCODE_PROVIDER)
+
+
 def deepseek_codex_reasoning_effort(effort: str) -> str:
     """Translate the product's Off label to Responses API's ``none``."""
 
@@ -154,15 +169,38 @@ def deepseek_codex_reasoning_effort(effort: str) -> str:
 def deepseek_secret_path(home: Path | None = None) -> Path:
     """Return DRadar's provider-secret path without consulting config.json."""
 
+    return _provider_secret_path(DEEPSEEK_SECRET_RELATIVE_PATH, home)
+
+
+def opencode_secret_path(home: Path | None = None) -> Path:
+    """Return OpenCode Go's provider-secret path without config.json."""
+
+    return _provider_secret_path(DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH, home)
+
+
+def _provider_secret_path(relative: Path, home: Path | None = None) -> Path:
     if home is None:
         home = Path(os.environ.get("DRADAR_HOME", Path.home() / ".dradar"))
-    return Path(home) / DEEPSEEK_SECRET_RELATIVE_PATH
+    return Path(home) / relative
 
 
 def deepseek_secret_error(path: Path | None = None) -> str | None:
     """Explain why an existing provider-secret file is unsafe to read."""
 
-    path = deepseek_secret_path() if path is None else path
+    return _provider_secret_error(
+        deepseek_secret_path() if path is None else path
+    )
+
+
+def opencode_secret_error(path: Path | None = None) -> str | None:
+    """Explain why an existing OpenCode Go secret file is unsafe to read."""
+
+    return _provider_secret_error(
+        opencode_secret_path() if path is None else path
+    )
+
+
+def _provider_secret_error(path: Path) -> str | None:
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -178,8 +216,8 @@ def deepseek_secret_error(path: Path | None = None) -> str | None:
     return None
 
 
-def _deepseek_key_from_file(path: Path) -> str | None:
-    if deepseek_secret_error(path) is not None:
+def _provider_key_from_file(path: Path) -> str | None:
+    if _provider_secret_error(path) is not None:
         return None
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -221,13 +259,42 @@ def deepseek_api_key(
 
     env = os.environ if environ is None else environ
     if environ is None or home is not None:
-        value = _deepseek_key_from_file(deepseek_secret_path(home))
+        value = _provider_key_from_file(deepseek_secret_path(home))
         if value:
             return value
     value = env.get(DEEPSEEK_API_KEY_ENV)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def opencode_api_key(
+    environ: Mapping[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> str | None:
+    """Resolve the OpenCode Go token from the environment first, then file."""
+
+    return _provider_api_key(
+        DEEPSEEK_OPENCODE_API_KEY_ENV, DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH,
+        environ, home=home,
+    )
+
+
+def _provider_api_key(
+    env_name: str,
+    relative: Path,
+    environ: Mapping[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> str | None:
+    env = os.environ if environ is None else environ
+    value = env.get(env_name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if environ is not None and home is None:
+        return None
+    return _provider_key_from_file(_provider_secret_path(relative, home))
 
 
 def deepseek_credential_source(
@@ -239,12 +306,45 @@ def deepseek_credential_source(
 
     env = os.environ if environ is None else environ
     if environ is None or home is not None:
-        if _deepseek_key_from_file(deepseek_secret_path(home)):
+        if _provider_key_from_file(deepseek_secret_path(home)):
             return "file"
     value = env.get(DEEPSEEK_API_KEY_ENV)
     if isinstance(value, str) and value.strip():
         return "environment"
     return None
+
+
+def opencode_credential_source(
+    environ: Mapping[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> str | None:
+    """Return the active OpenCode Go credential source without its value."""
+
+    return _provider_credential_source(
+        DEEPSEEK_OPENCODE_API_KEY_ENV, DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH,
+        environ, home=home,
+    )
+
+
+def _provider_credential_source(
+    env_name: str,
+    relative: Path,
+    environ: Mapping[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> str | None:
+    env = os.environ if environ is None else environ
+    value = env.get(env_name)
+    if isinstance(value, str) and value.strip():
+        return "environment"
+    if environ is not None and home is None:
+        return None
+    return (
+        "file"
+        if _provider_key_from_file(_provider_secret_path(relative, home))
+        else None
+    )
 
 
 def deepseek_opted_in(environ: Mapping[str, str] | None = None) -> bool:
@@ -256,13 +356,39 @@ def deepseek_opted_in(environ: Mapping[str, str] | None = None) -> bool:
     )
 
 
+def opencode_opted_in(environ: Mapping[str, str] | None = None) -> bool:
+    return (
+        opencode_api_key(environ) is not None
+        or (environ is None and opencode_secret_path().exists())
+    )
+
+
 def store_deepseek_api_key(value: str, *, home: Path | None = None) -> Path:
     """Atomically store a key in a DRadar-owned 0600 file."""
 
+    return _store_provider_api_key(
+        DEEPSEEK_SECRET_RELATIVE_PATH, value, home=home
+    )
+
+
+def store_opencode_api_key(value: str, *, home: Path | None = None) -> Path:
+    """Atomically store an OpenCode Go token in a DRadar-owned 0600 file."""
+
+    return _store_provider_api_key(
+        DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH, value, home=home
+    )
+
+
+def _store_provider_api_key(
+    relative: Path,
+    value: str,
+    *,
+    home: Path | None = None,
+) -> Path:
     key = value.strip()
     if not key or "\n" in key or "\r" in key:
-        raise ValueError("DeepSeek API key must be one non-empty line")
-    path = deepseek_secret_path(home)
+        raise ValueError("API key must be one non-empty line")
+    path = _provider_secret_path(relative, home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
         os.chmod(path.parent, 0o700)
@@ -286,18 +412,36 @@ def store_deepseek_api_key(value: str, *, home: Path | None = None) -> Path:
 
 
 def create_deepseek_auth_json(directory: Path) -> Path:
+    """Short-lived Codex auth.json for the official DeepSeek provider."""
+
+    return create_provider_auth_json(directory, DEEPSEEK_PROVIDER)
+
+
+def create_provider_auth_json(directory: Path, provider: str) -> Path:
     """Create a short-lived Codex auth file without putting the key in argv.
 
     Public Pier's stock Codex agent uploads ``CODEX_AUTH_JSON_PATH`` into the
     task container. Only the non-secret path appears in Pier/Docker command
-    lines; the caller must unlink the returned file after Pier exits.
+    lines; the caller must unlink the returned file after Pier exits. Each
+    provider reads only its own credential, so an official DeepSeek key can
+    never be reused for an OpenCode Go run and vice versa.
     """
 
-    key = deepseek_api_key()
+    if provider == DEEPSEEK_PROVIDER:
+        key = deepseek_api_key()
+        label = "DeepSeek API key"
+        setup_provider = "deepseek"
+    elif provider == DEEPSEEK_OPENCODE_PROVIDER:
+        key = opencode_api_key()
+        label = "OpenCode Go API key"
+        setup_provider = "opencode-go"
+    else:
+        raise ValueError(f"unsupported provider: {provider}")
     if key is None:
         raise ValueError(
-            "DeepSeek API key is not configured; run "
-            "`dradar provider setup deepseek` in your own interactive Terminal"
+            f"{label} is not configured; run "
+            f"`dradar provider setup {setup_provider}` in your own "
+            "interactive Terminal"
         )
     if any(character.isspace() for character in key):
         raise ValueError("DeepSeek API key must be one non-empty line")
@@ -513,12 +657,19 @@ def grok_subscription_session(directory: Path, *, home: Path | None = None):
 def advertised_capabilities(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
-    """Advertise only a complete, integrity-checked paid-provider runtime."""
+    """Advertise only complete, integrity-checked paid-provider runtimes.
+
+    Both DeepSeek model runtimes share the same integrity-pinned catalog, so
+    the official and the OpenCode Go gateway capability are advertised
+    together. They remain distinct capability strings so the server can
+    explicitly authorize assignments for either endpoint.
+    """
 
     capabilities = []
     if deepseek_catalog_error() is None:
         capabilities.extend((
             DEEPSEEK_CAPABILITY,
+            DEEPSEEK_OPENCODE_CAPABILITY,
             DEEPSEEK_PRO_CAPABILITY,
             DEEPSEEK_FLASH_OFF_CAPABILITY,
             DEEPSEEK_PRO_OFF_CAPABILITY,

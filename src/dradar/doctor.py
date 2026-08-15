@@ -14,6 +14,7 @@ from .identity import _client
 from .local_config import _load_config, tasks_root_from_config
 from .providers import (
     DEEPSEEK_API_KEY_ENV,
+    DEEPSEEK_OPENCODE_API_KEY_ENV,
     GROK_CLI_VERSION,
     deepseek_api_key,
     deepseek_catalog_error,
@@ -21,6 +22,8 @@ from .providers import (
     grok_auth_error,
     grok_auth_path,
     grok_cli_path,
+    opencode_api_key,
+    opencode_opted_in,
     parse_grok_cli_version,
 )
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
@@ -263,6 +266,8 @@ def cmd_doctor(args) -> int:
     grok_ready = grok_cli_ready and grok_requested and grok_oauth_issue is None
     deepseek_requested = deepseek_opted_in()
     deepseek_key_ready = bool(deepseek_api_key())
+    opencode_requested = opencode_opted_in()
+    opencode_key_ready = bool(opencode_api_key())
     if dsh_only:
         all_ok &= _check(
             "DeepSeek API key — local provider credential",
@@ -303,6 +308,22 @@ def cmd_doctor(args) -> int:
             _check("DeepSeek V4 Flash / Pro — Codex provider ready", True)
         if deepseek_key_ready:
             _check("DeepSeek V4 Flash / Pro — DSH Minimal agent ready", True)
+    elif opencode_requested:
+        catalog_issue = deepseek_catalog_error()
+        catalog_ready = catalog_issue is None
+        all_ok &= _check(
+            "OpenCode Go API key — local provider credential",
+            opencode_key_ready,
+            "run `dradar provider setup opencode-go` in your own interactive "
+            f"Terminal, or temporarily export {DEEPSEEK_OPENCODE_API_KEY_ENV}",
+        )
+        all_ok &= _check(
+            "DeepSeek Codex models.json — official catalog",
+            catalog_ready,
+            catalog_issue or "reinstall or upgrade dradar",
+        )
+        if opencode_key_ready and catalog_ready:
+            _check("DeepSeek V4 Flash via OpenCode Go — Codex provider ready", True)
     elif codex_ready:
         _check("codex — agent ready", True)
     elif claude_ready:
@@ -315,7 +336,7 @@ def cmd_doctor(args) -> int:
         _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
                bool(runner.claude_oauth_token()),
                "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
-    if not dsh_only and not deepseek_requested and not grok_requested:
+    if not dsh_only and not deepseek_requested and not opencode_requested and not grok_requested:
         all_ok &= (codex_ready or claude_ready)
 
     # The task repo is auto-cloned on `dradar go`; do it here too so a missing

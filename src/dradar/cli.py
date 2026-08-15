@@ -230,7 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     p_config_show.set_defaults(func=cmd_config_show)
     p_config_set = config_sub.add_parser("set", help="change a supported local setting")
     p_config_set.add_argument(
-        "key", choices=("image-cache-mode", "image-cache-limit-gb"),
+        "key",
+        choices=("image-cache-mode", "image-cache-limit-gb"),
     )
     p_config_set.add_argument("value")
     p_config_set.set_defaults(func=cmd_config_set)
@@ -241,11 +242,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="provider_command", required=True)
     p_provider_setup = provider_sub.add_parser(
         "setup", help="securely configure a provider credential or OAuth session")
-    p_provider_setup.add_argument("provider", choices=("deepseek", "grok"))
+    p_provider_setup.add_argument(
+        "provider", choices=("deepseek", "opencode-go", "grok"),
+    )
     p_provider_setup.set_defaults(func=cmd_provider_setup)
     p_provider_status = provider_sub.add_parser(
         "status", help="check provider readiness without displaying credentials")
-    p_provider_status.add_argument("provider", choices=("deepseek", "grok"))
+    p_provider_status.add_argument(
+        "provider", choices=("deepseek", "opencode-go", "grok"),
+    )
     p_provider_status.add_argument(
         "--live", action="store_true",
         help="also verify the configured credential against the provider API",

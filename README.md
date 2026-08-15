@@ -203,6 +203,28 @@ Pier 退出后立即删除。该本地文件存在时优先使用，避免桌面
   身份的旧 Codex checkpoint 恢复到另一个计费 provider。
 - 未显式领取 DeepSeek 格子时，原有 OpenAI Codex 与 Claude 行为完全不变。
 
+#### OpenCode Go 网关（可选的 server-authorized 端点）
+
+同一 DeepSeek 模型也可以通过 OpenCode Go 订阅网关
+（`https://opencode.ai/zen/go/v1`，OpenAI 兼容 `/responses` 路由）运行。该端点
+**只能由服务端显式下发**（assignment `provider = "opencode-go"` + 独立 capability
+`codex-deepseek-v4-flash-opencode-go-v1`），客户端不存在任何本地端点开关；
+端点选择在 `providers.py` 中是不可变常量，adapter 只接受 `api.deepseek.com` 与
+`opencode.ai` 两个授权 URL，其余一律 fail-closed。
+
+OpenCode Go 使用**独立凭据**，与官方 key 完全隔离：
+
+```bash
+dradar provider setup opencode-go   # 保存到 ~/.dradar/secrets/opencode_api_key
+dradar provider status opencode-go
+```
+
+自动化环境可临时设置 `OPENCODE_API_KEY`。官方 `deepseek_api_key` 永远不会出现在
+OpenCode Go 运行的 auth.json 中，反之亦然；缺少对应凭据时任务在发出任何付费请求前
+终止。OpenCode Go 提交带独立的 `model_config_version`/`model_runtime_profile` 与
+`model_endpoint` 元数据，可在聚合层与官方端点结果区分。模型、Codex 版本、effort、
+checkpoint 与隔离性约束与官方端点一致。
+
 配置依据：[DeepSeek 官方 Codex 集成文档](https://api-docs.deepseek.com/quick_start/agent_integrations/codex/)、
 [官方安装脚本](https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh)、
 [Responses API](https://api-docs.deepseek.com/guides/responses_api/) 和

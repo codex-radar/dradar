@@ -4,7 +4,7 @@ import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 
-from dradar import image_cache, local_config, runloop
+from dradar import cli, image_cache, local_config, runloop
 import pytest
 
 
@@ -573,3 +573,30 @@ def test_plan_cleanup_keeps_ledger_when_inspect_fails(monkeypatch, tmp_path: Pat
     assert plan.docker_available is False
     # The ledger is intact: no record was pruned.
     assert set(image_cache.load(tmp_path)) == set(records)
+
+
+def test_cli_rejects_deepseek_endpoint_setting(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "cmd_config_set",
+        lambda _args: pytest.fail("removed endpoint setting must not dispatch"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["config", "set", "deepseek-endpoint", "opencode-go"])
+
+    assert exc.value.code == 2
+
+
+def test_config_show_ignores_stale_deepseek_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(local_config, "HOME", tmp_path)
+    monkeypatch.setattr(local_config, "CONFIG_PATH", tmp_path / "config.json")
+    local_config._save_config({"deepseek_endpoint": "opencode-go"})
+
+    assert image_cache.cmd_config_show(argparse.Namespace()) == 0
+
+    assert "deepseek endpoint" not in capsys.readouterr().out

@@ -33,7 +33,10 @@ from .local_config import (
 from .machine import acquire_run_lock, sweep_orphan_compose
 from .providers import (
     DEEPSEEK_CATALOG_SHA256,
-    DEEPSEEK_PROVIDER,
+    DEEPSEEK_OPENCODE_BASE_URL,
+    DEEPSEEK_OPENCODE_PROVIDER,
+    DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
+    DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
     DSH_AGENT,
@@ -43,6 +46,7 @@ from .providers import (
     GROK_RUN_CONFIG_VERSION,
     GROK_RUNTIME_PROFILE,
     assignment_codex_provider,
+    is_deepseek_family,
 )
 from .runner import (
     DIAG_ADVICE, BuildFlakeError, RunnerError, build_codex_trajectory_bundle,
@@ -1455,15 +1459,21 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         # provider error.  The authenticated status view can then say
         # "insufficient-balance" instead of the opaque wrapper exception.
         meta["failure_kind"] = failure_kind
-    if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
-        # Server-side audit/gating can distinguish corrected official-catalog
-        # runs from the earlier fallback-metadata benchmark without deleting
-        # either history.
-        meta.update({
-            "model_config_version": DEEPSEEK_RUN_CONFIG_VERSION,
-            "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
-            "model_runtime_profile": DEEPSEEK_RUNTIME_PROFILE,
-        })
+    provider = assignment_codex_provider(assignment)
+    if is_deepseek_family(provider):
+        if provider == DEEPSEEK_OPENCODE_PROVIDER:
+            meta.update({
+                "model_config_version": DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
+                "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
+                "model_runtime_profile": DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
+                "model_endpoint": DEEPSEEK_OPENCODE_BASE_URL,
+            })
+        else:
+            meta.update({
+                "model_config_version": DEEPSEEK_RUN_CONFIG_VERSION,
+                "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
+                "model_runtime_profile": DEEPSEEK_RUNTIME_PROFILE,
+            })
     if assignment.get("agent") == GROK_AGENT:
         meta.update({
             "model_config_version": GROK_RUN_CONFIG_VERSION,
@@ -1636,7 +1646,7 @@ def _resume_one_checkpoint(
                 ):
                     return "discarded"
                 return "paused"
-            if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
+            if is_deepseek_family(assignment_codex_provider(assignment)):
                 # The public DeepSeek path deliberately uses stock Pier and
                 # does not resume provider-ambiguous Codex checkpoints. This
                 # prevents an old OpenAI checkpoint from ever being restored
