@@ -430,6 +430,7 @@ def test_ensure_tasks_root_clones_when_missing(tmp_path, monkeypatch):
 import json
 
 from dradar.runner import _trial_timeout_sec, run_trial, summarize_result
+from dradar.runner import _normalize_utf16_patch, _verify_dsh_artifact_binding
 
 
 def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
@@ -1012,3 +1013,67 @@ def test_no_network_task_requires_enforceable_environment_switch(
         build_pier_command(
             _assignment("codex"), tmp_path, tmp_path / "jobs", "j",
             tmp_path / "home")
+
+
+def test_dsh_artifact_binding_accepts_exact_current_run(tmp_path):
+    trial = tmp_path / "task__trial"
+    sidecar = trial / "agent" / "dsh-home" / "dsh-outcome.json"
+    sidecar.parent.mkdir(parents=True)
+    assignment = {
+        "assignment_id": "a" * 32,
+        "_artifact_run_id": "b" * 32,
+        "task_id": "httpx-streaming-json-iteration",
+        "model": "dsh-deepseek-v4-pro",
+        "effort": "off",
+    }
+    sidecar.write_text(json.dumps({
+        "schema": "dradar-dsh-outcome-v1",
+        "assignmentId": assignment["assignment_id"],
+        "artifactRunId": assignment["_artifact_run_id"],
+        "taskId": assignment["task_id"],
+        "assignmentModel": assignment["model"],
+        "reasoningEffort": assignment["effort"],
+    }))
+
+    _verify_dsh_artifact_binding(trial, assignment)
+
+
+def test_dsh_artifact_binding_rejects_previous_assignment_bytes(tmp_path):
+    trial = tmp_path / "task__trial"
+    sidecar = trial / "agent" / "dsh-home" / "dsh-outcome.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(json.dumps({
+        "schema": "dradar-dsh-outcome-v1",
+        "assignmentId": "a" * 32,
+        "artifactRunId": "b" * 32,
+        "taskId": "httpx-streaming-json-iteration",
+        "assignmentModel": "dsh-deepseek-v4-pro",
+        "reasoningEffort": "off",
+    }))
+    current = {
+        "assignment_id": "c" * 32,
+        "_artifact_run_id": "d" * 32,
+        "task_id": "httpx-streaming-json-iteration",
+        "model": "dsh-deepseek-v4-pro",
+        "effort": "off",
+    }
+
+    with pytest.raises(RunnerError, match="does not match"):
+        _verify_dsh_artifact_binding(trial, current)
+
+
+def test_dsh_utf16_patch_is_normalized_only_after_git_validation(tmp_path):
+    patch = tmp_path / "model.patch"
+    diff = (
+        "diff --git a/answer.txt b/answer.txt\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/answer.txt\n"
+        "@@ -0,0 +1 @@\n"
+        "+done\n"
+    )
+    patch.write_bytes(diff.encode("utf-16"))
+
+    assert _normalize_utf16_patch(patch) is True
+    assert patch.read_bytes() == diff.encode("utf-8")
+    assert _normalize_utf16_patch(patch) is False

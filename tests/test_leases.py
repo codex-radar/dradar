@@ -58,6 +58,26 @@ def test_leases_lists_waiting_and_running_with_recovery_hint(monkeypatch, capsys
     assert "--force" in out
 
 
+def test_started_history_without_healthy_runner_is_resumable_not_running(
+    monkeypatch, capsys,
+):
+    stale = _cell("a1", started=True)
+    stale.update({"heartbeat_running": False, "execution_state": "running"})
+    live = _cell("a2", started=True)
+    live.update({"heartbeat_running": True, "execution_state": "running"})
+    paused = _cell("a3", started=True)
+    paused.update({"heartbeat_running": False, "execution_state": "paused"})
+    client = FakeClient([stale, live, paused])
+    _wire(monkeypatch, client)
+
+    assert leases.cmd_leases(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert "1 running, 1 paused, 1 stale" in out
+    assert "a1" in out and "stale" in out
+    assert "not actually resumable" in out
+
+
 def test_release_all_protects_running_without_force(monkeypatch, capsys):
     client = FakeClient([_cell("a1"), _cell("a2", started=True)])
     _wire(monkeypatch, client)

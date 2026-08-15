@@ -13,11 +13,17 @@ from dradar import runloop
 from dradar.api_client import ApiError
 from dradar.providers import (
     DEEPSEEK_CATALOG_SHA256,
+    DEEPSEEK_CODEX_VERSION,
     DEEPSEEK_OPENCODE_BASE_URL,
     DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
     DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
+    DSH_AGENT,
+    DSH_FLASH_MODEL,
+    DSH_RUN_CONFIG_VERSION,
+    DSH_RUNTIME_PROFILE,
+    DSH_VERSION,
 )
 from dradar.runner import RunnerError, TrialArtifacts
 
@@ -453,7 +459,7 @@ def test_get_assignment_403_passes_server_detail_through(monkeypatch, tmp_path: 
     assert "login --github" not in msg
 
 
-def test_terminal_local_upload_rejection_is_excluded_while_other_work_drains(
+def test_terminal_local_upload_rejection_stops_multi_cell_checkout(
         monkeypatch, tmp_path: Path):
     first = dict(ASSIGNMENT)
     second = {**ASSIGNMENT, "assignment_id": "a2", "task_id": "t2", "nonce": "n2"}
@@ -485,8 +491,8 @@ def test_terminal_local_upload_rejection_is_excluded_while_other_work_drains(
     assert runloop._run_checkout_loop(
         args, AtomicClient(), tmp_path, [first, second],
     ) == 1
-    assert ran == ["a1", "a2"]
-    assert checkout_calls[1] == {"a1"}
+    assert ran == ["a1"]
+    assert checkout_calls == [set()]
 
 
 def test_choose_menu_entry_numeric_pick(monkeypatch):
@@ -533,7 +539,7 @@ class SubmitClient(FakeClient):
         self.submissions = []
 
     def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
-               outcome="completed", resume_generation=None):
+               outcome="completed", resume_generation=None, **_kwargs):
         self.submissions.append(
             {"assignment_id": assignment_id, "outcome": outcome, "meta": meta})
         return {"submission_id": f"s-{assignment_id}", "grade_status": "pending"}
@@ -568,6 +574,52 @@ def test_clean_run_submits_outcome_completed(monkeypatch, tmp_path: Path):
     assert client.submissions[0]["meta"]["codex_cli_version"] == "0.145.0"
 
 
+def test_task_content_mismatch_stops_before_model_run(
+    monkeypatch, tmp_path: Path, capsys,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(runloop, "check_task_content_hash", lambda *_args: False)
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: pytest.fail("model runner must not start"),
+    )
+    stopped = []
+    monkeypatch.setattr(
+        runloop, "_mark_stopped_quietly",
+        lambda _client, assignment, **_kwargs: stopped.append(
+            assignment["assignment_id"]),
+    )
+    client = SubmitClient({})
+
+    outcome = runloop._run_and_submit(
+        client, ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "task-content-mismatch"
+    assert stopped == ["a1"]
+    assert client.submissions == []
+    assert "no model quota was consumed" in capsys.readouterr().out
+
+
+def test_explicit_task_drift_override_keeps_existing_audited_behavior(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(runloop, "check_task_content_hash", lambda *_args: False)
+    art = _fake_art(tmp_path, rc=0)
+    monkeypatch.setattr(runloop, "run_trial", lambda *_args, **_kwargs: art)
+    client = SubmitClient({})
+    args = _args()
+    args.allow_task_drift = True
+
+    outcome = runloop._run_and_submit(
+        client, ASSIGNMENT, tmp_path, args, "abc123",
+    )
+
+    assert outcome == "submitted"
+    assert client.submissions[0]["meta"]["task_content_hash_match"] is False
+
+
 def test_deepseek_submission_attests_catalog_and_runtime_profile(
     monkeypatch, tmp_path: Path,
 ):
@@ -598,7 +650,7 @@ def test_opencode_go_submission_attests_endpoint_and_runtime_profile(
     monkeypatch, tmp_path: Path,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
-    art = _fake_art(tmp_path, rc=0, codex_cli_version="0.146.0")
+    art = _fake_art(tmp_path, rc=0, codex_cli_version=DEEPSEEK_CODEX_VERSION)
     monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
     client = SubmitClient({})
     assignment = {
@@ -621,6 +673,35 @@ def test_opencode_go_submission_attests_endpoint_and_runtime_profile(
     assert meta["model_endpoint"] == DEEPSEEK_OPENCODE_BASE_URL
 
 
+def test_dsh_submission_attests_minimal_native_runtime(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    art = _fake_art(tmp_path, rc=0, codex_cli_version=None)
+    art.dsh_version = DSH_VERSION
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": DSH_AGENT,
+        "provider": "deepseek",
+        "model": DSH_FLASH_MODEL,
+        "effort": "off",
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "submitted"
+    meta = client.submissions[0]["meta"]
+    assert meta["dsh_version"] == DSH_VERSION
+    assert meta["model_config_version"] == DSH_RUN_CONFIG_VERSION
+    assert meta["model_runtime_profile"] == DSH_RUNTIME_PROFILE
+    assert meta["dsh_minimal_tools"] == ["bash", "str_replace_editor"]
+    assert meta["dsh_native_efforts"] == ["off", "high", "max"]
+
+
 def test_nonzero_pier_rc_submits_outcome_interrupted_with_meta(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     result_data = {"agent_result": {"n_input_tokens": 10, "n_output_tokens": 3,
@@ -635,6 +716,174 @@ def test_nonzero_pier_rc_submits_outcome_interrupted_with_meta(monkeypatch, tmp_
     assert sub["meta"]["pier_returncode"] == 1
     assert sub["meta"]["duration_sec"] == 61.0
     assert sub["meta"]["n_input_tokens"] == 10  # token stats still reported
+
+
+def test_complete_bundle_survives_nonzero_pier_postrun_rc(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    phases = {
+        name: {
+            "started_at": "2026-08-14T00:00:01Z",
+            "finished_at": "2026-08-14T00:00:02Z",
+        }
+        for name in ("environment_setup", "agent_setup", "agent_execution")
+    }
+    art = _fake_art(tmp_path, rc=1, result_data={
+        "started_at": "2026-08-14T00:00:00Z",
+        "finished_at": "2026-08-14T00:10:00Z",
+        "exception_info": None,
+        "agent_result": {"n_agent_steps": 4},
+        **phases,
+    })
+    art.patch.write_text(
+        "diff --git a/result.txt b/result.txt\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/result.txt\n"
+        "@@ -0,0 +1 @@\n+done\n",
+        encoding="utf-8",
+    )
+    bundle = {"schema_version": "test", "sessions": []}
+    usage = {
+        "schema": "dradar-codex-trajectory-bundle-v1",
+        "complete": True,
+        "agent_session_count": 2,
+        "root_session_count": 1,
+        "subagent_session_count": 1,
+        "sessions": [],
+        "n_input_tokens": 100,
+        "n_cache_tokens": 20,
+        "n_output_tokens": 5,
+    }
+    monkeypatch.setattr(
+        runloop, "build_codex_trajectory_bundle", lambda _trial_dir: bundle,
+    )
+    monkeypatch.setattr(
+        runloop, "codex_trajectory_bundle_usage", lambda _bundle: usage,
+    )
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+
+    tag = runloop._run_and_submit(
+        client, ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "submitted"
+    sub = client.submissions[0]
+    assert sub["outcome"] == "completed"
+    assert sub["meta"]["pier_returncode"] == 1
+    assert sub["meta"]["pier_postrun_warning"] is True
+    assert sub["meta"]["pier_failure_phase"] == "post_agent"
+    assert sub["meta"]["bundled_completion_evidence"] == {
+        "schema": "dradar-bundled-completion-v1",
+        "usage_schema": "dradar-codex-trajectory-bundle-v1",
+        "agent_session_count": 2,
+        "root_session_count": 1,
+        "subagent_session_count": 1,
+    }
+
+
+def test_dsh_completed_agent_survives_nonzero_pier_postrun_rc(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    result_data = {
+        "started_at": "2026-08-14T00:00:00Z",
+        "finished_at": "2026-08-14T00:10:00Z",
+        "agent_execution": {
+            "started_at": "2026-08-14T00:00:10Z",
+            "finished_at": "2026-08-14T00:09:50Z",
+        },
+        "exception_info": None,
+        "agent_result": {
+            "n_input_tokens": 10,
+            "n_cache_tokens": 2,
+            "n_output_tokens": 3,
+        },
+    }
+    art = _fake_art(tmp_path, rc=1, result_data=result_data,
+                    codex_cli_version=None)
+    art.dsh_version = DSH_VERSION
+    art.patch.write_text(
+        "diff --git a/result.txt b/result.txt\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/result.txt\n"
+        "@@ -0,0 +1 @@\n"
+        "+done\n",
+        encoding="utf-8",
+    )
+    outcome = art.trial_dir / "agent" / "dsh-home" / "dsh-outcome.json"
+    outcome.parent.mkdir(parents=True)
+    outcome.write_text(json.dumps({
+        "schema": "dradar-dsh-outcome-v1",
+        "terminalKind": "completed",
+        "requestCount": 7,
+        "agentCompleted": True,
+        "errorCode": None,
+    }), encoding="utf-8")
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": DSH_AGENT,
+        "provider": "deepseek",
+        "model": DSH_FLASH_MODEL,
+        "effort": "high",
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "submitted"
+    sub = client.submissions[0]
+    assert sub["outcome"] == "completed"
+    assert sub["meta"]["pier_returncode"] == 1
+    assert sub["meta"]["pier_postrun_warning"] is True
+    assert sub["meta"]["pier_failure_phase"] == "post_agent"
+    assert sub["meta"]["dsh_completion_evidence"] == {
+        "schema": "dradar-dsh-outcome-v1",
+        "terminal_kind": "completed",
+        "request_count": 7,
+    }
+
+
+def test_dsh_nonzero_pier_rc_without_terminal_sidecar_stays_interrupted(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    art = _fake_art(tmp_path, rc=1, result_data={
+        "started_at": "2026-08-14T00:00:00Z",
+        "finished_at": "2026-08-14T00:10:00Z",
+        "agent_execution": {
+            "started_at": "2026-08-14T00:00:10Z",
+            "finished_at": "2026-08-14T00:09:50Z",
+        },
+        "exception_info": None,
+        "agent_result": {},
+    }, codex_cli_version=None)
+    art.dsh_version = DSH_VERSION
+    art.patch.write_text(
+        "diff --git a/result.txt b/result.txt\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/result.txt\n"
+        "@@ -0,0 +1 @@\n+done\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": DSH_AGENT,
+        "provider": "deepseek",
+        "model": DSH_FLASH_MODEL,
+        "effort": "high",
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "interrupted"
+    assert client.submissions[0]["outcome"] == "interrupted"
+    assert "pier_postrun_warning" not in client.submissions[0]["meta"]
 
 
 def test_recorded_exception_info_submits_outcome_interrupted(monkeypatch, tmp_path: Path):
@@ -701,3 +950,27 @@ def test_serial_batch_stops_before_second_cell_on_insufficient_balance(
     out = capsys.readouterr().out
     assert "stopping this worker before the next task" in out
     assert "siblings with model runs already in flight are allowed to finish" in out
+
+
+def test_serial_batch_stops_before_second_cell_on_task_content_mismatch(
+    monkeypatch, capsys, tmp_path: Path,
+):
+    attempts = []
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runloop, "_run_and_submit",
+        lambda _client, assignment, *_args, **_kwargs: (
+            attempts.append(assignment["assignment_id"])
+            or "task-content-mismatch"
+        ),
+    )
+    batch = [
+        {**ASSIGNMENT, "assignment_id": "a1", "task_id": "t1"},
+        {**ASSIGNMENT, "assignment_id": "a2", "task_id": "t2"},
+    ]
+
+    rc = runloop._run_batch(_args(), SubmitClient({}), tmp_path, batch)
+
+    assert rc == 1
+    assert attempts == ["a1"]
+    assert "same mismatched task checkout" in capsys.readouterr().out

@@ -15,11 +15,16 @@ from .local_config import _load_config, tasks_root_from_config
 from .providers import (
     DEEPSEEK_API_KEY_ENV,
     DEEPSEEK_OPENCODE_API_KEY_ENV,
+    GROK_CLI_VERSION,
     deepseek_api_key,
     deepseek_catalog_error,
     deepseek_opted_in,
+    grok_auth_error,
+    grok_auth_path,
+    grok_cli_path,
     opencode_api_key,
     opencode_opted_in,
+    parse_grok_cli_version,
 )
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 
@@ -150,11 +155,18 @@ def _windows_daemon_hint(virtualization_state: str) -> str:
 def cmd_doctor(args) -> int:
     cfg = _load_config()
     plat = _platform()
-    print(f"dradar {__version__} doctor ({plat})")
+    selected_agent = getattr(args, "agent", None)
+    dsh_only = selected_agent == "dsh-minimal"
+    scope = " — DSH Minimal" if dsh_only else ""
+    print(f"dradar {__version__} doctor ({plat}{scope})")
     if plat == "windows":
+        dependencies = (
+            "Docker Desktop (Linux containers), uv/uvx, and the DeepSeek credential"
+            if dsh_only else
+            "Docker Desktop (Linux containers), Pier, and the Codex CLI"
+        )
         print("  native Windows support is experimental — this check validates "
-              "Docker Desktop (Linux containers), Pier, and the Codex CLI; "
-              "WSL2 remains the established fallback")
+              f"{dependencies}; WSL2 remains the established fallback")
     hints = _DOCKER_HINTS[plat]
     all_ok = True
 
@@ -203,10 +215,20 @@ def cmd_doctor(args) -> int:
     # established bootstrap behavior.
     windows_bootstrap_blocked = plat == "windows" and not daemon_ready
 
-    # pier is auto-installed on `dradar go`; do it here too so doctor reflects
+    # DSH runs the published Pier release in an isolated uvx environment. It
+    # deliberately does not require or alter the host Pier used by other agent
+    # families.
+    if dsh_only:
+        uvx = shutil.which("uvx")
+        all_ok &= _check(
+            "uvx — isolated public DSH runner",
+            bool(uvx),
+            "install uv from https://docs.astral.sh/uv/getting-started/installation/",
+        )
+    # Pier is auto-installed on `dradar go`; do it here too so doctor reflects
     # the ready state instead of a scary FAIL a volunteer (or an agent following
     # a runbook) then chases with the wrong fix.
-    if windows_bootstrap_blocked:
+    elif windows_bootstrap_blocked:
         _skip("pier bootstrap", "fix the Docker daemon first; no installation attempted")
     else:
         try:
@@ -226,13 +248,51 @@ def cmd_doctor(args) -> int:
     auth = runner.codex_auth_path()
     codex_ready = bool(codex) and auth.is_file()
     claude_ready = bool(shutil.which("claude")) and bool(runner.claude_oauth_token())
+    grok = grok_cli_path()
+    grok_requested = grok_auth_path().exists()
+    grok_cli_ready = False
+    if grok:
+        try:
+            grok_version = subprocess.run(
+                [grok, "--version"], capture_output=True, text=True, timeout=10,
+            )
+            grok_cli_ready = (
+                grok_version.returncode == 0
+                and parse_grok_cli_version(grok_version.stdout) == GROK_CLI_VERSION
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    grok_oauth_issue = grok_auth_error() if grok_requested else None
+    grok_ready = grok_cli_ready and grok_requested and grok_oauth_issue is None
     deepseek_requested = deepseek_opted_in()
     deepseek_key_ready = bool(deepseek_api_key())
     opencode_requested = opencode_opted_in()
     opencode_key_ready = bool(opencode_api_key())
-    catalog_issue = deepseek_catalog_error()
-    catalog_ready = catalog_issue is None
-    if deepseek_requested:
+    if dsh_only:
+        all_ok &= _check(
+            "DeepSeek API key — local provider credential",
+            deepseek_key_ready,
+            "run `dradar provider setup deepseek` in your own interactive "
+            f"Terminal, or temporarily export {DEEPSEEK_API_KEY_ENV}",
+        )
+        if deepseek_key_ready:
+            _check("DeepSeek V4 Flash / Pro — DSH Minimal agent ready", True)
+    elif grok_requested:
+        all_ok &= _check(
+            f"Grok CLI {GROK_CLI_VERSION} — subscription runner",
+            grok_cli_ready,
+            f"install official Grok CLI {GROK_CLI_VERSION}",
+        )
+        all_ok &= _check(
+            "Grok subscription OAuth — dedicated DRadar slot",
+            grok_oauth_issue is None,
+            grok_oauth_issue or "run `dradar provider setup grok`",
+        )
+        if grok_ready:
+            _check("Grok 4.5 — subscription provider ready", True)
+    elif deepseek_requested:
+        catalog_issue = deepseek_catalog_error()
+        catalog_ready = catalog_issue is None
         all_ok &= _check(
             "DeepSeek API key — local provider credential",
             deepseek_key_ready,
@@ -245,29 +305,38 @@ def cmd_doctor(args) -> int:
             catalog_issue or "reinstall or upgrade dradar",
         )
         if deepseek_key_ready and catalog_ready:
-            _check("DeepSeek V4 Flash — Codex provider ready", True)
-    if opencode_requested:
+            _check("DeepSeek V4 Flash / Pro — Codex provider ready", True)
+        if deepseek_key_ready:
+            _check("DeepSeek V4 Flash / Pro — DSH Minimal agent ready", True)
+    elif opencode_requested:
+        catalog_issue = deepseek_catalog_error()
+        catalog_ready = catalog_issue is None
         all_ok &= _check(
             "OpenCode Go API key — local provider credential",
             opencode_key_ready,
             "run `dradar provider setup opencode-go` in your own interactive "
             f"Terminal, or temporarily export {DEEPSEEK_OPENCODE_API_KEY_ENV}",
         )
+        all_ok &= _check(
+            "DeepSeek Codex models.json — official catalog",
+            catalog_ready,
+            catalog_issue or "reinstall or upgrade dradar",
+        )
         if opencode_key_ready and catalog_ready:
             _check("DeepSeek V4 Flash via OpenCode Go — Codex provider ready", True)
-    if not (deepseek_requested or opencode_requested):
-        if codex_ready:
-            _check("codex — agent ready", True)
-        elif claude_ready:
-            _check("claude — agent ready", True)
-        else:
-            _check("codex CLI", bool(codex), _CODEX_HINTS[plat])
-            _check("codex auth.json", auth.is_file(), "run: codex login")
-            _check("claude CLI (alternative to codex)", bool(shutil.which("claude")),
-                   "npm install -g @anthropic-ai/claude-code")
-            _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
-                   bool(runner.claude_oauth_token()),
-                   "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
+    elif codex_ready:
+        _check("codex — agent ready", True)
+    elif claude_ready:
+        _check("claude — agent ready", True)
+    else:
+        _check("codex CLI", bool(codex), _CODEX_HINTS[plat])
+        _check("codex auth.json", auth.is_file(), "run: codex login")
+        _check("claude CLI (alternative to codex)", bool(shutil.which("claude")),
+               "npm install -g @anthropic-ai/claude-code")
+        _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
+               bool(runner.claude_oauth_token()),
+               "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
+    if not dsh_only and not deepseek_requested and not opencode_requested and not grok_requested:
         all_ok &= (codex_ready or claude_ready)
 
     # The task repo is auto-cloned on `dradar go`; do it here too so a missing
@@ -313,7 +382,8 @@ def cmd_doctor(args) -> int:
     else:
         all_ok &= _check("server login", False, "dradar login --server <url> --token <token>")
 
-    print("all checks passed" if all_ok else "fix the FAIL items above, then re-run: dradar doctor")
+    retry = "dradar doctor --agent dsh-minimal" if dsh_only else "dradar doctor"
+    print("all checks passed" if all_ok else f"fix the FAIL items above, then re-run: {retry}")
     return 0 if all_ok else 1
 
 

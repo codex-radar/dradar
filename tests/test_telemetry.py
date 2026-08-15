@@ -29,7 +29,7 @@ def test_payload_is_one_session_not_one_per_assignment_and_stays_small():
     client = FakeClient()
     telemetry = RunnerTelemetry(client, jitter=False, target_workers=20)
     telemetry.bind_batch("batch-1")
-    telemetry.set_phase("running", "assignment-1")
+    telemetry.set_phase("running", "assignment-1", 3)
     assert telemetry._send_once() == 60
     telemetry.set_phase("running", "assignment-2")
     telemetry._send_once()
@@ -37,11 +37,13 @@ def test_payload_is_one_session_not_one_per_assignment_and_stays_small():
     assert {p["session_id"] for p in client.heartbeats} == {telemetry.session_id}
     assert [p["active_assignment_id"] for p in client.heartbeats] == [
         "assignment-1", "assignment-2"]
+    assert [p["resume_generation"] for p in client.heartbeats] == [3, None]
     assert client.heartbeats[1]["seq"] > client.heartbeats[0]["seq"]
     assert len(json.dumps(client.heartbeats[-1]).encode()) < 1024
     assert set(client.heartbeats[-1]) == {
         "protocol_version", "client_version", "session_id", "batch_id", "seq",
-        "phase", "active_assignment_id", "client_monotonic_ms", "progress_counter",
+        "phase", "active_assignment_id", "resume_generation",
+        "client_monotonic_ms", "progress_counter",
         "platform", "target_workers",
     }
     assert client.heartbeats[-1]["target_workers"] == 20
@@ -49,11 +51,11 @@ def test_payload_is_one_session_not_one_per_assignment_and_stays_small():
 
 def test_target_worker_count_is_bounded():
     client = FakeClient()
-    for value in (0, 33):
+    for value in (0, 41):
         try:
             RunnerTelemetry(client, target_workers=value)
         except ValueError as exc:
-            assert "between 1 and 32" in str(exc)
+            assert "between 1 and 40" in str(exc)
         else:
             raise AssertionError("out-of-range target worker count was accepted")
 
@@ -66,6 +68,33 @@ def test_server_can_slow_cadence_but_not_make_it_pathological():
     telemetry = RunnerTelemetry(client, jitter=False)
     assert telemetry._send_once() == 600
     assert telemetry._send_once() == 30
+
+
+def test_server_notices_are_bounded_validated_and_printed_once(capsys):
+    notice = {
+        "id": "dsh-usage-upgrade-20260814",
+        "severity": "warning",
+        "message": "当前任务继续运行。\n完成后刷新 CLI。",
+    }
+    client = FakeClient([
+        {"next_heartbeat_sec": 60, "notices": [notice]},
+        {"next_heartbeat_sec": 60, "notices": [notice]},
+        {"next_heartbeat_sec": 60, "notices": [
+            {"id": "bad", "severity": "unknown", "message": "ignored"},
+            "not-an-object",
+        ]},
+    ])
+    telemetry = RunnerTelemetry(client, jitter=False)
+
+    telemetry._send_once()
+    telemetry._send_once()
+    telemetry._send_once()
+
+    err = capsys.readouterr().err
+    assert err.count("dsh-usage-upgrade-20260814") == 0
+    assert err.count("server notice [warning]") == 1
+    assert "当前任务继续运行。 完成后刷新 CLI。" in err
+    assert "ignored" not in err
 
 
 def test_three_failures_warn_once_then_recovery_is_visible(capsys):

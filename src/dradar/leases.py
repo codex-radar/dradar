@@ -10,6 +10,7 @@ import sys
 from datetime import datetime
 
 from .api_client import ApiError
+from .assignment_state import assignment_state, state_summary
 from .identity import _client
 from .local_config import _load_config
 
@@ -34,13 +35,13 @@ def _expiry(iso: str | None) -> str:
 
 
 def _state(assignment: dict) -> str:
-    return "running" if assignment.get("started_at") else "waiting"
+    return assignment_state(assignment)
 
 
 def _print_active(active: list[dict]) -> None:
     for index, item in enumerate(active, 1):
         print(
-            f"  {index:>2}. {_state(item):7s}  "
+            f"  {index:>2}. {_state(item):9s}  "
             f"{item['task_id']}  {item['model']}@{item['effort']}\n"
             f"      {item['assignment_id']}  expires {_expiry(item.get('expires_at'))}"
         )
@@ -59,14 +60,19 @@ def cmd_leases(args) -> int:
         return 0
 
     running = sum(_state(item) == "running" for item in active)
-    print(f"holding {len(active)} cell(s): {running} running, "
-          f"{len(active) - running} waiting")
+    stale = sum(_state(item) == "stale" for item in active)
+    print(f"holding {len(active)} cell(s): {state_summary(active)}")
     _print_active(active)
     print("\nrelease waiting cells: `dradar release <assignment-id>` or "
           "`dradar release --all`")
     if running:
         print("a running cell is protected; only use `--force` after its local "
               "runner has definitely stopped")
+    if stale:
+        print("a stale cell has no usable checkpoint and is not actually resumable; "
+              "do not start a duplicate local model process. Retry after the server "
+              "refreshes it, or use `dradar release --force` only after confirming "
+              "the original runner/container is gone")
     return 0
 
 

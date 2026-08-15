@@ -10,6 +10,7 @@ import pytest
 
 import dradar.runloop as runloop
 import dradar.runner as runner_mod
+from dradar.api_client import ApiError
 from dradar.runner import RunnerError, build_pier_command, diagnose_exception
 
 from test_go_menu import ASSIGNMENT, SubmitClient, _args, _fake_art
@@ -189,6 +190,8 @@ def test_interrupted_insufficient_balance_returns_batch_terminal_outcome(
     out = capsys.readouterr().out
     assert "insufficient balance" in out.lower()
     assert client.submissions[0]["outcome"] == "interrupted"
+    assert client.submissions[0]["meta"]["failure_kind"] == "insufficient-balance"
+    assert client.submissions[0]["meta"]["exception_type"] == "AgentError"
 
 
 def test_interrupted_model_capacity_advice_is_not_a_quota_guess(
@@ -227,7 +230,88 @@ def test_failed_trial_reports_stopped_to_server(monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "run_trial", always_fails)
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid: stopped.append(aid)
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
     assert tag == "failed"
-    assert stopped == [ASSIGNMENT["assignment_id"]]
+    assert stopped == [(
+        ASSIGNMENT["assignment_id"],
+        {"defer_seconds": 300, "failure_kind": "runner_failed"},
+    )]
+
+
+def test_user_interrupt_without_checkpoint_reports_stopped_to_server(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(runloop, "_pause_checkpoint_quietly", lambda *a, **kw: None)
+    stopped = []
+    client = SubmitClient({})
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+
+    with pytest.raises(KeyboardInterrupt):
+        runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
+
+    assert stopped == [(
+        ASSIGNMENT["assignment_id"],
+        {"defer_seconds": 0, "failure_kind": "user_interrupted"},
+    )]
+
+
+def test_user_interrupt_with_checkpoint_keeps_server_paused(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    checkpoint = object()
+    monkeypatch.setattr(
+        runloop, "_pause_checkpoint_quietly", lambda *a, **kw: checkpoint)
+    stopped = []
+    client = SubmitClient({})
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+
+    with pytest.raises(KeyboardInterrupt):
+        runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
+
+    assert stopped == []
+
+
+def test_mark_stopped_retries_transient_cleanup_failure(monkeypatch, capsys):
+    attempts = []
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            attempts.append((assignment_id, kwargs))
+            if len(attempts) < 3:
+                raise ApiError("temporary outage", status_code=503)
+            return {"ok": True}
+
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    assert runloop._mark_stopped_quietly(
+        Client(),
+        {"assignment_id": "assignment-1", "resume_generation": 4},
+        defer_seconds=0,
+    ) is True
+    assert len(attempts) == 3
+    assert all(kwargs["resume_generation"] == 4 for _, kwargs in attempts)
+    assert capsys.readouterr().out == ""
+
+
+def test_mark_stopped_surfaces_nonretryable_cleanup_failure(capsys):
+    attempts = []
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            attempts.append((assignment_id, kwargs))
+            raise ApiError("upgrade required", status_code=426)
+
+    assert runloop._mark_stopped_quietly(Client(), "assignment-2") is False
+    assert len(attempts) == 1
+    out = capsys.readouterr().out
+    assert "could not confirm checkout cleanup" in out
+    assert "assignment-2" in out
+    assert "retry `dradar resume`" in out

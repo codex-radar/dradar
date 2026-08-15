@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from dradar.scrub import (
@@ -71,6 +72,27 @@ def test_scrub_json_bytes_handles_sensitive_keys_inside_nested_objects():
     assert decoded["headers"]["Proxy-Authorization"] == "[REDACTED-AUTH]"
     assert decoded["headers"]["ok"] is True
     assert decoded["credentials"][0]["api_key"] == "[REDACTED]"
+
+
+def test_scrub_json_bytes_replaces_inline_images_with_auditable_marker():
+    encoded = "aGVsbG8="
+    data_url = "data:image/png;base64," + encoded
+    payload = {
+        "direct": {"image_url": data_url},
+        # Pier can wrap a tool result in a JSON-encoded string. The compactor
+        # must catch that representation without changing its outer type.
+        "wrapped": json.dumps({"type": "input_image", "image_url": data_url}),
+    }
+
+    decoded = json.loads(scrub_json_bytes(json.dumps(payload).encode()))
+    digest = hashlib.sha256(encoded.encode("ascii")).hexdigest()
+    marker = (
+        "[DRADAR-OMITTED-INLINE-IMAGE media_type=image/png "
+        f"encoded_chars={len(encoded)} base64_sha256={digest}]"
+    )
+    assert decoded["direct"]["image_url"] == marker
+    assert marker in decoded["wrapped"]
+    assert "aGVsbG8=" not in json.dumps(decoded)
 
 
 def test_scan_secrets_detects_without_rewriting():

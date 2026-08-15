@@ -206,6 +206,12 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
 
     monkeypatch.setattr(runloop, "run_trial", always_flaky)
     client = SubmitClient({})
+    stopped = []
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
-    assert tag == "failed"
+    assert tag == "environment-build-failed"
+    assert stopped == [(
+        ASSIGNMENT["assignment_id"],
+        {"defer_seconds": 300, "failure_kind": "environment_build_failed"},
+    )]
     assert "failed twice" in capsys.readouterr().out

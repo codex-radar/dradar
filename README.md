@@ -158,7 +158,7 @@ dradar login --server https://api.codexradar.com --token <YOUR_TOKEN> \
 dradar doctor
 ```
 
-### DeepSeek V4 Flash 补充 provider
+### DeepSeek V4 Flash / Pro 补充 provider
 
 DeepSeek 是 Codex 路径的可选补充，不会替换 `~/.codex/config.toml`、Codex
 `auth.json`、Claude 配置，也不会让原有任务自动切换 provider。只有在网页明确选择
@@ -168,28 +168,32 @@ DeepSeek 格子时才会使用按量计费的 DeepSeek API。
 
 ```bash
 dradar provider setup deepseek
-dradar provider status deepseek
+dradar provider status deepseek --live
 dradar doctor
 dradar go --pick TASK_ID:deepseek-v4-flash:max
+dradar go --pick TASK_ID:deepseek-v4-pro:high
 ```
 
 key 保存在 `~/.dradar/secrets/deepseek_api_key`，POSIX 系统权限固定为 `0600`，
 不会进入 `config.json`、命令参数、复制提示词或 DRadar 服务端。运行时 CLI 生成短期
 Codex `auth.json`，通过公开 Pier 的 `CODEX_AUTH_JSON_PATH` 文件上传机制送入容器；
-Pier 退出后立即删除。自动化环境也可临时设置 `DEEPSEEK_API_KEY`，CLI 会先写入短期
-auth 文件，再从 Pier 的继承环境中移除该变量。
+Pier 退出后立即删除。该本地文件存在时优先使用，避免桌面应用或 shell 遗留的旧
+`DEEPSEEK_API_KEY` 静默覆盖用户刚配置的新 key；没有本地文件的自动化环境仍可临时
+设置 `DEEPSEEK_API_KEY`，CLI 会先写入短期 auth 文件，再从 Pier 的继承环境中移除该变量。
 
 运行前 CLI 会校验随包发布的 DeepSeek 官方 Codex `models.json` 的 SHA-256，并由一个
 很窄的公开 Pier 子类把它上传到任务容器隔离的 `/tmp/codex-home/models.json`。文件缺失、
-被修改或不含 `high`/`max` 档位时，能力不会上报、`doctor` 会失败，任务也会在发出任何
+被修改或不含 `none`/`low`/`high`/`max` 上游档位时，能力不会上报、`doctor` 会失败，任务也会在发出任何
 付费模型请求前终止。目录启用后，上下文、自动压缩、推理摘要、并行工具和补丁工具等
 元数据均由目录决定，不再用本地 TOML 重复覆盖。
 
 当前公开边界：
 
-- 模型固定为 `deepseek-v4-flash`，有效 effort 只有 `high` 和 `max`；DeepSeek 接受的
-  `low`/`medium`、`xhigh` 只是这两档的兼容别名，不建立重复实验格。
-- 使用已验证的正式版 Codex `0.146.0`、Responses API，以及官方目录声明的
+- 模型固定为 `deepseek-v4-flash` 或 `deepseek-v4-pro`，两者公开启用的产品档位都是
+  `off`、`high` 和 `max`。`off` 在 Codex Responses API 链路上严格转换为
+  `reasoning.effort=none`，其余两档原样传递。上游目录中的 `low` 仅为完整性校验保留，
+  不可领取或运行；`medium`、`xhigh` 也不建立重复实验格。
+- 使用已验证的正式版 Codex `0.147.0`、Responses API，以及官方目录声明的
   1,048,576 token 上下文和 95% 有效上下文比例。
 - 基于公开 `datacurve-pier==0.3.0` 的标准 `codex` agent；附加代码只负责校验并上传
   官方模型目录，不包含 checkpoint 或任何 DRadar 私有 Pier 实现。
@@ -225,6 +229,52 @@ checkpoint 与隔离性约束与官方端点一致。
 [官方安装脚本](https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh)、
 [Responses API](https://api-docs.deepseek.com/guides/responses_api/) 和
 [Codex 自定义 provider](https://developers.openai.com/codex/config-advanced/#custom-model-providers)。
+
+### DeepSeek Harness Minimal
+
+DSH Minimal 是与 Codex 分开的实验 Harness。它复用同一份本地 DeepSeek key，但只接受
+`off`、`high`、`max` 三档，并固定使用 DSH 自带的 `minimal` 双工具组合（持久 Bash 与
+字符串替换编辑器）。网页认领 DSH 格子后，仍走普通志愿者的本机流程：本机 Docker、
+公开 CLI、当前账号已认领批次，再由 `resume` 启动，不需要单独安装宿主机 Pier。
+
+```bash
+dradar provider setup deepseek
+dradar provider status deepseek --live
+dradar doctor --agent dsh-minimal
+# 回到网页认领 DSH 格子后：
+dradar resume -y
+```
+
+运行器通过 `uvx --isolated` 使用公开 `datacurve-pier==0.3.0`，并在任务容器内安装固定的
+`@deepseek-ai/dsh` 版本。普通 Codex、Claude、Grok 和 DeepSeek Codex 的环境检查与运行
+路径不受影响。DSH 第一版不恢复 checkpoint；中断任务会按现有失效/重新认领流程处理。
+
+### Grok 订阅 OAuth 补充 agent
+
+Grok Build 只使用 grok.com 订阅的官方 OAuth/device login，不接受 `XAI_API_KEY`，也不接
+xAI 按量 API。首次在跑题机器的交互式终端中建立 DRadar 专用会话：
+
+```bash
+dradar provider setup grok
+dradar provider status grok
+dradar doctor
+dradar go --pick TASK_ID:grok-4.5:high
+```
+
+凭证保存在 `~/.dradar/providers/grok/auth.json`（目录 `0700`、文件 `0600`），与日常
+`~/.grok` 分离。每次运行只上传一个临时副本，整个模型会话持有独占锁；官方 CLI 静默
+刷新后，DRadar 校验并原子回写，再删除副本。因此同一订阅槽固定单并发，不会让两个
+Pier 容器同时刷新同一个 token。
+
+DRadar 会在宿主机上先校验官方 CLI 的固定版本，再把解析后的独立可执行文件作为只读
+运行输入上传到任务容器并二次验版。Docker build 不访问 x.ai，也不会把 OAuth 凭证或
+日常 `~/.grok` 目录烘焙进镜像；凭证仍只在容器启动后临时注入。
+
+当前 canary 边界：官方 Grok CLI 固定为 `1.0.0`，模型固定为 `grok-4.5`，档位为
+`low`/`medium`/`high`；只能显式领取，不进入自动推荐或补题；禁用 web search、memory、
+subagents 和 plan，并把容器运行时网络限制为 `auth.x.ai` 与
+`cli-chat-proxy.grok.com`。第一版不支持 checkpoint。轨迹按 ATIF-v1.7 保存，但订阅
+运行没有 API 账单，因此 cost 保持未知，不伪报为 `$0`。
 
 体检失败不会领取任务。修复所有 `FAIL` 后重新运行即可。
 
@@ -387,7 +437,8 @@ dradar resume --assignment <ASSIGNMENT_ID>
 | --- | --- |
 | `-y`, `--yes` | 跳过人工确认；适合自动化。不会取消服务端领取和额度上限检查 |
 | `--keep` | 成功上传后保留最终本地任务目录，供调试或审计 |
-| `--allow-task-drift` | 允许本地 benchmark 任务内容与服务端固定版本不一致；可能影响可复现性，谨慎使用 |
+| `--archive-session` | 显式选择：成功上传并清理任务目录前，把 Codex session 以私有权限归档到 `~/.dradar/history/codex-sessions/`；默认关闭 |
+| `--allow-task-drift` | 显式允许本地 benchmark 版本或任务内容与服务端不一致；这类运行不可可靠比较，默认会在消耗模型额度前停止 |
 | `--workers N` | 由一个父进程管理 N 个并发 worker，范围 1–32，默认 1 |
 | `--workers auto` | 检测 Docker、磁盘和账号限制后选择保守并发数 |
 | `--parallel` | 高级选项：允许手工启动另一个独立 DRadar 会话；隐含 `-y` |
@@ -396,6 +447,9 @@ dradar resume --assignment <ASSIGNMENT_ID>
 | `--max-estimated-quota-pct PCT` | 预计 7 天模型额度占用上限 |
 | `--quota-tier TIER` | 额度换算档位：`plus`、`pro-5x`、`pro-20x`，默认 `plus` |
 | `--max-tasks N` | 高级题数硬上限；可以低于默认内部安全上限 |
+
+归档不会写入 Codex 自己的 `~/.codex/sessions`，因此不会混入 Codex 的会话索引。
+可先用 `dradar sessions prune` 查看占用，再用 `dradar sessions prune --yes` 明确删除。
 
 `--workers` 已经负责启动和监管子进程，不能和 `--parallel` 同时使用。父进程先统一认领，
 子进程再通过服务端原子 checkout 分题，因此不会让同一 assignment 在同一批次重复运行。

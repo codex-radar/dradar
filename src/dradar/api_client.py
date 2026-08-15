@@ -303,18 +303,36 @@ class ApiClient:
         """Close a runner session without releasing any held lease."""
         return self._post("/api/v1/runner/close", json=payload, timeout=3.0)
 
-    def mark_stopped(self, assignment_id: str) -> dict[str, Any]:
+    def mark_stopped(
+        self,
+        assignment_id: str,
+        *,
+        defer_seconds: int = 300,
+        resume_generation: int | None = None,
+        failure_kind: str | None = None,
+    ) -> dict[str, Any]:
         """The counterpart of mark_started: this trial died client-side
         (build flake, agent crash, abandonment) with nothing uploaded, so the
-        server should stop showing the cell as 解题中. Same best-effort
-        contract — callers swallow ApiError; a stale 'running' badge also
-        self-heals server-side after est x3 with no submission."""
+        server should stop showing the cell as 解题中. Callers use bounded
+        best-effort retries and surface a final failure; current servers also
+        reopen session-bound, uncheckpointed work after its exact runner is
+        stale."""
+        data = {
+            "assignment_id": assignment_id,
+            "defer_seconds": str(defer_seconds),
+        }
+        if resume_generation is not None:
+            data["resume_generation"] = str(resume_generation)
+        if failure_kind:
+            data["failure_kind"] = failure_kind
         return self._post(
             "/api/v1/assignment/stopped",
             # A cross-session cooldown keeps a second `--parallel` process
             # from immediately taking the same cell that just failed here.
-            # Older servers ignore the extra form field harmlessly.
-            data={"assignment_id": assignment_id, "defer_seconds": "300"},
+            # A user-initiated Ctrl-C passes zero because the process exits
+            # and an immediate explicit `dradar resume` must work. Older
+            # servers ignore the extra form field harmlessly.
+            data=data,
         )
 
     def checkpoint_pause(

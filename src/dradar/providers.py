@@ -9,15 +9,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import stat
 import tempfile
+from contextlib import contextmanager
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 DEFAULT_CODEX_PROVIDER = "openai"
 DEEPSEEK_PROVIDER = "deepseek"
 DEEPSEEK_OPENCODE_PROVIDER = "opencode-go"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
+DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+# Backwards-compatible import used by older extensions and Flash-only tests.
+DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
+DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL)
 DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
 DEEPSEEK_OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY"
 DEEPSEEK_ENABLE_ENV = "DRADAR_ENABLE_DEEPSEEK"
@@ -25,25 +32,66 @@ DEEPSEEK_SECRET_RELATIVE_PATH = Path("secrets") / "deepseek_api_key"
 DEEPSEEK_OPENCODE_SECRET_RELATIVE_PATH = Path("secrets") / "opencode_api_key"
 DEEPSEEK_CAPABILITY = "codex-deepseek-v4-flash-v2"
 DEEPSEEK_OPENCODE_CAPABILITY = "codex-deepseek-v4-flash-opencode-go-v1"
-DEEPSEEK_CODEX_VERSION = "0.146.0"
+DEEPSEEK_PRO_CAPABILITY = "codex-deepseek-v4-pro-v1"
+DEEPSEEK_FLASH_OFF_CAPABILITY = "codex-deepseek-v4-flash-off-v1"
+DEEPSEEK_PRO_OFF_CAPABILITY = "codex-deepseek-v4-pro-off-v1"
+DEEPSEEK_CODEX_VERSION = "0.147.0"
 DEEPSEEK_MIN_CODEX_VERSION = "0.144.0"
-DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"high", "max"})
+# The bundled upstream catalog still describes ``low`` for integrity and
+# compatibility checks, but DRadar's public DeepSeek Codex lane retires it.
+DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
+DEEPSEEK_CATALOG_EFFORTS = frozenset({"none", "low", "high", "max"})
 DEEPSEEK_CATALOG_FILENAME = "deepseek_codex_models.json"
 DEEPSEEK_CATALOG_SHA256 = (
-    "b459a6e438d6a9939d01fd0dbb4693f165ed732bc8e4fd58d7145d9d94bd49a4"
+    "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
 )
 DEEPSEEK_CATALOG_REMOTE_PATH = "/tmp/codex-home/models.json"
 DEEPSEEK_CATALOG_SOURCE = (
     "https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh"
 )
-DEEPSEEK_CATALOG_SOURCE_VERSION = "1.0.0"
-DEEPSEEK_RUN_CONFIG_VERSION = "deepseek-codex-official-catalog-v1"
+DEEPSEEK_CATALOG_SOURCE_VERSION = "1.1.0+dradar-off"
+DEEPSEEK_RUN_CONFIG_VERSION = "deepseek-codex-official-catalog-v2"
 DEEPSEEK_RUNTIME_PROFILE = "public-pier-0.3.0-catalog-v1"
 DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION = "deepseek-opencode-go-catalog-v1"
 DEEPSEEK_OPENCODE_RUNTIME_PROFILE = "public-pier-0.3.0-opencode-go-catalog-v1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/"
 DEEPSEEK_OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 
+
+# DSH Minimal is a separate Pier agent, not a Codex provider alias. It reuses
+# the same local DeepSeek credential while preserving DSH rc.6's native effort
+# surface exactly: off/high/max (there is deliberately no synthetic low mode).
+DSH_AGENT = "dsh-minimal"
+DSH_VERSION = "0.1.0-rc.6"
+DSH_FLASH_MODEL = "dsh-deepseek-v4-flash"
+DSH_PRO_MODEL = "dsh-deepseek-v4-pro"
+DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL)
+DSH_RUNTIME_MODELS = {
+    DSH_FLASH_MODEL: DEEPSEEK_FLASH_MODEL,
+    DSH_PRO_MODEL: DEEPSEEK_PRO_MODEL,
+}
+DSH_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
+DSH_FLASH_CAPABILITY = "dsh-minimal-deepseek-v4-flash-artifact-v4"
+DSH_PRO_CAPABILITY = "dsh-minimal-deepseek-v4-pro-artifact-v4"
+DSH_RUN_CONFIG_VERSION = "dsh-minimal-native-rc6-v1"
+DSH_RUNTIME_PROFILE = "public-pier-0.3.0-dsh-minimal-v1"
+
+# Grok Build is intentionally subscription/OAuth-only.  In particular, the
+# runner strips XAI_API_KEY from Pier's environment and never accepts a key in
+# config, argv, or an assignment.  A dedicated DRadar-owned GROK_HOME keeps a
+# benchmark credential separate from the user's everyday Grok CLI session.
+GROK_PROVIDER = "xai-subscription"
+GROK_AGENT = "grok-build"
+GROK_MODEL = "grok-4.5"
+GROK_CLI_VERSION = "1.0.0"
+GROK_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high"})
+GROK_CAPABILITY = "grok-build-subscription-oauth-v1"
+GROK_RUN_CONFIG_VERSION = "grok-subscription-oauth-isolated-v1"
+GROK_RUNTIME_PROFILE = "pier-grok-build-single-slot-v1"
+GROK_HOME_RELATIVE_PATH = Path("providers") / "grok"
+GROK_AUTH_FILENAME = "auth.json"
+GROK_API_KEY_ENV = "XAI_API_KEY"
+_GROK_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -75,22 +123,25 @@ def deepseek_catalog_error(path: Path | None = None) -> str | None:
     models = parsed.get("models") if isinstance(parsed, dict) else None
     if not isinstance(models, list):
         return "DeepSeek model catalog has no models list"
-    flash = next(
-        (
-            item for item in models
-            if isinstance(item, dict) and item.get("slug") == DEEPSEEK_MODEL
-        ),
-        None,
-    )
-    if flash is None:
-        return f"DeepSeek model catalog is missing {DEEPSEEK_MODEL}"
-    efforts = {
-        item.get("effort")
-        for item in flash.get("supported_reasoning_levels", [])
-        if isinstance(item, dict)
+    by_slug = {
+        item.get("slug"): item
+        for item in models
+        if isinstance(item, dict) and isinstance(item.get("slug"), str)
     }
-    if not DEEPSEEK_SUPPORTED_EFFORTS <= efforts:
-        return "DeepSeek model catalog is missing the benchmark reasoning levels"
+    for model in DEEPSEEK_MODELS:
+        entry = by_slug.get(model)
+        if entry is None:
+            return f"DeepSeek model catalog is missing {model}"
+        efforts = {
+            item.get("effort")
+            for item in entry.get("supported_reasoning_levels", [])
+            if isinstance(item, dict)
+        }
+        if not DEEPSEEK_CATALOG_EFFORTS <= efforts:
+            return (
+                f"DeepSeek model catalog entry {model} is missing the "
+                "benchmark reasoning levels"
+            )
     return None
 
 
@@ -107,6 +158,12 @@ def is_deepseek_family(provider: str | None) -> bool:
     """True for any DeepSeek-model Codex provider (official or OpenCode Go)."""
 
     return provider in (DEEPSEEK_PROVIDER, DEEPSEEK_OPENCODE_PROVIDER)
+
+
+def deepseek_codex_reasoning_effort(effort: str) -> str:
+    """Translate the product's Off label to Responses API's ``none``."""
+
+    return "none" if effort == "off" else effort
 
 
 def deepseek_secret_path(home: Path | None = None) -> Path:
@@ -191,12 +248,24 @@ def deepseek_api_key(
     *,
     home: Path | None = None,
 ) -> str | None:
-    """Resolve the key from the environment first, then the private file."""
+    """Resolve the private file first, then fall back to the environment.
 
-    return _provider_api_key(
-        DEEPSEEK_API_KEY_ENV, DEEPSEEK_SECRET_RELATIVE_PATH,
-        environ, home=home,
-    )
+    ``provider setup deepseek`` is an explicit local credential selection. A
+    stale environment variable inherited from the desktop app or shell must
+    not silently shadow the key the user just configured. Callers that pass
+    an explicit ``environ`` without ``home`` still get a hermetic,
+    environment-only lookup for tests and automation probes.
+    """
+
+    env = os.environ if environ is None else environ
+    if environ is None or home is not None:
+        value = _provider_key_from_file(deepseek_secret_path(home))
+        if value:
+            return value
+    value = env.get(DEEPSEEK_API_KEY_ENV)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def opencode_api_key(
@@ -235,10 +304,14 @@ def deepseek_credential_source(
 ) -> str | None:
     """Return the active credential source without exposing its value."""
 
-    return _provider_credential_source(
-        DEEPSEEK_API_KEY_ENV, DEEPSEEK_SECRET_RELATIVE_PATH,
-        environ, home=home,
-    )
+    env = os.environ if environ is None else environ
+    if environ is None or home is not None:
+        if _provider_key_from_file(deepseek_secret_path(home)):
+            return "file"
+    value = env.get(DEEPSEEK_API_KEY_ENV)
+    if isinstance(value, str) and value.strip():
+        return "environment"
+    return None
 
 
 def opencode_credential_source(
@@ -370,6 +443,8 @@ def create_provider_auth_json(directory: Path, provider: str) -> Path:
             f"`dradar provider setup {setup_provider}` in your own "
             "interactive Terminal"
         )
+    if any(character.isspace() for character in key):
+        raise ValueError("DeepSeek API key must be one non-empty line")
     directory.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(
         prefix=".deepseek-auth.", suffix=".json", dir=directory,
@@ -391,6 +466,194 @@ def create_provider_auth_json(directory: Path, provider: str) -> Path:
     return path
 
 
+def create_deepseek_api_key_file(directory: Path) -> Path:
+    """Create DSH's short-lived owner-only raw-key input file.
+
+    The DSH Pier adapter uploads this file and converts it to DSH's credential
+    document inside the task container. The secret value therefore never
+    appears in Pier's argv, inherited environment, or DRadar log.
+    """
+
+    key = deepseek_api_key()
+    if key is None:
+        raise ValueError(
+            "DeepSeek API key is not configured; run "
+            "`dradar provider setup deepseek` in your own interactive Terminal"
+        )
+    if any(character.isspace() for character in key):
+        raise ValueError("DeepSeek API key must be one non-empty line")
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=".deepseek-dsh-key.", suffix=".txt", dir=directory,
+    )
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(key + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+    except BaseException:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def grok_home(home: Path | None = None) -> Path:
+    if home is None:
+        home = Path(os.environ.get("DRADAR_HOME", Path.home() / ".dradar"))
+    return Path(home) / GROK_HOME_RELATIVE_PATH
+
+
+def grok_auth_path(home: Path | None = None) -> Path:
+    return grok_home(home) / GROK_AUTH_FILENAME
+
+
+def _valid_grok_auth_payload(payload: object) -> bool:
+    """Recognize an OAuth credential without depending on account-specific IDs."""
+
+    if not isinstance(payload, dict) or not payload:
+        return False
+    for record in payload.values():
+        if not isinstance(record, dict):
+            continue
+        if (
+            isinstance(record.get("key"), str)
+            and record["key"].strip()
+            and isinstance(record.get("refresh_token"), str)
+            and record["refresh_token"].strip()
+            and record.get("auth_mode") != "api_key"
+        ):
+            return True
+    return False
+
+
+def grok_auth_error(path: Path | None = None) -> str | None:
+    """Fail closed for missing, broad, symlinked, or non-OAuth credentials."""
+
+    path = grok_auth_path() if path is None else path
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return f"Grok subscription OAuth is not configured at {path}"
+    except OSError as exc:
+        return f"cannot inspect {path}: {exc}"
+    if stat.S_ISLNK(info.st_mode):
+        return f"{path} must be a regular file, not a symlink"
+    if not stat.S_ISREG(info.st_mode):
+        return f"{path} must be a regular file"
+    if os.name != "nt" and stat.S_IMODE(info.st_mode) & 0o077:
+        return f"{path} is too broadly readable; run: chmod 600 {path}"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"Grok OAuth credential is unreadable or invalid JSON: {exc}"
+    if not _valid_grok_auth_payload(payload):
+        return "Grok credential is not a refreshable subscription OAuth session"
+    return None
+
+
+def grok_cli_path(environ: Mapping[str, str] | None = None) -> str | None:
+    env = os.environ if environ is None else environ
+    explicit = env.get("GROK_CLI_PATH")
+    if explicit:
+        return explicit
+    # Keep the ordinary call signature compatible with doctor/test shims that
+    # replace shutil.which with a one-argument platform probe.
+    if environ is None:
+        discovered = shutil.which("grok")
+        if discovered:
+            return discovered
+        official = Path.home() / ".grok" / "bin" / "grok"
+        return str(official) if official.is_file() and os.access(official, os.X_OK) else None
+    return shutil.which("grok", path=env.get("PATH"))
+
+
+def parse_grok_cli_version(output: str) -> str | None:
+    match = _GROK_VERSION_RE.search(output.strip())
+    return match.group(1) if match else None
+
+
+def _replace_private_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.chmod(target.parent, 0o700)
+    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            with source.open("rb") as incoming:
+                shutil.copyfileobj(incoming, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+@contextmanager
+def grok_subscription_session(directory: Path, *, home: Path | None = None):
+    """Yield a private run copy while serializing OAuth refresh/writeback.
+
+    The lock covers the entire paid CLI process.  The Pier adapter downloads
+    the possibly refreshed container credential back onto the yielded file;
+    this context validates it before atomically advancing the canonical slot.
+    """
+
+    canonical = grok_auth_path(home)
+    issue = grok_auth_error(canonical)
+    if issue is not None:
+        raise ValueError(issue + "; run `dradar provider setup grok` first")
+    canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock_path = canonical.parent / "auth.lock"
+    directory.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock:
+        if os.name == "nt":  # pragma: no cover - Windows runner
+            import msvcrt
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        fd, name = tempfile.mkstemp(
+            prefix=".grok-oauth-run.", suffix=".json", dir=directory,
+        )
+        os.close(fd)
+        run_copy = Path(name)
+        try:
+            _replace_private_file(canonical, run_copy)
+            yield run_copy
+            issue = grok_auth_error(run_copy)
+            if issue is not None:
+                raise ValueError(
+                    "Grok returned an invalid refreshed OAuth credential: " + issue
+                )
+            _replace_private_file(run_copy, canonical)
+        finally:
+            try:
+                run_copy.unlink()
+            except FileNotFoundError:
+                pass
+            if os.name == "nt":  # pragma: no cover - Windows runner
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def advertised_capabilities(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
@@ -402,10 +665,30 @@ def advertised_capabilities(
     explicitly authorize assignments for either endpoint.
     """
 
-    del environ
-    if deepseek_catalog_error() is not None:
-        return ()
-    return (DEEPSEEK_CAPABILITY, DEEPSEEK_OPENCODE_CAPABILITY)
+    capabilities = []
+    if deepseek_catalog_error() is None:
+        capabilities.extend((
+            DEEPSEEK_CAPABILITY,
+            DEEPSEEK_OPENCODE_CAPABILITY,
+            DEEPSEEK_PRO_CAPABILITY,
+            DEEPSEEK_FLASH_OFF_CAPABILITY,
+            DEEPSEEK_PRO_OFF_CAPABILITY,
+        ))
+    # The adapter installs its pinned DSH runtime inside each task image, so
+    # its only local runtime prerequisite is a usable DeepSeek credential.
+    # Unlike the legacy Codex capabilities, keep these new paid-agent cells
+    # hidden until the key is actually ready.
+    if (
+        deepseek_api_key(environ) is not None
+        and Path(__file__).with_name("pier_dsh.py").is_file()
+    ):
+        capabilities.extend((DSH_FLASH_CAPABILITY, DSH_PRO_CAPABILITY))
+    # Unlike API-key providers, a subscription slot is scarce and stateful.
+    # Advertise it only when both the CLI and a safe refreshable OAuth session
+    # are actually present, preventing the server from assigning unusable work.
+    if grok_cli_path(environ) and grok_auth_error() is None:
+        capabilities.append(GROK_CAPABILITY)
+    return tuple(capabilities)
 
 
 def normalize_capabilities(values: Iterable[str]) -> tuple[str, ...]:

@@ -293,4 +293,80 @@ def test_doctor_blocks_deepseek_when_official_catalog_is_invalid(
     assert rc == 1
     assert "[FAIL] DeepSeek Codex models.json — official catalog" in out
     assert "integrity check failed" in out
-    assert "DeepSeek V4 Flash — Codex provider ready" not in out
+    assert "DeepSeek V4 Flash / Pro — Codex provider ready" not in out
+
+
+def test_dsh_scoped_doctor_uses_public_uvx_without_host_pier(
+    monkeypatch, capsys, tmp_path,
+):
+    tasks_root = tmp_path / "tasks"
+    tasks_root.mkdir()
+    monkeypatch.setattr(doctor, "_platform", lambda: "linux")
+    monkeypatch.setattr(
+        doctor, "_load_config",
+        lambda: {"server": "https://example.test", "token": "hidden"},
+    )
+    monkeypatch.setattr(doctor, "tasks_root_from_config", lambda _cfg: tasks_root)
+    monkeypatch.setattr(doctor, "deepseek_opted_in", lambda: True)
+    monkeypatch.setattr(doctor, "deepseek_api_key", lambda: "configured")
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        lambda name: f"/usr/bin/{name}" if name in {"docker", "uvx"} else None,
+    )
+    monkeypatch.setattr(doctor, "_probe", lambda _cmd: True)
+    monkeypatch.setattr(doctor, "docker_resources", lambda: (8, 16.0, ()))
+    monkeypatch.setattr(
+        doctor.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(free=100_000_000_000),
+    )
+    monkeypatch.setattr(
+        doctor, "_client",
+        lambda _cfg: SimpleNamespace(whoami=lambda: {"nickname": "tester"}),
+    )
+    monkeypatch.setattr(
+        doctor.runner, "ensure_pier",
+        lambda: pytest.fail("DSH scoped doctor must not install host Pier"),
+    )
+    monkeypatch.setattr(
+        doctor, "deepseek_catalog_error",
+        lambda: pytest.fail("DSH does not consume the Codex model catalog"),
+    )
+
+    rc = doctor.cmd_doctor(SimpleNamespace(agent="dsh-minimal"))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "[ok ] uvx — isolated public DSH runner" in out
+    assert "[ok ] DeepSeek V4 Flash / Pro — DSH Minimal agent ready" in out
+    assert "SecurityMind" not in out
+    assert "pier" not in out.lower()
+
+
+def test_dsh_scoped_doctor_reports_its_own_retry_command(
+    monkeypatch, capsys, tmp_path,
+):
+    tasks_root = tmp_path / "tasks"
+    tasks_root.mkdir()
+    monkeypatch.setattr(doctor, "_platform", lambda: "linux")
+    monkeypatch.setattr(doctor, "_load_config", lambda: {})
+    monkeypatch.setattr(doctor, "tasks_root_from_config", lambda _cfg: tasks_root)
+    monkeypatch.setattr(doctor, "deepseek_api_key", lambda: None)
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        lambda name: "/usr/bin/docker" if name == "docker" else None,
+    )
+    monkeypatch.setattr(doctor, "_probe", lambda _cmd: True)
+    monkeypatch.setattr(doctor, "docker_resources", lambda: (8, 16.0, ()))
+    monkeypatch.setattr(
+        doctor.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(free=100_000_000_000),
+    )
+
+    rc = doctor.cmd_doctor(SimpleNamespace(agent="dsh-minimal"))
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "[FAIL] uvx — isolated public DSH runner" in out
+    assert "[FAIL] DeepSeek API key" in out
+    assert "re-run: dradar doctor --agent dsh-minimal" in out
+    assert "SecurityMind" not in out

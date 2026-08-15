@@ -88,7 +88,7 @@ class FakeClient:
                            resume_generation, reason):
         self.discarded = (assignment_id, checkpoint_id, resume_generation, reason)
 
-    def mark_stopped(self, assignment_id):
+    def mark_stopped(self, assignment_id, **_kwargs):
         self.stopped.append(assignment_id)
 
 
@@ -116,6 +116,58 @@ def test_upload_success_clears_ledger(tmp_path: Path, monkeypatch):
     outcome = runloop._upload_trial(client, _entry(trial_dir, meta={"k": "v"}))
     assert outcome == "submitted"
     assert pending.load(tmp_path) == []
+
+
+def test_opted_in_session_archive_runs_after_ack_before_job_cleanup(
+    tmp_path: Path, monkeypatch,
+):
+    home = tmp_path / ".dradar"
+    job_dir = home / "work" / "jobs" / "job-a1"
+    trial_dir = _make_trial_dir(job_dir, "trial")
+    session = trial_dir / "agent" / "sessions" / "2026" / "08" / "16" / "root.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text("{}\n")
+    monkeypatch.setattr(runloop, "HOME", home)
+    monkeypatch.setattr(runloop, "build_codex_trajectory_bundle", lambda _path: None)
+    client = FakeClient(lambda _aid: {
+        "submission_id": "s1", "grade_status": "pending",
+    })
+
+    outcome = runloop._upload_trial(client, _entry(
+        trial_dir, job_dir=str(job_dir), keep=False, archive_session=True,
+    ))
+
+    archived = (
+        home / "history" / "codex-sessions" / "a1" /
+        "2026" / "08" / "16" / "root.jsonl"
+    )
+    assert outcome == "submitted"
+    assert archived.read_text() == "{}\n"
+    assert not job_dir.exists()
+
+
+def test_session_archive_opt_in_persists_across_retry_but_keep_takes_precedence(
+    tmp_path: Path, monkeypatch,
+):
+    home = tmp_path / ".dradar"
+    job_dir = home / "work" / "jobs" / "job-a1"
+    trial_dir = _make_trial_dir(job_dir, "trial")
+    session = trial_dir / "agent" / "sessions" / "root.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text("{}\n")
+    monkeypatch.setattr(runloop, "HOME", home)
+    monkeypatch.setattr(runloop, "build_codex_trajectory_bundle", lambda _path: None)
+    pending.record(home, _entry(
+        trial_dir, job_dir=str(job_dir), keep=True, archive_session=True,
+    ))
+    client = FakeClient(lambda _aid: {
+        "submission_id": "s1", "grade_status": "pending",
+    })
+
+    runloop._retry_pending_uploads(client)
+
+    assert job_dir.is_dir()
+    assert not (home / "history").exists()
 
 
 def _write_codex_session(path: Path, session_id: str, role: str,
@@ -957,6 +1009,141 @@ def test_bundle_422_retries_completed_result_without_optional_bundle(
     assert client.calls == [True, False]
     assert pending.load(tmp_path) == []
     assert client.stopped == []
+
+
+def test_bundle_rejection_then_required_fallback_is_terminal(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    sessions = trial_dir / "agent" / "sessions"
+    _write_codex_session(sessions / "root.jsonl", "root-1", "user", 100)
+
+    class IncompatibleServerClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            if trajectory_bundle is not None:
+                raise ApiError(
+                    "server returned 422: trajectory_bundle.json is incomplete",
+                    status_code=422,
+                )
+            raise ApiError(
+                "server returned 422: complete trajectory_bundle.json is required",
+                status_code=422,
+            )
+
+    client = IncompatibleServerClient(lambda _aid: None)
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "rejected"
+    assert client.calls == [True, False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == ["a1"]
+    assert trial_dir.is_dir()
+
+
+def test_persisted_bundle_omission_required_by_server_is_terminal(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    entry = _entry(trial_dir)
+    entry["omit_trajectory_bundle"] = True
+
+    class StrictServerClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            assert trajectory_bundle is None
+            raise ApiError(
+                "server returned 422: complete trajectory_bundle.json is required",
+                status_code=422,
+            )
+
+    client = StrictServerClient(lambda _aid: None)
+    assert runloop._upload_trial(client, entry) == "rejected"
+    assert client.calls == [False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == ["a1"]
+
+
+def test_oversized_projected_request_omits_bundle_before_submit(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    # Keep the test fixture tiny while exercising the production size-budget
+    # branch: the patch + framing fit, but adding the bundle does not.
+    monkeypatch.setattr(
+        runloop, "_UPLOAD_BODY_BUDGET_BYTES",
+        runloop._MULTIPART_OVERHEAD_BUDGET_BYTES + 200,
+    )
+    trial_dir = _make_trial_dir(tmp_path)
+    sessions = trial_dir / "agent" / "sessions"
+    _write_codex_session(sessions / "root.jsonl", "root-1", "user", 100)
+
+    class CaptureClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            assert trajectory_bundle is None
+            return {"submission_id": "s1", "grade_status": "pending"}
+
+    client = CaptureClient(lambda _aid: None)
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "submitted"
+    assert client.calls == [False]
+    assert pending.load(tmp_path) == []
+    assert "omitting the optional trajectory bundle" in capsys.readouterr().out
+
+
+def test_bundle_edge_413_retries_once_without_optional_bundle(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    sessions = trial_dir / "agent" / "sessions"
+    _write_codex_session(sessions / "root.jsonl", "root-1", "user", 100)
+
+    class EdgeFallbackClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            if trajectory_bundle is not None:
+                raise ApiError(
+                    "server returned 413: Payload Too Large (cloudflare)",
+                    status_code=413,
+                )
+            return {"submission_id": "s1", "grade_status": "pending"}
+
+    client = EdgeFallbackClient(lambda _aid: None)
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "submitted"
+    assert client.calls == [True, False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == []
+
+
+def test_bundle_edge_413_is_terminal_if_reduced_request_is_still_too_large(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    sessions = trial_dir / "agent" / "sessions"
+    _write_codex_session(sessions / "root.jsonl", "root-1", "user", 100)
+
+    class AlwaysOversizedClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            self.calls.append(trajectory_bundle is not None)
+            raise ApiError("server returned 413: too large", status_code=413)
+
+    client = AlwaysOversizedClient(lambda _aid: None)
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "rejected"
+    assert client.calls == [True, False]
+    assert pending.load(tmp_path) == []
+    assert client.stopped == ["a1"]
 
 
 def test_bundle_422_persists_downgrade_when_fallback_transport_fails(

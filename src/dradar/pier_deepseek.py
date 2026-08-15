@@ -22,7 +22,7 @@ from pier.models.agent.context import AgentContext
 from pier.models.agent.network import NetworkAllowlist
 
 _CATALOG_SHA256 = (
-    "b459a6e438d6a9939d01fd0dbb4693f165ed732bc8e4fd58d7145d9d94bd49a4"
+    "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
 )
 
 _OFFICIAL_DEEPSEEK_BASE_URL = "https://api.deepseek.com/"

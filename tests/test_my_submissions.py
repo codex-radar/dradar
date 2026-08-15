@@ -70,3 +70,23 @@ def test_cmd_status_makes_lease_recovery_commands_discoverable(monkeypatch, caps
     out = capsys.readouterr().out
     assert "1 running, 1 waiting" in out
     assert "dradar leases" in out and "dradar release" in out
+
+
+def test_cmd_status_uses_live_runner_health_not_historical_started_at(
+    monkeypatch, capsys,
+):
+    payload = {"nickname": "v", "points": 0, "submissions": []}
+    active = [
+        {"assignment_id": "a1", "started_at": "2026-07-15T00:00:00+00:00",
+         "heartbeat_running": False, "execution_state": "running"},
+        {"assignment_id": "a2", "started_at": "2026-07-15T00:00:00+00:00",
+         "heartbeat_running": True, "execution_state": "running"},
+    ]
+    monkeypatch.setattr(identity, "_load_config", lambda: {"server": "https://x", "token": "t"})
+    monkeypatch.setattr(identity, "_client", lambda cfg: FakeStatusClient(payload, active))
+    monkeypatch.setattr(identity.pending, "load", lambda home: [])
+    from types import SimpleNamespace
+
+    identity.cmd_status(SimpleNamespace())
+
+    assert "1 running, 1 stale" in capsys.readouterr().out

@@ -11,8 +11,8 @@ The actual command implementations live in sibling modules, split by concern:
 This file owns only the argparse tree + `main()`, this package's
 console-script entry point (see pyproject.toml). Import everything else from
 the module that defines it — the single-file-era courtesy re-exports were
-dropped once a grep of every known consumer (this repo's tests and the ds0
-pipeline scripts) showed nothing reaching through `dradar.cli`.
+dropped once a grep of the public consumers showed nothing reaching through
+`dradar.cli`.
 """
 
 import argparse
@@ -30,6 +30,7 @@ from .runloop import (
     cmd_checkpoint_discard, cmd_checkpoints, cmd_cleanup, cmd_go,
     cmd_refill_status, cmd_refill_stop, cmd_retry_upload,
 )
+from .session_archive import cmd_sessions_prune
 
 __all__ = ["main"]
 
@@ -92,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
     p_login.set_defaults(func=cmd_login)
 
     p_doc = sub.add_parser("doctor", help="preflight checks")
+    p_doc.add_argument(
+        "--agent", choices=("dsh-minimal",), default=None,
+        help="check only the dependencies required by this agent",
+    )
     p_doc.set_defaults(func=cmd_doctor)
 
     p_capacity = sub.add_parser(
@@ -236,15 +241,19 @@ def main(argv: list[str] | None = None) -> int:
     provider_sub = p_provider.add_subparsers(
         dest="provider_command", required=True)
     p_provider_setup = provider_sub.add_parser(
-        "setup", help="securely enter and save a provider API key")
+        "setup", help="securely configure a provider credential or OAuth session")
     p_provider_setup.add_argument(
-        "provider", choices=("deepseek", "opencode-go"),
+        "provider", choices=("deepseek", "opencode-go", "grok"),
     )
     p_provider_setup.set_defaults(func=cmd_provider_setup)
     p_provider_status = provider_sub.add_parser(
-        "status", help="check provider readiness without displaying its key")
+        "status", help="check provider readiness without displaying credentials")
     p_provider_status.add_argument(
-        "provider", choices=("deepseek", "opencode-go"),
+        "provider", choices=("deepseek", "opencode-go", "grok"),
+    )
+    p_provider_status.add_argument(
+        "--live", action="store_true",
+        help="also verify the configured credential against the provider API",
     )
     p_provider_status.set_defaults(func=cmd_provider_status)
 
@@ -266,6 +275,18 @@ def main(argv: list[str] | None = None) -> int:
     p_cp_discard.add_argument("checkpoint_id", metavar="ID")
     p_cp_discard.set_defaults(func=cmd_checkpoint_discard, lease_hint=True)
 
+    p_sessions = sub.add_parser(
+        "sessions", help="manage opt-in local Codex session archives")
+    sessions_sub = p_sessions.add_subparsers(
+        dest="sessions_command", required=True)
+    p_sessions_prune = sessions_sub.add_parser(
+        "prune", help="show or delete archived Codex sessions")
+    p_sessions_prune.add_argument(
+        "-y", "--yes", action="store_true",
+        help="delete the archives (default: report disk usage only)",
+    )
+    p_sessions_prune.set_defaults(func=cmd_sessions_prune)
+
     for name, help_, is_resume in (
         ("go", "fetch an assignment and run it", False),
         ("resume", "continue the active assignment (no-op if none)", True),
@@ -277,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:
             help="benchmark channel (default: saved channel)",
         )
         p.add_argument("--keep", action="store_true", help="keep local job dir after upload")
+        p.add_argument(
+            "--archive-session", action="store_true",
+            help="after a successful upload, privately archive Codex session "
+                 "transcripts under ~/.dradar/history (off by default)",
+        )
         p.add_argument(
             "--allow-task-drift", action="store_true",
             help="run even if your deep-swe checkout differs from the server's pinned version",
@@ -291,7 +317,13 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--workers", type=_workers_value, default=1, metavar="N|auto",
             help="run up to N tasks concurrently, or use 'auto' for a "
-                 "conservative Docker-based recommendation (default: 1; maximum: 32)",
+                 "conservative Docker-based recommendation (default: 1; maximum: 40)",
+        )
+        p.add_argument(
+            "--worker-target-file", metavar="PATH",
+            help="dynamically resize a fixed worker pool by atomically writing "
+                 "a number from 1 through --workers to PATH; scale-down lets "
+                 "in-flight tasks finish",
         )
         p.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
         p.add_argument(

@@ -191,6 +191,50 @@ def test_resume_one_passes_checkpoint_and_new_generation_to_runner(
     assert seen["checkpoint"].checkpoint_id == item.checkpoint_id
 
 
+def test_resume_registers_queued_then_announces_fenced_owner_after_success(
+    tmp_path: Path, monkeypatch,
+):
+    aid = "d" * 32
+    item = _make_checkpoint(tmp_path, aid, generation=2)
+    assignment = dict(_assignment(aid, generation=2), batch_id="batch-1")
+    events = []
+
+    class Client(_RecoveryClient):
+        def checkpoint_resume(self, *args, **kwargs):
+            events.append("resume")
+            return super().checkpoint_resume(*args, **kwargs)
+
+    class Telemetry:
+        session_id = "session-recovery"
+
+        def bind_batch(self, batch_id):
+            events.append(("batch", batch_id))
+
+        def set_phase(self, phase, assignment_id=None, resume_generation=None):
+            events.append(("phase", phase, assignment_id, resume_generation))
+
+        def flush(self):
+            events.append("flush")
+
+    client = Client(assignment)
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **k: "base")
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runloop, "_run_and_submit", lambda *a, **k: "submitted")
+
+    assert runloop._resume_one_checkpoint(
+        client, item, assignment, _args(), tmp_path / "tasks", Telemetry(),
+    ) == "submitted"
+    assert events[:6] == [
+        ("batch", "batch-1"),
+        ("phase", "queued", None, None),
+        "flush",
+        "resume",
+        ("phase", "running", aid, 3),
+        "flush",
+    ]
+
+
 def test_checkpoint_recovery_uses_exponential_backoff(tmp_path: Path):
     aid = "7" * 32
     now = datetime.now(timezone.utc)

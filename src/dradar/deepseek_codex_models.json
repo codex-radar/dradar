@@ -33,6 +33,10 @@
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
         {
+          "effort": "none",
+          "description": "Disable reasoning"
+        },
+        {
           "effort": "low",
           "description": "Fast responses with lighter reasoning"
         },
@@ -99,6 +103,10 @@
       "description": "Most capable frontier agentic coding model.",
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
+        {
+          "effort": "none",
+          "description": "Disable reasoning"
+        },
         {
           "effort": "low",
           "description": "Fast responses with lighter reasoning"

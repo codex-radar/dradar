@@ -1,4 +1,4 @@
-"""DeepSeek V4 Flash is an additive, public-safe Codex provider."""
+"""DeepSeek V4 Flash / Pro are additive, public-safe Codex providers."""
 
 import hashlib
 import json
@@ -20,11 +20,18 @@ from dradar.providers import (
     DEEPSEEK_CATALOG_REMOTE_PATH,
     DEEPSEEK_CATALOG_SHA256,
     DEEPSEEK_CODEX_VERSION,
+    DEEPSEEK_FLASH_OFF_CAPABILITY,
     DEEPSEEK_MODEL,
     DEEPSEEK_OPENCODE_BASE_URL,
     DEEPSEEK_OPENCODE_CAPABILITY,
     DEEPSEEK_OPENCODE_PROVIDER,
+    DEEPSEEK_MODELS,
+    DEEPSEEK_PRO_CAPABILITY,
+    DEEPSEEK_PRO_OFF_CAPABILITY,
+    DEEPSEEK_PRO_MODEL,
     DEEPSEEK_PROVIDER,
+    DSH_FLASH_CAPABILITY,
+    DSH_PRO_CAPABILITY,
     advertised_capabilities,
     assignment_codex_provider,
     deepseek_catalog_error,
@@ -78,10 +85,18 @@ def test_capability_advertises_software_support_before_first_key_setup():
     assert advertised_capabilities({}) == (
         DEEPSEEK_CAPABILITY,
         DEEPSEEK_OPENCODE_CAPABILITY,
+        DEEPSEEK_PRO_CAPABILITY,
+        DEEPSEEK_FLASH_OFF_CAPABILITY,
+        DEEPSEEK_PRO_OFF_CAPABILITY,
     )
     assert advertised_capabilities({DEEPSEEK_API_KEY_ENV: "key"}) == (
         DEEPSEEK_CAPABILITY,
         DEEPSEEK_OPENCODE_CAPABILITY,
+        DEEPSEEK_PRO_CAPABILITY,
+        DEEPSEEK_FLASH_OFF_CAPABILITY,
+        DEEPSEEK_PRO_OFF_CAPABILITY,
+        DSH_FLASH_CAPABILITY,
+        DSH_PRO_CAPABILITY,
     )
 
 
@@ -89,16 +104,18 @@ def test_bundled_catalog_has_expected_integrity_and_reasoning_levels():
     catalog = deepseek_catalog_path()
     payload = catalog.read_bytes()
     parsed = json.loads(payload)
-    flash = next(item for item in parsed["models"] if item["slug"] == DEEPSEEK_MODEL)
+    by_slug = {item["slug"]: item for item in parsed["models"]}
+    flash = by_slug[DEEPSEEK_MODEL]
 
     assert hashlib.sha256(payload).hexdigest() == DEEPSEEK_CATALOG_SHA256
     assert [item["slug"] for item in parsed["models"]] == [
         "deepseek-v4-flash", "deepseek-v4-pro",
     ]
     assert deepseek_catalog_error(catalog) is None
-    assert {level["effort"] for level in flash["supported_reasoning_levels"]} >= {
-        "high", "max",
-    }
+    for model in DEEPSEEK_MODELS:
+        assert {level["effort"] for level in by_slug[model]["supported_reasoning_levels"]} >= {
+            "none", "low", "high", "max",
+        }
     assert flash["supports_parallel_tool_calls"] is True
     assert flash["apply_patch_tool_type"] == "freeform"
     assert flash["multi_agent_version"] == "v2"
@@ -159,7 +176,7 @@ def test_command_uses_official_catalog_adapter_and_auth_without_secret_env(
         item for item in command if item.startswith("config_toml_file=")
     )
     config_path = Path(config_arg.split("=", 1)[1])
-    assert config_path == home / "codex-deepseek-v4-flash.toml"
+    assert config_path == home / "codex-deepseek-v4.toml"
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["model_provider"] == DEEPSEEK_PROVIDER
     assert parsed["model_catalog_json"] == DEEPSEEK_CATALOG_REMOTE_PATH
@@ -207,14 +224,40 @@ def test_command_uses_opencode_go_endpoint_snapshot(
     parsed = tomllib.loads(Path(config_arg.split("=", 1)[1]).read_text())
     config_url = parsed["model_providers"][DEEPSEEK_PROVIDER]["base_url"]
 
-    # The gateway URL is written to Codex config and handed to the adapter
-    # from the same runner snapshot; the provider table keeps the shared
-    # "deepseek" identity because the catalog models are the same.
     assert config_url == DEEPSEEK_OPENCODE_BASE_URL
     assert parsed["model_provider"] == DEEPSEEK_PROVIDER
     assert [
         item for item in command if item.startswith("provider_base_url=")
     ] == [f"provider_base_url={config_url}"]
+
+
+def test_command_routes_pro_with_its_requested_reasoning_effort(
+    tmp_path: Path,
+    monkeypatch,
+):
+    command, _home = _command(
+        tmp_path,
+        monkeypatch,
+        _assignment(model=DEEPSEEK_PRO_MODEL, effort="high"),
+    )
+    assert command[command.index("--model") + 1] == DEEPSEEK_PRO_MODEL
+    assert "reasoning_effort=high" in command
+    assert f"version={DEEPSEEK_CODEX_VERSION}" in command
+
+
+@pytest.mark.parametrize("model", DEEPSEEK_MODELS)
+def test_command_routes_product_off_to_responses_api_none(
+    tmp_path: Path,
+    monkeypatch,
+    model: str,
+):
+    command, _home = _command(
+        tmp_path,
+        monkeypatch,
+        _assignment(model=model, effort="off"),
+    )
+    assert "reasoning_effort=none" in command
+    assert "reasoning_effort=off" not in command
 
 
 def test_opencode_run_rejects_missing_runtime_credential(
@@ -262,7 +305,7 @@ def test_deepseek_shared_inputs_are_reused_and_owner_only(
         home / runner.DEEPSEEK_AGENT_MODULE_FILENAME: (
             Path(runner.__file__).with_name("pier_deepseek.py").read_bytes()
         ),
-        home / "codex-deepseek-v4-flash.toml": runner.deepseek_toml(
+        home / "codex-deepseek-v4.toml": runner.deepseek_toml(
             providers.DEEPSEEK_BASE_URL
         ).encode(),
         home / "codex-submission-prompt.j2": (
@@ -300,7 +343,7 @@ def test_shared_input_publication_is_atomic_under_concurrency(
     tmp_path: Path,
     monkeypatch,
 ):
-    path = tmp_path / "codex-deepseek-v4-flash.toml"
+    path = tmp_path / "codex-deepseek-v4.toml"
     old = b"complete-old-config\n"
     payload = (b"complete-new-config\n" * 65536)
     path.write_bytes(old)
@@ -373,12 +416,12 @@ def test_command_fails_before_paid_run_when_catalog_is_modified(
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "xhigh"])
-def test_compatibility_aliases_are_not_duplicate_benchmark_cells(
+def test_retired_or_compatibility_efforts_are_not_benchmark_cells(
     tmp_path: Path,
     monkeypatch,
     effort: str,
 ):
-    with pytest.raises(RunnerError, match="effort must be one of high, max"):
+    with pytest.raises(RunnerError, match="effort must be one of high, max, off"):
         _command(tmp_path, monkeypatch, _assignment(effort=effort))
 
 

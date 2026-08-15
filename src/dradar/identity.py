@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import pending
 from .api_client import ApiClient, ApiError
+from .assignment_state import state_summary
 from .local_config import (
     DEFAULT_BENCHMARK, HOME, _load_config, _save_config, default_tasks_root,
     tasks_root_from_config,
@@ -210,9 +211,8 @@ def cmd_status(args) -> int:
             one = lease_data.get("assignment")
             active = [one] if one else []
         if active:
-            running = sum(bool(item.get("started_at")) for item in active)
-            print(f"\n{len(active)} active lease(s): {running} running, "
-                  f"{len(active) - running} waiting — inspect with `dradar leases`; "
+            print(f"\n{len(active)} active lease(s): {state_summary(active)} "
+                  "— inspect with `dradar leases`; "
                   "give back with `dradar release`")
     except ApiError:
         pass

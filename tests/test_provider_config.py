@@ -4,6 +4,7 @@ import json
 import os
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from dradar import provider_config
@@ -25,11 +26,12 @@ from dradar.providers import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_provider_environment(monkeypatch):
+def _isolate_provider_environment(monkeypatch, tmp_path):
     monkeypatch.delenv(DEEPSEEK_API_KEY_ENV, raising=False)
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path / "dradar-home"))
 
 
-def test_file_backed_key_is_atomic_private_and_environment_can_override(
+def test_file_backed_key_is_atomic_private_and_overrides_stale_environment(
     tmp_path,
     monkeypatch,
 ):
@@ -45,6 +47,17 @@ def test_file_backed_key_is_atomic_private_and_environment_can_override(
     assert deepseek_credential_source() == "file"
 
     monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "environment-secret")
+    assert deepseek_api_key() == "file-secret"
+    assert deepseek_credential_source() == "file"
+
+
+def test_environment_key_is_the_fallback_when_no_private_file(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "environment-secret")
+
     assert deepseek_api_key() == "environment-secret"
     assert deepseek_credential_source() == "environment"
 
@@ -137,6 +150,31 @@ def test_setup_uses_hidden_input_and_never_echoes_key(
     assert "sentinel-provider-secret" not in capsys.readouterr().out
 
 
+def test_setup_key_is_active_even_with_a_stale_inherited_environment(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "stale-environment-secret")
+    monkeypatch.setattr(
+        provider_config.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(
+        provider_config.getpass,
+        "getpass",
+        lambda _prompt: "new-file-secret",
+    )
+
+    rc = provider_config.cmd_provider_setup(SimpleNamespace(provider="deepseek"))
+
+    assert rc == 0
+    assert deepseek_api_key() == "new-file-secret"
+    assert deepseek_credential_source() == "file"
+    output = capsys.readouterr().out
+    assert "stale-environment-secret" not in output
+    assert "new-file-secret" not in output
+
+
 def test_status_reports_source_without_secret(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
     store_deepseek_api_key("sentinel-provider-secret")
@@ -223,3 +261,64 @@ def test_opencode_secret_symlink_is_rejected(tmp_path, monkeypatch):
 
     assert opencode_api_key() is None
     assert opencode_credential_source() is None
+def test_live_status_verifies_auth_and_required_models(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    store_deepseek_api_key("sentinel-provider-secret")
+    seen = {}
+
+    def get(url, *, headers, timeout, follow_redirects):
+        seen.update(
+            url=url, authorization=headers["Authorization"],
+            timeout=timeout, follow_redirects=follow_redirects,
+        )
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [
+                {"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"},
+            ]},
+        )
+
+    monkeypatch.setattr(provider_config.httpx, "get", get)
+    rc = provider_config.cmd_provider_status(
+        SimpleNamespace(provider="deepseek", live=True))
+
+    assert rc == 0
+    assert seen == {
+        "url": "https://api.deepseek.com/models",
+        "authorization": "Bearer sentinel-provider-secret",
+        "timeout": 10.0,
+        "follow_redirects": False,
+    }
+    output = capsys.readouterr().out
+    assert "verified live" in output
+    assert "sentinel-provider-secret" not in output
+
+
+def test_live_status_distinguishes_rejected_key_from_transport_failure(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    store_deepseek_api_key("sentinel-provider-secret")
+    monkeypatch.setattr(
+        provider_config.httpx, "get",
+        lambda *args, **kwargs: SimpleNamespace(status_code=401),
+    )
+    assert provider_config.cmd_provider_status(
+        SimpleNamespace(provider="deepseek", live=True)) == 1
+    rejected = capsys.readouterr().out
+    assert "HTTP 401" in rejected
+    assert "provider setup deepseek" in rejected
+    assert "sentinel-provider-secret" not in rejected
+
+    def fail(*args, **kwargs):
+        raise httpx.ConnectError("sentinel-provider-secret")
+
+    monkeypatch.setattr(provider_config.httpx, "get", fail)
+    assert provider_config.cmd_provider_status(
+        SimpleNamespace(provider="deepseek", live=True)) == 1
+    transport = capsys.readouterr().out
+    assert "network/proxy" in transport
+    assert "ConnectError" in transport
+    assert "sentinel-provider-secret" not in transport

@@ -39,6 +39,12 @@ from .providers import (
     DEEPSEEK_OPENCODE_RUNTIME_PROFILE,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
+    DSH_AGENT,
+    DSH_RUN_CONFIG_VERSION,
+    DSH_RUNTIME_PROFILE,
+    GROK_AGENT,
+    GROK_RUN_CONFIG_VERSION,
+    GROK_RUNTIME_PROFILE,
     assignment_codex_provider,
     is_deepseek_family,
 )
@@ -55,6 +61,7 @@ from .scrub import (
     patch_structure_is_valid, redact_patch_secrets, scan_secrets,
     scrub_json_bytes,
 )
+from .session_archive import archive_after_submit
 from .telemetry import RunnerTelemetry
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 
@@ -63,20 +70,30 @@ from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 # count ceiling as a last-resort guard against corrupt estimates or a logic
 # regression; normal quota-bounded plans should never reach it.
 DEFAULT_REFILL_TASK_SAFETY_CAP = 1000
-_TERMINAL_LOCAL_OUTCOMES = {"not-uploaded", "rejected"}
+_TERMINAL_LOCAL_OUTCOMES = {
+    "not-uploaded", "rejected", "task-content-mismatch",
+}
 _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
     "recovery-exhausted", "runtime-incompatible",
 }
 _POOL_ABORT_ENV = "DRADAR_POOL_ABORT_FILE"
+_POOL_TARGET_FILE_ENV = "DRADAR_POOL_TARGET_FILE"
 _POOL_DRAIN_PREFIX = "drain:"
 _POOL_SUPERVISOR_POLL_SECONDS = 0.2
 _POOL_BACKFILL_REFRESH_SECONDS = 2.0
 _POOL_BACKFILL_ERROR_RETRY_SECONDS = 10.0
 _POOL_IMAGE_CACHE_MAINTENANCE_SECONDS = 15 * 60
+_POOL_TARGET_CACHE: dict[Path, int] = {}
 MAX_CHECKPOINT_RESUMES = 5
 _CHECKPOINT_BACKOFF_BASE_SECONDS = 30.0
 _CHECKPOINT_BACKOFF_MAX_SECONDS = 600.0
+
+# Cloudflare's common request-body ceiling is 100 MB. Keep enough headroom
+# for multipart boundaries and form fields so an optional trajectory bundle
+# cannot strand an otherwise valid patch/result at the proxy edge.
+_UPLOAD_BODY_BUDGET_BYTES = 95_000_000
+_MULTIPART_OVERHEAD_BUDGET_BYTES = 64 * 1024
 
 _TERMINAL_FAILURE_OUTCOMES = {
     "auth": ("auth-failure", "agent authentication failed"),
@@ -107,18 +124,64 @@ def _selected_tasks_root(cfg: dict) -> Path:
 
 
 def _is_trajectory_bundle_rejection(exc: ApiError) -> bool:
-    """Whether a 422 only rejects the optional trajectory bundle.
+    """Whether retrying once without the optional bundle is safe.
 
-    Newer servers may provide a stable application code. Older deployments
-    only expose the safe detail string, so keep a deliberately narrow text
-    fallback for compatibility.
+    A proxy-generated 413 cannot identify which multipart field crossed its
+    whole-request limit. The caller invokes this helper only while a bundle
+    is present, so removing that optional field is a safe one-shot downgrade;
+    a second 413 is still terminal. For application 422s, retain the narrow
+    bundle-specific code/text checks so unrelated validation is never bypassed.
     """
+    if exc.status_code == 413:
+        return True
     if exc.status_code != 422:
         return False
     if exc.code and exc.code.startswith("trajectory_bundle_"):
         return True
     detail = str(exc).lower()
     return "trajectory_bundle" in detail or "trajectory bundle" in detail
+
+
+def _is_trajectory_bundle_required(exc: ApiError) -> bool:
+    """Whether the server rejected a reduced upload for lacking the bundle.
+
+    This is a terminal protocol mismatch for the current payload: the client
+    already tried the bundle (or omitted it because it exceeded the safe body
+    budget), while the server refuses an answer without one.  Keeping such an
+    entry in the pending ledger causes every public worker to retry it forever
+    and gradually consumes all real-concurrency slots.
+    """
+    if exc.status_code != 422:
+        return False
+    if exc.code == "trajectory_bundle_required":
+        return True
+    detail = str(exc).lower()
+    return (
+        "complete trajectory_bundle.json is required" in detail
+        or ("trajectory bundle" in detail and "required" in detail)
+    )
+
+
+def _estimated_upload_body_bytes(
+    patch: Path,
+    trajectory: Path | None,
+    result: Path | None,
+    trajectory_bundle: Path | None,
+    client_meta: dict,
+) -> int:
+    """Conservatively estimate the multipart request body before submission.
+
+    httpx adds a random boundary plus small per-part headers. A fixed 64 KiB
+    allowance is intentionally much larger than that framing for this handful
+    of fields, while the 5 MB gap below the proxy ceiling absorbs remaining
+    implementation differences.
+    """
+    total = _MULTIPART_OVERHEAD_BUDGET_BYTES
+    total += len(json.dumps(client_meta).encode("utf-8"))
+    for artifact in (patch, trajectory, result, trajectory_bundle):
+        if artifact is not None and artifact.exists():
+            total += artifact.stat().st_size
+    return total
 
 
 def _is_patch_secret_rejection(exc: ApiError) -> bool:
@@ -173,6 +236,51 @@ def _pool_stop_directive(path: Path | None = None) -> tuple[bool, str] | None:
 def _pool_abort_reason() -> str | None:
     directive = _pool_stop_directive()
     return directive[1] if directive is not None else None
+
+
+def _pool_target_file(args=None) -> Path | None:
+    raw = (
+        getattr(args, "worker_target_file", None) if args is not None else None
+    ) or os.environ.get(_POOL_TARGET_FILE_ENV)
+    return Path(raw).expanduser() if raw else None
+
+
+def _read_pool_target(path: Path | None, *, default: int, maximum: int) -> int:
+    """Read a live worker target without ever guessing past safe bounds."""
+    if path is None:
+        return default
+    try:
+        value = int(path.read_text().strip())
+    except (OSError, ValueError):
+        print(
+            f"worker target file {path} is unavailable or invalid; "
+            f"keeping {default} worker(s)", file=sys.stderr,
+        )
+        return default
+    if not 1 <= value <= maximum:
+        print(
+            f"worker target {value} is outside 1..{maximum}; "
+            f"keeping {default} worker(s)", file=sys.stderr,
+        )
+        return default
+    return value
+
+
+def _worker_slot_is_enabled() -> bool:
+    """Whether this child may check out another task after a live resize."""
+    path = _pool_target_file()
+    if path is None:
+        return True
+    try:
+        slot = int(os.environ.get("DRADAR_WORKER_INDEX", "1"))
+        maximum = int(os.environ.get("DRADAR_POOL_MAX_SIZE", "40"))
+        previous = int(os.environ.get("DRADAR_POOL_SIZE", str(maximum)))
+    except ValueError:
+        return False
+    previous = _POOL_TARGET_CACHE.get(path, previous)
+    target = _read_pool_target(path, default=previous, maximum=maximum)
+    _POOL_TARGET_CACHE[path] = target
+    return slot <= target
 
 
 def _announce_account_stop(outcome: str) -> None:
@@ -498,8 +606,8 @@ def _check_version_pin(pinned: str | None, tasks_root: Path, allow_drift: bool) 
 _artifacts_from_trial_dir = trial_artifact_paths
 
 
-def _apply_codex_usage_to_result(result_path: Path, usage: dict) -> None:
-    """Replace Pier's arbitrary single-session totals in an upload copy.
+def _apply_usage_to_result(result_path: Path, usage: dict) -> None:
+    """Replace Pier's missing/arbitrary token totals in an upload copy.
 
     The raw result remains untouched for retry/debugging.  Clearing cost_usd
     is intentional: the server owns the model price table and recomputes the
@@ -527,8 +635,157 @@ def _apply_codex_usage_to_result(result_path: Path, usage: dict) -> None:
     if not isinstance(metadata, dict):
         metadata = {}
         agent_result["metadata"] = metadata
-    metadata["codex_session_usage"] = usage
+    metadata["provider_usage"] = usage
+    if "codex" in str(usage.get("schema", "")):
+        metadata["codex_session_usage"] = usage
     result_path.write_text(json.dumps(payload, ensure_ascii=False))
+
+
+# Kept for compatibility with callers/tests that used the earlier narrow name.
+_apply_codex_usage_to_result = _apply_usage_to_result
+
+
+def _dsh_trial_usage(trial_dir: Path) -> dict | None:
+    """Read DSH's provider-reported, per-request de-duplicated usage sidecar.
+
+    DSH defines ``inputTokens`` as uncached input and exposes cache reads and
+    writes as disjoint buckets. DRadar's upload contract uses total prompt
+    tokens plus the cache-read subset, so cache writes remain billed as normal
+    input while cache reads receive the server's cached-input price.
+    """
+    path = trial_dir / "agent" / "dsh-home" / "dsh-usage.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "dsh-provider-usage-v1":
+        return None
+    names = (
+        "uncachedInputTokens", "cacheReadTokens", "cacheWriteTokens",
+        "outputTokens", "requestCount",
+    )
+    if any(
+        not isinstance(value.get(name), int)
+        or isinstance(value.get(name), bool)
+        or value[name] < 0
+        for name in names
+    ) or value["requestCount"] < 1:
+        return None
+    n_input = (
+        value["uncachedInputTokens"]
+        + value["cacheReadTokens"]
+        + value["cacheWriteTokens"]
+    )
+    return {
+        "schema": value["schema"],
+        "complete": True,
+        "model": value.get("model"),
+        "request_count": value["requestCount"],
+        "uncached_input_tokens": value["uncachedInputTokens"],
+        "cache_read_tokens": value["cacheReadTokens"],
+        "cache_write_tokens": value["cacheWriteTokens"],
+        "n_input_tokens": n_input,
+        "n_cache_tokens": value["cacheReadTokens"],
+        "n_output_tokens": value["outputTokens"],
+    }
+
+
+def _dsh_completed_outcome(
+    trial_dir: Path, patch: Path, result: Path | None,
+) -> dict | None:
+    """Return pinned DSH completion evidence after a Pier post-run failure.
+
+    Pier's process can fail after the in-container agent has completed and the
+    task hook has harvested a valid patch.  That outer rc must not discard paid
+    work, but a non-empty patch alone is insufficient: API failures can leave a
+    partial or empty artifact too.  The pinned headless runner therefore writes
+    a minimal terminal sidecar before Pier starts post-run collection.  Recover
+    only when that sidecar, result timestamps, exception state, and git diff all
+    independently agree that the agent completed.
+    """
+    outcome_path = trial_dir / "agent" / "dsh-home" / "dsh-outcome.json"
+    try:
+        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+        result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
+        patch_bytes = patch.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(outcome, dict) or not isinstance(result_value, dict):
+        return None
+    request_count = outcome.get("requestCount")
+    if (
+        outcome.get("schema") != "dradar-dsh-outcome-v1"
+        or outcome.get("terminalKind") != "completed"
+        or outcome.get("agentCompleted") is not True
+        or outcome.get("errorCode") is not None
+        or not isinstance(request_count, int)
+        or isinstance(request_count, bool)
+        or request_count < 1
+    ):
+        return None
+    agent_execution = result_value.get("agent_execution")
+    if (
+        result_value.get("exception_info")
+        or not result_value.get("started_at")
+        or not result_value.get("finished_at")
+        or not isinstance(agent_execution, dict)
+        or not agent_execution.get("started_at")
+        or not agent_execution.get("finished_at")
+        or not patch_bytes
+        or not patch_structure_is_valid(patch_bytes)
+    ):
+        return None
+    return {
+        "schema": outcome["schema"],
+        "terminal_kind": outcome["terminalKind"],
+        "request_count": request_count,
+    }
+
+
+def _bundled_completed_outcome(
+    assignment: dict, trial_dir: Path, patch: Path, result: Path | None,
+) -> dict | None:
+    """Return independent completion evidence for a Codex-family rc failure."""
+    if assignment.get("agent") in {DSH_AGENT, GROK_AGENT}:
+        return None
+    try:
+        result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
+        patch_bytes = patch.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(result_value, dict):
+        return None
+    phases = (
+        result_value.get("environment_setup"),
+        result_value.get("agent_setup"),
+        result_value.get("agent_execution"),
+    )
+    if (
+        result_value.get("exception_info")
+        or not result_value.get("started_at")
+        or not result_value.get("finished_at")
+        or not isinstance(result_value.get("agent_result"), dict)
+        or not all(
+            isinstance(phase, dict)
+            and phase.get("started_at")
+            and phase.get("finished_at")
+            for phase in phases
+        )
+        or not patch_bytes
+        or not patch_structure_is_valid(patch_bytes)
+    ):
+        return None
+    bundle = build_codex_trajectory_bundle(trial_dir)
+    usage = codex_trajectory_bundle_usage(bundle) if bundle is not None else None
+    if usage is None or usage.get("complete") is not True:
+        return None
+    return {
+        "schema": "dradar-bundled-completion-v1",
+        "usage_schema": usage.get("schema"),
+        "agent_session_count": usage.get("agent_session_count"),
+        "root_session_count": usage.get("root_session_count"),
+        "subagent_session_count": usage.get("subagent_session_count"),
+    }
 
 
 def _upload_trial(
@@ -577,7 +834,7 @@ def _upload_trial(
 
     def settle_terminal_local_failure() -> None:
         """Keep evidence but make a non-retryable local result runnable again."""
-        _mark_stopped_quietly(client, assignment_id)
+        _mark_stopped_quietly(client, entry)
         item = checkpoints.find_latest(HOME, assignment_id)
         if item is not None:
             checkpoints.mark_terminal(HOME, item)
@@ -639,10 +896,12 @@ def _upload_trial(
               f"({', '.join(redacted_labels)}); uploading a structurally validated "
               "redacted copy. The raw patch stays local.")
 
+    upload_meta = dict(entry.get("meta") or {})
     trajectory_bundle = build_codex_trajectory_bundle(Path(entry["trial_dir"]))
     usage = (codex_trajectory_bundle_usage(trajectory_bundle)
              if trajectory_bundle is not None else None)
-    upload_meta = dict(entry.get("meta") or {})
+    if upload_meta.get("dsh_version") and usage is None:
+        usage = _dsh_trial_usage(Path(entry["trial_dir"]))
     if entry.get("artifact_staging_recovery"):
         upload_meta["artifact_staging_recovery"] = entry["artifact_staging_recovery"]
     if redacted_patch is not None:
@@ -652,10 +911,14 @@ def _upload_trial(
         upload_meta["cost_usd"] = None
         upload_meta["usage_aggregation"] = usage["schema"]
         upload_meta["usage_aggregation_complete"] = usage["complete"]
-        upload_meta["agent_session_count"] = usage["agent_session_count"]
-        upload_meta["root_session_count"] = usage["root_session_count"]
-        upload_meta["subagent_session_count"] = usage["subagent_session_count"]
-        upload_meta["agent_session_usage"] = usage["sessions"]
+        for key in (
+            "agent_session_count", "root_session_count",
+            "subagent_session_count", "agent_session_usage", "request_count",
+            "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
+        ):
+            source_key = "sessions" if key == "agent_session_usage" else key
+            if source_key in usage:
+                upload_meta[key] = usage[source_key]
         for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens"):
             upload_meta[key] = usage[key] if usage["complete"] else None
 
@@ -703,7 +966,7 @@ def _upload_trial(
             result_scrubbed = scrubbed / "result.json"
             result_scrubbed.write_bytes(scrub_json_bytes(result.read_bytes()))
             if usage is not None:
-                _apply_codex_usage_to_result(result_scrubbed, usage)
+                _apply_usage_to_result(result_scrubbed, usage)
         # Refresh before submitting: from here on an unacked completed trial
         # has the canonical paths + digest in its ledger entry. The server
         # dedupes replays (409 "already submitted"), so duplicates are safe.
@@ -712,6 +975,23 @@ def _upload_trial(
             None if entry.get("omit_trajectory_bundle")
             else trajectory_bundle_scrubbed
         )
+        if submit_bundle is not None:
+            projected_bytes = _estimated_upload_body_bytes(
+                upload_patch, traj_scrubbed, result_scrubbed,
+                submit_bundle, upload_meta,
+            )
+            if projected_bytes > _UPLOAD_BODY_BUDGET_BYTES:
+                # Persist before submitting so a crash or later transport
+                # failure cannot rebuild and resend the same oversized body.
+                entry["omit_trajectory_bundle"] = True
+                pending.record(HOME, entry)
+                submit_bundle = None
+                print(
+                    f"  {task_id}: projected upload is "
+                    f"{projected_bytes / 1_000_000:.1f} MB, above the safe "
+                    f"{_UPLOAD_BODY_BUDGET_BYTES / 1_000_000:.0f} MB request "
+                    "budget; omitting the optional trajectory bundle"
+                )
         while True:
             submit_kwargs = {
                 "outcome": outcome,
@@ -735,15 +1015,39 @@ def _upload_trial(
                     pending.record(HOME, entry)
                     submit_bundle = None
                     print(
-                        f"  {task_id}: server rejected the optional trajectory "
-                        "bundle; retrying the completed result without it"
+                        f"  {task_id}: upload was rejected while it included the "
+                        "optional trajectory bundle; retrying the completed "
+                        "result without it"
                     )
                     continue
+
+                if (submit_bundle is None
+                        and _is_trajectory_bundle_required(exc)):
+                    # An older/strict server can reject the optional bundle
+                    # and then reject the one-shot reduced request for not
+                    # carrying that same bundle.  No retry can change this
+                    # completed payload.  Reopen the cell instead of pinning
+                    # a paid worker slot behind an immortal pending entry.
+                    print(
+                        f"  {task_id}: the server requires a complete trajectory "
+                        "bundle after rejecting/omitting this run's bundle; "
+                        "releasing the incompatible assignment instead of "
+                        "retrying forever"
+                    )
+                    pending.remove(HOME, assignment_id)
+                    settle_terminal_local_failure()
+                    print(
+                        "  rejected artifacts kept for diagnosis: "
+                        f"{patch.parent.parent}"
+                    )
+                    return "rejected"
 
                 if exc.status_code == 409 and "already submitted" in str(exc).lower():
                     # Some earlier attempt actually landed server-side even
                     # though THIS process never saw the response — good news.
                     print(f"  {task_id}: already submitted (an earlier attempt landed) — clearing it")
+                    if not ask_cleanup:
+                        archive_after_submit(HOME, entry)
                     pending.remove(HOME, assignment_id)
                     cleanup_settled()
                     return "submitted"
@@ -756,9 +1060,10 @@ def _upload_trial(
                 if (exc.status_code in (404, 413)
                         or _is_patch_secret_rejection(exc)):
                     # These are genuinely terminal for the current payload:
-                    # assignment unknown, request too large, or a patch the
-                    # server still considers unsafe. Never bypass the secret
-                    # gate by retrying a reduced optional-artifact set.
+                    # assignment unknown, the reduced request is still too
+                    # large, or a patch the server still considers unsafe.
+                    # Never bypass the secret gate by retrying a reduced
+                    # optional-artifact set.
                     print(f"  {task_id}: the server rejected this upload for good ({exc}) — "
                           "retrying can't fix it, dropping it from the retry queue "
                           f"(local artifact path: {patch.parent.parent})")
@@ -773,6 +1078,8 @@ def _upload_trial(
                       "(`dradar retry-upload`)")
                 return "upload-failed"
 
+    if not ask_cleanup:
+        archive_after_submit(HOME, entry)
     pending.remove(HOME, assignment_id)
     cleanup_settled()
     if ack.get("grade_status") == "invalid":
@@ -799,6 +1106,7 @@ def _upload_trial(
         elif ask_cleanup and Path(job_dir).is_dir():
             answer = input("  delete this task's local files now? [Y/n] ").strip().lower()
             if answer in ("", "y", "yes"):
+                archive_after_submit(HOME, entry)
                 shutil.rmtree(job_dir, ignore_errors=True)
                 print("  local task files cleaned")
             else:
@@ -812,14 +1120,51 @@ def _upload_trial(
     return "interrupted" if outcome == "interrupted" else "submitted"
 
 
-def _mark_stopped_quietly(client: ApiClient, assignment: dict | str) -> None:
-    try:
-        assignment_id = (
-            assignment if isinstance(assignment, str) else assignment["assignment_id"]
-        )
-        client.mark_stopped(assignment_id)
-    except Exception:
-        pass
+def _mark_stopped_quietly(
+    client: ApiClient,
+    assignment: dict | str,
+    *,
+    defer_seconds: int = 300,
+    failure_kind: str | None = None,
+) -> bool:
+    """Best-effort checkout cleanup with bounded retry and visible failure.
+
+    The endpoint is idempotent, so retrying transport/5xx failures is safe.
+    Client errors are not retried because they need a refresh or upgrade, but
+    they are still surfaced: silently losing this transition can strand a
+    lease as apparently resumable with no checkpoint behind it.
+    """
+    assignment_id = (
+        assignment if isinstance(assignment, str) else assignment["assignment_id"]
+    )
+    resume_generation = (
+        None if isinstance(assignment, str) else assignment.get("resume_generation")
+    )
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            stop_kwargs = {"defer_seconds": defer_seconds}
+            if resume_generation is not None:
+                stop_kwargs["resume_generation"] = resume_generation
+            if failure_kind is not None:
+                stop_kwargs["failure_kind"] = failure_kind
+            client.mark_stopped(assignment_id, **stop_kwargs)
+            return True
+        except ApiError as exc:
+            last_error = exc
+            if exc.status_code is not None and exc.status_code < 500:
+                break
+        except Exception as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(0.25 * (attempt + 1))
+    print(
+        f"warning: could not confirm checkout cleanup for {assignment_id} "
+        f"after {attempt + 1} attempt(s): {last_error}. The lease may appear "
+        "stuck until the server detects the stale runner; keep this message "
+        "and retry `dradar resume` after connectivity or the CLI upgrade is fixed."
+    )
+    return False
 
 
 def _discard_checkpoint_quietly(
@@ -932,6 +1277,15 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             return "busy"
     hash_match = check_task_content_hash(assignment, tasks_root)
+    if hash_match is False and not getattr(args, "allow_task_drift", False):
+        print(
+            "refusing to start: the selected benchmark task differs from the "
+            "server copy. Restore local task changes or refresh the task pack, "
+            "then run `dradar resume`; no model quota was consumed. Use "
+            "`--allow-task-drift` only for an intentional non-comparable run."
+        )
+        _mark_stopped_quietly(client, assignment)
+        return "task-content-mismatch"
     work_dir = HOME / "work"
     print("running trial (this can take a while)...")
     for attempt in (1, 2):
@@ -962,8 +1316,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                   "`dradar resume` (still free: the agent never started), or "
                   "use `dradar release` if you do not want to keep the cell")
             if _pause_checkpoint_quietly(client, assignment) is None:
-                _mark_stopped_quietly(client, assignment)
-            return "failed"
+                _mark_stopped_quietly(
+                    client, assignment, failure_kind="environment_build_failed",
+                )
+            return "environment-build-failed"
         except RunnerError as exc:
             failure_kind = classify_exception_message(str(exc))
             terminal_outcome = _terminal_failure_outcome(failure_kind)
@@ -976,10 +1332,26 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             print(f"trial failed: {exc}\n"
                   "use `dradar resume` to retry later, or `dradar release` to "
                   "give the cell back")
-            _mark_stopped_quietly(client, assignment)
+            _mark_stopped_quietly(
+                client,
+                assignment,
+                failure_kind=failure_kind or "runner_failed",
+            )
             return terminal_outcome or "failed"
         except (KeyboardInterrupt, EOFError):
-            _pause_checkpoint_quietly(client, assignment)
+            # A user can interrupt before an agent has produced a resumable
+            # checkpoint (notably DSH minimal mode). In that case there is no
+            # local recovery path, so undo the checkout stamp before bubbling
+            # the interrupt up. Otherwise the UI reports a resumable lease
+            # while every later ``dradar resume`` sees it as already checked
+            # out and has nothing it can start.
+            if _pause_checkpoint_quietly(client, assignment) is None:
+                _mark_stopped_quietly(
+                    client,
+                    assignment,
+                    defer_seconds=0,
+                    failure_kind="user_interrupted",
+                )
             raise
 
     # Make the authoritative source copy immediately after Pier returns,
@@ -1005,9 +1377,32 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     )
 
     stats = summarize_result(art.result)
-    # An interrupted/failed run (nonzero pier rc or recorded exception) is not a
-    # model failure: report it so the server marks it invalid, not graded 0.
-    interrupted = art.returncode != 0 or stats.get("exception_info")
+    # A recorded agent exception is always interrupted. A nonzero outer Pier
+    # rc may happen after the agent completed and the task hook harvested its
+    # patch. Accept that paid work only with independent DSH terminal evidence
+    # or a complete server-verifiable Codex trajectory bundle.
+    dsh_completion = None
+    if (
+        assignment.get("agent") == DSH_AGENT
+        and art.returncode != 0
+        and not stats.get("exception_info")
+    ):
+        dsh_completion = _dsh_completed_outcome(
+            art.trial_dir, art.patch, art.result,
+        )
+    bundled_completion = None
+    if (
+        art.returncode != 0
+        and not stats.get("exception_info")
+        and dsh_completion is None
+    ):
+        bundled_completion = _bundled_completed_outcome(
+            assignment, art.trial_dir, art.patch, art.result,
+        )
+    postrun_completion = dsh_completion or bundled_completion
+    interrupted = bool(stats.get("exception_info")) or (
+        art.returncode != 0 and postrun_completion is None
+    )
     diag = diagnose_exception(art.result) if interrupted else {}
     failure_kind = diag.get("kind")
     terminal_outcome = _terminal_failure_outcome(failure_kind)
@@ -1020,9 +1415,17 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             return terminal_outcome or "paused"
     outcome = "interrupted" if interrupted else "completed"
     if telemetry:
-        telemetry.set_phase("uploading", assignment["assignment_id"])
+        telemetry.set_phase(
+            "uploading", assignment["assignment_id"],
+            assignment.get("resume_generation"),
+        )
     print(f"trial finished in {art.duration_sec/60:.1f} min (pier rc={art.returncode}, "
           f"outcome={outcome}); uploading...")
+    if postrun_completion is not None:
+        print(
+            "agent completed and produced independently verified artifacts; treating the "
+            "nonzero Pier return code as a post-run infrastructure warning"
+        )
     if interrupted:
         # Say what ACTUALLY failed. pier's rc=0 covers only its own process;
         # the recorded exception carries the in-container agent's real error
@@ -1046,14 +1449,19 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "task_content_hash_match": hash_match,
         "deep_swe_commit": local_commit,
         "codex_cli_version": art.codex_cli_version,
+        "grok_cli_version": art.grok_cli_version,
+        "dsh_version": art.dsh_version,
         **stats,
     }
+    if failure_kind:
+        # Keep Pier's raw exception_type for debugging, but also upload the
+        # recovery-oriented cause that the CLI already derived from the
+        # provider error.  The authenticated status view can then say
+        # "insufficient-balance" instead of the opaque wrapper exception.
+        meta["failure_kind"] = failure_kind
     provider = assignment_codex_provider(assignment)
     if is_deepseek_family(provider):
         if provider == DEEPSEEK_OPENCODE_PROVIDER:
-            # OpenCode Go runs carry their own config/runtime identity plus
-            # the exact gateway endpoint, so aggregation can prove which
-            # endpoint produced a result.
             meta.update({
                 "model_config_version": DEEPSEEK_OPENCODE_RUN_CONFIG_VERSION,
                 "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
@@ -1061,16 +1469,38 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "model_endpoint": DEEPSEEK_OPENCODE_BASE_URL,
             })
         else:
-            # Server-side audit/gating can distinguish corrected official
-            # runs from the earlier fallback-metadata benchmark without
-            # deleting either history. The official endpoint stays implicit
-            # in the official config version so existing submissions keep a
-            # byte-identical metadata shape.
             meta.update({
                 "model_config_version": DEEPSEEK_RUN_CONFIG_VERSION,
                 "model_catalog_sha256": DEEPSEEK_CATALOG_SHA256,
                 "model_runtime_profile": DEEPSEEK_RUNTIME_PROFILE,
             })
+    if assignment.get("agent") == GROK_AGENT:
+        meta.update({
+            "model_config_version": GROK_RUN_CONFIG_VERSION,
+            "model_runtime_profile": GROK_RUNTIME_PROFILE,
+            "subscription_oauth": True,
+            "subscription_concurrency": 1,
+        })
+    if assignment.get("agent") == DSH_AGENT:
+        meta.update({
+            "model_config_version": DSH_RUN_CONFIG_VERSION,
+            "model_runtime_profile": DSH_RUNTIME_PROFILE,
+            "dsh_minimal_tools": ["bash", "str_replace_editor"],
+            "dsh_native_efforts": ["off", "high", "max"],
+            "dsh_artifact_binding": art.dsh_artifact_binding,
+        })
+        if dsh_completion is not None:
+            meta.update({
+                "dsh_completion_evidence": dsh_completion,
+                "pier_postrun_warning": True,
+                "pier_failure_phase": "post_agent",
+            })
+    elif bundled_completion is not None:
+        meta.update({
+            "bundled_completion_evidence": bundled_completion,
+            "pier_postrun_warning": True,
+            "pier_failure_phase": "post_agent",
+        })
 
     if item is not None and item.job_dir == art.job_dir:
         checkpoints.prune_superseded(HOME, assignment["assignment_id"], item)
@@ -1080,6 +1510,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "task_id": assignment["task_id"], "trial_dir": str(art.trial_dir),
         "meta": meta, "outcome": outcome,
         "job_dir": str(art.job_dir) if art.job_dir else None, "keep": args.keep,
+        "archive_session": getattr(args, "archive_session", False),
         "resume_generation": assignment.get("resume_generation", 0),
     }, ask_cleanup=(
         outcome == "completed"
@@ -1167,6 +1598,7 @@ def _checkpoint_upload_entry(
         "outcome": "completed",
         "job_dir": str(item.job_dir),
         "keep": args.keep,
+        "archive_session": getattr(args, "archive_session", False),
         "resume_generation": assignment.get(
             "resume_generation", item.resume_generation),
     }
@@ -1228,6 +1660,16 @@ def _resume_one_checkpoint(
                 ):
                     return "discarded"
                 return "paused"
+            if assignment.get("agent") == DSH_AGENT:
+                print(
+                    f"  {assignment_id}: DSH Minimal checkpoints are not "
+                    "supported; discarding the stale local checkpoint"
+                )
+                if _discard_checkpoint_quietly(
+                    client, item, assignment, reason="incompatible",
+                ):
+                    return "discarded"
+                return "paused"
 
             local_commit = _check_version_pin(
                 assignment.get("deep_swe_commit"), tasks_root,
@@ -1276,7 +1718,9 @@ def _resume_one_checkpoint(
 
             if telemetry:
                 telemetry.bind_batch(assignment.get("batch_id"))
-                telemetry.set_phase("running", assignment_id)
+                # Register the recovery process without claiming ownership.
+                # checkpoint/resume is the atomic bind + fencing operation.
+                telemetry.set_phase("queued")
                 telemetry.flush()
             try:
                 data = client.checkpoint_resume(
@@ -1300,6 +1744,12 @@ def _resume_one_checkpoint(
                 print(f"  {assignment_id}: couldn't resume checkpoint ({exc}); kept locally")
                 return "paused"
             resumed = data["assignment"]
+            if telemetry:
+                telemetry.set_phase(
+                    "running", assignment_id,
+                    resumed.get("resume_generation"),
+                )
+                telemetry.flush()
             print(f"resuming checkpoint {item.checkpoint_id} for {resumed['task_id']} "
                   f"(generation {resumed.get('resume_generation', '?')})")
             outcome = _run_and_submit(
@@ -1639,8 +2089,8 @@ def cmd_go(args) -> int:
         sys.exit("--auto N requires N >= 1")
     workers = getattr(args, "workers", 1)
     auto_workers = workers == "auto"
-    if not auto_workers and (workers < 1 or workers > 32):
-        sys.exit("--workers N requires 1 <= N <= 32")
+    if not auto_workers and (workers < 1 or workers > 40):
+        sys.exit("--workers N requires 1 <= N <= 40")
     if getattr(args, "worker_child", False) and (
         workers != 1
         or not getattr(args, "parallel", False)
@@ -1653,6 +2103,11 @@ def cmd_go(args) -> int:
         sys.exit("--assignment targets one checkpoint and requires --workers 1")
     if getattr(args, "refill_to", None) is not None:
         args.refill = True
+    target_file = _pool_target_file(args)
+    if (target_file is not None
+            and not getattr(args, "worker_child", False)
+            and (auto_workers or workers <= 1)):
+        sys.exit("--worker-target-file requires a fixed --workers N greater than 1")
     refill_options = (
         getattr(args, "max_tasks", None),
         getattr(args, "max_estimated_quota_pct", None),
@@ -1693,7 +2148,7 @@ def cmd_go(args) -> int:
         target_workers = int(os.environ.get("DRADAR_POOL_SIZE", "1"))
     except ValueError:
         target_workers = 1
-    if not 1 <= target_workers <= 32:
+    if not 1 <= target_workers <= 40:
         target_workers = 1
     telemetry = RunnerTelemetry(client, target_workers=target_workers)
     telemetry.start()
@@ -1796,6 +2251,8 @@ def _worker_command(args) -> list[str]:
     ]
     if args.keep:
         command.append("--keep")
+    if getattr(args, "archive_session", False):
+        command.append("--archive-session")
     if args.allow_task_drift:
         command.append("--allow-task-drift")
     if args.dev_agent:
@@ -1866,8 +2323,33 @@ def _assignment_is_ready_for_checkout(
     return ready_at <= (now or datetime.now(timezone.utc))
 
 
-def _pool_ready_waiting_count(client: ApiClient) -> int | None:
-    """Read the authoritative held queue without claiming anything.
+def _assignment_is_recoverable_checkpoint(
+    assignment: dict, local: dict[str, checkpoints.Checkpoint],
+) -> bool:
+    """Whether a paused server lease has matching, safe local recovery state."""
+    assignment_id = assignment.get("assignment_id")
+    item = local.get(assignment_id) if assignment_id else None
+    server_generation = assignment.get("resume_generation", 0)
+    if (
+        item is None or not item.valid or checkpoints.is_expired(item)
+        or checkpoints.is_terminal(HOME, item)
+        or assignment.get("execution_state") != "paused"
+        or assignment.get("runner_state") not in {None, "paused", "resumable"}
+        or not assignment.get("checkpoint_id")
+        or not isinstance(server_generation, int)
+        or isinstance(server_generation, bool)
+        or server_generation < 0
+    ):
+        return False
+    return (
+        item.checkpoint_id == assignment.get("checkpoint_id")
+        and item.resume_generation == server_generation
+        and _checkpoint_backoff_seconds(item) <= 0
+    )
+
+
+def _pool_ready_work_count(client: ApiClient) -> int | None:
+    """Read fresh checkout work plus safely recoverable checkpoints.
 
     ``None`` means the safety check itself failed. The supervisor then keeps
     current workers but fails closed instead of guessing and overspawning.
@@ -1881,11 +2363,18 @@ def _pool_ready_waiting_count(client: ApiClient) -> int | None:
     if active is None:
         one = data.get("assignment")
         active = [one] if one else []
-    return sum(
+    waiting = sum(
         _assignment_is_ready_for_checkout(assignment)
         for assignment in active
         if assignment
     )
+    local = checkpoints.latest_by_assignment(HOME)
+    recoverable = sum(
+        _assignment_is_recoverable_checkpoint(assignment, local)
+        for assignment in active
+        if assignment
+    )
+    return waiting + recoverable
 
 
 def _run_worker_pool(args) -> int:
@@ -1983,10 +2472,15 @@ def _run_worker_pool(args) -> int:
     active, _free_pick = _prepare_batch(args, client)
     if not active:
         return 0
-    count = min(args.workers, len(active))
-    if count < args.workers:
+    maximum = args.workers
+    target_file = _pool_target_file(args)
+    target = _read_pool_target(target_file, default=maximum, maximum=maximum)
+    count = min(target, len(active))
+    if count < target:
         print(f"only {len(active)} task(s) are currently held; starting {count} worker(s)")
     print(f"starting {count} worker(s); server-side checkout assigns each task exactly once")
+    if target_file is not None:
+        print(f"live worker target: {target_file} (range 1..{maximum})")
     command = _worker_command(args)
     pool_abort_file = configured_abort_file or (
         Path(tempfile.gettempdir())
@@ -2011,7 +2505,10 @@ def _run_worker_pool(args) -> int:
     def spawn_worker(slot: int) -> None:
         env = os.environ.copy()
         env["DRADAR_WORKER_INDEX"] = str(slot)
-        env["DRADAR_POOL_SIZE"] = str(count)
+        env["DRADAR_POOL_SIZE"] = str(target)
+        env["DRADAR_POOL_MAX_SIZE"] = str(maximum)
+        if target_file is not None:
+            env[_POOL_TARGET_FILE_ENV] = str(target_file)
         env[_POOL_ABORT_ENV] = str(pool_abort_file)
         process = subprocess.Popen(command, env=env, **popen_kwargs)
         processes.append(process)
@@ -2030,9 +2527,29 @@ def _run_worker_pool(args) -> int:
                     continue
                 returncodes.append((slot, returncode))
                 del active_processes[slot]
+                if returncode != 0 and not backfill_disabled:
+                    # A child already returned its failed assignment to a
+                    # retryable state. Replacing that child automatically can
+                    # pick the same cell again as soon as its cooldown expires
+                    # (or rotate through other cells with the same local
+                    # fault). Drain only: paid sibling runs stay untouched,
+                    # while an explicit later `dradar resume` starts a fresh
+                    # pool after the operator has inspected the failure.
+                    backfill_disabled = True
+                    print(
+                        f"worker {slot} exited {returncode}; disabling automatic "
+                        "backfill and draining workers already in flight"
+                    )
 
             if not active_processes:
                 break
+            new_target = _read_pool_target(
+                target_file, default=target, maximum=maximum,
+            )
+            if new_target != target:
+                direction = "up" if new_target > target else "down"
+                print(f"scaling worker pool {direction}: {target} -> {new_target}")
+                target = new_target
             if pool_abort_file.is_file():
                 if abort_reason is None:
                     directive = _pool_stop_directive(pool_abort_file)
@@ -2057,9 +2574,9 @@ def _run_worker_pool(args) -> int:
 
             current_time = time.monotonic()
             if (not backfill_disabled
-                    and len(active_processes) < count
+                    and len(active_processes) < target
                     and current_time >= next_backfill_check):
-                ready = _pool_ready_waiting_count(client)
+                ready = _pool_ready_work_count(client)
                 next_backfill_check = (
                     current_time + (
                         _POOL_BACKFILL_ERROR_RETRY_SECONDS
@@ -2068,12 +2585,12 @@ def _run_worker_pool(args) -> int:
                 )
                 if ready:
                     vacant_slots = sorted(
-                        set(range(1, count + 1)) - set(active_processes)
+                        set(range(1, target + 1)) - set(active_processes)
                     )
                     for slot in vacant_slots[:ready]:
                         print(
                             f"held work is waiting; restoring worker slot "
-                            f"{slot}/{count}"
+                            f"{slot}/{target}"
                         )
                         try:
                             spawn_worker(slot)
@@ -2084,13 +2601,14 @@ def _run_worker_pool(args) -> int:
                             backfill_error = str(exc)
                             backfill_disabled = True
                             print(
-                                f"couldn't restore worker slot {slot}/{count} "
+                                f"couldn't restore worker slot {slot}/{target} "
                                 f"({exc}); current workers will finish safely"
                             )
                             break
             time.sleep(_POOL_SUPERVISOR_POLL_SECONDS)
     except (KeyboardInterrupt, EOFError):
-        print("\nstopping workers safely; active tasks remain resumable...")
+        print("\nstopping workers safely; each active task is recoverable only after "
+              "a checkpoint is saved or the server confirms checkout cleanup...")
         _signal_workers(processes)
         _maintain_image_cache(client, cfg, phase="after interrupted worker pool")
         cleanup_abort_file()
@@ -2213,7 +2731,10 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
                       "to continue or `dradar release` to give them back)")
                 return 1
         if telemetry:
-            telemetry.set_phase("running", assignment["assignment_id"])
+            telemetry.set_phase(
+                "running", assignment["assignment_id"],
+                assignment.get("resume_generation"),
+            )
             # Make the session/assignment relationship visible before the
             # subprocess can start or fail. assignment/started then stamps
             # started_at + this same session id in one server transaction.
@@ -2225,6 +2746,19 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             telemetry.set_phase("queued")
         if outcome in _ACCOUNT_TERMINAL_OUTCOMES:
             _announce_account_stop(outcome)
+            break
+        if outcome == "environment-build-failed":
+            print(
+                "stopping this batch after repeated environment setup failures; "
+                "no later cell will be started. Fix Docker/network/Pier, then run "
+                "`dradar resume`."
+            )
+            break
+        if outcome == "task-content-mismatch":
+            print(
+                "stopping this batch before later cells use the same mismatched "
+                "task checkout"
+            )
             break
     ok = all(o in ("submitted", "interrupted") for o in results)
     return 0 if ok else 1
@@ -2243,6 +2777,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                                       args.allow_task_drift)
     results, failed_ids = [], set()
     while True:
+        if not _worker_slot_is_enabled():
+            print("worker slot retired by the live pool target; leaving after current work")
+            break
         pool_abort_reason = _pool_abort_reason()
         if pool_abort_reason:
             print(f"worker pool stopped before another checkout: {pool_abort_reason}")
@@ -2305,7 +2842,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         extra = data.get("unstarted")
         if telemetry:
             telemetry.bind_batch(assignment.get("batch_id"))
-            telemetry.set_phase("running", assignment["assignment_id"])
+            telemetry.set_phase(
+                "running", assignment["assignment_id"],
+                assignment.get("resume_generation"),
+            )
         print(f"\n=== checked out {assignment['task_id']} "
               f"{assignment['model']}@{assignment['effort']}"
               + (f" · {extra} more waiting" if extra else "") + " ===")
@@ -2324,11 +2864,26 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             _announce_account_stop(outcome)
             results.append(outcome)
             break
-        fail_fast = os.environ.get("DRADAR_BATCH_FAIL_FAST", "").lower() in {
+        if outcome == "environment-build-failed":
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, "local environment build failed")
+            _signal_pool_abort(
+                "local environment build failed", interrupt_siblings=False,
+            )
+            print(
+                "stopping this worker before the next checkout after repeated "
+                "environment setup failures. Fix Docker/network/Pier, then run "
+                "`dradar resume`."
+            )
+            results.append(outcome)
+            break
+        configured_fail_fast = os.environ.get(
+            "DRADAR_BATCH_FAIL_FAST", "",
+        ).lower() in {
             "1", "true", "yes", "on",
         }
         if getattr(args, "refill", False):
-            if outcome != "submitted":
+            if outcome not in ("submitted", "interrupted"):
                 refill_plan.stop(HOME, f"task outcome={outcome}")
                 print(f"continuous refill stopped after outcome={outcome}; no new tasks "
                       "will be claimed, and existing leases/checkpoints stay untouched")
@@ -2376,13 +2931,24 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 elif replenished.get("status") == "stopped":
                     print(f"continuous refill stopped: "
                           f"{replenished.get('reason') or 'safety limit reached'}")
-        if fail_fast and outcome != "submitted":
+        worker_failure = (
+            getattr(args, "worker_child", False)
+            and outcome not in ("submitted", "interrupted")
+        )
+        continuous_claim_failure = (
+            (getattr(args, "auto", None) is not None or len(active) > 1)
+            and outcome not in ("submitted", "interrupted")
+        )
+        configured_failure = configured_fail_fast and outcome != "submitted"
+        if worker_failure or continuous_claim_failure or configured_failure:
             # Large operator-managed batches should fail closed: continuing to
             # drain the queue turned one shared proxy incident into 27 invalid
-            # submissions on 2026-07-16. Keep ordinary volunteer behavior
-            # unchanged unless the dedicated batch launcher opts in.
-            print(f"stopping this batch runner after outcome={outcome} — fix "
-                  "the shared agent/network issue before resuming")
+            # submissions on 2026-07-16. Supervised children also fail closed
+            # so their parent can drain healthy siblings without respawning a
+            # worker onto the same cooled-down assignment.
+            print(f"stopping this automatic batch runner after outcome={outcome} — "
+                  "fix the agent/network issue before resuming; no later task "
+                  "will be checked out")
             results.append(outcome)
             break
         if outcome == "failed" or outcome in _TERMINAL_LOCAL_OUTCOMES:

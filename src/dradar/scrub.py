@@ -21,6 +21,7 @@ path ever bypasses on non-UTF-8 input: bytes are decoded with
 are still caught.
 """
 
+import hashlib
 import json
 import re
 import subprocess
@@ -83,6 +84,16 @@ _SENSITIVE_JSON_KEY_RE = re.compile(
 _AUTH_JSON_KEY_RE = re.compile(r"(?i)authorization$")
 _OPAQUE_AUTH_VALUE_RE = re.compile(r"[^\s\"']{12,}")
 _OPAQUE_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9._~+/-]{16,}=*")
+
+# Codex computer/browser tool outputs may embed screenshots as multi-megabyte
+# data URLs. Their pixels are not needed for grading, usage accounting, or
+# web-tool audit, and retaining them duplicates the same image in the legacy
+# trajectory and the multi-agent bundle. Preserve tamper-evident metadata
+# instead of uploading the raw display payload.
+_INLINE_IMAGE_DATA_RE = re.compile(
+    r"data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/_=-]+)",
+    re.IGNORECASE,
+)
 
 
 def _decode(data: bytes) -> str:
@@ -153,9 +164,26 @@ def scrub_bytes(data: bytes) -> bytes:
     return scrub_text(_decode(data)).encode("utf-8", errors="surrogateescape")
 
 
+def _compact_inline_images(text: str) -> str:
+    def marker(match: re.Match[str]) -> str:
+        media_type = match.group(1).lower()
+        payload = match.group(2)
+        digest = hashlib.sha256(payload.encode("ascii")).hexdigest()
+        return (
+            "[DRADAR-OMITTED-INLINE-IMAGE "
+            f"media_type={media_type} encoded_chars={len(payload)} "
+            f"base64_sha256={digest}]"
+        )
+
+    return _INLINE_IMAGE_DATA_RE.sub(marker, text)
+
+
 def _scrub_json_value(value: object) -> object:
     if isinstance(value, str):
-        return scrub_text(value)
+        # Compact first: credential regexes should not scan megabytes of image
+        # encoding, and screenshots can visually contain data that text-only
+        # redaction cannot reliably detect.
+        return scrub_text(_compact_inline_images(value))
     if isinstance(value, list):
         return [_scrub_json_value(item) for item in value]
     if isinstance(value, dict):
