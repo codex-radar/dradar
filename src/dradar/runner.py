@@ -48,14 +48,34 @@ from .providers import (
     GROK_MODEL,
     GROK_PROVIDER,
     GROK_SUPPORTED_EFFORTS,
+    KIMI_AGENT,
+    KIMI_API_KEY_ENVS,
+    KIMI_CLI_VERSION,
+    KIMI_MODEL,
+    KIMI_PROVIDER,
+    KIMI_SUPPORTED_EFFORTS,
+    ZCODE_AGENT,
+    ZCODE_API_KEY_ENV,
+    ZCODE_CLI_SHA256,
+    ZCODE_CLI_VERSION,
+    ZCODE_MODEL,
+    ZCODE_PROVIDER,
+    ZCODE_SUPPORTED_EFFORTS,
     assignment_codex_provider,
     create_deepseek_api_key_file,
     create_deepseek_auth_json,
+    create_zcode_api_key_file,
     deepseek_catalog_error,
     deepseek_catalog_path,
     grok_cli_path,
     grok_subscription_session,
+    kimi_cli_path,
+    kimi_subscription_session,
+    parse_kimi_cli_version,
     parse_grok_cli_version,
+    parse_zcode_cli_version,
+    zcode_cli_error,
+    zcode_cli_path,
 )
 
 # The egress allowlist alone does NOT stop the agent from searching the web:
@@ -78,6 +98,41 @@ ALLOWLIST_TOML = (
     '[__pier_allowlist]\n'
     'url = "https://chatgpt.com"\n'
 )
+
+
+def _resolve_user_tool(name: str, *, home: Path | None = None) -> str | None:
+    """Resolve a CLI, including uv's per-user bin directory.
+
+    Non-interactive SSH and systemd-launched shells commonly omit
+    ``~/.local/bin`` even though ``uv tool install`` puts executables there.
+    Keep the normal PATH result authoritative, then inspect only the current
+    user's explicit/default uv tool directory when it was not already searched.
+    """
+    discovered = shutil.which(name)
+    if discovered:
+        return discovered
+
+    user_home = home or Path.home()
+    candidate_dirs: list[Path] = []
+    configured = os.environ.get("UV_TOOL_BIN_DIR")
+    if configured:
+        candidate_dirs.append(Path(configured).expanduser())
+    candidate_dirs.append(user_home / ".local" / "bin")
+
+    searched_dirs = {
+        str(Path(item).expanduser())
+        for item in os.environ.get("PATH", "").split(os.pathsep)
+        if item
+    }
+    suffixes = (".exe", "") if sys.platform == "win32" else ("",)
+    for directory in candidate_dirs:
+        if str(directory) in searched_dirs:
+            continue
+        for suffix in suffixes:
+            candidate = directory / f"{name}{suffix}"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 # Public-safe DeepSeek configuration for an isolated stock Pier Codex agent.
 # The official catalog is uploaded to this container-local path before Codex
@@ -105,6 +160,10 @@ DEEPSEEK_AGENT_IMPORT_PATH = "_dradar_pier_deepseek:DeepSeekCodex"
 DEEPSEEK_AGENT_MODULE_FILENAME = "_dradar_pier_deepseek.py"
 GROK_AGENT_IMPORT_PATH = "_dradar_pier_grok:GrokBuild"
 GROK_AGENT_MODULE_FILENAME = "_dradar_pier_grok.py"
+KIMI_AGENT_IMPORT_PATH = "_dradar_pier_kimi:KimiCode"
+KIMI_AGENT_MODULE_FILENAME = "_dradar_pier_kimi.py"
+ZCODE_AGENT_IMPORT_PATH = "_dradar_pier_zcode:ZCodeBigModel"
+ZCODE_AGENT_MODULE_FILENAME = "_dradar_pier_zcode.py"
 DSH_AGENT_IMPORT_PATH = "_dradar_pier_dsh:DshMinimal"
 DSH_AGENT_MODULE_FILENAME = "_dradar_pier_dsh.py"
 
@@ -167,6 +226,8 @@ class TrialArtifacts:
     log_path: Path
     codex_cli_version: str | None = None
     grok_cli_version: str | None = None
+    kimi_cli_version: str | None = None
+    zcode_cli_version: str | None = None
     dsh_version: str | None = None
     dsh_artifact_binding: dict[str, str] | None = None
 
@@ -414,6 +475,28 @@ def _ensure_grok_agent_module(home: Path) -> Path:
     )
 
 
+def _ensure_kimi_agent_module(home: Path) -> Path:
+    source = Path(__file__).with_name("pier_kimi.py")
+    if not source.is_file():
+        raise RunnerError(
+            "Kimi Code Pier adapter is missing; reinstall or upgrade dradar"
+        )
+    return _materialize_shared_file(
+        home / KIMI_AGENT_MODULE_FILENAME, source.read_bytes()
+    )
+
+
+def _ensure_zcode_agent_module(home: Path) -> Path:
+    source = Path(__file__).with_name("pier_zcode.py")
+    if not source.is_file():
+        raise RunnerError(
+            "ZCode Pier adapter is missing; reinstall or upgrade dradar"
+        )
+    return _materialize_shared_file(
+        home / ZCODE_AGENT_MODULE_FILENAME, source.read_bytes()
+    )
+
+
 def _ensure_dsh_agent_module(home: Path) -> Path:
     """Expose only the pinned standalone DSH adapter to public Pier."""
 
@@ -480,13 +563,61 @@ def _validate_grok_assignment(assignment: dict) -> None:
         )
     if assignment.get("effort") not in GROK_SUPPORTED_EFFORTS:
         raise RunnerError(
-            "Grok subscription effort must be low, medium, or high; "
+            "Grok subscription effort must be low, medium, high, or xhigh; "
             f"got {assignment.get('effort')!r}"
         )
     requested = assignment.get("agent_version") or GROK_CLI_VERSION
     if requested != GROK_CLI_VERSION:
         raise RunnerError(
             f"Grok subscription runs are pinned to CLI {GROK_CLI_VERSION}; "
+            f"the server requested unverified {requested!r}"
+        )
+
+
+def _validate_kimi_assignment(assignment: dict) -> None:
+    if assignment.get("provider") != KIMI_PROVIDER:
+        raise RunnerError(
+            "Kimi Code assignments must explicitly use provider "
+            f"{KIMI_PROVIDER!r}"
+        )
+    if assignment.get("model") != KIMI_MODEL:
+        raise RunnerError(
+            f"unsupported Kimi subscription model {assignment.get('model')!r}; "
+            f"only {KIMI_MODEL!r} is enabled"
+        )
+    if assignment.get("effort") not in KIMI_SUPPORTED_EFFORTS:
+        raise RunnerError(
+            "Kimi subscription effort must be low, high, or max; "
+            f"got {assignment.get('effort')!r}"
+        )
+    requested = assignment.get("agent_version") or KIMI_CLI_VERSION
+    if requested != KIMI_CLI_VERSION:
+        raise RunnerError(
+            f"Kimi subscription runs are pinned to CLI {KIMI_CLI_VERSION}; "
+            f"the server requested unverified {requested!r}"
+        )
+
+
+def _validate_zcode_assignment(assignment: dict) -> None:
+    if assignment.get("provider") != ZCODE_PROVIDER:
+        raise RunnerError(
+            "ZCode assignments must explicitly use provider "
+            f"{ZCODE_PROVIDER!r}"
+        )
+    if assignment.get("model") != ZCODE_MODEL:
+        raise RunnerError(
+            f"unsupported ZCode model {assignment.get('model')!r}; "
+            f"only {ZCODE_MODEL!r} is enabled"
+        )
+    if assignment.get("effort") not in ZCODE_SUPPORTED_EFFORTS:
+        raise RunnerError(
+            "ZCode effort must be low, high, or max; "
+            f"got {assignment.get('effort')!r}"
+        )
+    requested = assignment.get("agent_version") or ZCODE_CLI_VERSION
+    if requested != ZCODE_CLI_VERSION:
+        raise RunnerError(
+            f"ZCode runs are pinned to CLI {ZCODE_CLI_VERSION}; "
             f"the server requested unverified {requested!r}"
         )
 
@@ -521,6 +652,8 @@ def _pier_process_env(
     *,
     deepseek_module_dir: Path | None = None,
     grok_module_dir: Path | None = None,
+    kimi_module_dir: Path | None = None,
+    zcode_module_dir: Path | None = None,
     dsh_module_dir: Path | None = None,
 ) -> dict[str, str]:
     """Keep provider secrets out of Pier's inherited environment."""
@@ -544,6 +677,23 @@ def _pier_process_env(
         env.pop("PYTHONHOME", None)
         if grok_module_dir is not None:
             env["PYTHONPATH"] = str(grok_module_dir)
+    if assignment.get("agent") == KIMI_AGENT:
+        for name in KIMI_API_KEY_ENVS:
+            env.pop(name, None)
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        if kimi_module_dir is not None:
+            env["PYTHONPATH"] = str(kimi_module_dir)
+    if assignment.get("agent") == ZCODE_AGENT:
+        for name in (
+            ZCODE_API_KEY_ENV, "BIGMODEL_API_KEY", "ZHIPUAI_API_KEY",
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+        ):
+            env.pop(name, None)
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        if zcode_module_dir is not None:
+            env["PYTHONPATH"] = str(zcode_module_dir)
     if assignment.get("agent") == DSH_AGENT:
         env.pop(DEEPSEEK_API_KEY_ENV, None)
         env.pop("PYTHONPATH", None)
@@ -642,8 +792,8 @@ def build_pier_command(
         # tool environment; PYTHONPATH later exposes only the narrow catalog
         # uploader copied into this run directory.
         public_pier = "datacurve-pier==0.3.0"
-        uvx = shutil.which("uvx")
-        uv = shutil.which("uv")
+        uvx = _resolve_user_tool("uvx")
+        uv = _resolve_user_tool("uv")
         if uvx:
             pier_command = [
                 uvx, "--isolated", "--from", public_pier, "pier",
@@ -658,7 +808,7 @@ def build_pier_command(
                 "uv/uvx is required for the isolated public DeepSeek/DSH runner"
             )
     else:
-        pier = shutil.which("pier")
+        pier = _resolve_user_tool("pier")
         if not pier:
             raise RunnerError(
                 "pier not found on PATH (run: uv tool install datacurve-pier)"
@@ -684,6 +834,23 @@ def build_pier_command(
                 "fresh explicit run"
             )
         agent_args = ["--agent-import-path", GROK_AGENT_IMPORT_PATH]
+    elif agent == KIMI_AGENT:
+        _validate_kimi_assignment(assignment)
+        _ensure_kimi_agent_module(home)
+        if resume_checkpoint is not None:
+            raise RunnerError(
+                "Kimi subscription checkpoints are not supported yet; start a "
+                "fresh explicit run"
+            )
+        agent_args = ["--agent-import-path", KIMI_AGENT_IMPORT_PATH]
+    elif agent == ZCODE_AGENT:
+        _validate_zcode_assignment(assignment)
+        _ensure_zcode_agent_module(home)
+        if resume_checkpoint is not None:
+            raise RunnerError(
+                "ZCode checkpoints are not supported yet; start a fresh explicit run"
+            )
+        agent_args = ["--agent-import-path", ZCODE_AGENT_IMPORT_PATH]
     elif agent == DSH_AGENT:
         _validate_dsh_assignment(assignment)
         _ensure_dsh_agent_module(home)
@@ -839,6 +1006,50 @@ def build_pier_command(
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={GROK_CLI_VERSION}",
         ]
+    elif agent == KIMI_AGENT:
+        if provider_auth_path is None or not provider_auth_path.is_file():
+            raise RunnerError(
+                "Kimi subscription OAuth is unavailable; run "
+                "`dradar provider setup kimi` in your own interactive Terminal"
+            )
+        if provider_cli_path is None or not provider_cli_path.is_file():
+            raise RunnerError(
+                "Pinned Kimi CLI executable is unavailable; run "
+                "`dradar provider status kimi` first"
+            )
+        submission_prompt = _ensure_codex_submission_prompt(
+            home, assignment.get("benchmark_id")
+        )
+        cmd += [
+            "--model", assignment["model"],
+            "--ak", f"reasoning_effort={assignment['effort']}",
+            "--ak", f"auth_json_file={provider_auth_path}",
+            "--ak", f"kimi_cli_file={provider_cli_path}",
+            "--ak", f"prompt_template_path={submission_prompt}",
+            "--ak", f"version={KIMI_CLI_VERSION}",
+        ]
+    elif agent == ZCODE_AGENT:
+        if provider_auth_path is None or not provider_auth_path.is_file():
+            raise RunnerError(
+                "ZCode Coding Plan credential is unavailable; run "
+                "`dradar provider setup zcode` in your own interactive Terminal"
+            )
+        if provider_cli_path is None or not provider_cli_path.is_file():
+            raise RunnerError(
+                "Pinned ZCode CLI is unavailable; run "
+                "`dradar provider status zcode` first"
+            )
+        submission_prompt = _ensure_codex_submission_prompt(
+            home, assignment.get("benchmark_id")
+        )
+        cmd += [
+            "--model", assignment["model"],
+            "--ak", f"reasoning_effort={assignment['effort']}",
+            "--ak", f"api_key_file={provider_auth_path}",
+            "--ak", f"zcode_cli_file={provider_cli_path}",
+            "--ak", f"prompt_template_path={submission_prompt}",
+            "--ak", f"version={ZCODE_CLI_VERSION}",
+        ]
     return cmd
 
 
@@ -875,6 +1086,79 @@ def _validated_grok_cli_path() -> Path:
             f"found {found or 'an unrecognized version'}"
         )
     return executable
+
+
+def _validated_kimi_cli_path() -> Path:
+    """Resolve and verify the pinned Kimi CLI before claiming quota."""
+
+    discovered = kimi_cli_path()
+    if not discovered:
+        raise RunnerError(
+            f"Official Kimi Code CLI {KIMI_CLI_VERSION} is unavailable; run "
+            "`dradar provider setup kimi` first"
+        )
+    try:
+        executable = Path(discovered).expanduser().resolve(strict=True)
+        info = executable.stat()
+    except OSError as exc:
+        raise RunnerError(f"cannot inspect pinned Kimi CLI: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or not os.access(executable, os.X_OK):
+        raise RunnerError("Pinned Kimi CLI must resolve to an executable regular file")
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RunnerError(f"could not verify pinned Kimi CLI: {exc}") from exc
+    found = parse_kimi_cli_version(result.stdout)
+    if result.returncode != 0 or found != KIMI_CLI_VERSION:
+        raise RunnerError(
+            f"Kimi subscription runs require CLI {KIMI_CLI_VERSION}; "
+            f"found {found or 'an unrecognized version'}"
+        )
+    return executable
+
+
+def _validated_zcode_cli_path() -> Path:
+    """Resolve, digest-check, and version-check the official protocol runtime."""
+
+    discovered = zcode_cli_path()
+    issue = zcode_cli_error(discovered)
+    if issue is not None:
+        raise RunnerError(issue)
+    try:
+        cli = Path(discovered).expanduser().resolve(strict=True)
+    except (AttributeError, OSError) as exc:
+        raise RunnerError(f"cannot inspect pinned ZCode CLI: {exc}") from exc
+    node = _resolve_user_tool("node")
+    if not node:
+        raise RunnerError("Node.js is required to verify the pinned ZCode CLI")
+    try:
+        result = subprocess.run(
+            [node, str(cli), "version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RunnerError(f"could not verify pinned ZCode CLI: {exc}") from exc
+    found = parse_zcode_cli_version(result.stdout + "\n" + result.stderr)
+    if result.returncode != 0 or found != ZCODE_CLI_VERSION:
+        raise RunnerError(
+            f"ZCode runs require CLI {ZCODE_CLI_VERSION}; "
+            f"found {found or 'an unrecognized version'}"
+        )
+    # ``zcode_cli_error`` already verified the byte digest. Keep the imported
+    # constant in this runner's trusted surface so a release bump must update
+    # both the path validation and adapter pin deliberately.
+    if len(ZCODE_CLI_SHA256) != 64:
+        raise RunnerError("invalid built-in ZCode CLI digest pin")
+    return cli
 
 
 def locate_artifacts(jobs_dir: Path, job_name: str) -> tuple[Path, Path]:
@@ -1464,11 +1748,11 @@ def _pier_version_compatible(installed_version: str | None) -> bool:
 
 def ensure_pier() -> None:
     """Ensure the pinned Pier build with persistent-resume support is active."""
-    pier = shutil.which("pier")
+    pier = _resolve_user_tool("pier")
     installed_version = _pier_version(pier) if pier else None
     if _pier_version_compatible(installed_version):
         return
-    uv = shutil.which("uv")
+    uv = _resolve_user_tool("uv")
     if not uv:
         uv_hint = (
             "PowerShell: irm https://astral.sh/uv/install.ps1 | iex"
@@ -1481,7 +1765,7 @@ def ensure_pier() -> None:
     with _pier_install_lock():
         # Another process may have completed the same shared uv-tool install
         # while this one waited. Recheck under the lock before mutating it.
-        pier = shutil.which("pier")
+        pier = _resolve_user_tool("pier")
         installed_version = _pier_version(pier) if pier else None
         if _pier_version_compatible(installed_version):
             return
@@ -1491,7 +1775,7 @@ def ensure_pier() -> None:
         else:
             print(f"pier not found — installing SecurityMind build {PIER_VERSION}...")
         proc = subprocess.run([uv, "tool", "install", "--force", PIER_SPEC])
-        active_pier = shutil.which("pier")
+        active_pier = _resolve_user_tool("pier")
         active_version = _pier_version(active_pier) if active_pier else None
         if proc.returncode != 0 or not _pier_version_compatible(active_version):
             raise RunnerError(
@@ -1756,6 +2040,8 @@ def run_trial(
 ) -> TrialArtifacts:
     effective_assignment = assignment
     codex_cli_version = None
+    kimi_cli_version = None
+    zcode_cli_version = None
     dsh_version = None
     codex_provider = None
     effective_agent = dev_agent or assignment["agent"]
@@ -1787,6 +2073,22 @@ def run_trial(
             "agent_version": GROK_CLI_VERSION,
         }
         print(f"verified pinned Grok subscription CLI: {GROK_CLI_VERSION}")
+    elif effective_agent == KIMI_AGENT:
+        _validate_kimi_assignment(assignment)
+        kimi_cli_version = KIMI_CLI_VERSION
+        effective_assignment = {
+            **assignment,
+            "agent_version": kimi_cli_version,
+        }
+        print(f"verified pinned Kimi subscription CLI: {kimi_cli_version}")
+    elif effective_agent == ZCODE_AGENT:
+        _validate_zcode_assignment(assignment)
+        zcode_cli_version = ZCODE_CLI_VERSION
+        effective_assignment = {
+            **assignment,
+            "agent_version": zcode_cli_version,
+        }
+        print(f"verified pinned ZCode CLI: {zcode_cli_version}")
     elif effective_agent == DSH_AGENT:
         _validate_dsh_assignment(assignment)
         dsh_version = DSH_VERSION
@@ -1839,17 +2141,31 @@ def run_trial(
                 )
             except (OSError, ValueError) as exc:
                 raise RunnerError(str(exc)) from exc
+        elif effective_agent == KIMI_AGENT:
+            try:
+                provider_cli_path = _validated_kimi_cli_path()
+                provider_auth_path = provider_stack.enter_context(
+                    kimi_subscription_session(work_dir)
+                )
+            except (OSError, ValueError) as exc:
+                raise RunnerError(str(exc)) from exc
+        elif effective_agent == ZCODE_AGENT:
+            try:
+                provider_cli_path = _validated_zcode_cli_path()
+                provider_auth_path = create_zcode_api_key_file(work_dir)
+            except (OSError, ValueError) as exc:
+                raise RunnerError(str(exc)) from exc
         provider_kwargs = (
             {
                 "provider_auth_path": provider_auth_path,
                 **(
                     {"provider_cli_path": provider_cli_path}
-                    if effective_agent == GROK_AGENT else {}
+                    if effective_agent in (GROK_AGENT, KIMI_AGENT, ZCODE_AGENT) else {}
                 ),
             }
             if (
                 codex_provider == DEEPSEEK_PROVIDER
-                or effective_agent in (GROK_AGENT, DSH_AGENT)
+                or effective_agent in (GROK_AGENT, KIMI_AGENT, ZCODE_AGENT, DSH_AGENT)
             )
             else {}
         )
@@ -1880,6 +2196,8 @@ def run_trial(
                 work_dir if codex_provider == DEEPSEEK_PROVIDER else None
             ),
             grok_module_dir=(work_dir if effective_agent == GROK_AGENT else None),
+            kimi_module_dir=(work_dir if effective_agent == KIMI_AGENT else None),
+            zcode_module_dir=(work_dir if effective_agent == ZCODE_AGENT else None),
             dsh_module_dir=(work_dir if effective_agent == DSH_AGENT else None),
         )
         if on_started is not None:
@@ -1956,7 +2274,7 @@ def run_trial(
         if provider_auth_path is not None:
             if (
                 codex_provider == DEEPSEEK_PROVIDER
-                or effective_agent == DSH_AGENT
+                or effective_agent in (DSH_AGENT, ZCODE_AGENT)
             ):
                 try:
                     provider_auth_path.unlink()
@@ -1964,7 +2282,7 @@ def run_trial(
                     pass
                 except OSError as exc:
                     raise RunnerError(
-                        f"could not remove temporary DeepSeek credential file "
+                        f"could not remove temporary provider credential file "
                         f"{provider_auth_path}: {exc}"
                     ) from exc
         try:
@@ -2053,6 +2371,8 @@ def run_trial(
         grok_cli_version=(
             GROK_CLI_VERSION if effective_agent == GROK_AGENT else None
         ),
+        kimi_cli_version=kimi_cli_version,
+        zcode_cli_version=zcode_cli_version,
         dsh_version=dsh_version,
         dsh_artifact_binding=dsh_artifact_binding,
     )

@@ -15,13 +15,25 @@ from .local_config import _load_config, tasks_root_from_config
 from .providers import (
     DEEPSEEK_API_KEY_ENV,
     GROK_CLI_VERSION,
+    GROK_AGENT,
+    KIMI_AGENT,
+    KIMI_CLI_VERSION,
+    ZCODE_AGENT,
+    ZCODE_CLI_VERSION,
     deepseek_api_key,
     deepseek_catalog_error,
     deepseek_opted_in,
     grok_auth_error,
     grok_auth_path,
     grok_cli_path,
+    kimi_auth_error,
+    kimi_auth_path,
+    kimi_cli_path,
+    parse_kimi_cli_version,
     parse_grok_cli_version,
+    zcode_api_key,
+    zcode_cli_error,
+    zcode_cli_path,
 )
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 
@@ -154,7 +166,16 @@ def cmd_doctor(args) -> int:
     plat = _platform()
     selected_agent = getattr(args, "agent", None)
     dsh_only = selected_agent == "dsh-minimal"
-    scope = " — DSH Minimal" if dsh_only else ""
+    grok_only = selected_agent == GROK_AGENT
+    kimi_only = selected_agent == KIMI_AGENT
+    zcode_only = selected_agent == ZCODE_AGENT
+    scopes = {
+        "dsh-minimal": " — DSH Minimal",
+        GROK_AGENT: " — Grok Build",
+        KIMI_AGENT: " — Kimi Code",
+        ZCODE_AGENT: " — ZCode",
+    }
+    scope = scopes.get(selected_agent, "")
     print(f"dradar {__version__} doctor ({plat}{scope})")
     if plat == "windows":
         dependencies = (
@@ -216,7 +237,7 @@ def cmd_doctor(args) -> int:
     # deliberately does not require or alter the host Pier used by other agent
     # families.
     if dsh_only:
-        uvx = shutil.which("uvx")
+        uvx = runner._resolve_user_tool("uvx")
         all_ok &= _check(
             "uvx — isolated public DSH runner",
             bool(uvx),
@@ -232,7 +253,7 @@ def cmd_doctor(args) -> int:
             runner.ensure_pier()
         except runner.RunnerError:
             pass
-        pier = shutil.which("pier")
+        pier = runner._resolve_user_tool("pier")
         pier_ready = bool(
             pier and runner._pier_version_compatible(runner._pier_version(pier)))
         all_ok &= _check("pier", pier_ready, runner.PIER_INSTALL_COMMAND)
@@ -245,8 +266,10 @@ def cmd_doctor(args) -> int:
     auth = runner.codex_auth_path()
     codex_ready = bool(codex) and auth.is_file()
     claude_ready = bool(shutil.which("claude")) and bool(runner.claude_oauth_token())
-    grok = grok_cli_path()
-    grok_requested = grok_auth_path().exists()
+    grok_requested = grok_only or (
+        selected_agent is None and grok_auth_path().exists()
+    )
+    grok = grok_cli_path() if grok_requested else None
     grok_cli_ready = False
     if grok:
         try:
@@ -261,6 +284,28 @@ def cmd_doctor(args) -> int:
             pass
     grok_oauth_issue = grok_auth_error() if grok_requested else None
     grok_ready = grok_cli_ready and grok_requested and grok_oauth_issue is None
+    kimi_requested = kimi_only or (
+        selected_agent is None and kimi_auth_path().exists()
+    )
+    kimi = kimi_cli_path() if kimi_requested else None
+    kimi_cli_ready = False
+    if kimi:
+        try:
+            kimi_version = subprocess.run(
+                [kimi, "--version"], capture_output=True, text=True, timeout=10,
+            )
+            kimi_cli_ready = (
+                kimi_version.returncode == 0
+                and parse_kimi_cli_version(kimi_version.stdout) == KIMI_CLI_VERSION
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    kimi_oauth_issue = kimi_auth_error() if kimi_requested else None
+    kimi_ready = kimi_cli_ready and kimi_requested and kimi_oauth_issue is None
+    zcode_key_ready = bool(zcode_api_key())
+    zcode_requested = zcode_only or (selected_agent is None and zcode_key_ready)
+    zcode_cli_issue = zcode_cli_error(zcode_cli_path()) if zcode_requested else None
+    zcode_ready = zcode_requested and zcode_key_ready and zcode_cli_issue is None
     deepseek_requested = deepseek_opted_in()
     deepseek_key_ready = bool(deepseek_api_key())
     if dsh_only:
@@ -272,19 +317,46 @@ def cmd_doctor(args) -> int:
         )
         if deepseek_key_ready:
             _check("DeepSeek V4 Flash / Pro — DSH Minimal agent ready", True)
-    elif grok_requested:
-        all_ok &= _check(
-            f"Grok CLI {GROK_CLI_VERSION} — subscription runner",
-            grok_cli_ready,
-            f"install official Grok CLI {GROK_CLI_VERSION}",
-        )
-        all_ok &= _check(
-            "Grok subscription OAuth — dedicated DRadar slot",
-            grok_oauth_issue is None,
-            grok_oauth_issue or "run `dradar provider setup grok`",
-        )
-        if grok_ready:
-            _check("Grok 4.5 — subscription provider ready", True)
+    elif grok_requested or kimi_requested or zcode_requested:
+        if grok_requested:
+            all_ok &= _check(
+                f"Grok CLI {GROK_CLI_VERSION} — subscription runner",
+                grok_cli_ready,
+                f"install official Grok CLI {GROK_CLI_VERSION}",
+            )
+            all_ok &= _check(
+                "Grok subscription OAuth — dedicated DRadar slot",
+                grok_oauth_issue is None,
+                grok_oauth_issue or "run `dradar provider setup grok`",
+            )
+            if grok_ready:
+                _check("Grok 4.6 — subscription provider ready", True)
+        if kimi_requested:
+            all_ok &= _check(
+                f"Kimi Code CLI {KIMI_CLI_VERSION} — subscription runner",
+                kimi_cli_ready,
+                f"install official Kimi Code CLI {KIMI_CLI_VERSION}",
+            )
+            all_ok &= _check(
+                "Kimi subscription OAuth — dedicated DRadar slot",
+                kimi_oauth_issue is None,
+                kimi_oauth_issue or "run `dradar provider setup kimi`",
+            )
+            if kimi_ready:
+                _check("Kimi K3 — subscription provider ready", True)
+        if zcode_requested:
+            all_ok &= _check(
+                f"ZCode CLI {ZCODE_CLI_VERSION} — pinned Coding Plan runner",
+                zcode_cli_issue is None,
+                zcode_cli_issue or "reinstall the tested private ZCode runtime",
+            )
+            all_ok &= _check(
+                "ZCode Coding Plan API key — local provider credential",
+                zcode_key_ready,
+                "run `dradar provider setup zcode` in your own interactive Terminal",
+            )
+            if zcode_ready:
+                _check("ZCode GLM-5.3 — Coding Plan provider ready", True)
     elif deepseek_requested:
         catalog_issue = deepseek_catalog_error()
         catalog_ready = catalog_issue is None
@@ -315,7 +387,13 @@ def cmd_doctor(args) -> int:
         _check("CLAUDE_CODE_OAUTH_TOKEN (alternative to codex)",
                bool(runner.claude_oauth_token()),
                "or: claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN each shell")
-    if not dsh_only and not deepseek_requested and not grok_requested:
+    if (
+        not dsh_only
+        and not deepseek_requested
+        and not grok_requested
+        and not kimi_requested
+        and not zcode_requested
+    ):
         all_ok &= (codex_ready or claude_ready)
 
     # The task repo is auto-cloned on `dradar go`; do it here too so a missing
@@ -361,7 +439,10 @@ def cmd_doctor(args) -> int:
     else:
         all_ok &= _check("server login", False, "dradar login --server <url> --token <token>")
 
-    retry = "dradar doctor --agent dsh-minimal" if dsh_only else "dradar doctor"
+    retry = (
+        f"dradar doctor --agent {selected_agent}"
+        if selected_agent else "dradar doctor"
+    )
     print("all checks passed" if all_ok else f"fix the FAIL items above, then re-run: {retry}")
     return 0 if all_ok else 1
 

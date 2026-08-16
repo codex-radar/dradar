@@ -42,6 +42,12 @@ from .providers import (
     GROK_AGENT,
     GROK_RUN_CONFIG_VERSION,
     GROK_RUNTIME_PROFILE,
+    KIMI_AGENT,
+    KIMI_RUN_CONFIG_VERSION,
+    KIMI_RUNTIME_PROFILE,
+    ZCODE_AGENT,
+    ZCODE_RUN_CONFIG_VERSION,
+    ZCODE_RUNTIME_PROFILE,
     assignment_codex_provider,
 )
 from .runner import (
@@ -797,7 +803,7 @@ def _bundled_completed_outcome(
     assignment: dict, trial_dir: Path, patch: Path, result: Path | None,
 ) -> dict | None:
     """Return independent completion evidence for a Codex-family rc failure."""
-    if assignment.get("agent") in {DSH_AGENT, GROK_AGENT}:
+    if assignment.get("agent") in {DSH_AGENT, GROK_AGENT, KIMI_AGENT}:
         return None
     try:
         result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
@@ -1502,6 +1508,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "deep_swe_commit": local_commit,
         "codex_cli_version": art.codex_cli_version,
         "grok_cli_version": art.grok_cli_version,
+        "kimi_cli_version": art.kimi_cli_version,
+        "zcode_cli_version": art.zcode_cli_version,
         "dsh_version": art.dsh_version,
         **stats,
     }
@@ -1526,6 +1534,22 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "model_runtime_profile": GROK_RUNTIME_PROFILE,
             "subscription_oauth": True,
             "subscription_concurrency": 1,
+        })
+    if assignment.get("agent") == KIMI_AGENT:
+        meta.update({
+            "model_config_version": KIMI_RUN_CONFIG_VERSION,
+            "model_runtime_profile": KIMI_RUNTIME_PROFILE,
+            "subscription_oauth": True,
+            "subscription_concurrency": 1,
+            "kimi_native_efforts": ["low", "high", "max"],
+        })
+    if assignment.get("agent") == ZCODE_AGENT:
+        meta.update({
+            "model_config_version": ZCODE_RUN_CONFIG_VERSION,
+            "model_runtime_profile": ZCODE_RUNTIME_PROFILE,
+            "coding_plan_api_key": True,
+            "zcode_protocol_version": 1,
+            "zcode_native_efforts": ["low", "high", "max"],
         })
     if assignment.get("agent") == DSH_AGENT:
         meta.update({
@@ -1706,9 +1730,17 @@ def _resume_one_checkpoint(
                 ):
                     return "discarded"
                 return "paused"
-            if assignment.get("agent") == DSH_AGENT:
+            if assignment.get("agent") in {
+                DSH_AGENT, GROK_AGENT, KIMI_AGENT, ZCODE_AGENT,
+            }:
+                label = {
+                    DSH_AGENT: "DSH Minimal",
+                    GROK_AGENT: "Grok Build",
+                    KIMI_AGENT: "Kimi Code",
+                    ZCODE_AGENT: "ZCode",
+                }[assignment["agent"]]
                 print(
-                    f"  {assignment_id}: DSH Minimal checkpoints are not "
+                    f"  {assignment_id}: {label} checkpoints are not "
                     "supported; discarding the stale local checkpoint"
                 )
                 if _discard_checkpoint_quietly(

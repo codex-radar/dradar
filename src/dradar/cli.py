@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_doc = sub.add_parser("doctor", help="preflight checks")
     p_doc.add_argument(
-        "--agent", choices=("dsh-minimal",), default=None,
+        "--agent", choices=("dsh-minimal", "grok-build", "kimi-code", "zcode"), default=None,
         help="check only the dependencies required by this agent",
     )
     p_doc.set_defaults(func=cmd_doctor)
@@ -241,11 +241,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="provider_command", required=True)
     p_provider_setup = provider_sub.add_parser(
         "setup", help="securely configure a provider credential or OAuth session")
-    p_provider_setup.add_argument("provider", choices=("deepseek", "grok"))
+    p_provider_setup.add_argument(
+        "provider", choices=("deepseek", "grok", "kimi", "zcode")
+    )
     p_provider_setup.set_defaults(func=cmd_provider_setup)
     p_provider_status = provider_sub.add_parser(
         "status", help="check provider readiness without displaying credentials")
-    p_provider_status.add_argument("provider", choices=("deepseek", "grok"))
+    p_provider_status.add_argument(
+        "provider", choices=("deepseek", "grok", "kimi", "zcode")
+    )
     p_provider_status.add_argument(
         "--live", action="store_true",
         help="also verify the configured credential against the provider API",

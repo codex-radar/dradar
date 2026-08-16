@@ -278,6 +278,26 @@ import pytest
 from dradar.runner import RunnerError, ensure_pier, ensure_tasks_root
 
 
+def test_resolve_user_tool_falls_back_to_uv_user_bin(tmp_path, monkeypatch):
+    user_bin = tmp_path / ".local" / "bin"
+    user_bin.mkdir(parents=True)
+    pier = user_bin / "pier"
+    pier.write_text("#!/bin/sh\n")
+    pier.chmod(0o700)
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    assert runner_mod._resolve_user_tool("pier", home=tmp_path) == str(pier)
+
+
+def test_resolve_user_tool_keeps_path_lookup_authoritative(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        runner_mod.shutil, "which", lambda name: f"/opt/tools/{name}",
+    )
+
+    assert runner_mod._resolve_user_tool("pier", home=tmp_path) == "/opt/tools/pier"
+
+
 @pytest.fixture(autouse=True)
 def _isolated_pier_install_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(

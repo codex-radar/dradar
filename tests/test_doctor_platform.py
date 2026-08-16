@@ -370,3 +370,54 @@ def test_dsh_scoped_doctor_reports_its_own_retry_command(
     assert "[FAIL] DeepSeek API key" in out
     assert "re-run: dradar doctor --agent dsh-minimal" in out
     assert "SecurityMind" not in out
+
+
+def test_zcode_scoped_doctor_ignores_other_configured_provider_slots(
+    monkeypatch, capsys, tmp_path,
+):
+    tasks_root = tmp_path / "tasks"
+    tasks_root.mkdir()
+    monkeypatch.setattr(doctor, "_platform", lambda: "linux")
+    monkeypatch.setattr(
+        doctor, "_load_config",
+        lambda: {"server": "https://example.test", "token": "hidden"},
+    )
+    monkeypatch.setattr(doctor, "tasks_root_from_config", lambda _cfg: tasks_root)
+    monkeypatch.setattr(doctor, "deepseek_opted_in", lambda: False)
+    monkeypatch.setattr(doctor, "zcode_api_key", lambda: "configured")
+    monkeypatch.setattr(doctor, "zcode_cli_path", lambda: "/pinned/zcode.cjs")
+    monkeypatch.setattr(doctor, "zcode_cli_error", lambda _path: None)
+    monkeypatch.setattr(
+        doctor, "grok_cli_path",
+        lambda: pytest.fail("ZCode scope must not inspect Grok"),
+    )
+    monkeypatch.setattr(
+        doctor, "kimi_cli_path",
+        lambda: pytest.fail("ZCode scope must not inspect Kimi"),
+    )
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        lambda name: "/usr/bin/docker" if name == "docker" else None,
+    )
+    monkeypatch.setattr(doctor, "_probe", lambda _cmd: True)
+    monkeypatch.setattr(doctor, "docker_resources", lambda: (8, 16.0, ()))
+    monkeypatch.setattr(doctor.runner, "ensure_pier", lambda: None)
+    monkeypatch.setattr(doctor.runner, "_resolve_user_tool", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(doctor.runner, "_pier_version", lambda _path: doctor.runner.PIER_VERSION)
+    monkeypatch.setattr(doctor.runner, "_pier_version_compatible", lambda _version: True)
+    monkeypatch.setattr(
+        doctor.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(free=100_000_000_000),
+    )
+    monkeypatch.setattr(
+        doctor, "_client",
+        lambda _cfg: SimpleNamespace(whoami=lambda: {"nickname": "tester"}),
+    )
+
+    rc = doctor.cmd_doctor(SimpleNamespace(agent="zcode"))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "ZCode GLM-5.3 — Coding Plan provider ready" in out
+    assert "Grok" not in out
+    assert "Kimi" not in out

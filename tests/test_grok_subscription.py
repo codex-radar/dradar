@@ -119,12 +119,30 @@ def test_pier_command_uses_private_adapter_without_key_in_argv(
     assert env["PYTHONPATH"] == str(home)
 
 
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+def test_all_grok_46_efforts_build_the_pinned_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effort: str,
+) -> None:
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    auth = _write_auth(tmp_path / "auth.json")
+    cli = tmp_path / "grok"
+    cli.write_text("binary", encoding="utf-8")
+    cmd = runner.build_pier_command(
+        _assignment(effort=effort), tasks, tmp_path / "jobs", "job", tmp_path,
+        provider_auth_path=auth, provider_cli_path=cli,
+    )
+    assert f"reasoning_effort={effort}" in cmd
+    assert cmd[cmd.index("--model") + 1] == "grok-4.6"
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"provider": "xai-api"}, "explicitly use provider"),
         ({"model": "grok-other"}, "unsupported Grok subscription model"),
-        ({"effort": "max"}, "effort must be low, medium, or high"),
+        ({"effort": "max"}, "effort must be low, medium, high, or xhigh"),
         ({"agent_version": "9.9.9"}, "pinned to CLI"),
     ],
 )
@@ -160,3 +178,12 @@ def test_grok_checkpoint_resume_is_rejected(tmp_path: Path, monkeypatch):
             provider_auth_path=auth,
             provider_cli_path=cli,
         )
+
+
+def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
+    source = Path(providers.__file__).with_name("pier_grok.py").read_text()
+    assert 'f"{shlex.quote(remote_cli)} models "' in source
+    assert "grep -Fq" in source
+    assert "grok-4.6" in source
+    assert '"grok.com"' in source
+    assert "GROK_TELEMETRY_ENABLED" in source
