@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from collections.abc import Iterable, Mapping
@@ -108,7 +109,7 @@ KIMI_API_KEY_ENVS = frozenset({
 _KIMI_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 
 # ZCode is driven through the official desktop bundle's headless protocol.  A
-# fixed CLI digest and the domestic Coding Plan endpoint keep this private lane
+# fixed CLI digest and the domestic Coding Plan endpoint keep this preview lane
 # reproducible; only GLM-5.3's native low/high/max thought levels are exposed.
 ZCODE_PROVIDER = "bigmodel-coding-plan"
 ZCODE_AGENT = "zcode"
@@ -126,6 +127,7 @@ ZCODE_HOME_RELATIVE_PATH = Path("providers") / "zcode"
 ZCODE_CLI_RELATIVE_PATH = ZCODE_HOME_RELATIVE_PATH / "current" / "zcode.cjs"
 ZCODE_SECRET_RELATIVE_PATH = Path("secrets") / "zcode_coding_plan_api_key"
 ZCODE_API_KEY_ENV = "ZCODE_API_KEY"
+ZCODE_OFFICIAL_DOWNLOAD_PAGE = "https://zcode.z.ai/cn"
 _ZCODE_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -545,19 +547,79 @@ def create_zcode_api_key_file(directory: Path) -> Path:
     return path
 
 
-def zcode_cli_path(environ: Mapping[str, str] | None = None) -> str | None:
+def zcode_cli_candidates(
+    environ: Mapping[str, str] | None = None,
+    *,
+    user_home: Path | None = None,
+) -> tuple[Path, ...]:
+    """Return explicit, imported, and official desktop ZCode CLI locations.
+
+    DRadar never downloads or redistributes ZCode.  Setup imports the
+    digest-pinned CLI from the user's official desktop installation (or from
+    an explicit ``ZCODE_CLI_PATH``) into DRadar's owner-only provider slot.
+    """
+
     env = os.environ if environ is None else environ
+    home = Path(user_home) if user_home is not None else Path.home()
+    dradar_home = Path(env.get("DRADAR_HOME", home / ".dradar"))
+    candidates: list[Path] = []
     explicit = env.get("ZCODE_CLI_PATH")
     if explicit:
-        return explicit
-    if environ is None:
-        home = Path(os.environ.get("DRADAR_HOME", Path.home() / ".dradar"))
-        bundled = home / ZCODE_CLI_RELATIVE_PATH
-        return str(bundled) if bundled.is_file() else None
-    configured_home = env.get("DRADAR_HOME")
-    if configured_home:
-        bundled = Path(configured_home) / ZCODE_CLI_RELATIVE_PATH
-        return str(bundled) if bundled.is_file() else None
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(dradar_home / ZCODE_CLI_RELATIVE_PATH)
+
+    if sys.platform == "darwin":
+        candidates.extend((
+            Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+            home / "Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+        ))
+    elif os.name == "nt":  # pragma: no cover - exercised via candidate tests
+        for variable in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+            root = env.get(variable)
+            if not root:
+                continue
+            base = Path(root)
+            candidates.extend((
+                base / "Programs/ZCode/resources/glm/zcode.cjs",
+                base / "ZCode/resources/glm/zcode.cjs",
+            ))
+    else:
+        appdir = env.get("APPDIR")
+        if appdir:
+            app_root = Path(appdir)
+            candidates.extend((
+                app_root / "resources/glm/zcode.cjs",
+                app_root / "usr/lib/zcode/resources/glm/zcode.cjs",
+            ))
+        candidates.extend((
+            Path("/opt/ZCode/resources/glm/zcode.cjs"),
+            Path("/opt/zcode/resources/glm/zcode.cjs"),
+            Path("/usr/lib/ZCode/resources/glm/zcode.cjs"),
+            Path("/usr/lib/zcode/resources/glm/zcode.cjs"),
+        ))
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return tuple(unique)
+
+
+def zcode_cli_path(environ: Mapping[str, str] | None = None) -> str | None:
+    candidates = zcode_cli_candidates(environ)
+    if not candidates:
+        return None
+    env = os.environ if environ is None else environ
+    # Preserve an explicit path even when it is invalid so status/doctor can
+    # report the integrity error instead of a misleading "not installed".
+    if env.get("ZCODE_CLI_PATH"):
+        return str(candidates[0])
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 
@@ -588,6 +650,31 @@ def zcode_cli_error(
             f"ZCode {ZCODE_APP_VERSION} runtime"
         )
     return None
+
+
+def store_zcode_cli(
+    source: str | Path,
+    *,
+    home: Path | None = None,
+) -> Path:
+    """Import a verified official ZCode CLI into DRadar's local-only slot."""
+
+    issue = zcode_cli_error(source)
+    if issue is not None:
+        raise ValueError(issue)
+    if home is None:
+        home = Path(os.environ.get("DRADAR_HOME", Path.home() / ".dradar"))
+    target = Path(home) / ZCODE_CLI_RELATIVE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.chmod(target.parent, 0o700)
+    source_path = Path(source).expanduser().resolve(strict=True)
+    if target.exists() and source_path == target.resolve(strict=True):
+        if os.name != "nt":
+            os.chmod(target, 0o600)
+        return target
+    _replace_private_file(source_path, target)
+    return target
 
 
 def grok_home(home: Path | None = None) -> Path:

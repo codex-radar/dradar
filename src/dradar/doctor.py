@@ -362,7 +362,7 @@ def cmd_doctor(args) -> int:
             all_ok &= _check(
                 f"ZCode CLI {ZCODE_CLI_VERSION} — pinned Coding Plan runner",
                 zcode_cli_issue is None,
-                zcode_cli_issue or "reinstall the tested private ZCode runtime",
+                zcode_cli_issue or "reinstall the verified official ZCode runtime",
             )
             all_ok &= _check(
                 "ZCode Coding Plan API key — local provider credential",

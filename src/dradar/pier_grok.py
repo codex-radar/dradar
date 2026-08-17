@@ -1,4 +1,4 @@
-"""Private Pier adapter for the official Grok Build subscription CLI.
+"""Credential-isolated Pier adapter for the official Grok Build CLI.
 
 This module deliberately supports only grok.com's OAuth subscription session.
 It never accepts an xAI API key.  DRadar exposes this single file to Pier's

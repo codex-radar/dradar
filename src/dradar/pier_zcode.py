@@ -1,4 +1,4 @@
-"""Private Pier adapter for ZCode with BigModel's domestic Coding Plan.
+"""Credential-isolated Pier adapter for ZCode with BigModel Coding Plan.
 
 The adapter runs the official ZCode Protocol server from a digest-pinned
 desktop bundle.  The Coding Plan key is uploaded as an owner-only run file,

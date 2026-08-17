@@ -4,22 +4,28 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import dradar.providers as providers
+import dradar.provider_config as provider_config
 import dradar.runner as runner
 from dradar.providers import (
     ZCODE_AGENT,
     ZCODE_API_KEY_ENV,
     ZCODE_CAPABILITY,
+    ZCODE_CLI_RELATIVE_PATH,
     ZCODE_CLI_VERSION,
     ZCODE_MODEL,
     ZCODE_PROVIDER,
     advertised_capabilities,
     create_zcode_api_key_file,
     parse_zcode_cli_version,
+    store_zcode_cli,
     store_zcode_api_key,
+    zcode_cli_candidates,
+    zcode_cli_path,
     zcode_secret_error,
 )
 from dradar.runner import RunnerError
@@ -52,6 +58,101 @@ def test_zcode_version_banner_is_parsed() -> None:
     assert parse_zcode_cli_version("0.16.3\n") == ZCODE_CLI_VERSION
     assert parse_zcode_cli_version("zcode 0.16.3\n") == ZCODE_CLI_VERSION
     assert parse_zcode_cli_version("unexpected") is None
+
+
+def test_zcode_cli_candidates_include_official_macos_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers.sys, "platform", "darwin")
+    candidates = zcode_cli_candidates({}, user_home=tmp_path)
+    assert Path(
+        "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"
+    ) in candidates
+    assert (
+        tmp_path / "Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"
+    ) in candidates
+
+
+def test_zcode_cli_candidates_support_linux_appdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers.sys, "platform", "linux")
+    appdir = tmp_path / "mounted-appimage"
+    candidates = zcode_cli_candidates(
+        {"APPDIR": str(appdir), "DRADAR_HOME": str(tmp_path / "dradar")},
+        user_home=tmp_path,
+    )
+    assert appdir / "resources/glm/zcode.cjs" in candidates
+    assert appdir / "usr/lib/zcode/resources/glm/zcode.cjs" in candidates
+
+
+def test_zcode_cli_path_preserves_invalid_explicit_path_for_diagnostics(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing-zcode.cjs"
+    assert zcode_cli_path({"ZCODE_CLI_PATH": str(missing)}) == str(missing)
+
+
+def test_verified_zcode_cli_is_imported_to_local_provider_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "official" / "zcode.cjs"
+    source.parent.mkdir()
+    source.write_text("verified-runtime", encoding="utf-8")
+    monkeypatch.setattr(providers, "zcode_cli_error", lambda _path: None)
+    target = store_zcode_cli(source, home=tmp_path / "dradar")
+    assert target == tmp_path / "dradar" / ZCODE_CLI_RELATIVE_PATH
+    assert target.read_text(encoding="utf-8") == "verified-runtime"
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_zcode_setup_imports_official_runtime_before_reading_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    source = tmp_path / "ZCode.app/Contents/Resources/glm/zcode.cjs"
+    imported = tmp_path / "dradar/providers/zcode/current/zcode.cjs"
+    secret = tmp_path / "dradar/secrets/zcode_coding_plan_api_key"
+    monkeypatch.setattr(
+        provider_config.sys, "stdin", SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr(provider_config, "zcode_cli_path", lambda: str(source))
+    monkeypatch.setattr(provider_config, "zcode_cli_error", lambda _path: None)
+    monkeypatch.setattr(provider_config, "store_zcode_cli", lambda _path: imported)
+    monkeypatch.setattr(
+        provider_config.getpass, "getpass", lambda _prompt: "super-secret-value",
+    )
+    monkeypatch.setattr(provider_config, "store_zcode_api_key", lambda _key: secret)
+
+    rc = provider_config.cmd_provider_setup(SimpleNamespace(provider="zcode"))
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert str(imported) in output
+    assert str(secret) in output
+    assert "super-secret-value" not in output
+
+
+def test_zcode_setup_stops_before_key_prompt_when_runtime_is_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        provider_config.sys, "stdin", SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr(provider_config, "zcode_cli_path", lambda: None)
+    monkeypatch.setattr(
+        provider_config, "zcode_cli_error", lambda _path: "official CLI is missing",
+    )
+    monkeypatch.setattr(
+        provider_config.getpass,
+        "getpass",
+        lambda _prompt: pytest.fail("must not request a key without a runtime"),
+    )
+
+    rc = provider_config.cmd_provider_setup(SimpleNamespace(provider="zcode"))
+    output = capsys.readouterr().out
+    assert rc == 1
+    assert "https://zcode.z.ai/cn" in output
+    assert "ZCODE_CLI_PATH" in output
 
 
 def test_zcode_key_storage_and_run_copy_are_private(

@@ -1,4 +1,4 @@
-"""Private Pier adapter for the official Kimi Code subscription CLI.
+"""Credential-isolated Pier adapter for the official Kimi Code subscription CLI.
 
 Only Kimi's managed OAuth service is supported.  The adapter injects a pinned
 standalone CLI and one locked run-copy of the credential into the task

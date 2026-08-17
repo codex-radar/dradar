@@ -20,8 +20,10 @@ from .providers import (
     GROK_MODEL,
     KIMI_API_KEY_ENVS,
     KIMI_CLI_VERSION,
+    ZCODE_APP_VERSION,
     ZCODE_CLI_VERSION,
     ZCODE_MODEL,
+    ZCODE_OFFICIAL_DOWNLOAD_PAGE,
     deepseek_api_key,
     deepseek_credential_source,
     deepseek_secret_error,
@@ -40,6 +42,7 @@ from .providers import (
     parse_zcode_cli_version,
     store_grok_auth,
     store_deepseek_api_key,
+    store_zcode_cli,
     store_zcode_api_key,
     zcode_api_key,
     zcode_cli_error,
@@ -179,6 +182,23 @@ def _setup_zcode() -> int:
             "The key stays in DRadar's owner-only secret directory."
         )
         return 2
+    cli = zcode_cli_path()
+    issue = zcode_cli_error(cli)
+    if issue is not None:
+        print(
+            "ZCode setup could not find the verified official ZCode "
+            f"{ZCODE_APP_VERSION} "
+            f"desktop runtime: {issue}\n"
+            f"Install it from {ZCODE_OFFICIAL_DOWNLOAD_PAGE}, then retry. "
+            "Advanced users may point ZCODE_CLI_PATH at "
+            "Resources/glm/zcode.cjs; DRadar verifies its SHA-256 before use."
+        )
+        return 1
+    try:
+        imported_cli = store_zcode_cli(cli)
+    except (OSError, ValueError) as exc:
+        print(f"could not import the verified ZCode runtime: {exc}")
+        return 1
     key = getpass.getpass("BigModel Coding Plan API key (input hidden): ")
     try:
         path = store_zcode_api_key(key)
@@ -187,6 +207,7 @@ def _setup_zcode() -> int:
         return 1
     print(
         f"ZCode Coding Plan API key saved locally at {path} (value hidden).\n"
+        f"Verified ZCode runtime imported to {imported_cli}.\n"
         "It is never sent to the DRadar server. Verify the pinned runtime and "
         "model access with: dradar provider status zcode --live"
     )
@@ -234,7 +255,7 @@ def _status_zcode(*, live: bool) -> int:
         return 1
     source = zcode_credential_source()
     print(
-        f"ZCode provider ready via {source or 'private credential'} "
+        f"ZCode provider ready via {source or 'local credential'} "
         f"(value hidden, CLI {ZCODE_CLI_VERSION}, model {ZCODE_MODEL})."
     )
     return _live_zcode_status(key) if live else 0
