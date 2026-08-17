@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import httpx
 
@@ -15,6 +17,7 @@ from .providers import (
     DEEPSEEK_MODELS,
     GROK_API_KEY_ENV,
     GROK_CLI_VERSION,
+    GROK_MODEL,
     KIMI_API_KEY_ENVS,
     KIMI_CLI_VERSION,
     ZCODE_CLI_VERSION,
@@ -27,6 +30,7 @@ from .providers import (
     grok_auth_path,
     grok_cli_path,
     grok_home,
+    grok_live_error,
     kimi_auth_error,
     kimi_auth_path,
     kimi_cli_path,
@@ -34,6 +38,7 @@ from .providers import (
     parse_kimi_cli_version,
     parse_grok_cli_version,
     parse_zcode_cli_version,
+    store_grok_auth,
     store_deepseek_api_key,
     store_zcode_api_key,
     zcode_api_key,
@@ -86,9 +91,6 @@ def cmd_provider_status(args) -> int:
 
     live = bool(getattr(args, "live", False))
     if args.provider == "grok":
-        if live:
-            print("--live is currently supported only for the DeepSeek provider.")
-            return 2
         return _status_grok_subscription()
     if args.provider == "kimi":
         if live:
@@ -318,27 +320,34 @@ def _setup_grok_subscription() -> int:
         )
         return 1
     home = grok_home()
-    home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name != "nt":
-        os.chmod(home, 0o700)
-    env = dict(os.environ)
-    env["GROK_HOME"] = str(home)
-    env.pop(GROK_API_KEY_ENV, None)
-    print(
-        "Starting official Grok device OAuth for the dedicated DRadar slot. "
-        "Complete the browser/device prompt shown by Grok."
-    )
+    home.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        proc = subprocess.run([executable, "login", "--device-auth"], env=env)
+        with tempfile.TemporaryDirectory(
+            prefix=".grok-login-", dir=home.parent,
+        ) as name:
+            native_home = Path(name)
+            env = dict(os.environ)
+            env["HOME"] = str(native_home)
+            env.pop("GROK_HOME", None)
+            env.pop(GROK_API_KEY_ENV, None)
+            print(
+                "Starting official Grok device OAuth for the dedicated DRadar slot. "
+                "Complete the browser/device prompt shown by Grok."
+            )
+            proc = subprocess.run(
+                [executable, "login", "--device-auth"], env=env,
+            )
+            if proc.returncode != 0:
+                print("Grok OAuth login did not complete successfully.")
+                return proc.returncode or 1
+            native_auth = native_home / ".grok" / "auth.json"
+            try:
+                store_grok_auth(native_auth)
+            except (OSError, ValueError) as exc:
+                print(f"Grok login returned but the credential is not ready: {exc}")
+                return 1
     except OSError as exc:
         print(f"could not start Grok login: {exc}")
-        return 1
-    if proc.returncode != 0:
-        print("Grok OAuth login did not complete successfully.")
-        return proc.returncode or 1
-    issue = grok_auth_error(grok_auth_path())
-    if issue is not None:
-        print(f"Grok login returned but the credential is not ready: {issue}")
         return 1
     print(
         f"Grok subscription OAuth is ready at {grok_auth_path()} (tokens hidden).\n"
@@ -370,9 +379,14 @@ def _status_grok_subscription() -> int:
     if issue is not None:
         print(f"Grok subscription provider not ready: {issue}")
         return 1
+    live_issue = grok_live_error(executable, grok_auth_path())
+    if live_issue is not None:
+        print(f"Grok subscription provider not ready: {live_issue}.")
+        return 1
     print(
         f"Grok subscription provider ready via {grok_auth_path()} "
-        f"(OAuth tokens hidden, CLI {GROK_CLI_VERSION}, API keys disabled)."
+        f"(OAuth tokens hidden, CLI {GROK_CLI_VERSION}, {GROK_MODEL} verified, "
+        "API keys disabled)."
     )
     return 0
 

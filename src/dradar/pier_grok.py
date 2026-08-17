@@ -27,7 +27,12 @@ class GrokBuild(BaseInstalledAgent):
     """Run the official Grok CLI headlessly with an isolated OAuth home."""
 
     SUPPORTS_ATIF = True
-    _REMOTE_HOME = PurePosixPath("/tmp/dradar-grok-home")
+    # Grok 1.0.0 resolves credentials from ``$HOME/.grok/auth.json``. Its
+    # GROK_HOME setting controls selected configuration paths but is not the
+    # credential-home override, so using it alone silently falls back to an
+    # unauthenticated 4.5 catalog.
+    _REMOTE_USER_HOME = PurePosixPath("/tmp/dradar-grok-user")
+    _REMOTE_HOME = _REMOTE_USER_HOME / ".grok"
     _REMOTE_AUTH = _REMOTE_HOME / "auth.json"
     _REMOTE_BIN_DIR = PurePosixPath("/tmp/dradar-grok-bin")
     _REMOTE_CLI = _REMOTE_BIN_DIR / "grok"
@@ -94,16 +99,18 @@ class GrokBuild(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         del context
+        remote_user_home = self._REMOTE_USER_HOME.as_posix()
         remote_home = self._REMOTE_HOME.as_posix()
         remote_auth = self._REMOTE_AUTH.as_posix()
         remote_bin = self._REMOTE_BIN_DIR.as_posix()
         remote_cli = self._REMOTE_CLI.as_posix()
         env = self.build_process_env({
-            "GROK_HOME": remote_home,
+            "HOME": remote_user_home,
             "GROK_TELEMETRY_ENABLED": "0",
             "GROK_TELEMETRY_MIXPANEL_ENABLED": "0",
             "GROK_TELEMETRY_TRACE_UPLOAD": "0",
         })
+        env.pop("GROK_HOME", None)
         # API keys are intentionally unsupported, including accidental ambient
         # keys baked into a task image or injected by a caller.
         env.pop("XAI_API_KEY", None)
@@ -180,8 +187,9 @@ class GrokBuild(BaseInstalledAgent):
             "--deny", f"Edit({remote_home}/**)",
             "--deny", f"Write({remote_home}/**)",
             "--deny", "Bash(*auth.json*)",
+            "--deny", "Bash(*.grok*)",
             "--deny", "Bash(*GROK_HOME*)",
-            "--deny", f"Bash(*{remote_home}*)",
+            "--deny", f"Bash(*{remote_user_home}*)",
         ]
         cli = " ".join(shlex.quote(part) for part in flags)
         command = (

@@ -26,6 +26,7 @@ from .providers import (
     grok_auth_error,
     grok_auth_path,
     grok_cli_path,
+    grok_live_error,
     kimi_auth_error,
     kimi_auth_path,
     kimi_cli_path,
@@ -283,7 +284,14 @@ def cmd_doctor(args) -> int:
         except (subprocess.TimeoutExpired, OSError):
             pass
     grok_oauth_issue = grok_auth_error() if grok_requested else None
-    grok_ready = grok_cli_ready and grok_requested and grok_oauth_issue is None
+    grok_live_issue = (
+        grok_live_error(grok, grok_auth_path())
+        if grok_cli_ready and grok_oauth_issue is None else None
+    )
+    grok_ready = (
+        grok_cli_ready and grok_requested
+        and grok_oauth_issue is None and grok_live_issue is None
+    )
     kimi_requested = kimi_only or (
         selected_agent is None and kimi_auth_path().exists()
     )
@@ -329,6 +337,12 @@ def cmd_doctor(args) -> int:
                 grok_oauth_issue is None,
                 grok_oauth_issue or "run `dradar provider setup grok`",
             )
+            if grok_cli_ready and grok_oauth_issue is None:
+                all_ok &= _check(
+                    "Grok 4.6 — live subscription access",
+                    grok_live_issue is None,
+                    grok_live_issue or "run `dradar provider setup grok`",
+                )
             if grok_ready:
                 _check("Grok 4.6 — subscription provider ready", True)
         if kimi_requested:

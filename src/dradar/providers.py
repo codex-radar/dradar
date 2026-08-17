@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from collections.abc import Iterable, Mapping
@@ -641,6 +642,65 @@ def grok_auth_error(path: Path | None = None) -> str | None:
     if not _valid_grok_auth_payload(payload):
         return "Grok credential is not a refreshable subscription OAuth session"
     return None
+
+
+def grok_live_error(
+    executable: str | Path | None = None,
+    auth_path: Path | None = None,
+) -> str | None:
+    """Verify the saved OAuth session and Grok 4.6 catalog without a prompt.
+
+    Grok 1.0.0 reads OAuth from ``$HOME/.grok/auth.json``. DRadar keeps its
+    canonical slot at a provider-specific path, so the probe uses a private
+    temporary HOME matching Grok's native layout and never exposes tokens in
+    argv or output.
+    """
+    cli = str(executable or grok_cli_path() or "")
+    if not cli:
+        return f"official Grok CLI {GROK_CLI_VERSION} is not installed"
+    canonical = grok_auth_path() if auth_path is None else auth_path
+    issue = grok_auth_error(canonical)
+    if issue is not None:
+        return issue
+    try:
+        with tempfile.TemporaryDirectory(prefix="dradar-grok-probe-") as name:
+            native_home = Path(name) / ".grok"
+            native_home.mkdir(mode=0o700)
+            _replace_private_file(canonical, native_home / GROK_AUTH_FILENAME)
+            env = dict(os.environ)
+            env["HOME"] = name
+            env.pop("GROK_HOME", None)
+            env.pop(GROK_API_KEY_ENV, None)
+            env["GROK_TELEMETRY_ENABLED"] = "0"
+            env["GROK_TELEMETRY_MIXPANEL_ENABLED"] = "0"
+            env["GROK_TELEMETRY_TRACE_UPLOAD"] = "0"
+            proc = subprocess.run(
+                [cli, "models"], capture_output=True, text=True,
+                timeout=30, check=False, env=env,
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"Grok live model check failed: {type(exc).__name__}"
+    output = f"{proc.stdout}\n{proc.stderr}"
+    if proc.returncode != 0:
+        return "Grok live model check failed"
+    if "not authenticated" in output.lower():
+        return "Grok OAuth session is not authenticated"
+    if GROK_MODEL not in output:
+        return f"Grok OAuth account cannot access {GROK_MODEL}"
+    return None
+
+
+def store_grok_auth(source: Path, *, home: Path | None = None) -> Path:
+    """Atomically install a native Grok OAuth file into DRadar's slot."""
+    issue = grok_auth_error(source)
+    if issue is not None:
+        raise ValueError(issue)
+    canonical = grok_auth_path(home)
+    canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.chmod(canonical.parent, 0o700)
+    _replace_private_file(source, canonical)
+    return canonical
 
 
 def grok_cli_path(environ: Mapping[str, str] | None = None) -> str | None:
