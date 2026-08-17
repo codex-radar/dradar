@@ -342,6 +342,7 @@ dradar cells --state cooldown --task cache --sort minutes
 dradar cells --available --format pick
 dradar cells --available --all --json
 dradar cells --available --max-minutes 15 --max-cost 2 --min-pass-rate 0.5
+dradar cells --model deepseek-v4-flash --price-band peak --sort cost
 ```
 
 ### 格子状态
@@ -382,6 +383,7 @@ dradar cells --available --max-minutes 15 --max-cost 2 --min-pass-rate 0.5
 | `--min-tests N` / `--max-tests N` | 历史测试数范围 |
 | `--min-minutes N` / `--max-minutes N` | 预计运行分钟数范围；没有估时的数据不匹配 |
 | `--min-cost USD` / `--max-cost USD` | 预计模型成本范围（美元）；没有成本估算的数据不匹配 |
+| `--price-band off-peak\|peak` | DeepSeek 价签档位；默认低谷价，统一用于输出、费用筛选和排序，不改变实际结算 |
 | `--min-pass-rate RATE` / `--max-pass-rate RATE` | 历史通过率范围，取值 0–1（例如 `0.5` 表示 50%）；没有通过率的数据不匹配 |
 | `--min-priority N` | 最低推荐优先级；服务端没有发布该数据时明确报错 |
 | `--sort FIELD` | `multiplier`、`tests`、`pass-rate`、`minutes`、`cost`、`priority`、`task`、`model`、`effort` 或 `state` |

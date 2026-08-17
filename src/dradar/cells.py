@@ -55,6 +55,20 @@ def _rows(table: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _apply_price_band(rows: list[dict[str, Any]], price_band: str) -> None:
+    """Use one explicit DeepSeek tariff for every read-only cost operation."""
+    band_key = "peak" if price_band == "peak" else "off_peak"
+    for row in rows:
+        by_band = row.get("cost_by_band")
+        if not isinstance(by_band, dict):
+            continue
+        value = by_band.get(band_key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        row["cost"] = float(value)
+        row["price_band"] = price_band
+
+
 def _filter_rows(rows: list[dict[str, Any]], args) -> list[dict[str, Any]]:
     models = _selected(args.model)
     efforts = _selected(args.effort)
@@ -220,6 +234,8 @@ def cmd_cells(args) -> int:
         sys.exit(f"could not load cells: {exc}")
 
     all_rows = _rows(table)
+    price_band = getattr(args, "price_band", "off-peak")
+    _apply_price_band(all_rows, price_band)
     priority_available = _validate_priority_support(all_rows, args)
     _validate_ranges(args)
     rows = _filter_rows(all_rows, args)
@@ -232,6 +248,7 @@ def cmd_cells(args) -> int:
             "total": len(all_rows),
             "matched": matched,
             "shown": len(shown),
+            "price_band": price_band,
             "cells": shown,
         }, ensure_ascii=False, indent=2))
         return 0

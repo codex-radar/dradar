@@ -15,6 +15,7 @@ TABLE = {
         "beta-task|gpt-a|high": {
             "st": "cooldown", "mult": 3.0, "total_n": 8, "rate": 1.0,
             "min": 20, "cost": 2.5, "suggest_priority": 100,
+            "cost_by_band": {"off_peak": 1.25, "peak": 2.5},
         },
         "gamma-task|gpt-b|high": {
             "st": "open", "mult": 2.5, "total_n": 1, "rate": None,
@@ -42,6 +43,7 @@ def _args(**overrides):
         min_multiplier=None, min_tests=None, max_tests=None, min_priority=None,
         min_minutes=None, max_minutes=None, min_cost=None, max_cost=None,
         min_pass_rate=None, max_pass_rate=None,
+        price_band="off-peak",
         sort="multiplier", reverse=False, limit=20, all=False, json=True,
         format="table",
     )
@@ -87,6 +89,21 @@ def test_cells_resource_and_pass_rate_ranges_exclude_unknown_values(
         min_pass_rate=0.5, max_pass_rate=0.8,
     )
     assert [row["task_id"] for row in result["cells"]] == ["alpha-task"]
+
+
+def test_cells_price_band_applies_to_output_filters_and_sorting(monkeypatch, capsys):
+    off_peak = _run(monkeypatch, capsys, model=["gpt-a"], sort="cost")
+    assert off_peak["price_band"] == "off-peak"
+    beta = next(row for row in off_peak["cells"] if row["task_id"] == "beta-task")
+    assert beta["cost"] == 1.25
+
+    peak = _run(
+        monkeypatch, capsys, model=["gpt-a"], min_cost=2, sort="cost",
+        price_band="peak",
+    )
+    assert peak["price_band"] == "peak"
+    assert [row["task_id"] for row in peak["cells"]] == ["beta-task"]
+    assert peak["cells"][0]["cost"] == 2.5
 
 
 def test_cells_rejects_inverted_resource_ranges(monkeypatch, capsys):

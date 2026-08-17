@@ -143,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
         help="maximum estimated model cost in USD",
     )
     p_cells.add_argument(
+        "--price-band", choices=("off-peak", "peak"), default="off-peak",
+        help="DeepSeek estimate band used by output, filters, and sorting (default: off-peak)",
+    )
+    p_cells.add_argument(
         "--min-pass-rate", type=_pass_rate, metavar="RATE",
         help="minimum historical pass rate, from 0 to 1 (0.5 = 50%%)",
     )
