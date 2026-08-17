@@ -88,7 +88,16 @@ class GrokBuild(BaseInstalledAgent):
         # Runtime model traffic and silent OAuth refresh only.  Web search and
         # fetch are also removed at the CLI layer below.
         return NetworkAllowlist(
-            domains=["auth.x.ai", "cli-chat-proxy.grok.com", "grok.com"]
+            domains=[
+                "auth.x.ai",
+                "cli-chat-proxy.grok.com",
+                # Grok Build 1.0.0 loads the subscription settings and
+                # dynamic model catalog from the Code control plane before
+                # opening the chat stream.  The proxy treats allowlist hosts
+                # as exact names, so the apex entry does not cover this host.
+                "code.grok.com",
+                "grok.com",
+            ]
         )
 
     @with_prompt_template

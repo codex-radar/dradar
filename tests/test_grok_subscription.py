@@ -189,6 +189,7 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
     assert "grep -Fq" in source
     assert "grok-4.6" in source
     assert '"grok.com"' in source
+    assert '"code.grok.com"' in source
     assert "GROK_TELEMETRY_ENABLED" in source
 
 
