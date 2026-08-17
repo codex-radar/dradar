@@ -273,7 +273,10 @@ def test_zcode_checkpoint_resume_is_rejected(
 
 def test_zcode_adapter_source_has_fixed_security_contract() -> None:
     source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
-    assert 'return NetworkAllowlist(domains=["open.bigmodel.cn"])' in source
+    assert (
+        'return NetworkAllowlist(domains=["open.bigmodel.cn", "zcode.z.ai"])'
+        in source
+    )
     assert '"baseURL": "https://open.bigmodel.cn/api/anthropic"' in source
     assert '"apiKey": {"source": "inline", "value": key}' in source
     assert 'key_file.unlink()' in source

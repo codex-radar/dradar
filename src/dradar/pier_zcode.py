@@ -470,7 +470,12 @@ class ZCodeBigModel(BaseInstalledAgent):
         )
 
     def network_allowlist(self) -> NetworkAllowlist:
-        return NetworkAllowlist(domains=["open.bigmodel.cn"])
+        # The domestic Coding Plan model traffic uses open.bigmodel.cn, while
+        # the official ZCode runtime also reads its control-plane metadata
+        # from zcode.z.ai before starting a full agent turn.  Keep this list
+        # exact: telemetry, web search, and arbitrary network access remain
+        # blocked by the adapter and Pier egress proxy.
+        return NetworkAllowlist(domains=["open.bigmodel.cn", "zcode.z.ai"])
 
     @with_prompt_template
     async def run(
