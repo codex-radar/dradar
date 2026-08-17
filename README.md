@@ -148,8 +148,8 @@ dradar login --server https://api.codexradar.com --token <YOUR_TOKEN> \
 
 - Docker CLI、Docker daemon 和 Compose 插件；
 - 与 DRadar 固定版本兼容的 Pier，缺失时会尝试安装；
-- Codex CLI + `auth.json`、Claude CLI + OAuth Token，或可选的 DeepSeek API key 与
-  官方 Codex `models.json` 完整性；
+- Codex CLI + `auth.json`、Claude CLI + OAuth Token，以及所选可选 provider 的本地凭据、
+  固定 CLI 版本和模型访问能力；
 - 当前 benchmark 的任务仓库（主站目前为 DeepSWE），缺失时会尝试克隆；
 - Docker daemon 实际可用的 CPU/内存（不足时告警，不读取宿主机宣传配置）；
 - 可用磁盘和服务端登录。
@@ -241,7 +241,7 @@ xAI 按量 API。首次在跑题机器的交互式终端中建立 DRadar 专用�
 dradar provider setup grok
 dradar provider status grok
 dradar doctor
-dradar go --pick TASK_ID:grok-4.5:high
+dradar go --pick TASK_ID:grok-4.6:high
 ```
 
 凭证保存在 `~/.dradar/providers/grok/auth.json`（目录 `0700`、文件 `0600`），与日常
@@ -253,11 +253,48 @@ DRadar 会在宿主机上先校验官方 CLI 的固定版本，再把解析后�
 运行输入上传到任务容器并二次验版。Docker build 不访问 x.ai，也不会把 OAuth 凭证或
 日常 `~/.grok` 目录烘焙进镜像；凭证仍只在容器启动后临时注入。
 
-当前 canary 边界：官方 Grok CLI 固定为 `1.0.0`，模型固定为 `grok-4.5`，档位为
-`low`/`medium`/`high`；只能显式领取，不进入自动推荐或补题；禁用 web search、memory、
+当前 canary 边界：官方 Grok CLI 固定为 `1.0.0`，模型固定为 `grok-4.6`，档位为
+`low`/`medium`/`high`/`xhigh`；只能显式领取，不进入自动推荐或补题；禁用 web search、memory、
 subagents 和 plan，并把容器运行时网络限制为 `auth.x.ai` 与
-`cli-chat-proxy.grok.com`。第一版不支持 checkpoint。轨迹按 ATIF-v1.7 保存，但订阅
+`cli-chat-proxy.grok.com`、`code.grok.com`。第一版不支持 checkpoint。轨迹按 ATIF-v1.7 保存，但订阅
 运行没有 API 账单，因此 cost 保持未知，不伪报为 `$0`。
+
+### Kimi Code K3 订阅 OAuth agent
+
+Kimi Code 只使用官方订阅 OAuth，不接受 `KIMI_API_KEY`、`MOONSHOT_API_KEY` 等按量 key。
+先安装官方 Kimi Code CLI `0.36.0`，然后在跑题机器自己的交互式终端中建立 DRadar 专用会话：
+
+```bash
+dradar provider setup kimi
+dradar provider status kimi
+dradar doctor --agent kimi-code
+dradar go --pick TASK_ID:k3:high
+```
+
+DRadar 把 OAuth 保存在 `~/.dradar/providers/kimi`，不会借用或覆盖日常 Kimi Code 配置。
+任务容器只收到一次运行所需的锁定副本，退出后会回收刷新状态并删除临时副本。模型固定为
+`k3`，只接受 `low`/`high`/`max`；DeepSWE 与庞贝壁画均可显式领取，但不进入自动推荐、
+排序或持续补题。第一版不恢复 checkpoint。
+
+### ZCode GLM-5.3 国内 Coding Plan agent
+
+ZCode 使用国内 BigModel Coding Plan Key，不使用海外入口。先从
+[ZCode 官网](https://zcode.z.ai/cn)安装官方 ZCode `3.7.7`，再运行：
+
+```bash
+dradar provider setup zcode
+dradar provider status zcode --live
+dradar doctor --agent zcode
+dradar go --pick TASK_ID:glm-5.3:high
+```
+
+`provider setup` 会从官方桌面安装的 `Resources/glm/zcode.cjs` 导入 CLI `0.16.3`，并在复制
+前校验固定 SHA-256；高级用户也可以临时设置 `ZCODE_CLI_PATH` 指向该文件。Coding Plan Key
+通过关闭回显的交互式输入保存到 `~/.dradar/secrets`，不会进入命令行、配置 JSON、Git、
+DRadar 服务端或轨迹。容器启动后 Key 会立即转入 ZCode 的内存会话并删除临时文件。
+
+模型固定为 `glm-5.3`，档位为 `low`/`high`/`max`。它只参与 DeepSWE，不会出现在庞贝壁画
+认领表；只能显式领取，不进入自动推荐或补题，第一版不恢复 checkpoint。
 
 体检失败不会领取任务。修复所有 `FAIL` 后重新运行即可。
 
