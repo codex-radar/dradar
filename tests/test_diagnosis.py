@@ -255,6 +255,30 @@ def test_failed_trial_reports_stopped_to_server(monkeypatch, tmp_path):
     )]
 
 
+def test_failed_trial_reports_only_structured_failure_diagnostic(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    diagnostic = {
+        "schema": "dradar-runner-failure-v1",
+        "failure_code": "trial_timeout",
+        "trial_timeout_sec": 3600,
+        "zcode_session_timeout_sec": 3660,
+    }
+
+    def always_fails(*args, **kwargs):
+        raise RunnerError("secret must remain local", failure_diagnostic=diagnostic)
+
+    monkeypatch.setattr(runloop, "run_trial", always_fails)
+    stopped = []
+    client = SubmitClient({})
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    assert runloop._run_and_submit(
+        client, ASSIGNMENT, tmp_path, _args(), "abc",
+    ) == "failed"
+    assert stopped[0][1]["failure_diagnostic"] == diagnostic
+    assert "secret" not in json.dumps(stopped[0][1])
+
+
 def test_user_interrupt_without_checkpoint_reports_stopped_to_server(
         monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")

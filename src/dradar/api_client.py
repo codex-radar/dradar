@@ -310,6 +310,7 @@ class ApiClient:
         defer_seconds: int = 300,
         resume_generation: int | None = None,
         failure_kind: str | None = None,
+        failure_diagnostic: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """The counterpart of mark_started: this trial died client-side
         (build flake, agent crash, abandonment) with nothing uploaded, so the
@@ -325,6 +326,10 @@ class ApiClient:
             data["resume_generation"] = str(resume_generation)
         if failure_kind:
             data["failure_kind"] = failure_kind
+        if failure_diagnostic is not None:
+            data["failure_diagnostic"] = json.dumps(
+                failure_diagnostic, separators=(",", ":"), sort_keys=True,
+            )
         return self._post(
             "/api/v1/assignment/stopped",
             # A cross-session cooldown keeps a second `--parallel` process

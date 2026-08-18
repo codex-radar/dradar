@@ -3,6 +3,7 @@ attached to ApiError (the 409/410 pending-ledger pruning branches on it),
 the submit() multipart shape, and the Authorization header rules."""
 
 import json
+import urllib.parse
 
 import httpx
 import pytest
@@ -294,6 +295,26 @@ def test_mark_stopped_can_allow_immediate_user_resume():
     assert b"defer_seconds=0" in seen["body"]
     assert b"resume_generation" not in seen["body"]
     assert b"failure_kind" not in seen["body"]
+
+
+def test_mark_stopped_encodes_bounded_failure_diagnostic():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"ok": True})
+
+    diagnostic = {
+        "schema": "dradar-runner-failure-v1",
+        "failure_code": "trial_timeout",
+        "trial_timeout_sec": 3600,
+        "zcode_session_timeout_sec": 3660,
+    }
+    _client(handler).mark_stopped(
+        "a1", failure_kind="runner_failed", failure_diagnostic=diagnostic,
+    )
+    body = urllib.parse.parse_qs(seen["body"].decode())
+    assert json.loads(body["failure_diagnostic"][0]) == diagnostic
 
 
 def test_checkpoint_protocol_sends_id_generation_and_runner_session():

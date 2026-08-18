@@ -92,7 +92,16 @@ class ProtocolError(RuntimeError):
     pass
 
 
-node, cli, key_path, instruction_path, effort, outcome_path, events_path, stderr_path = sys.argv[1:]
+(
+    node, cli, key_path, instruction_path, effort, session_timeout_raw,
+    outcome_path, events_path, stderr_path, diagnostic_path,
+) = sys.argv[1:]
+try:
+    session_timeout_sec = int(session_timeout_raw)
+except ValueError as exc:
+    raise ProtocolError("ZCode session timeout is invalid") from exc
+if not 60 <= session_timeout_sec <= 24 * 60 * 60:
+    raise ProtocolError("ZCode session timeout is outside the safe range")
 key_file = Path(key_path)
 key = key_file.read_text(encoding="utf-8").strip()
 if not key or any(character.isspace() for character in key):
@@ -110,6 +119,39 @@ def redact(value):
     if isinstance(value, dict):
         return {name: redact(item) for name, item in value.items()}
     return value
+
+
+def write_runtime_diagnostic(status, turn_count, seen_running, terminal_observed):
+    """Persist only bounded lifecycle facts; never messages, paths or ids."""
+    safe_status = status if status in {
+        "idle", "running", "error", "failed", "stopped",
+    } else "unknown"
+    safe_turn_count = (
+        turn_count
+        if isinstance(turn_count, int) and not isinstance(turn_count, bool)
+        else 0
+    )
+    payload = {
+        "schema": "dradar-zcode-runtime-v1",
+        "status": safe_status,
+        "turn_count": max(0, min(safe_turn_count, 100000)),
+        "seen_running": bool(seen_running),
+        "terminal_observed": bool(terminal_observed),
+    }
+    path = Path(diagnostic_path)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
 
 
 def collect_rollout_usage(
@@ -424,9 +466,10 @@ try:
     key_file.unlink()
     call("session/send", {"sessionId": session_id, "content": instruction}, timeout=120.0)
 
-    deadline = time.monotonic() + 90 * 60
+    deadline = time.monotonic() + session_timeout_sec
     seen_running = False
     final_state = None
+    write_runtime_diagnostic(None, 0, False, False)
     while time.monotonic() < deadline:
         state = call("session/read", {"sessionId": session_id}, timeout=60.0)
         projection = state.get("projection") if isinstance(state, dict) else None
@@ -434,6 +477,13 @@ try:
         turns = projection.get("turnCount", 0) if isinstance(projection, dict) else 0
         if status not in {None, "idle"}:
             seen_running = True
+        terminal_observed = (
+            (isinstance(turns, int) and turns > 0 and status == "idle")
+            or status in {"error", "failed", "stopped"}
+        )
+        write_runtime_diagnostic(
+            status, turns, seen_running, terminal_observed,
+        )
         if isinstance(turns, int) and turns > 0 and status == "idle":
             final_state = state
             break
@@ -442,7 +492,9 @@ try:
             break
         time.sleep(1.0)
     if final_state is None:
-        raise ProtocolError("ZCode session did not finish within 90 minutes")
+        raise ProtocolError(
+            f"ZCode session did not finish within {session_timeout_sec} seconds"
+        )
     enabled_tools = set()
     state_messages = final_state.get("messages") if isinstance(final_state, dict) else None
     if isinstance(state_messages, list):
@@ -752,6 +804,7 @@ class ZCodeBigModel(BaseInstalledAgent):
     _OUTCOME_FILE = "zcode-outcome.json"
     _EVENTS_FILE = "zcode-protocol-events.json"
     _STDERR_FILE = "zcode-stderr.log"
+    _DIAGNOSTIC_FILE = "zcode-runtime-diagnostic.json"
     _STREAM_FILE = "zcode-protocol.log"
     _USAGE_FILE = "provider-usage.json"
 
@@ -765,6 +818,7 @@ class ZCodeBigModel(BaseInstalledAgent):
         api_key_file: str,
         zcode_cli_file: str,
         reasoning_effort: str,
+        session_timeout_sec: str | int,
         model_name: str | None = None,
         version: str | None = ZCODE_CLI_VERSION,
         **kwargs: Any,
@@ -793,6 +847,12 @@ class ZCodeBigModel(BaseInstalledAgent):
             raise ValueError("ZCode adapter enables only glm-5.3")
         if reasoning_effort not in SUPPORTED_EFFORTS:
             raise ValueError("ZCode reasoning_effort must be low, high, or max")
+        try:
+            resolved_session_timeout = int(session_timeout_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ZCode session_timeout_sec must be an integer") from exc
+        if not 60 <= resolved_session_timeout <= 24 * 60 * 60:
+            raise ValueError("ZCode session_timeout_sec is outside the safe range")
         resolved_version = version or ZCODE_CLI_VERSION
         if resolved_version != ZCODE_CLI_VERSION:
             raise ValueError(f"ZCode adapter requires exact CLI {ZCODE_CLI_VERSION}")
@@ -810,6 +870,7 @@ class ZCodeBigModel(BaseInstalledAgent):
         self._api_key_file = key_file
         self._zcode_cli_file = cli_file
         self._reasoning_effort = reasoning_effort
+        self._session_timeout_sec = resolved_session_timeout
         self._credential_value = key_value
         self._instruction = ""
         run_secret_dir = self._REMOTE_SECRET_ROOT / uuid.uuid4().hex
@@ -861,6 +922,7 @@ class ZCodeBigModel(BaseInstalledAgent):
         outcome = f"/logs/agent/{self._OUTCOME_FILE}"
         events = f"/logs/agent/{self._EVENTS_FILE}"
         stderr = f"/logs/agent/{self._STDERR_FILE}"
+        diagnostic = f"/logs/agent/{self._DIAGNOSTIC_FILE}"
         stream = f"/logs/agent/{self._STREAM_FILE}"
         instruction_path = f"{remote_secret}/instruction.txt"
         env = self.build_process_env({
@@ -922,7 +984,8 @@ class ZCodeBigModel(BaseInstalledAgent):
             shlex.quote(item)
             for item in (
                 "node", remote_cli, remote_key, instruction_path,
-                self._reasoning_effort, outcome, events, stderr,
+                self._reasoning_effort, str(self._session_timeout_sec),
+                outcome, events, stderr, diagnostic,
             )
         )
         command = (

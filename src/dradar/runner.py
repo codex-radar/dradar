@@ -235,7 +235,11 @@ class TrialArtifacts:
 
 
 class RunnerError(RuntimeError):
-    pass
+    def __init__(
+        self, *args: object, failure_diagnostic: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.failure_diagnostic = failure_diagnostic
 
 
 class LiveAccountTerminalError(RunnerError):
@@ -1065,6 +1069,7 @@ def build_pier_command(
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"api_key_file={provider_auth_path}",
             "--ak", f"zcode_cli_file={provider_cli_path}",
+            "--ak", f"session_timeout_sec={_zcode_session_timeout_sec(assignment)}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={ZCODE_CLI_VERSION}",
         ]
@@ -2133,6 +2138,73 @@ def _trial_timeout_sec(assignment: dict) -> int:
     return max(3600, int(est_min) * 60 * 4)
 
 
+def _zcode_session_timeout_sec(assignment: dict) -> int:
+    """Keep ZCode behind Pier's watchdog; DRadar's outer cap stays authoritative."""
+    return _trial_timeout_sec(assignment) + 60
+
+
+def _zcode_runtime_diagnostic(jobs_dir: Path, job_name: str) -> dict[str, object]:
+    """Read the adapter's allowlisted lifecycle snapshot, never its raw logs."""
+    try:
+        paths = list(
+            (jobs_dir / job_name).glob("*/agent/zcode-runtime-diagnostic.json")
+        )
+    except OSError:
+        return {}
+    if len(paths) != 1:
+        return {}
+    try:
+        payload = json.loads(paths[0].read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("schema") != "dradar-zcode-runtime-v1":
+        return {}
+    status = payload.get("status")
+    turns = payload.get("turn_count")
+    if status not in {"idle", "running", "error", "failed", "stopped", "unknown"}:
+        status = "unknown"
+    if not isinstance(turns, int) or isinstance(turns, bool) or not 0 <= turns <= 100000:
+        turns = 0
+    return {
+        "zcode_last_status": status,
+        "zcode_turn_count": turns,
+        "zcode_seen_running": payload.get("seen_running") is True,
+        "zcode_terminal_observed": payload.get("terminal_observed") is True,
+    }
+
+
+def _zcode_failure_diagnostic(
+    assignment: dict,
+    task_path: Path,
+    jobs_dir: Path,
+    job_name: str,
+    failure_code: str,
+) -> dict[str, object] | None:
+    """Build a bounded numeric/enum-only diagnostic for assignment/stopped."""
+    if assignment.get("agent") != ZCODE_AGENT:
+        return None
+    base_timeout = _task_agent_timeout_sec(task_path)
+    multiplier = _agent_timeout_multiplier(assignment, task_path)
+    diagnostic: dict[str, object] = {
+        "schema": "dradar-runner-failure-v1",
+        "failure_code": failure_code,
+        "trial_timeout_sec": _trial_timeout_sec(assignment),
+        "zcode_session_timeout_sec": _zcode_session_timeout_sec(assignment),
+    }
+    est_minutes = assignment.get("est_minutes")
+    if (
+        isinstance(est_minutes, (int, float))
+        and not isinstance(est_minutes, bool)
+        and 0 < est_minutes <= 1440
+    ):
+        diagnostic["est_minutes"] = float(est_minutes)
+    if isinstance(base_timeout, (int, float)) and base_timeout > 0:
+        diagnostic["task_agent_timeout_sec"] = int(base_timeout)
+        diagnostic["pier_agent_timeout_sec"] = int(math.ceil(base_timeout * multiplier))
+    diagnostic.update(_zcode_runtime_diagnostic(jobs_dir, job_name))
+    return diagnostic
+
+
 @contextmanager
 def _dsh_tasks_overlay(
     assignment: dict,
@@ -2433,7 +2505,15 @@ def run_trial(
                         raise RunnerError(
                             f"trial exceeded {timeout_sec // 60} min and was aborted "
                             f"(see {log_path}); docker/agent likely wedged\n"
-                            f"last lines of the log:\n{_tail(log_path)}")
+                            f"last lines of the log:\n{_tail(log_path)}",
+                            failure_diagnostic=_zcode_failure_diagnostic(
+                                effective_assignment,
+                                tasks_root / assignment["task_id"],
+                                jobs_dir,
+                                job_name,
+                                "trial_timeout",
+                            ),
+                        )
                     if now >= next_beat:
                         next_beat = now + HEARTBEAT_SEC
                         print(f"  … {int((now - started) / 60)} min elapsed — "
@@ -2491,6 +2571,10 @@ def run_trial(
         job_dir, trial_dir = locate_artifacts(jobs_dir, job_name)
     except RunnerError:
         if terminal_error is not None:
+            if terminal_error.failure_diagnostic is not None:
+                terminal_error.failure_diagnostic.update(
+                    _zcode_runtime_diagnostic(jobs_dir, job_name)
+                )
             raise terminal_error
         if _looks_like_build_flake(tail):
             raise BuildFlakeError(
@@ -2540,7 +2624,14 @@ def run_trial(
                 f"build diagnostic:\n{_diagnostic_tail(diagnostic)}")
         raise RunnerError(
             f"model.patch missing (agent likely failed; see {log_path} and {trial_dir})\n"
-            f"last lines of the log:\n{tail}"
+            f"last lines of the log:\n{tail}",
+            failure_diagnostic=_zcode_failure_diagnostic(
+                effective_assignment,
+                tasks_root / assignment["task_id"],
+                jobs_dir,
+                job_name,
+                "agent_no_artifact",
+            ),
         )
     returncode = proc.returncode
     if terminal_error is not None and returncode in (None, 0):

@@ -1303,6 +1303,7 @@ def _mark_stopped_quietly(
     *,
     defer_seconds: int = 300,
     failure_kind: str | None = None,
+    failure_diagnostic: dict[str, object] | None = None,
 ) -> bool:
     """Best-effort checkout cleanup with bounded retry and visible failure.
 
@@ -1325,6 +1326,8 @@ def _mark_stopped_quietly(
                 stop_kwargs["resume_generation"] = resume_generation
             if failure_kind is not None:
                 stop_kwargs["failure_kind"] = failure_kind
+            if failure_diagnostic is not None:
+                stop_kwargs["failure_diagnostic"] = failure_diagnostic
             client.mark_stopped(assignment_id, **stop_kwargs)
             return True
         except ApiError as exc:
@@ -1513,6 +1516,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 client,
                 assignment,
                 failure_kind=failure_kind or "runner_failed",
+                failure_diagnostic=(
+                    exc.failure_diagnostic
+                    if (failure_kind or "runner_failed") == "runner_failed"
+                    else None
+                ),
             )
             return terminal_outcome or "failed"
         except (KeyboardInterrupt, EOFError):

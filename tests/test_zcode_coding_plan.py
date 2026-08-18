@@ -221,6 +221,7 @@ def test_pier_command_uses_private_zcode_adapter_without_secret(
     assert f"reasoning_effort={effort}" in cmd
     assert f"api_key_file={key}" in cmd
     assert f"zcode_cli_file={cli}" in cmd
+    assert "session_timeout_sec=3660" in cmd
     assert f"version={ZCODE_CLI_VERSION}" in cmd
     assert "must-not-leak" not in joined
     assert (home / runner.ZCODE_AGENT_MODULE_FILENAME).read_bytes() == (
@@ -292,6 +293,49 @@ def test_zcode_adapter_source_has_fixed_security_contract() -> None:
     assert 'message.get("content") or message.get("parts")' in source
     assert 'info.get("role") if isinstance(info, dict) else None' in source
     assert "[REDACTED_ZCODE_CREDENTIAL]" in source
+    assert "deadline = time.monotonic() + session_timeout_sec" in source
+    assert "90 * 60" not in source
+    assert "dradar-zcode-runtime-v1" in source
+
+
+def test_zcode_session_deadline_tracks_long_assignment_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    cli = tmp_path / "zcode.cjs"
+    cli.write_text("pinned", encoding="utf-8")
+    command = runner.build_pier_command(
+        _assignment(est_minutes=40), tasks, tmp_path / "jobs", "job", home,
+        provider_auth_path=_private(tmp_path / "key"), provider_cli_path=cli,
+    )
+    # DRadar outer cap is 40m * 4 = 160m. The adapter gets one extra minute
+    # so the outer watchdog remains the authoritative termination path.
+    assert "session_timeout_sec=9660" in command
+
+
+def test_zcode_runtime_diagnostic_reads_only_allowlisted_lifecycle_facts(
+    tmp_path: Path,
+) -> None:
+    diagnostic = tmp_path / "job" / "trial" / "agent"
+    diagnostic.mkdir(parents=True)
+    (diagnostic / "zcode-runtime-diagnostic.json").write_text(json.dumps({
+        "schema": "dradar-zcode-runtime-v1",
+        "status": "running",
+        "turn_count": 7,
+        "seen_running": True,
+        "terminal_observed": False,
+        "prompt": "must never leave the machine",
+    }), encoding="utf-8")
+    assert runner._zcode_runtime_diagnostic(tmp_path, "job") == {
+        "zcode_last_status": "running",
+        "zcode_turn_count": 7,
+        "zcode_seen_running": True,
+        "zcode_terminal_observed": False,
+    }
 
 
 def _zcode_usage(payload: dict) -> dict:
