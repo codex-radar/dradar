@@ -112,6 +112,40 @@ def redact(value):
     return value
 
 
+def collect_rollout_usage(session_id):
+    """Extract only billing facts from ZCode's durable per-request ledger."""
+    if not isinstance(session_id, str) or not session_id.startswith("sess_"):
+        return []
+    path = Path.home() / ".zcode" / "cli" / "rollout" / f"model-io-{session_id}.jsonl"
+    facts = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return facts
+    for line in lines:
+        try:
+            record = json.loads(line)
+            if record.get("type") != "model_io" or record.get("sessionId") != session_id:
+                continue
+            model = record.get("model")
+            response = record.get("response")
+            usage = response.get("usage") if isinstance(response, dict) else None
+            if (not isinstance(model, dict) or model.get("modelId") != "glm-5.3"
+                    or not isinstance(usage, dict)):
+                continue
+            facts.append({
+                "occurredAt": record["completedAt"],
+                "inputTokens": usage["inputTokens"],
+                "cacheReadTokens": usage.get("cacheReadTokens", 0),
+                "cacheWriteTokens": usage.get("cacheWriteTokens", 0),
+                "outputTokens": usage["outputTokens"],
+                "totalTokens": usage["totalTokens"],
+            })
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    return facts
+
+
 proc = subprocess.Popen(
     [node, cli, "app-server"],
     stdin=subprocess.PIPE,
@@ -362,6 +396,7 @@ finally:
 
 if outcome is None:
     raise ProtocolError("ZCode produced no outcome")
+outcome["rolloutUsageEvents"] = collect_rollout_usage(session_id)
 safe_outcome = redact(outcome)
 encoded = json.dumps(safe_outcome, ensure_ascii=False, separators=(",", ":"))
 if key in encoded:
@@ -406,12 +441,20 @@ def _zcode_usage_facts(payload: dict) -> dict:
 
     events = []
     event_created = 0
-    for notification in notifications:
-        if (not isinstance(notification, dict)
-                or notification.get("method") != "v4/telemetry/event"):
-            continue
-        params = notification.get("params")
-        if not isinstance(params, dict) or params.get("kind") != "usage.delta":
+    rollout = payload.get("rolloutUsageEvents")
+    if isinstance(rollout, list) and rollout:
+        candidates = rollout
+    else:
+        candidates = []
+        for notification in notifications:
+            if (not isinstance(notification, dict)
+                    or notification.get("method") != "v4/telemetry/event"):
+                continue
+            params = notification.get("params")
+            if isinstance(params, dict) and params.get("kind") == "usage.delta":
+                candidates.append(params)
+    for params in candidates:
+        if not isinstance(params, dict):
             continue
         try:
             values = {
@@ -421,17 +464,26 @@ def _zcode_usage_facts(payload: dict) -> dict:
                     "outputTokens",
                 )
             }
-            occurred = float(params["occurredAt"])
             if (any(value < 0 for value in values.values())
                     or values["cacheReadTokens"] + values["cacheWriteTokens"]
                     > values["inputTokens"]
                     or int(params["totalTokens"])
                     != values["inputTokens"] + values["outputTokens"]):
                 raise ValueError
-            seconds = occurred / (1000 if occurred > 10_000_000_000 else 1)
-            occurred_at = datetime.fromtimestamp(
-                seconds, timezone.utc,
-            ).isoformat().replace("+00:00", "Z")
+            occurred = params["occurredAt"]
+            if isinstance(occurred, str):
+                parsed = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    raise ValueError
+                occurred_at = parsed.astimezone(timezone.utc).isoformat().replace(
+                    "+00:00", "Z"
+                )
+            else:
+                epoch = float(occurred)
+                seconds = epoch / (1000 if epoch > 10_000_000_000 else 1)
+                occurred_at = datetime.fromtimestamp(
+                    seconds, timezone.utc,
+                ).isoformat().replace("+00:00", "Z")
         except (KeyError, TypeError, ValueError, OverflowError, OSError):
             continue
         events.append({

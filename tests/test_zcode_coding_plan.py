@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,3 +332,106 @@ def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> 
     assert facts["n_output_tokens"] == 3
     assert facts["n_input_tokens"] + facts["n_output_tokens"] == 3_286
     assert facts["n_input_tokens"] + facts["n_cache_tokens"] + facts["n_output_tokens"] != 3_286
+
+
+def test_zcode_usage_prefers_durable_rollout_ledger() -> None:
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    helper = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_zcode_usage_facts"
+    )
+    namespace = {"datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
+         namespace)
+    facts = namespace["_zcode_usage_facts"]({
+        "usage": {
+            "inputTokens": 5_000,
+            "cacheReadTokens": 2_000,
+            "cacheCreationTokens": 100,
+            "outputTokens": 500,
+            "totalTokens": 5_500,
+            "modelRequestCount": 2,
+        },
+        "notifications": [],
+        "rolloutUsageEvents": [
+            {
+                "occurredAt": "2026-08-18T05:59:59.000Z",
+                "inputTokens": 2_000,
+                "cacheReadTokens": 500,
+                "cacheWriteTokens": 100,
+                "outputTokens": 200,
+                "totalTokens": 2_200,
+            },
+            {
+                "occurredAt": "2026-08-18T06:00:00.000Z",
+                "inputTokens": 3_000,
+                "cacheReadTokens": 1_500,
+                "cacheWriteTokens": 0,
+                "outputTokens": 300,
+                "totalTokens": 3_300,
+            },
+        ],
+    })
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 5_000
+    assert facts["n_cache_tokens"] == 2_000
+    assert facts["n_output_tokens"] == 500
+    assert [event["occurred_at"] for event in facts["token_usage_events"]] == [
+        "2026-08-18T05:59:59Z", "2026-08-18T06:00:00Z",
+    ]
+
+
+def test_zcode_rollout_collector_exports_only_billing_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    runner_assignment = next(
+        node for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_PROTOCOL_RUNNER"
+                for target in node.targets)
+    )
+    runner_source = ast.literal_eval(runner_assignment.value)
+    runner_module = ast.parse(runner_source)
+    collector = next(
+        node for node in runner_module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "collect_rollout_usage"
+    )
+    namespace = {"json": json, "Path": Path}
+    exec(compile(ast.Module(body=[collector], type_ignores=[]), "runner.py", "exec"),
+         namespace)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    session_id = "sess_01234567-89ab-cdef-0123-456789abcdef"
+    rollout = tmp_path / ".zcode" / "cli" / "rollout"
+    rollout.mkdir(parents=True)
+    (rollout / f"model-io-{session_id}.jsonl").write_text(json.dumps({
+        "type": "model_io",
+        "sessionId": session_id,
+        "completedAt": "2026-08-18T06:00:00.123Z",
+        "model": {"modelId": "glm-5.3", "providerId": "bigmodel-coding-plan"},
+        "request": {"body": {"messages": [{"content": "SECRET PROMPT"}]}},
+        "response": {
+            "text": "SECRET RESPONSE",
+            "usage": {
+                "inputTokens": 4_000,
+                "cacheReadTokens": 1_500,
+                "cacheWriteTokens": 100,
+                "outputTokens": 300,
+                "totalTokens": 4_300,
+            },
+        },
+    }) + "\n", encoding="utf-8")
+
+    facts = namespace["collect_rollout_usage"](session_id)
+    assert facts == [{
+        "occurredAt": "2026-08-18T06:00:00.123Z",
+        "inputTokens": 4_000,
+        "cacheReadTokens": 1_500,
+        "cacheWriteTokens": 100,
+        "outputTokens": 300,
+        "totalTokens": 4_300,
+    }]
+    assert "SECRET" not in json.dumps(facts)
