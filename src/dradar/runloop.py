@@ -1332,6 +1332,16 @@ def _mark_stopped_quietly(
             return True
         except ApiError as exc:
             last_error = exc
+            if (
+                failure_diagnostic is not None
+                and exc.status_code == 422
+                and "failure_diagnostic" in str(exc)
+            ):
+                # A rolling/older server may reject only the optional
+                # diagnostic schema. Retry cleanup once without telemetry;
+                # never generalize this to unrelated 4xx responses.
+                failure_diagnostic = None
+                continue
             if exc.status_code is not None and exc.status_code < 500:
                 break
         except Exception as exc:

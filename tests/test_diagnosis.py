@@ -355,3 +355,42 @@ def test_mark_stopped_surfaces_nonretryable_cleanup_failure(capsys):
     assert "could not confirm checkout cleanup" in out
     assert "assignment-2" in out
     assert "retry `dradar resume`" in out
+
+
+def test_mark_stopped_downgrades_only_diagnostic_422(capsys):
+    attempts = []
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            attempts.append((assignment_id, kwargs))
+            if len(attempts) == 1:
+                raise ApiError(
+                    "server returned 422: unsupported failure_diagnostic schema",
+                    status_code=422,
+                )
+            return {"ok": True}
+
+    assert runloop._mark_stopped_quietly(
+        Client(), "assignment-3", failure_kind="runner_failed",
+        failure_diagnostic={"schema": "dradar-runner-failure-v1"},
+    ) is True
+    assert len(attempts) == 2
+    assert "failure_diagnostic" in attempts[0][1]
+    assert "failure_diagnostic" not in attempts[1][1]
+    assert capsys.readouterr().out == ""
+
+
+def test_mark_stopped_does_not_downgrade_unrelated_422(capsys):
+    attempts = []
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            attempts.append((assignment_id, kwargs))
+            raise ApiError("server returned 422: stale fence", status_code=422)
+
+    assert runloop._mark_stopped_quietly(
+        Client(), "assignment-4", failure_kind="runner_failed",
+        failure_diagnostic={"schema": "dradar-runner-failure-v1"},
+    ) is False
+    assert len(attempts) == 1
+    assert "could not confirm checkout cleanup" in capsys.readouterr().out

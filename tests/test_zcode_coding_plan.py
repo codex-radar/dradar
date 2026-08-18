@@ -317,6 +317,27 @@ def test_zcode_session_deadline_tracks_long_assignment_budget(
     assert "session_timeout_sec=9660" in command
 
 
+@pytest.mark.parametrize("est_minutes", [360, 1440])
+def test_zcode_session_deadline_clamps_below_protocol_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, est_minutes: int,
+) -> None:
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    cli = tmp_path / "zcode.cjs"
+    cli.write_text("pinned", encoding="utf-8")
+    assignment = _assignment(est_minutes=est_minutes)
+    command = runner.build_pier_command(
+        assignment, tasks, tmp_path / "jobs", "job", home,
+        provider_auth_path=_private(tmp_path / "key"), provider_cli_path=cli,
+    )
+    assert "session_timeout_sec=86400" in command
+    assert runner._zcode_trial_timeout_sec(assignment) == 86340
+    assert runner._zcode_session_timeout_sec(assignment) == 86400
+
+
 def test_zcode_runtime_diagnostic_reads_only_allowlisted_lifecycle_facts(
     tmp_path: Path,
 ) -> None:
