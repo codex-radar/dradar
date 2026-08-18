@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -282,9 +284,50 @@ def test_zcode_adapter_source_has_fixed_security_contract() -> None:
     assert '"apiKey": {"source": "inline", "value": key}' in source
     assert 'key_file.unlink()' in source
     assert '"memoryEnabled": False' in source
+    assert '"titleGenerationEnabled": False' in source
     assert '"WebFetch", "WebSearch", "web_search"' in source
     assert 'required_tools = {"Read", "Write", "Edit", "Bash"}' in source
     assert '"Read(/tmp/dradar-zcode-*)"' not in source
     assert 'message.get("content") or message.get("parts")' in source
     assert 'info.get("role") if isinstance(info, dict) else None' in source
     assert "[REDACTED_ZCODE_CREDENTIAL]" in source
+
+
+def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> None:
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    helper = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_zcode_usage_facts"
+    )
+    namespace = {"datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
+         namespace)
+    facts = namespace["_zcode_usage_facts"]({
+        "usage": {
+            "inputTokens": 3_283,
+            "cacheReadTokens": 1_216,
+            "cacheCreationTokens": 0,
+            "outputTokens": 3,
+            "totalTokens": 3_286,
+            "modelRequestCount": 1,
+        },
+        "notifications": [{
+            "method": "v4/telemetry/event",
+            "params": {
+                "kind": "usage.delta",
+                "occurredAt": 1_787_051_447_467,
+                "inputTokens": 3_283,
+                "cacheReadTokens": 1_216,
+                "cacheWriteTokens": 0,
+                "outputTokens": 3,
+                "totalTokens": 3_286,
+            },
+        }],
+    })
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 3_283
+    assert facts["n_cache_tokens"] == 1_216
+    assert facts["n_output_tokens"] == 3
+    assert facts["n_input_tokens"] + facts["n_output_tokens"] == 3_286
+    assert facts["n_input_tokens"] + facts["n_cache_tokens"] + facts["n_output_tokens"] != 3_286

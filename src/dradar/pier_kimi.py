@@ -12,6 +12,7 @@ import json
 import os
 import shlex
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -99,6 +100,93 @@ KIMI_BINARY_SHA256 = {
 }
 
 
+def _usage_instant(value: Any) -> str | None:
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            seconds = float(value) / (1000 if value > 10_000_000_000 else 1)
+            instant = datetime.fromtimestamp(seconds, timezone.utc)
+        elif isinstance(value, str):
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if instant.tzinfo is None:
+                return None
+            instant = instant.astimezone(timezone.utc)
+        else:
+            return None
+    except (OverflowError, OSError, ValueError):
+        return None
+    return instant.isoformat().replace("+00:00", "Z")
+
+
+def _kimi_usage_facts(records: list[dict]) -> dict:
+    """Read Kimi's per-request durable usage records without cache overlap.
+
+    ``inputOther`` and ``inputCacheCreation`` are ordinary-priced prompt
+    tokens. ``inputCacheRead`` is both part of total prompt tokens and the
+    cached subset. Keeping that invariant matches Pier/DRadar's normalized
+    contract: n_input_tokens already includes n_cache_tokens.
+    """
+
+    totals = {name: 0 for name in (
+        "inputOther", "inputCacheRead", "inputCacheCreation", "output",
+    )}
+    events = []
+    valid = True
+    for record in records:
+        if (record.get("type") != "usage.record"
+                or record.get("usageScope") != "turn"):
+            continue
+        usage = record.get("usage")
+        if not isinstance(usage, dict):
+            valid = False
+            continue
+
+        def counter(name: str) -> int | None:
+            value = usage.get(name)
+            return value if isinstance(value, int) and not isinstance(value, bool) \
+                and value >= 0 else None
+
+        current = {name: counter(name) for name in totals}
+        if any(value is None for value in current.values()):
+            valid = False
+            continue
+        current = {name: int(value) for name, value in current.items()}
+        if any(current.values()):
+            occurred_at = _usage_instant(
+                record.get("time") or record.get("timestamp")
+                or record.get("occurred_at")
+            )
+            events.append({
+                "occurred_at": occurred_at,
+                "n_input_tokens": (
+                    current["inputOther"] + current["inputCacheRead"]
+                    + current["inputCacheCreation"]
+                ),
+                "n_cache_tokens": current["inputCacheRead"],
+                "n_output_tokens": current["output"],
+            })
+        for name in totals:
+            totals[name] += current[name]
+    prompt_tokens = (
+        totals["inputOther"] + totals["inputCacheRead"]
+        + totals["inputCacheCreation"]
+    )
+    complete = valid and bool(events) and prompt_tokens + totals["output"] > 0
+    timed_complete = complete and all(event["occurred_at"] for event in events)
+    return {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "kimi-code",
+        "model": "k3",
+        "complete": complete,
+        "request_count": len(events),
+        "n_input_tokens": prompt_tokens,
+        "n_cache_tokens": totals["inputCacheRead"],
+        "n_output_tokens": totals["output"],
+        "cache_creation_tokens": totals["inputCacheCreation"],
+        "token_usage_events": events if timed_complete else [],
+        "timed_usage_complete": timed_complete,
+    }
+
+
 def _install_command() -> str:
     return (
         "set -euo pipefail; "
@@ -145,6 +233,7 @@ class KimiCode(BaseInstalledAgent):
     _STREAM_FILE = "kimi-code.jsonl"
     _STDERR_FILE = "kimi-code.stderr.log"
     _SESSION_LOG_FILE = "kimi-code-session.log"
+    _USAGE_FILE = "provider-usage.json"
 
     @staticmethod
     def name() -> str:
@@ -476,37 +565,44 @@ class KimiCode(BaseInstalledAgent):
             )
         if assistant_calls == 0:
             return
-        output_tokens = 0
         try:
             wire_lines = session_log_path.read_text(
                 encoding="utf-8", errors="replace"
             ).splitlines()
         except OSError:
             wire_lines = []
+        wire_records = []
         for line in wire_lines:
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(record, dict):
-                continue
-            message = record.get("message")
-            if not isinstance(message, dict) or message.get("type") != "StatusUpdate":
-                continue
-            payload = message.get("payload")
-            usage = payload.get("token_usage") if isinstance(payload, dict) else None
-            output = usage.get("output") if isinstance(usage, dict) else None
-            if isinstance(output, int):
-                output_tokens += output
+            if isinstance(record, dict):
+                wire_records.append(record)
+        usage_facts = _kimi_usage_facts(wire_records)
+        prompt_tokens = usage_facts["n_input_tokens"] if usage_facts["complete"] else 0
+        cached_tokens = usage_facts["n_cache_tokens"] if usage_facts["complete"] else 0
+        output_tokens = usage_facts["n_output_tokens"] if usage_facts["complete"] else 0
+        cache_creation_tokens = (
+            usage_facts["cache_creation_tokens"] if usage_facts["complete"] else 0
+        )
+        try:
+            (self.logs_dir / self._USAGE_FILE).write_text(
+                json.dumps(usage_facts, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         metrics = FinalMetrics(
-            total_prompt_tokens=None,
+            total_prompt_tokens=prompt_tokens or None,
             total_completion_tokens=output_tokens or None,
+            total_cached_tokens=cached_tokens or None,
             total_cost_usd=None,
             total_steps=len(steps),
             extra={
                 "billing_basis": "subscription",
                 "cost_not_reported": True,
-                "prompt_tokens_not_reported": True,
+                "cache_creation_tokens": cache_creation_tokens,
                 "resume_attempts": self._resume_attempts,
             },
         )

@@ -762,6 +762,75 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
     }
 
 
+def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
+    """Read one adapter-produced, fully normalized subscription usage ledger."""
+
+    path = trial_dir / "agent" / "provider-usage.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    expected_provider = (
+        "zcode" if meta.get("zcode_cli_version")
+        else "kimi-code" if meta.get("kimi_cli_version")
+        else "grok" if meta.get("grok_cli_version")
+        else None
+    )
+    if (
+        expected_provider is None
+        or not isinstance(value, dict)
+        or value.get("schema") != "dradar-subscription-provider-usage-v1"
+        or value.get("provider") != expected_provider
+        or value.get("complete") is not True
+    ):
+        return None
+    names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
+    if any(
+        not isinstance(value.get(name), int)
+        or isinstance(value.get(name), bool)
+        or value[name] < 0
+        for name in names
+    ) or value["n_cache_tokens"] > value["n_input_tokens"]:
+        return None
+    request_count = value.get("request_count")
+    if (not isinstance(request_count, int) or isinstance(request_count, bool)
+            or request_count < 1):
+        return None
+    timed = value.get("timed_usage_complete") is True
+    events = value.get("token_usage_events")
+    if timed:
+        if not isinstance(events, list) or len(events) != request_count:
+            return None
+        totals = {name: 0 for name in names}
+        for event in events:
+            if not isinstance(event, dict):
+                return None
+            try:
+                instant = datetime.fromisoformat(
+                    event["occurred_at"].replace("Z", "+00:00")
+                )
+            except (AttributeError, KeyError, TypeError, ValueError):
+                return None
+            if instant.tzinfo is None or any(
+                not isinstance(event.get(name), int)
+                or isinstance(event.get(name), bool)
+                or event[name] < 0
+                for name in names
+            ) or event["n_cache_tokens"] > event["n_input_tokens"]:
+                return None
+            for name in names:
+                totals[name] += event[name]
+        if any(totals[name] != value[name] for name in names):
+            return None
+    else:
+        events = []
+    return {
+        **value,
+        "token_usage_events": events,
+        "timed_usage_complete": timed,
+    }
+
+
 def _dsh_completed_outcome(
     trial_dir: Path, patch: Path, result: Path | None,
 ) -> dict | None:
@@ -984,6 +1053,8 @@ def _upload_trial(
     )
     if upload_meta.get("dsh_version") and usage is None:
         usage = _dsh_trial_usage(Path(entry["trial_dir"]))
+    if usage is None:
+        usage = _subscription_trial_usage(Path(entry["trial_dir"]), upload_meta)
     if entry.get("artifact_staging_recovery"):
         upload_meta["artifact_staging_recovery"] = entry["artifact_staging_recovery"]
     if redacted_patch is not None:
@@ -998,6 +1069,8 @@ def _upload_trial(
             "subagent_session_count", "agent_session_usage", "request_count",
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
+            "cache_creation_tokens", "subscription_reported_cost_usd",
+            "subscription_reported_cost_basis",
         ):
             source_key = "sessions" if key == "agent_session_usage" else key
             if source_key in usage:

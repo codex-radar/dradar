@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import math
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -196,6 +199,34 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
     assert "GROK_LINUX_SHA256" in source
     assert "sha256sum --check --strict" in source
     assert "await environment.upload_file(self._grok_cli_file" not in source
+
+
+def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
+    source = Path(providers.__file__).with_name("pier_grok.py").read_text()
+    module = ast.parse(source)
+    helper = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_grok_usage_facts"
+    )
+    namespace = {"datetime": datetime, "timezone": timezone, "math": math}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_grok.py", "exec"),
+         namespace)
+    facts = namespace["_grok_usage_facts"]([{
+        "timestamp": "2026-08-18T01:00:00Z",
+        "total_cost_usd": 0.00142052,
+        "usage": {
+            "input_tokens": 500,
+            "cache_read_input_tokens": 400,
+            "cache_creation_input_tokens": 100,
+            "output_tokens": 50,
+        },
+    }])
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 1_000
+    assert facts["n_cache_tokens"] == 400
+    assert facts["n_output_tokens"] == 50
+    assert facts["cache_creation_tokens"] == 100
+    assert facts["subscription_reported_cost_usd"] == pytest.approx(0.00142052)
 
 
 def test_grok_live_probe_uses_native_private_home(

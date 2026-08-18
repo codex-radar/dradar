@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import ast
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -306,6 +309,47 @@ def test_kimi_adapter_source_has_fixed_security_contract() -> None:
     assert "KIMI_DISABLE_TELEMETRY" in source
     assert "KIMI_DISABLE_CRON" in source
     assert "[REDACTED_KIMI_CREDENTIAL]" in source
+
+
+def test_kimi_wire_usage_sums_request_records_without_cache_overlap() -> None:
+    source = Path(providers.__file__).with_name("pier_kimi.py").read_text()
+    module = ast.parse(source)
+    helpers = [
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"_usage_instant", "_kimi_usage_facts"}
+    ]
+    namespace = {"Any": Any, "datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
+         namespace)
+    status = lambda usage, at: {
+        "time": at,
+        "type": "usage.record",
+        "usageScope": "turn",
+        "usage": usage,
+    }
+    facts = namespace["_kimi_usage_facts"]([
+        status({
+            "inputOther": 1_964,
+            "inputCacheCreation": 101,
+            "inputCacheRead": 19_200,
+            "output": 27,
+        }, "2026-08-18T01:00:00Z"),
+        status({
+            "inputOther": 10,
+            "inputCacheCreation": 20,
+            "inputCacheRead": 30,
+            "output": 4,
+        }, "2026-08-18T01:00:02Z"),
+        {"message": {"type": "Unrelated"}},
+    ])
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 21_325
+    assert facts["n_cache_tokens"] == 19_230
+    assert facts["n_output_tokens"] == 31
+    assert facts["cache_creation_tokens"] == 121
+    assert facts["request_count"] == 2
+    assert sum(e["n_input_tokens"] for e in facts["token_usage_events"]) == 21_325
 
 
 def _write_kimi_session(

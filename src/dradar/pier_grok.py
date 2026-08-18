@@ -8,9 +8,11 @@ isolated Python environment through ``--agent-import-path``.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -29,6 +31,101 @@ GROK_LINUX_SHA256 = {
     "x86_64": "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961",
     "aarch64": "ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9",
 }
+
+
+def _grok_usage_facts(events: list[dict]) -> dict:
+    """Read complete cumulative Grok usage without cache overlap."""
+
+    names = (
+        "input_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "output_tokens",
+    )
+    previous = {name: 0 for name in names}
+    timed_events = []
+    valid = True
+    for event in events:
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        current = {
+            name: usage.get(name)
+            if (isinstance(usage.get(name), int)
+                and not isinstance(usage.get(name), bool)
+                and usage[name] >= 0)
+            else None
+            for name in names
+        }
+        if any(value is None for value in current.values()):
+            valid = False
+            continue
+        current = {name: int(value) for name, value in current.items()}
+        if any(current[name] < previous[name] for name in names):
+            valid = False
+            continue
+        delta = {name: current[name] - previous[name] for name in names}
+        if any(delta.values()):
+            raw_time = (
+                event.get("timestamp") or event.get("created_at")
+                or event.get("createdAt") or event.get("time")
+            )
+            occurred_at = None
+            try:
+                if isinstance(raw_time, (int, float)) and not isinstance(raw_time, bool):
+                    seconds = float(raw_time) / (
+                        1000 if raw_time > 10_000_000_000 else 1
+                    )
+                    instant = datetime.fromtimestamp(seconds, timezone.utc)
+                elif isinstance(raw_time, str):
+                    instant = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                    if instant.tzinfo is None:
+                        raise ValueError
+                    instant = instant.astimezone(timezone.utc)
+                else:
+                    raise ValueError
+                occurred_at = instant.isoformat().replace("+00:00", "Z")
+            except (OverflowError, OSError, TypeError, ValueError):
+                pass
+            timed_events.append({
+                "occurred_at": occurred_at,
+                "n_input_tokens": (
+                    delta["input_tokens"] + delta["cache_read_input_tokens"]
+                    + delta["cache_creation_input_tokens"]
+                ),
+                "n_cache_tokens": delta["cache_read_input_tokens"],
+                "n_output_tokens": delta["output_tokens"],
+            })
+        previous = current
+    prompt = (
+        previous["input_tokens"] + previous["cache_read_input_tokens"]
+        + previous["cache_creation_input_tokens"]
+    )
+    complete = valid and bool(timed_events) and prompt + previous["output_tokens"] > 0
+    timed_complete = complete and all(event["occurred_at"] for event in timed_events)
+    reported_cost = None
+    for event in reversed(events):
+        value = event.get("total_cost_usd")
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(candidate) and candidate >= 0:
+            reported_cost = candidate
+            break
+    return {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "grok",
+        "model": "grok-4.6",
+        "complete": complete,
+        "request_count": len(timed_events),
+        "n_input_tokens": prompt,
+        "n_cache_tokens": previous["cache_read_input_tokens"],
+        "n_output_tokens": previous["output_tokens"],
+        "cache_creation_tokens": previous["cache_creation_input_tokens"],
+        "subscription_reported_cost_usd": reported_cost,
+        "subscription_reported_cost_basis": "official-grok-cli",
+        "token_usage_events": timed_events if timed_complete else [],
+        "timed_usage_complete": timed_complete,
+    }
 
 
 def _install_command() -> str:
@@ -75,6 +172,7 @@ class GrokBuild(BaseInstalledAgent):
     _REMOTE_AUTH = _REMOTE_HOME / "auth.json"
     _REMOTE_CLI = PurePosixPath("/opt/grok-runtime/bin/grok")
     _STREAM_FILE = "grok-build.jsonl"
+    _USAGE_FILE = "provider-usage.json"
     _TOOLS = "read_file,grep,list_dir,search_replace,run_terminal_cmd,todo_write"
 
     @staticmethod
@@ -272,7 +370,7 @@ class GrokBuild(BaseInstalledAgent):
             return
         steps: list[Step] = []
         session_id: str | None = None
-        input_tokens = output_tokens = 0
+        parsed_events = []
         for line in lines:
             try:
                 event = json.loads(line)
@@ -280,11 +378,8 @@ class GrokBuild(BaseInstalledAgent):
                 continue
             if not isinstance(event, dict):
                 continue
+            parsed_events.append(event)
             session_id = event.get("session_id") or event.get("sessionId") or session_id
-            usage = event.get("usage")
-            if isinstance(usage, dict):
-                input_tokens = max(input_tokens, int(usage.get("input_tokens") or 0))
-                output_tokens = max(output_tokens, int(usage.get("output_tokens") or 0))
             message = event.get("message") if isinstance(event.get("message"), dict) else event
             role = message.get("role")
             text = self._content_text(message.get("content"))
@@ -302,12 +397,29 @@ class GrokBuild(BaseInstalledAgent):
             )
         if not steps:
             return
+        usage_facts = _grok_usage_facts(parsed_events)
+        input_tokens = usage_facts["n_input_tokens"] if usage_facts["complete"] else 0
+        cached_tokens = usage_facts["n_cache_tokens"] if usage_facts["complete"] else 0
+        output_tokens = usage_facts["n_output_tokens"] if usage_facts["complete"] else 0
+        created_tokens = usage_facts["cache_creation_tokens"] if usage_facts["complete"] else 0
+        try:
+            (self.logs_dir / self._USAGE_FILE).write_text(
+                json.dumps(usage_facts, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         metrics = FinalMetrics(
             total_prompt_tokens=input_tokens or None,
             total_completion_tokens=output_tokens or None,
+            total_cached_tokens=cached_tokens or None,
             total_cost_usd=None,
             total_steps=len(steps),
-            extra={"billing_basis": "subscription", "cost_not_reported": True},
+            extra={
+                "billing_basis": "subscription",
+                "cost_not_reported": True,
+                "cache_creation_tokens": created_tokens,
+            },
         )
         trajectory = Trajectory(
             schema_version="ATIF-v1.7",

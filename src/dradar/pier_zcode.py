@@ -15,6 +15,7 @@ import re
 import shlex
 import stat
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -243,6 +244,7 @@ try:
             "thoughtLevel": effort,
             "mode": "yolo",
             "persistence": "deferred",
+            "titleGenerationEnabled": False,
             "mcpServers": [],
             "toolAllowlist": [
                 "Read", "Write", "Edit", "ApplyPatch", "Bash", "Glob", "Grep",
@@ -375,6 +377,97 @@ print(f"ZCode session {session_id} completed with GLM-5.3 ({effort}).")
 '''
 
 
+def _zcode_usage_facts(payload: dict) -> dict:
+    """Verify ZCode's timed request ledger against its session aggregate."""
+
+    usage = payload.get("usage")
+    notifications = payload.get("notifications")
+    if not isinstance(usage, dict) or not isinstance(notifications, list):
+        usage, notifications = {}, []
+
+    def counter(name: str) -> int:
+        value = usage.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return 0
+
+    prompt = counter("inputTokens")
+    cached = counter("cacheReadTokens")
+    created = counter("cacheCreationTokens")
+    output = counter("outputTokens")
+    # ZCode's inputTokens already includes both cache categories (confirmed
+    # by totalTokens == inputTokens + outputTokens). Never add them again.
+    if cached > prompt or created > prompt or cached + created > prompt:
+        prompt = cached = created = output = 0
+    total = usage.get("totalTokens")
+    if (isinstance(total, int) and not isinstance(total, bool)
+            and total >= 0 and total != prompt + output):
+        prompt = cached = created = output = 0
+
+    events = []
+    event_created = 0
+    for notification in notifications:
+        if (not isinstance(notification, dict)
+                or notification.get("method") != "v4/telemetry/event"):
+            continue
+        params = notification.get("params")
+        if not isinstance(params, dict) or params.get("kind") != "usage.delta":
+            continue
+        try:
+            values = {
+                name: int(params[name])
+                for name in (
+                    "inputTokens", "cacheReadTokens", "cacheWriteTokens",
+                    "outputTokens",
+                )
+            }
+            occurred = float(params["occurredAt"])
+            if (any(value < 0 for value in values.values())
+                    or values["cacheReadTokens"] + values["cacheWriteTokens"]
+                    > values["inputTokens"]
+                    or int(params["totalTokens"])
+                    != values["inputTokens"] + values["outputTokens"]):
+                raise ValueError
+            seconds = occurred / (1000 if occurred > 10_000_000_000 else 1)
+            occurred_at = datetime.fromtimestamp(
+                seconds, timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        events.append({
+            "occurred_at": occurred_at,
+            "n_input_tokens": values["inputTokens"],
+            "n_cache_tokens": values["cacheReadTokens"],
+            "n_output_tokens": values["outputTokens"],
+        })
+        event_created += values["cacheWriteTokens"]
+    request_count = counter("modelRequestCount")
+    summed = {
+        "input": sum(event["n_input_tokens"] for event in events),
+        "cache": sum(event["n_cache_tokens"] for event in events),
+        "output": sum(event["n_output_tokens"] for event in events),
+    }
+    complete = (
+        bool(events)
+        and request_count == len(events)
+        and summed == {"input": prompt, "cache": cached, "output": output}
+        and event_created == created
+    )
+    return {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "zcode",
+        "model": "glm-5.3",
+        "complete": complete,
+        "request_count": request_count,
+        "n_input_tokens": prompt,
+        "n_cache_tokens": cached,
+        "n_output_tokens": output,
+        "cache_creation_tokens": created,
+        "token_usage_events": events if complete else [],
+        "timed_usage_complete": complete,
+    }
+
+
 class ZCodeBigModel(BaseInstalledAgent):
     """Run GLM-5.3 through ZCode's v1 stdio protocol."""
 
@@ -389,6 +482,7 @@ class ZCodeBigModel(BaseInstalledAgent):
     _EVENTS_FILE = "zcode-protocol-events.json"
     _STDERR_FILE = "zcode-stderr.log"
     _STREAM_FILE = "zcode-protocol.log"
+    _USAGE_FILE = "provider-usage.json"
 
     @staticmethod
     def name() -> str:
@@ -680,17 +774,30 @@ class ZCodeBigModel(BaseInstalledAgent):
         usage = payload.get("usage")
         if not isinstance(usage, dict):
             usage = {}
+        usage_facts = _zcode_usage_facts(payload)
+        prompt_tokens = usage_facts["n_input_tokens"] if usage_facts["complete"] else 0
+        cached_tokens = usage_facts["n_cache_tokens"] if usage_facts["complete"] else 0
+        output_tokens = usage_facts["n_output_tokens"] if usage_facts["complete"] else 0
+        created_tokens = usage_facts["cache_creation_tokens"] if usage_facts["complete"] else 0
+        try:
+            (self.logs_dir / self._USAGE_FILE).write_text(
+                json.dumps(usage_facts, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         metrics = FinalMetrics(
-            total_prompt_tokens=usage.get("inputTokens"),
-            total_completion_tokens=usage.get("outputTokens"),
+            total_prompt_tokens=prompt_tokens or None,
+            total_completion_tokens=output_tokens or None,
+            total_cached_tokens=cached_tokens or None,
             total_cost_usd=None,
             total_steps=len(steps),
             extra={
                 "billing_basis": "coding-plan",
                 "cost_not_reported": True,
                 "reasoning_tokens": usage.get("reasoningTokens"),
-                "cache_creation_tokens": usage.get("cacheCreationTokens"),
-                "cache_read_tokens": usage.get("cacheReadTokens"),
+                "cache_creation_tokens": created_tokens,
+                "cache_read_tokens": cached_tokens,
                 "model_request_count": usage.get("modelRequestCount"),
                 "model_error_count": usage.get("modelErrorCount"),
             },
