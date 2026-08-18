@@ -20,6 +20,7 @@ def test_subscription_usage_requires_timed_events_to_match_aggregate(tmp_path) -
         "n_cache_tokens": 120,
         "n_output_tokens": 30,
         "cache_creation_tokens": 0,
+        "request_usage_complete": True,
         "timed_usage_complete": True,
         "token_usage_events": [
             {
@@ -51,3 +52,36 @@ def test_subscription_usage_requires_timed_events_to_match_aggregate(tmp_path) -
     assert _subscription_trial_usage(
         tmp_path, {"zcode_cli_version": "0.16.3"},
     ) is None
+
+
+def test_context_banded_usage_accepts_complete_untimed_request_ledger(tmp_path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    payload = {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "grok",
+        "model": "grok-4.6",
+        "complete": True,
+        "request_count": 2,
+        "n_input_tokens": 300,
+        "n_cache_tokens": 120,
+        "n_output_tokens": 30,
+        "request_usage_complete": True,
+        "timed_usage_complete": False,
+        "token_usage_events": [
+            {"n_input_tokens": 100, "n_cache_tokens": 40,
+             "n_output_tokens": 10},
+            {"n_input_tokens": 200, "n_cache_tokens": 80,
+             "n_output_tokens": 20},
+        ],
+    }
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+
+    facts = _subscription_trial_usage(
+        tmp_path, {"grok_cli_version": "1.0.3"},
+    )
+
+    assert facts is not None
+    assert facts["request_usage_complete"] is True
+    assert facts["timed_usage_complete"] is False
+    assert len(facts["token_usage_events"]) == 2

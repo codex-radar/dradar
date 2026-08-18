@@ -426,12 +426,69 @@ def test_zcode_rollout_collector_exports_only_billing_facts(
     }) + "\n", encoding="utf-8")
 
     facts = namespace["collect_rollout_usage"](session_id)
-    assert facts == [{
-        "occurredAt": "2026-08-18T06:00:00.123Z",
-        "inputTokens": 4_000,
-        "cacheReadTokens": 1_500,
-        "cacheWriteTokens": 100,
-        "outputTokens": 300,
-        "totalTokens": 4_300,
-    }]
+    assert facts == {
+        "recordCount": 1,
+        "invalidRecordCount": 0,
+        "events": [{
+            "occurredAt": "2026-08-18T06:00:00.123Z",
+            "inputTokens": 4_000,
+            "cacheReadTokens": 1_500,
+            "cacheWriteTokens": 100,
+            "outputTokens": 300,
+            "totalTokens": 4_300,
+        }],
+    }
     assert "SECRET" not in json.dumps(facts)
+
+
+def test_zcode_durable_ledger_defines_api_billed_aggregate() -> None:
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    helper = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_zcode_usage_facts"
+    )
+    namespace = {"datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
+         namespace)
+    facts = namespace["_zcode_usage_facts"]({
+        # session/usage is a context-delta UI aggregate and deliberately does
+        # not equal the sum of API-billed request contexts.
+        "usage": {
+            "inputTokens": 41_790,
+            "cacheReadTokens": 0,
+            "cacheCreationTokens": 0,
+            "outputTokens": 20_546,
+            "totalTokens": 62_336,
+            "modelRequestCount": 64,
+        },
+        "notifications": [],
+        "rolloutUsageEvents": {
+            "recordCount": 2,
+            "invalidRecordCount": 0,
+            "events": [
+                {
+                    "occurredAt": "2026-08-18T05:59:59Z",
+                    "inputTokens": 100_000,
+                    "cacheReadTokens": 90_000,
+                    "cacheWriteTokens": 2_000,
+                    "outputTokens": 1_000,
+                    "totalTokens": 101_000,
+                },
+                {
+                    "occurredAt": "2026-08-18T06:00:00Z",
+                    "inputTokens": 120_000,
+                    "cacheReadTokens": 110_000,
+                    "cacheWriteTokens": 0,
+                    "outputTokens": 2_000,
+                    "totalTokens": 122_000,
+                },
+            ],
+        },
+    })
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 220_000
+    assert facts["n_cache_tokens"] == 200_000
+    assert facts["n_output_tokens"] == 3_000
+    assert facts["cache_creation_tokens"] == 2_000
+    assert facts["request_count"] == 2

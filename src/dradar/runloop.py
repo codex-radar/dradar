@@ -797,21 +797,28 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             or request_count < 1):
         return None
     timed = value.get("timed_usage_complete") is True
+    request_complete = (
+        value.get("request_usage_complete") is True
+        or ("request_usage_complete" not in value and timed)
+    )
     events = value.get("token_usage_events")
-    if timed:
+    if request_complete:
         if not isinstance(events, list) or len(events) != request_count:
             return None
         totals = {name: 0 for name in names}
         for event in events:
             if not isinstance(event, dict):
                 return None
-            try:
-                instant = datetime.fromisoformat(
-                    event["occurred_at"].replace("Z", "+00:00")
-                )
-            except (AttributeError, KeyError, TypeError, ValueError):
-                return None
-            if instant.tzinfo is None or any(
+            if timed:
+                try:
+                    instant = datetime.fromisoformat(
+                        event["occurred_at"].replace("Z", "+00:00")
+                    )
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    return None
+                if instant.tzinfo is None:
+                    return None
+            if any(
                 not isinstance(event.get(name), int)
                 or isinstance(event.get(name), bool)
                 or event[name] < 0
@@ -827,6 +834,7 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
     return {
         **value,
         "token_usage_events": events,
+        "request_usage_complete": request_complete,
         "timed_usage_complete": timed,
     }
 
@@ -1069,6 +1077,7 @@ def _upload_trial(
             "subagent_session_count", "agent_session_usage", "request_count",
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
+            "request_usage_complete",
             "cache_creation_tokens", "subscription_reported_cost_usd",
             "subscription_reported_cost_basis",
         ):

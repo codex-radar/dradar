@@ -115,24 +115,29 @@ def redact(value):
 def collect_rollout_usage(session_id):
     """Extract only billing facts from ZCode's durable per-request ledger."""
     if not isinstance(session_id, str) or not session_id.startswith("sess_"):
-        return []
+        return {"recordCount": 0, "invalidRecordCount": 0, "events": []}
     path = Path.home() / ".zcode" / "cli" / "rollout" / f"model-io-{session_id}.jsonl"
     facts = []
+    record_count = 0
+    invalid_count = 0
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        return facts
+        return {"recordCount": 0, "invalidRecordCount": 0, "events": []}
     for line in lines:
         try:
             record = json.loads(line)
-            if record.get("type") != "model_io" or record.get("sessionId") != session_id:
+            if (not isinstance(record, dict)
+                    or record.get("type") != "model_io"
+                    or record.get("sessionId") != session_id):
                 continue
+            record_count += 1
             model = record.get("model")
             response = record.get("response")
             usage = response.get("usage") if isinstance(response, dict) else None
             if (not isinstance(model, dict) or model.get("modelId") != "glm-5.3"
                     or not isinstance(usage, dict)):
-                continue
+                raise TypeError
             facts.append({
                 "occurredAt": record["completedAt"],
                 "inputTokens": usage["inputTokens"],
@@ -142,8 +147,12 @@ def collect_rollout_usage(session_id):
                 "totalTokens": usage["totalTokens"],
             })
         except (json.JSONDecodeError, KeyError, TypeError):
-            continue
-    return facts
+            invalid_count += 1
+    return {
+        "recordCount": record_count,
+        "invalidRecordCount": invalid_count,
+        "events": facts,
+    }
 
 
 proc = subprocess.Popen(
@@ -442,10 +451,22 @@ def _zcode_usage_facts(payload: dict) -> dict:
     events = []
     event_created = 0
     rollout = payload.get("rolloutUsageEvents")
-    if isinstance(rollout, list) and rollout:
+    durable = isinstance(rollout, dict)
+    if durable:
+        candidates = rollout.get("events")
+        if not isinstance(candidates, list):
+            candidates = []
+        record_count = rollout.get("recordCount")
+        invalid_count = rollout.get("invalidRecordCount")
+    elif isinstance(rollout, list) and rollout:
+        # Compatibility with the first unreleased collector shape.
         candidates = rollout
+        record_count = len(candidates)
+        invalid_count = 0
     else:
         candidates = []
+        record_count = None
+        invalid_count = None
         for notification in notifications:
             if (not isinstance(notification, dict)
                     or notification.get("method") != "v4/telemetry/event"):
@@ -453,17 +474,21 @@ def _zcode_usage_facts(payload: dict) -> dict:
             params = notification.get("params")
             if isinstance(params, dict) and params.get("kind") == "usage.delta":
                 candidates.append(params)
+    events_valid = True
     for params in candidates:
         if not isinstance(params, dict):
+            events_valid = False
             continue
         try:
-            values = {
-                name: int(params[name])
-                for name in (
-                    "inputTokens", "cacheReadTokens", "cacheWriteTokens",
-                    "outputTokens",
-                )
-            }
+            values = {}
+            for name in (
+                "inputTokens", "cacheReadTokens", "cacheWriteTokens",
+                "outputTokens",
+            ):
+                value = params[name]
+                if (not isinstance(value, int) or isinstance(value, bool)):
+                    raise ValueError
+                values[name] = value
             if (any(value < 0 for value in values.values())
                     or values["cacheReadTokens"] + values["cacheWriteTokens"]
                     > values["inputTokens"]
@@ -485,6 +510,7 @@ def _zcode_usage_facts(payload: dict) -> dict:
                     seconds, timezone.utc,
                 ).isoformat().replace("+00:00", "Z")
         except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            events_valid = False
             continue
         events.append({
             "occurred_at": occurred_at,
@@ -493,18 +519,38 @@ def _zcode_usage_facts(payload: dict) -> dict:
             "n_output_tokens": values["outputTokens"],
         })
         event_created += values["cacheWriteTokens"]
-    request_count = counter("modelRequestCount")
     summed = {
         "input": sum(event["n_input_tokens"] for event in events),
         "cache": sum(event["n_cache_tokens"] for event in events),
         "output": sum(event["n_output_tokens"] for event in events),
     }
-    complete = (
-        bool(events)
-        and request_count == len(events)
-        and summed == {"input": prompt, "cache": cached, "output": output}
-        and event_created == created
-    )
+    if durable or (isinstance(rollout, list) and rollout):
+        # session/usage intentionally reports context-delta accounting for the
+        # Coding Plan UI, not the sum of API-billed request contexts.  The
+        # privacy-scrubbed durable model-io ledger is the authoritative source
+        # for API-equivalent cost and must therefore define the aggregate too.
+        prompt = summed["input"]
+        cached = summed["cache"]
+        output = summed["output"]
+        created = event_created
+        request_count = len(events)
+        complete = (
+            events_valid
+            and bool(events)
+            and isinstance(record_count, int)
+            and not isinstance(record_count, bool)
+            and record_count == len(events)
+            and invalid_count == 0
+        )
+    else:
+        request_count = counter("modelRequestCount")
+        complete = (
+            events_valid
+            and bool(events)
+            and request_count == len(events)
+            and summed == {"input": prompt, "cache": cached, "output": output}
+            and event_created == created
+        )
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "zcode",
@@ -516,6 +562,7 @@ def _zcode_usage_facts(payload: dict) -> dict:
         "n_output_tokens": output,
         "cache_creation_tokens": created,
         "token_usage_events": events if complete else [],
+        "request_usage_complete": complete,
         "timed_usage_complete": complete,
     }
 

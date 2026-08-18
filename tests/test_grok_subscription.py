@@ -248,7 +248,20 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
     assert facts["n_output_tokens"] == 50
     assert facts["cache_creation_tokens"] == 100
     assert facts["request_count"] == 2
+    assert facts["request_usage_complete"] is True
     assert facts["timed_usage_complete"] is False
+    assert facts["token_usage_events"] == [
+        {
+            "n_input_tokens": 610,
+            "n_cache_tokens": 250,
+            "n_output_tokens": 30,
+        },
+        {
+            "n_input_tokens": 390,
+            "n_cache_tokens": 150,
+            "n_output_tokens": 20,
+        },
+    ]
     assert facts["subscription_reported_cost_usd"] == pytest.approx(0.00142052)
 
     incomplete = namespace["_grok_usage_facts"]([

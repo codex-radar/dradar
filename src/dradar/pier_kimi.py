@@ -192,7 +192,8 @@ def _kimi_usage_facts(records: list[dict]) -> dict:
         "n_cache_tokens": totals["inputCacheRead"],
         "n_output_tokens": totals["output"],
         "cache_creation_tokens": totals["inputCacheCreation"],
-        "token_usage_events": events if timed_complete else [],
+        "token_usage_events": events if complete else [],
+        "request_usage_complete": complete,
         "timed_usage_complete": timed_complete,
     }
 
@@ -434,7 +435,8 @@ class KimiCode(BaseInstalledAgent):
                 environment,
                 command=(
                     "candidate=$(find " + shlex.quote(remote_home + "/sessions")
-                    + " -type f -name 'wire.jsonl' -print 2>/dev/null "
+                    + " -type f -path '*/agents/main/wire.jsonl' "
+                    "-print 2>/dev/null | sort "
                     "| tail -n 1); "
                     f"if [ -n \"$candidate\" ]; then {copy}"
                     "session_dir=${candidate%/agents/main/wire.jsonl}; "

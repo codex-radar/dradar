@@ -63,6 +63,7 @@ def _grok_usage_facts(events: list[dict]) -> dict:
     }
     response_totals = {name: 0 for name in names}
     response_count = 0
+    token_usage_events = []
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant":
             continue
@@ -72,12 +73,24 @@ def _grok_usage_facts(events: list[dict]) -> dict:
             valid = False
             continue
         response_count += 1
+        response_values = {}
         for name in names:
             value = response_usage.get(name)
             if (not isinstance(value, int) or isinstance(value, bool) or value < 0):
                 valid = False
                 continue
+            response_values[name] = value
             response_totals[name] += value
+        if len(response_values) == len(names):
+            token_usage_events.append({
+                "n_input_tokens": (
+                    response_values["input_tokens"]
+                    + response_values["cache_read_input_tokens"]
+                    + response_values["cache_creation_input_tokens"]
+                ),
+                "n_cache_tokens": response_values["cache_read_input_tokens"],
+                "n_output_tokens": response_values["output_tokens"],
+            })
     prompt = (
         current["input_tokens"] + current["cache_read_input_tokens"]
         + current["cache_creation_input_tokens"]
@@ -123,7 +136,12 @@ def _grok_usage_facts(events: list[dict]) -> dict:
         "cache_creation_tokens": current["cache_creation_input_tokens"],
         "subscription_reported_cost_usd": reported_cost,
         "subscription_reported_cost_basis": "official-grok-cli",
-        "token_usage_events": [],
+        # Grok's official stream exposes one usage object per response.  It
+        # does not expose a trustworthy request timestamp, but Grok's API
+        # tariff is context-banded rather than time-banded, so the complete
+        # per-request token ledger is still sufficient for server repricing.
+        "token_usage_events": token_usage_events if complete else [],
+        "request_usage_complete": complete,
         "timed_usage_complete": False,
     }
 

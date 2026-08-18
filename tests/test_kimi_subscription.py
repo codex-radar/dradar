@@ -352,6 +352,7 @@ def test_kimi_wire_usage_sums_request_records_without_cache_overlap() -> None:
     assert facts["cache_creation_tokens"] == 121
     assert facts["request_count"] == 2
     assert facts["completed_turn_count"] == 2
+    assert facts["request_usage_complete"] is True
     assert sum(e["n_input_tokens"] for e in facts["token_usage_events"]) == 21_325
 
     incomplete = namespace["_kimi_usage_facts"]([
@@ -365,6 +366,11 @@ def test_kimi_wire_usage_sums_request_records_without_cache_overlap() -> None:
         {"type": "turn.ended"},
     ])
     assert incomplete["complete"] is False
+
+
+def test_kimi_copies_only_the_main_agent_durable_wire() -> None:
+    source = Path(providers.__file__).with_name("pier_kimi.py").read_text()
+    assert "-path '*/agents/main/wire.jsonl'" in source
 
 
 def _write_kimi_session(
