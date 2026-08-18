@@ -294,7 +294,7 @@ def test_zcode_adapter_source_has_fixed_security_contract() -> None:
     assert "[REDACTED_ZCODE_CREDENTIAL]" in source
 
 
-def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> None:
+def _zcode_usage(payload: dict) -> dict:
     source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
     module = ast.parse(source)
     helper = next(
@@ -304,18 +304,74 @@ def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> 
     namespace = {"datetime": datetime, "timezone": timezone}
     exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
          namespace)
-    facts = namespace["_zcode_usage_facts"]({
+    return namespace["_zcode_usage_facts"]({
+        "sessionId": "sess_contract", **payload,
+    })
+
+
+def _collect_rollout(session_id: str, **limits: int) -> dict:
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    runner_assignment = next(
+        node for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_PROTOCOL_RUNNER"
+                for target in node.targets)
+    )
+    runner_module = ast.parse(ast.literal_eval(runner_assignment.value))
+    collector = next(
+        node for node in runner_module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "collect_rollout_usage"
+    )
+    collector_source = ast.unparse(collector)
+    assert "read_text" not in collector_source
+    assert ".open('rb')" in collector_source
+    namespace = {"json": json, "Path": Path}
+    exec(compile(ast.Module(body=[collector], type_ignores=[]), "runner.py", "exec"),
+         namespace)
+    return namespace["collect_rollout_usage"](session_id, **limits)
+
+
+def _provider_turn(
+    *, session_id: str = "sess_contract", event_id: object = "evt-terminal-1",
+    **overrides: int,
+) -> dict:
+    usage = {
+        "source": "provider",
+        "modelRequestCount": 1,
+        "inputTokens": 3_283,
+        "cacheReadTokens": 1_216,
+        "cacheWriteTokens": 0,
+        "outputTokens": 3,
+        "totalTokens": 3_286,
+        **overrides,
+    }
+    return {
+        "events": [{
+            "eventId": event_id,
+            "sessionId": session_id,
+            "turnId": "turn-1",
+            "seq": 10,
+            "timestamp": 1_787_051_447_467,
+            "type": "turn.completed",
+            "payload": {"resultType": "success", "usage": usage},
+        }],
+    }
+
+
+def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> None:
+    facts = _zcode_usage({
         "usage": {
-            "inputTokens": 3_283,
-            "cacheReadTokens": 1_216,
-            "cacheCreationTokens": 0,
-            "outputTokens": 3,
-            "totalTokens": 3_286,
-            "modelRequestCount": 1,
+            # This is deliberately a different session-baseline projection.
+            "inputTokens": 2_000, "cacheReadTokens": 0,
+            "cacheCreationTokens": 0, "outputTokens": 4,
+            "totalTokens": 2_004, "modelRequestCount": 2,
         },
+        "events": _provider_turn(),
         "notifications": [{
             "method": "v4/telemetry/event",
             "params": {
+                "eventId": "usage-1",
                 "kind": "usage.delta",
                 "occurredAt": 1_787_051_447_467,
                 "inputTokens": 3_283,
@@ -330,21 +386,15 @@ def test_zcode_usage_ledger_preserves_cache_subset_without_double_counting() -> 
     assert facts["n_input_tokens"] == 3_283
     assert facts["n_cache_tokens"] == 1_216
     assert facts["n_output_tokens"] == 3
+    assert facts["request_count"] == 1
+    assert facts["session_usage_model_request_count"] == 2
+    assert facts["timed_usage_complete"] is True
     assert facts["n_input_tokens"] + facts["n_output_tokens"] == 3_286
     assert facts["n_input_tokens"] + facts["n_cache_tokens"] + facts["n_output_tokens"] != 3_286
 
 
 def test_zcode_usage_prefers_durable_rollout_ledger() -> None:
-    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
-    module = ast.parse(source)
-    helper = next(
-        node for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_zcode_usage_facts"
-    )
-    namespace = {"datetime": datetime, "timezone": timezone}
-    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
-         namespace)
-    facts = namespace["_zcode_usage_facts"]({
+    facts = _zcode_usage({
         "usage": {
             "inputTokens": 5_000,
             "cacheReadTokens": 2_000,
@@ -353,9 +403,15 @@ def test_zcode_usage_prefers_durable_rollout_ledger() -> None:
             "totalTokens": 5_500,
             "modelRequestCount": 2,
         },
+        "events": _provider_turn(
+            modelRequestCount=2, inputTokens=5_000, cacheReadTokens=2_000,
+            cacheWriteTokens=100, outputTokens=500, totalTokens=5_500,
+        ),
         "notifications": [],
-        "rolloutUsageEvents": [
-            {
+        "rolloutUsage": {
+            "invalidRecordCount": 0,
+            "duplicateRecordCount": 0,
+            "events": [{
                 "occurredAt": "2026-08-18T05:59:59.000Z",
                 "inputTokens": 2_000,
                 "cacheReadTokens": 500,
@@ -370,8 +426,8 @@ def test_zcode_usage_prefers_durable_rollout_ledger() -> None:
                 "cacheWriteTokens": 0,
                 "outputTokens": 300,
                 "totalTokens": 3_300,
-            },
-        ],
+            }],
+        },
     })
     assert facts["complete"] is True
     assert facts["n_input_tokens"] == 5_000
@@ -380,6 +436,122 @@ def test_zcode_usage_prefers_durable_rollout_ledger() -> None:
     assert [event["occurred_at"] for event in facts["token_usage_events"]] == [
         "2026-08-18T05:59:59Z", "2026-08-18T06:00:00Z",
     ]
+
+
+def test_zcode_provider_aggregate_is_retained_without_timed_ledger() -> None:
+    facts = _zcode_usage({
+        "usage": {"modelRequestCount": 2},
+        "events": _provider_turn(
+            modelRequestCount=1, inputTokens=90_000, cacheReadTokens=80_000,
+            outputTokens=5_000, totalTokens=95_000,
+        ),
+        "notifications": [],
+        "rolloutUsage": {
+            "events": [], "invalidRecordCount": 0, "duplicateRecordCount": 0,
+        },
+    })
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 90_000
+    assert facts["n_cache_tokens"] == 80_000
+    assert facts["n_output_tokens"] == 5_000
+    assert facts["timed_usage_complete"] is False
+    assert facts["token_usage_events"] == []
+    assert facts["timed_usage_incomplete_reason"] == "request_ledger_unavailable"
+
+
+def test_zcode_mismatched_or_duplicate_ledger_never_double_counts() -> None:
+    event = {
+        "occurredAt": "2026-08-18T06:00:00Z", "inputTokens": 10_000,
+        "cacheReadTokens": 8_000, "cacheWriteTokens": 0,
+        "outputTokens": 500, "totalTokens": 10_500,
+    }
+    facts = _zcode_usage({
+        "usage": {"modelRequestCount": 3},
+        "events": _provider_turn(
+            modelRequestCount=1, inputTokens=10_001, cacheReadTokens=8_000,
+            outputTokens=500, totalTokens=10_501,
+        ),
+        "notifications": [],
+        "rolloutUsage": {
+            "events": [event], "invalidRecordCount": 0, "duplicateRecordCount": 1,
+        },
+    })
+    assert facts["complete"] is True
+    assert facts["n_input_tokens"] == 10_001
+    assert facts["timed_usage_complete"] is False
+    assert facts["token_usage_events"] == []
+    assert facts["request_ledger_duplicate_count"] == 1
+    assert facts["timed_usage_incomplete_reason"] == (
+        "request_ledger_does_not_match_provider_aggregate"
+    )
+
+
+def test_zcode_missing_provider_aggregate_is_explicitly_incomplete() -> None:
+    facts = _zcode_usage({
+        "usage": {
+            "modelRequestCount": 4, "inputTokens": 12_000,
+            "cacheReadTokens": 0, "cacheCreationTokens": 0,
+            "outputTokens": 900, "totalTokens": 12_900,
+        },
+        "events": {"events": []},
+        "notifications": [],
+        "rolloutUsage": {
+            "events": [], "invalidRecordCount": 0, "duplicateRecordCount": 0,
+        },
+    })
+    assert facts["complete"] is False
+    assert facts["request_count"] == 0
+    assert facts["n_input_tokens"] == 0
+    assert facts["token_usage_events"] == []
+    assert facts["usage_incomplete_reason"] == (
+        "provider_aggregate_missing_or_invalid"
+    )
+
+
+def test_zcode_provider_aggregate_rejects_cross_session_event() -> None:
+    facts = _zcode_usage({
+        "sessionId": "sess_A",
+        "events": _provider_turn(session_id="sess_B"),
+        "notifications": [],
+    })
+    assert facts["complete"] is False
+    assert facts["usage_incomplete_reason"] == (
+        "provider_aggregate_missing_or_invalid"
+    )
+
+
+@pytest.mark.parametrize("event_id", [None, "", [], ["event-1"]])
+def test_zcode_provider_aggregate_rejects_unstable_event_identity(
+    event_id: object,
+) -> None:
+    facts = _zcode_usage({
+        "events": _provider_turn(event_id=event_id),
+        "notifications": [],
+    })
+    assert facts["complete"] is False
+
+
+def test_zcode_provider_aggregate_deduplicates_only_identical_event() -> None:
+    first = _provider_turn()["events"][0]
+    identical = json.loads(json.dumps(first))
+    facts = _zcode_usage({
+        "events": {"events": [first, identical]},
+        "notifications": [],
+    })
+    assert facts["complete"] is True
+    assert facts["request_count"] == 1
+    assert facts["n_input_tokens"] == 3_283
+
+    conflicting = json.loads(json.dumps(first))
+    conflicting["payload"]["usage"].update({
+        "inputTokens": 3_284, "totalTokens": 3_287,
+    })
+    conflict = _zcode_usage({
+        "events": {"events": [first, conflicting]},
+        "notifications": [],
+    })
+    assert conflict["complete"] is False
+    assert conflict["n_input_tokens"] == 0
 
 
 def test_zcode_rollout_collector_exports_only_billing_facts(
@@ -407,7 +579,9 @@ def test_zcode_rollout_collector_exports_only_billing_facts(
     session_id = "sess_01234567-89ab-cdef-0123-456789abcdef"
     rollout = tmp_path / ".zcode" / "cli" / "rollout"
     rollout.mkdir(parents=True)
-    (rollout / f"model-io-{session_id}.jsonl").write_text(json.dumps({
+    # Exercise the actual 0.16.3 early-recorder filename, not only the ideal
+    # per-session filename.
+    (rollout / "model-io-no-session.jsonl").write_text(json.dumps({
         "type": "model_io",
         "sessionId": session_id,
         "completedAt": "2026-08-18T06:00:00.123Z",
@@ -427,8 +601,6 @@ def test_zcode_rollout_collector_exports_only_billing_facts(
 
     facts = namespace["collect_rollout_usage"](session_id)
     assert facts == {
-        "recordCount": 1,
-        "invalidRecordCount": 0,
         "events": [{
             "occurredAt": "2026-08-18T06:00:00.123Z",
             "inputTokens": 4_000,
@@ -437,58 +609,100 @@ def test_zcode_rollout_collector_exports_only_billing_facts(
             "outputTokens": 300,
             "totalTokens": 4_300,
         }],
+        "invalidRecordCount": 0,
+        "duplicateRecordCount": 0,
+        "limitExceeded": False,
+        "limitReason": None,
     }
     assert "SECRET" not in json.dumps(facts)
 
 
-def test_zcode_durable_ledger_defines_api_billed_aggregate() -> None:
-    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
-    module = ast.parse(source)
-    helper = next(
-        node for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_zcode_usage_facts"
+def test_zcode_rollout_large_file_only_disables_timed_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rollout = tmp_path / ".zcode" / "cli" / "rollout"
+    rollout.mkdir(parents=True)
+    (rollout / "model-io-no-session.jsonl").write_bytes(b"x" * 129)
+
+    collected = _collect_rollout(
+        "sess_contract", max_file_bytes=128, max_total_bytes=256,
     )
-    namespace = {"datetime": datetime, "timezone": timezone}
-    exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_zcode.py", "exec"),
-         namespace)
-    facts = namespace["_zcode_usage_facts"]({
-        # session/usage is a context-delta UI aggregate and deliberately does
-        # not equal the sum of API-billed request contexts.
-        "usage": {
-            "inputTokens": 41_790,
-            "cacheReadTokens": 0,
-            "cacheCreationTokens": 0,
-            "outputTokens": 20_546,
-            "totalTokens": 62_336,
-            "modelRequestCount": 64,
-        },
-        "notifications": [],
-        "rolloutUsageEvents": {
-            "recordCount": 2,
-            "invalidRecordCount": 0,
-            "events": [
-                {
-                    "occurredAt": "2026-08-18T05:59:59Z",
-                    "inputTokens": 100_000,
-                    "cacheReadTokens": 90_000,
-                    "cacheWriteTokens": 2_000,
-                    "outputTokens": 1_000,
-                    "totalTokens": 101_000,
-                },
-                {
-                    "occurredAt": "2026-08-18T06:00:00Z",
-                    "inputTokens": 120_000,
-                    "cacheReadTokens": 110_000,
-                    "cacheWriteTokens": 0,
-                    "outputTokens": 2_000,
-                    "totalTokens": 122_000,
-                },
-            ],
-        },
+    assert collected["limitExceeded"] is True
+    assert collected["limitReason"] == "single_file_bytes"
+    assert collected["events"] == []
+
+    # Even exact unsolicited telemetry cannot turn a resource-truncated
+    # rollout into a supposedly complete time series.
+    facts = _zcode_usage({
+        "events": _provider_turn(),
+        "rolloutUsage": collected,
+        "notifications": [{
+            "method": "v4/telemetry/event",
+            "params": {
+                "eventId": "usage-1", "kind": "usage.delta",
+                "occurredAt": 1_787_051_447_467, "inputTokens": 3_283,
+                "cacheReadTokens": 1_216, "cacheWriteTokens": 0,
+                "outputTokens": 3, "totalTokens": 3_286,
+            },
+        }],
     })
     assert facts["complete"] is True
-    assert facts["n_input_tokens"] == 220_000
-    assert facts["n_cache_tokens"] == 200_000
-    assert facts["n_output_tokens"] == 3_000
-    assert facts["cache_creation_tokens"] == 2_000
-    assert facts["request_count"] == 2
+    assert facts["n_input_tokens"] == 3_283
+    assert facts["timed_usage_complete"] is False
+    assert facts["token_usage_events"] == []
+    assert facts["timed_usage_incomplete_reason"] == (
+        "request_ledger_resource_limit_exceeded"
+    )
+
+
+def test_zcode_rollout_too_many_files_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rollout = tmp_path / ".zcode" / "cli" / "rollout"
+    rollout.mkdir(parents=True)
+    (rollout / "model-io-a.jsonl").write_text("\n")
+    (rollout / "model-io-b.jsonl").write_text("\n")
+
+    collected = _collect_rollout("sess_contract", max_files=1)
+
+    assert collected == {
+        "events": [],
+        "invalidRecordCount": 0,
+        "duplicateRecordCount": 0,
+        "limitExceeded": True,
+        "limitReason": "file_count",
+    }
+
+
+def test_zcode_rollout_total_line_and_record_limits_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rollout = tmp_path / ".zcode" / "cli" / "rollout"
+    rollout.mkdir(parents=True)
+    path = rollout / "model-io-no-session.jsonl"
+    path.write_text("{}\n{}\n")
+    assert _collect_rollout("sess_contract", max_lines=1)["limitReason"] == (
+        "line_count"
+    )
+    assert _collect_rollout(
+        "sess_contract", max_file_bytes=1_024, max_total_bytes=3,
+    )["limitReason"] == "total_bytes"
+
+    record = {
+        "type": "model_io", "sessionId": "sess_contract",
+        "completedAt": "2026-08-18T06:00:00Z",
+        "model": {"modelId": "glm-5.3"},
+        "response": {"usage": {
+            "inputTokens": 10, "cacheReadTokens": 0, "cacheWriteTokens": 0,
+            "outputTokens": 2, "totalTokens": 12,
+        }},
+    }
+    first = {**record, "requestId": "request-1", "attempt": 1}
+    second = {**record, "requestId": "request-2", "attempt": 1}
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+    assert _collect_rollout("sess_contract", max_records=1)["limitReason"] == (
+        "record_count"
+    )

@@ -763,7 +763,7 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
 
 
 def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
-    """Read one adapter-produced, fully normalized subscription usage ledger."""
+    """Read normalized usage or a fixed-code ZCode incomplete diagnostic."""
 
     path = trial_dir / "agent" / "provider-usage.json"
     try:
@@ -781,7 +781,14 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         or not isinstance(value, dict)
         or value.get("schema") != "dradar-subscription-provider-usage-v1"
         or value.get("provider") != expected_provider
-        or value.get("complete") is not True
+    ):
+        return None
+    complete = value.get("complete") is True
+    incomplete_reason = value.get("usage_incomplete_reason")
+    if not complete and not (
+        expected_provider == "zcode"
+        and value.get("complete") is False
+        and incomplete_reason == "provider_aggregate_missing_or_invalid"
     ):
         return None
     names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
@@ -794,9 +801,11 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         return None
     request_count = value.get("request_count")
     if (not isinstance(request_count, int) or isinstance(request_count, bool)
-            or request_count < 1):
+            or request_count < (1 if complete else 0)):
         return None
     timed = value.get("timed_usage_complete") is True
+    if not complete and timed:
+        return None
     request_complete = (
         value.get("request_usage_complete") is True
         or ("request_usage_complete" not in value and timed)
@@ -1078,6 +1087,9 @@ def _upload_trial(
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
             "request_usage_complete",
+            "timed_usage_incomplete_reason", "usage_aggregate_source",
+            "usage_incomplete_reason",
+            "session_usage_model_request_count", "request_ledger_duplicate_count",
             "cache_creation_tokens", "subscription_reported_cost_usd",
             "subscription_reported_cost_basis",
         ):

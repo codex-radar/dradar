@@ -112,47 +112,144 @@ def redact(value):
     return value
 
 
-def collect_rollout_usage(session_id):
+def collect_rollout_usage(
+    session_id, *, max_files=8, max_file_bytes=16 * 1024 * 1024,
+    max_total_bytes=32 * 1024 * 1024, max_lines=20_000, max_records=10_000,
+    max_directory_entries=64,
+):
     """Extract only billing facts from ZCode's durable per-request ledger."""
+    def result(events=None, invalid=0, duplicate=0, limit_reason=None):
+        return {
+            "events": events or [],
+            "invalidRecordCount": invalid,
+            "duplicateRecordCount": duplicate,
+            "limitExceeded": limit_reason is not None,
+            "limitReason": limit_reason,
+        }
+
     if not isinstance(session_id, str) or not session_id.startswith("sess_"):
-        return {"recordCount": 0, "invalidRecordCount": 0, "events": []}
-    path = Path.home() / ".zcode" / "cli" / "rollout" / f"model-io-{session_id}.jsonl"
-    facts = []
-    record_count = 0
-    invalid_count = 0
+        return result()
+    root = Path.home() / ".zcode" / "cli" / "rollout"
+    expected = root / f"model-io-{session_id}.jsonl"
+    # ZCode 0.16.3 can open the recorder before session metadata has been
+    # attached and then persist the request in model-io-no-session.jsonl.
+    # Each run has an isolated HOME, so scan the bounded rollout directory and
+    # select records by their embedded sessionId instead of trusting the name.
+    paths = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return {"recordCount": 0, "invalidRecordCount": 0, "events": []}
-    for line in lines:
-        try:
-            record = json.loads(line)
-            if (not isinstance(record, dict)
-                    or record.get("type") != "model_io"
-                    or record.get("sessionId") != session_id):
+        for entry_count, path in enumerate(root.iterdir(), start=1):
+            if entry_count > max_directory_entries:
+                return result(limit_reason="directory_entry_count")
+            if not (path.name.startswith("model-io-")
+                    and path.name.endswith(".jsonl")):
                 continue
-            record_count += 1
-            model = record.get("model")
-            response = record.get("response")
-            usage = response.get("usage") if isinstance(response, dict) else None
-            if (not isinstance(model, dict) or model.get("modelId") != "glm-5.3"
-                    or not isinstance(usage, dict)):
-                raise TypeError
-            facts.append({
-                "occurredAt": record["completedAt"],
-                "inputTokens": usage["inputTokens"],
-                "cacheReadTokens": usage.get("cacheReadTokens", 0),
-                "cacheWriteTokens": usage.get("cacheWriteTokens", 0),
-                "outputTokens": usage["outputTokens"],
-                "totalTokens": usage["totalTokens"],
-            })
-        except (json.JSONDecodeError, KeyError, TypeError):
-            invalid_count += 1
-    return {
-        "recordCount": record_count,
-        "invalidRecordCount": invalid_count,
-        "events": facts,
-    }
+            paths.append(path)
+            if len(paths) > max_files:
+                return result(limit_reason="file_count")
+    except OSError:
+        return result(invalid=1)
+    paths.sort()
+    if expected in paths:
+        paths.remove(expected)
+        paths.insert(0, expected)
+    total_bytes = 0
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file():
+                return result(invalid=1)
+            size = path.stat().st_size
+        except OSError:
+            return result(invalid=1)
+        if size > max_file_bytes:
+            return result(limit_reason="single_file_bytes")
+        total_bytes += size
+        if total_bytes > max_total_bytes:
+            return result(limit_reason="total_bytes")
+    facts = []
+    invalid = 0
+    duplicate = 0
+    seen = set()
+    bytes_read = 0
+    line_count = 0
+    record_count = 0
+    for path in paths:
+        try:
+            stream = path.open("rb")
+        except OSError:
+            invalid += 1
+            continue
+        file_bytes = 0
+        with stream:
+            while True:
+                line = stream.readline(max_file_bytes + 1)
+                if not line:
+                    break
+                file_bytes += len(line)
+                bytes_read += len(line)
+                line_count += 1
+                if file_bytes > max_file_bytes:
+                    return result(limit_reason="single_file_bytes")
+                if bytes_read > max_total_bytes:
+                    return result(limit_reason="total_bytes")
+                if line_count > max_lines:
+                    return result(limit_reason="line_count")
+                try:
+                    line = line.decode("utf-8")
+                except UnicodeDecodeError:
+                    invalid += 1
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid += 1
+                    continue
+                if not isinstance(record, dict) or record.get("sessionId") != session_id:
+                    continue
+                record_count += 1
+                if record_count > max_records:
+                    return result(limit_reason="record_count")
+                try:
+                    model = record["model"]
+                    response = record["response"]
+                    usage = response["usage"]
+                    if (record.get("type") != "model_io"
+                            or not isinstance(model, dict)
+                            or model.get("modelId") != "glm-5.3"
+                            or not isinstance(usage, dict)):
+                        raise ValueError
+                    values = {
+                        name: usage.get(name, 0) if name in {
+                            "cacheReadTokens", "cacheWriteTokens"
+                        } else usage[name]
+                        for name in (
+                            "inputTokens", "cacheReadTokens", "cacheWriteTokens",
+                            "outputTokens", "totalTokens",
+                        )
+                    }
+                    if any(not isinstance(value, int) or isinstance(value, bool)
+                           or value < 0 for value in values.values()):
+                        raise ValueError
+                    if (values["cacheReadTokens"] + values["cacheWriteTokens"]
+                            > values["inputTokens"]
+                            or values["totalTokens"]
+                            != values["inputTokens"] + values["outputTokens"]):
+                        raise ValueError
+                    completed = record["completedAt"]
+                    if not isinstance(completed, (str, int, float)):
+                        raise ValueError
+                    identity = (record.get("requestId"), record.get("attempt"))
+                    if identity[0] is None:
+                        identity = (
+                            completed, values["inputTokens"], values["outputTokens"],
+                        )
+                    if identity in seen:
+                        duplicate += 1
+                        continue
+                    seen.add(identity)
+                    facts.append({"occurredAt": completed, **values})
+                except (KeyError, TypeError, ValueError):
+                    invalid += 1
+    return result(facts, invalid, duplicate)
 
 
 proc = subprocess.Popen(
@@ -405,7 +502,7 @@ finally:
 
 if outcome is None:
     raise ProtocolError("ZCode produced no outcome")
-outcome["rolloutUsageEvents"] = collect_rollout_usage(session_id)
+outcome["rolloutUsage"] = collect_rollout_usage(session_id)
 safe_outcome = redact(outcome)
 encoded = json.dumps(safe_outcome, ensure_ascii=False, separators=(",", ":"))
 if key in encoded:
@@ -422,7 +519,7 @@ print(f"ZCode session {session_id} completed with GLM-5.3 ({effort}).")
 
 
 def _zcode_usage_facts(payload: dict) -> dict:
-    """Verify ZCode's timed request ledger against its session aggregate."""
+    """Verify ZCode's provider ledger without mixing session-baseline usage."""
 
     usage = payload.get("usage")
     notifications = payload.get("notifications")
@@ -435,43 +532,112 @@ def _zcode_usage_facts(payload: dict) -> dict:
             return value
         return 0
 
-    prompt = counter("inputTokens")
-    cached = counter("cacheReadTokens")
-    created = counter("cacheCreationTokens")
-    output = counter("outputTokens")
-    # ZCode's inputTokens already includes both cache categories (confirmed
-    # by totalTokens == inputTokens + outputTokens). Never add them again.
-    if cached > prompt or created > prompt or cached + created > prompt:
-        prompt = cached = created = output = 0
-    total = usage.get("totalTokens")
-    if (isinstance(total, int) and not isinstance(total, bool)
-            and total >= 0 and total != prompt + output):
-        prompt = cached = created = output = 0
+    # session/usage is a context-baseline projection in ZCode 0.16.3. It can
+    # include an extra non-provider request and intentionally does not equal
+    # the provider token ledger. Keep it for diagnostics only.
+    session_request_count = counter("modelRequestCount")
+
+    session_id = payload.get("sessionId")
+    valid_session_id = (
+        isinstance(session_id, str)
+        and session_id.startswith("sess_")
+        and len(session_id) > len("sess_")
+        and len(session_id) <= 128
+    )
+    provider_events = payload.get("events")
+    if isinstance(provider_events, dict):
+        provider_events = provider_events.get("events")
+    aggregate = None
+    aggregate_seen = {}
+    if valid_session_id and isinstance(provider_events, list):
+        totals = {
+            "inputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0,
+            "outputTokens": 0, "totalTokens": 0, "modelRequestCount": 0,
+        }
+        valid_aggregate = True
+        aggregate_count = 0
+        for event in provider_events:
+            if not isinstance(event, dict) or event.get("type") != "turn.completed":
+                continue
+            identity = event.get("eventId")
+            if (not isinstance(identity, str) or not identity.strip()
+                    or event.get("sessionId") != session_id):
+                valid_aggregate = False
+                continue
+            params = event.get("payload")
+            provider = params.get("usage") if isinstance(params, dict) else None
+            try:
+                if not isinstance(provider, dict) or provider.get("source") != "provider":
+                    raise ValueError
+                values = {
+                    name: int(provider.get(name, 0))
+                    for name in totals
+                }
+                if (any(not isinstance(provider.get(name, 0), int)
+                        or isinstance(provider.get(name, 0), bool)
+                        or value < 0 for name, value in values.items())
+                        or values["modelRequestCount"] < 1
+                        or values["cacheReadTokens"] + values["cacheWriteTokens"]
+                        > values["inputTokens"]
+                        or values["totalTokens"]
+                        != values["inputTokens"] + values["outputTokens"]):
+                    raise ValueError
+            except (TypeError, ValueError):
+                valid_aggregate = False
+                continue
+            fingerprint = tuple(values[name] for name in totals)
+            prior = aggregate_seen.get(identity)
+            if prior is not None:
+                if prior != fingerprint:
+                    valid_aggregate = False
+                continue
+            aggregate_seen[identity] = fingerprint
+            aggregate_count += 1
+            for name, value in values.items():
+                totals[name] += value
+        if valid_aggregate and aggregate_count and totals["modelRequestCount"]:
+            aggregate = totals
+
+    if aggregate is None:
+        prompt = cached = created = output = request_count = 0
+    else:
+        prompt = aggregate["inputTokens"]
+        cached = aggregate["cacheReadTokens"]
+        created = aggregate["cacheWriteTokens"]
+        output = aggregate["outputTokens"]
+        request_count = aggregate["modelRequestCount"]
 
     events = []
     event_created = 0
-    rollout = payload.get("rolloutUsageEvents")
-    durable = isinstance(rollout, dict)
-    if durable:
-        candidates = rollout.get("events")
-        if not isinstance(candidates, list):
-            candidates = []
-        record_count = rollout.get("recordCount")
-        invalid_count = rollout.get("invalidRecordCount")
-    elif isinstance(rollout, list) and rollout:
-        # Compatibility with the first unreleased collector shape.
-        candidates = rollout
-        record_count = len(candidates)
-        invalid_count = 0
+    rollout = payload.get("rolloutUsage")
+    rollout_invalid = 0
+    rollout_duplicate = 0
+    rollout_limited = isinstance(rollout, dict) and rollout.get("limitExceeded") is True
+    if rollout_limited:
+        candidates = []
+    elif (isinstance(rollout, dict)
+            and isinstance(rollout.get("events"), list)
+            and rollout["events"]):
+        candidates = rollout["events"]
+        rollout_invalid = rollout.get("invalidRecordCount", 0)
+        rollout_duplicate = rollout.get("duplicateRecordCount", 0)
+    elif (isinstance(payload.get("rolloutUsageEvents"), list)
+          and payload["rolloutUsageEvents"]):
+        # Compatibility with the short-lived 0.5.67 sidecar schema.
+        candidates = payload["rolloutUsageEvents"]
     else:
         candidates = []
-        record_count = None
-        invalid_count = None
+        seen_notifications = set()
         for notification in notifications:
             if (not isinstance(notification, dict)
                     or notification.get("method") != "v4/telemetry/event"):
                 continue
             params = notification.get("params")
+            identity = params.get("eventId") if isinstance(params, dict) else None
+            if identity is not None and identity in seen_notifications:
+                continue
+            if identity is not None:
+                seen_notifications.add(identity)
             if isinstance(params, dict) and params.get("kind") == "usage.delta":
                 candidates.append(params)
     events_valid = True
@@ -524,46 +690,52 @@ def _zcode_usage_facts(payload: dict) -> dict:
         "cache": sum(event["n_cache_tokens"] for event in events),
         "output": sum(event["n_output_tokens"] for event in events),
     }
-    if durable or (isinstance(rollout, list) and rollout):
-        # session/usage intentionally reports context-delta accounting for the
-        # Coding Plan UI, not the sum of API-billed request contexts.  The
-        # privacy-scrubbed durable model-io ledger is the authoritative source
-        # for API-equivalent cost and must therefore define the aggregate too.
-        prompt = summed["input"]
-        cached = summed["cache"]
-        output = summed["output"]
-        created = event_created
-        request_count = len(events)
-        complete = (
-            events_valid
-            and bool(events)
-            and isinstance(record_count, int)
-            and not isinstance(record_count, bool)
-            and record_count == len(events)
-            and invalid_count == 0
-        )
+    timed_complete = (
+        aggregate is not None
+        and bool(events)
+        and request_count == len(events)
+        and summed == {"input": prompt, "cache": cached, "output": output}
+        and event_created == created
+        and rollout_invalid == 0
+        and not rollout_limited
+    )
+    if aggregate is None:
+        incomplete_reason = "provider_aggregate_missing_or_invalid"
+    elif timed_complete:
+        incomplete_reason = None
+    elif rollout_limited:
+        incomplete_reason = "request_ledger_resource_limit_exceeded"
+    elif rollout_invalid:
+        incomplete_reason = "request_ledger_contains_invalid_records"
+    elif events:
+        incomplete_reason = "request_ledger_does_not_match_provider_aggregate"
     else:
-        request_count = counter("modelRequestCount")
-        complete = (
-            events_valid
-            and bool(events)
-            and request_count == len(events)
-            and summed == {"input": prompt, "cache": cached, "output": output}
-            and event_created == created
-        )
+        incomplete_reason = "request_ledger_unavailable"
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "zcode",
         "model": "glm-5.3",
-        "complete": complete,
+        "complete": aggregate is not None,
         "request_count": request_count,
         "n_input_tokens": prompt,
         "n_cache_tokens": cached,
         "n_output_tokens": output,
         "cache_creation_tokens": created,
-        "token_usage_events": events if complete else [],
-        "request_usage_complete": complete,
-        "timed_usage_complete": complete,
+        "token_usage_events": events if timed_complete else [],
+        "request_usage_complete": timed_complete,
+        "timed_usage_complete": timed_complete,
+        "timed_usage_incomplete_reason": incomplete_reason,
+        "usage_incomplete_reason": (
+            incomplete_reason if aggregate is None else None
+        ),
+        "usage_aggregate_source": (
+            "zcode-session-events-turn-completed-provider-v1"
+            if aggregate is not None else None
+        ),
+        "session_usage_model_request_count": session_request_count,
+        "request_ledger_duplicate_count": (
+            rollout_duplicate if isinstance(rollout_duplicate, int) else 0
+        ),
     }
 
 
@@ -897,7 +1069,10 @@ class ZCodeBigModel(BaseInstalledAgent):
                 "reasoning_tokens": usage.get("reasoningTokens"),
                 "cache_creation_tokens": created_tokens,
                 "cache_read_tokens": cached_tokens,
-                "model_request_count": usage.get("modelRequestCount"),
+                "model_request_count": usage_facts["request_count"],
+                "session_usage_model_request_count": usage_facts[
+                    "session_usage_model_request_count"
+                ],
                 "model_error_count": usage.get("modelErrorCount"),
             },
         )

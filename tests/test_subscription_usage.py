@@ -85,3 +85,40 @@ def test_context_banded_usage_accepts_complete_untimed_request_ledger(tmp_path) 
     assert facts["request_usage_complete"] is True
     assert facts["timed_usage_complete"] is False
     assert len(facts["token_usage_events"]) == 2
+
+
+def test_zcode_incomplete_reason_survives_without_token_totals(tmp_path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    payload = {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "zcode",
+        "model": "glm-5.3",
+        "complete": False,
+        "request_count": 0,
+        "n_input_tokens": 0,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 0,
+        "cache_creation_tokens": 0,
+        "timed_usage_complete": False,
+        "token_usage_events": [],
+        "usage_incomplete_reason": "provider_aggregate_missing_or_invalid",
+        "timed_usage_incomplete_reason": "provider_aggregate_missing_or_invalid",
+    }
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+
+    facts = _subscription_trial_usage(
+        tmp_path, {"zcode_cli_version": "0.16.3"},
+    )
+
+    assert facts is not None
+    assert facts["complete"] is False
+    assert facts["usage_incomplete_reason"] == (
+        "provider_aggregate_missing_or_invalid"
+    )
+
+    payload["usage_incomplete_reason"] = "contains user supplied text"
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+    assert _subscription_trial_usage(
+        tmp_path, {"zcode_cli_version": "0.16.3"},
+    ) is None
