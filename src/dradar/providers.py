@@ -81,9 +81,10 @@ GROK_AGENT = "grok-build"
 GROK_MODEL = "grok-4.6"
 GROK_CLI_VERSION = "1.0.3"
 GROK_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
-GROK_CAPABILITY = "grok-build-4.6-subscription-oauth-v3"
-GROK_RUN_CONFIG_VERSION = "grok-4.6-subscription-oauth-isolated-v3"
-GROK_RUNTIME_PROFILE = "pier-grok-build-4.6-single-slot-v3"
+GROK_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v4"
+GROK_LEGACY_CAPABILITY = "grok-build-4.6-subscription-oauth-v3"
+GROK_RUN_CONFIG_VERSION = "grok-4.6-subscription-oauth-concurrent-v4"
+GROK_RUNTIME_PROFILE = "pier-grok-build-4.6-shared-oauth-lock-v4"
 GROK_HOME_RELATIVE_PATH = Path("providers") / "grok"
 GROK_RUNTIME_RELATIVE_PATH = (
     GROK_HOME_RELATIVE_PATH / "runtime" / GROK_CLI_VERSION
@@ -130,16 +131,18 @@ GROK_API_KEY_ENV = "XAI_API_KEY"
 _GROK_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 
 # Kimi Code is also subscription/OAuth-only.  Keep a dedicated DRadar data
-# root instead of borrowing the user's everyday ~/.kimi-code session: OAuth
-# refresh mutates the credential file and therefore needs a serialized slot.
+# root instead of borrowing the user's everyday ~/.kimi-code session.  Paid
+# task containers share only the official credential and OAuth-lock folders;
+# task sessions, configs, workspaces, logs, and artifacts stay isolated.
 KIMI_PROVIDER = "kimi-subscription"
 KIMI_AGENT = "kimi-code"
 KIMI_MODEL = "k3"
 KIMI_CLI_VERSION = "0.36.1"
 KIMI_SUPPORTED_EFFORTS = frozenset({"low", "high", "max"})
-KIMI_CAPABILITY = "kimi-code-k3-subscription-oauth-node-v1"
-KIMI_RUN_CONFIG_VERSION = "kimi-code-k3-subscription-oauth-node-isolated-v1"
-KIMI_RUNTIME_PROFILE = "pier-kimi-code-k3-node-single-slot-v1"
+KIMI_CAPABILITY = "kimi-code-k3-subscription-oauth-node-concurrent-v2"
+KIMI_LEGACY_CAPABILITY = "kimi-code-k3-subscription-oauth-node-v1"
+KIMI_RUN_CONFIG_VERSION = "kimi-code-k3-subscription-oauth-node-concurrent-v2"
+KIMI_RUNTIME_PROFILE = "pier-kimi-code-k3-node-shared-oauth-lock-v2"
 KIMI_BINARY_BASE_URL = "https://code.kimi.com/kimi-code/binaries/0.36.1"
 KIMI_BINARY_SHA256 = {
     "linux-x64": "78c07b255e0bdc8dfe90d0cbd3204a3d862957394a08ca99c6e31144732451c7",
@@ -1050,51 +1053,33 @@ def parse_kimi_cli_version(output: str) -> str | None:
 
 @contextmanager
 def kimi_subscription_session(directory: Path, *, home: Path | None = None):
-    """Yield a private Kimi credential copy and atomically retain refreshes."""
+    """Validate and expose Kimi's shared native OAuth credential store.
+
+    The official Kimi runtime coordinates concurrent refresh-token rotation in
+    its ``credentials``/``oauth`` directories.  DRadar must not wrap the whole
+    paid run in another host lock: doing so would turn ``--workers N`` into N
+    checkouts followed by one-at-a-time provider execution.
+    """
 
     canonical = kimi_auth_path(home)
     issue = kimi_auth_error(canonical)
     if issue is not None:
         raise ValueError(issue + "; run `dradar provider setup kimi` first")
-    canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = kimi_home(home) / "auth.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root = kimi_home(home)
+    oauth = root / "oauth"
+    for path in (root, canonical.parent, oauth):
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            os.chmod(path, 0o700)
+    native_lock = oauth / "kimi-code"
+    native_lock.touch(mode=0o600, exist_ok=True)
+    if os.name != "nt":
+        os.chmod(native_lock, 0o600)
     directory.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
-        if os.name == "nt":  # pragma: no cover - Windows runner
-            import msvcrt
-            if lock.seek(0, os.SEEK_END) == 0:
-                lock.write(b"\0")
-                lock.flush()
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        fd, name = tempfile.mkstemp(
-            prefix=".kimi-oauth-run.", suffix=".json", dir=directory,
-        )
-        os.close(fd)
-        run_copy = Path(name)
-        try:
-            _replace_private_file(canonical, run_copy)
-            yield run_copy
-            issue = kimi_auth_error(run_copy)
-            if issue is not None:
-                raise ValueError(
-                    "Kimi returned an invalid refreshed OAuth credential: " + issue
-                )
-            _replace_private_file(run_copy, canonical)
-        finally:
-            try:
-                run_copy.unlink()
-            except FileNotFoundError:
-                pass
-            if os.name == "nt":  # pragma: no cover - Windows runner
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    yield canonical
+    issue = kimi_auth_error(canonical)
+    if issue is not None:
+        raise ValueError("Kimi returned an invalid refreshed OAuth credential: " + issue)
 
 
 def _replace_private_file(source: Path, target: Path) -> None:
@@ -1122,11 +1107,11 @@ def _replace_private_file(source: Path, target: Path) -> None:
 
 @contextmanager
 def grok_subscription_session(directory: Path, *, home: Path | None = None):
-    """Yield a private run copy while serializing OAuth refresh/writeback.
+    """Validate and expose Grok's shared native OAuth home.
 
-    The lock covers the entire paid CLI process.  The Pier adapter downloads
-    the possibly refreshed container credential back onto the yielded file;
-    this context validates it before atomically advancing the canonical slot.
+    Grok 1.0.3 coordinates refreshes with ``auth.json.lock`` next to the
+    credential.  Sharing that narrow provider home lets independent task
+    containers use the official lock instead of serializing whole trials.
     """
 
     canonical = grok_auth_path(home)
@@ -1134,43 +1119,13 @@ def grok_subscription_session(directory: Path, *, home: Path | None = None):
     if issue is not None:
         raise ValueError(issue + "; run `dradar provider setup grok` first")
     canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = canonical.parent / "auth.lock"
+    if os.name != "nt":
+        os.chmod(canonical.parent, 0o700)
     directory.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
-        if os.name == "nt":  # pragma: no cover - Windows runner
-            import msvcrt
-            if lock.seek(0, os.SEEK_END) == 0:
-                lock.write(b"\0")
-                lock.flush()
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        fd, name = tempfile.mkstemp(
-            prefix=".grok-oauth-run.", suffix=".json", dir=directory,
-        )
-        os.close(fd)
-        run_copy = Path(name)
-        try:
-            _replace_private_file(canonical, run_copy)
-            yield run_copy
-            issue = grok_auth_error(run_copy)
-            if issue is not None:
-                raise ValueError(
-                    "Grok returned an invalid refreshed OAuth credential: " + issue
-                )
-            _replace_private_file(run_copy, canonical)
-        finally:
-            try:
-                run_copy.unlink()
-            except FileNotFoundError:
-                pass
-            if os.name == "nt":  # pragma: no cover - Windows runner
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    yield canonical
+    issue = grok_auth_error(canonical)
+    if issue is not None:
+        raise ValueError("Grok returned an invalid refreshed OAuth credential: " + issue)
 
 
 def advertised_capabilities(
@@ -1206,9 +1161,9 @@ def advertised_capabilities(
     # Advertise it only when both the CLI and a safe refreshable OAuth session
     # are actually present, preventing the server from assigning unusable work.
     if grok_cli_path(environ) and grok_auth_error() is None:
-        capabilities.append(GROK_CAPABILITY)
+        capabilities.extend((GROK_CAPABILITY, GROK_LEGACY_CAPABILITY))
     if kimi_cli_path(environ) and kimi_auth_error() is None:
-        capabilities.append(KIMI_CAPABILITY)
+        capabilities.extend((KIMI_CAPABILITY, KIMI_LEGACY_CAPABILITY))
     if (
         zcode_api_key(environ) is not None
         and zcode_cli_error(environ=environ) is None

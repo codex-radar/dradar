@@ -164,6 +164,10 @@ GROK_AGENT_MODULE_FILENAME = "_dradar_pier_grok.py"
 KIMI_AGENT_IMPORT_PATH = "_dradar_pier_kimi:KimiCode"
 KIMI_AGENT_MODULE_FILENAME = "_dradar_pier_kimi.py"
 KIMI_RECOVERY_MODULE_FILENAME = "_dradar_kimi_recovery.py"
+SHARED_OAUTH_ENV_IMPORT_PATH = (
+    "_dradar_pier_shared_oauth_docker:SharedOAuthDockerEnvironment"
+)
+SHARED_OAUTH_ENV_MODULE_FILENAME = "_dradar_pier_shared_oauth_docker.py"
 ZCODE_AGENT_IMPORT_PATH = "_dradar_pier_zcode:ZCodeBigModel"
 ZCODE_AGENT_MODULE_FILENAME = "_dradar_pier_zcode.py"
 DSH_AGENT_IMPORT_PATH = "_dradar_pier_dsh:DshMinimal"
@@ -496,6 +500,65 @@ def _ensure_kimi_agent_module(home: Path) -> Path:
     return _materialize_shared_file(
         home / KIMI_AGENT_MODULE_FILENAME, source.read_bytes()
     )
+
+
+def _ensure_shared_oauth_environment_module(home: Path) -> Path:
+    source = Path(__file__).with_name("pier_shared_oauth_docker.py")
+    if not source.is_file():
+        raise RunnerError(
+            "shared OAuth Docker environment is missing; reinstall or upgrade dradar"
+        )
+    return _materialize_shared_file(
+        home / SHARED_OAUTH_ENV_MODULE_FILENAME, source.read_bytes()
+    )
+
+
+def _shared_oauth_mounts_json(agent: str, auth_path: Path) -> str:
+    """Build the narrow provider mounts without putting secret values in argv."""
+
+    try:
+        canonical = auth_path.resolve(strict=True)
+    except OSError as exc:
+        raise RunnerError(f"subscription OAuth credential is unavailable: {exc}") from exc
+    if canonical != auth_path or canonical.is_symlink():
+        raise RunnerError("subscription OAuth credential must be a canonical file")
+    if agent == KIMI_AGENT:
+        if canonical.name != "kimi-code.json" or canonical.parent.name != "credentials":
+            raise RunnerError("Kimi OAuth credential is outside the managed store")
+        root = canonical.parent.parent
+        if root.name != "kimi":
+            raise RunnerError("Kimi OAuth credential is outside the managed store")
+        oauth = root / "oauth"
+        oauth.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            os.chmod(canonical.parent, 0o700)
+            os.chmod(oauth, 0o700)
+        mounts = [
+            {
+                "type": "bind",
+                "source": str(canonical.parent.resolve(strict=True)),
+                "target": "/tmp/dradar-kimi-home/credentials",
+            },
+            {
+                "type": "bind",
+                "source": str(oauth.resolve(strict=True)),
+                "target": "/tmp/dradar-kimi-home/oauth",
+            },
+        ]
+    elif agent == GROK_AGENT:
+        root = canonical.parent
+        if canonical.name != "auth.json" or root.name != "grok":
+            raise RunnerError("Grok OAuth credential is outside the managed store")
+        if os.name != "nt":
+            os.chmod(root, 0o700)
+        mounts = [{
+            "type": "bind",
+            "source": str(root.resolve(strict=True)),
+            "target": "/tmp/dradar-grok-user/.grok",
+        }]
+    else:  # pragma: no cover - private helper misuse
+        raise RunnerError("shared OAuth mounts are only supported for Kimi and Grok")
+    return json.dumps(mounts, separators=(",", ":"), sort_keys=True)
 
 
 def _ensure_zcode_agent_module(home: Path) -> Path:
@@ -853,6 +916,7 @@ def build_pier_command(
     elif agent == GROK_AGENT:
         _validate_grok_assignment(assignment)
         _ensure_grok_agent_module(home)
+        _ensure_shared_oauth_environment_module(home)
         if resume_checkpoint is not None:
             raise RunnerError(
                 "Grok subscription checkpoints are not supported yet; start a "
@@ -862,6 +926,7 @@ def build_pier_command(
     elif agent == KIMI_AGENT:
         _validate_kimi_assignment(assignment)
         _ensure_kimi_agent_module(home)
+        _ensure_shared_oauth_environment_module(home)
         if resume_checkpoint is not None:
             raise RunnerError(
                 "Kimi subscription checkpoints are not supported yet; start a "
@@ -898,6 +963,14 @@ def build_pier_command(
         "--disable-verification",
         "--yes",
     ]
+    if agent in (GROK_AGENT, KIMI_AGENT):
+        if provider_auth_path is None:
+            raise RunnerError("subscription OAuth credential is unavailable")
+        cmd += [
+            "--environment-import-path", SHARED_OAUTH_ENV_IMPORT_PATH,
+            "--ek", "shared_oauth_mounts_json="
+            + _shared_oauth_mounts_json(agent, provider_auth_path),
+        ]
     multiplier = _agent_timeout_multiplier(assignment, task_path)
     if not math.isclose(multiplier, 1.0):
         cmd += ["--agent-timeout-multiplier", f"{multiplier:.6f}"]
@@ -1027,6 +1100,7 @@ def build_pier_command(
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"auth_json_file={provider_auth_path}",
+            "--ak", "shared_oauth=true",
             "--ak", f"grok_cli_file={provider_cli_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={GROK_CLI_VERSION}",
@@ -1049,6 +1123,7 @@ def build_pier_command(
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"auth_json_file={provider_auth_path}",
+            "--ak", "shared_oauth=true",
             "--ak", f"kimi_cli_file={provider_cli_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={KIMI_CLI_VERSION}",

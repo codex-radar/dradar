@@ -256,6 +256,7 @@ class KimiCode(BaseInstalledAgent):
         auth_json_file: str,
         kimi_cli_file: str,
         reasoning_effort: str,
+        shared_oauth: bool = False,
         **kwargs: Any,
     ):
         auth = Path(auth_json_file)
@@ -266,6 +267,8 @@ class KimiCode(BaseInstalledAgent):
             raise ValueError("Verified host Kimi CLI executable is missing")
         if reasoning_effort not in {"low", "high", "max"}:
             raise ValueError("Kimi reasoning_effort must be low, high, or max")
+        if not isinstance(shared_oauth, bool):
+            raise ValueError("Kimi shared_oauth must be a boolean")
         try:
             payload = json.loads(auth.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -278,6 +281,7 @@ class KimiCode(BaseInstalledAgent):
         if len(secrets) < 2:
             raise ValueError("Kimi OAuth run credential is not refreshable")
         self._auth_json_file = auth
+        self._shared_oauth = shared_oauth
         self._reasoning_effort = reasoning_effort
         self._credential_values = secrets
         self._instruction = ""
@@ -355,7 +359,13 @@ class KimiCode(BaseInstalledAgent):
                 f"{shlex.quote(remote_home + '/oauth')} "
                 f"{shlex.quote(remote_user_home)} "
                 f"{shlex.quote(remote_skills)} "
-                f"&& : > {shlex.quote(remote_lock)}"
+                + (
+                    f"&& test -r {shlex.quote(remote_auth)} "
+                    f"&& test -w {shlex.quote(remote_auth)} "
+                    f"&& test -e {shlex.quote(remote_lock)}"
+                    if self._shared_oauth
+                    else f"&& : > {shlex.quote(remote_lock)}"
+                )
             ),
             env=env,
         )
@@ -363,7 +373,8 @@ class KimiCode(BaseInstalledAgent):
         local_policy = self.logs_dir / "kimi-policy.py"
         local_config.write_text(KIMI_CONFIG, encoding="utf-8")
         local_policy.write_text(KIMI_POLICY, encoding="utf-8")
-        await environment.upload_file(self._auth_json_file, remote_auth)
+        if not self._shared_oauth:
+            await environment.upload_file(self._auth_json_file, remote_auth)
         await environment.upload_file(local_config, remote_config)
         await environment.upload_file(local_policy, remote_policy)
         targets = " ".join(
@@ -375,7 +386,7 @@ class KimiCode(BaseInstalledAgent):
                 remote_policy,
             )
         )
-        if environment.default_user is not None:
+        if environment.default_user is not None and not self._shared_oauth:
             await self.exec_as_root(
                 environment,
                 command=(
@@ -386,7 +397,7 @@ class KimiCode(BaseInstalledAgent):
                 ),
                 env=env,
             )
-        else:
+        elif not self._shared_oauth:
             await self.exec_as_agent(
                 environment,
                 command=(
@@ -485,12 +496,15 @@ class KimiCode(BaseInstalledAgent):
                     self._session_id = recovered_session_id
             except Exception as exc:
                 self.logger.warning("Could not recover Kimi session log: %s", exc)
-            try:
-                await environment.download_file(remote_auth, self._auth_json_file)
-                if os.name != "nt":
-                    os.chmod(self._auth_json_file, 0o600)
-            except Exception as exc:
-                self.logger.warning("Could not recover refreshed Kimi OAuth state: %s", exc)
+            if not self._shared_oauth:
+                try:
+                    await environment.download_file(remote_auth, self._auth_json_file)
+                    if os.name != "nt":
+                        os.chmod(self._auth_json_file, 0o600)
+                except Exception as exc:
+                    self.logger.warning(
+                        "Could not recover refreshed Kimi OAuth state: %s", exc
+                    )
 
     def _redact_or_reject_credential_output(self, paths: list[Path]) -> None:
         leaked = False

@@ -1,4 +1,4 @@
-"""Kimi Code integration is K3 subscription OAuth-only and single-slot."""
+"""Kimi Code integration is K3 subscription OAuth with native concurrency."""
 
 from __future__ import annotations
 
@@ -85,24 +85,19 @@ def test_kimi_oauth_validator_rejects_symlink_and_broad_mode(
         assert "too broadly readable" in (kimi_auth_error(target) or "")
 
 
-def test_kimi_subscription_session_is_private_and_writes_back_refresh(
+def test_kimi_subscription_session_uses_canonical_native_lock_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("DRADAR_HOME", str(home))
     canonical = _write_auth(kimi_auth_path(), _oauth("old", "old-refresh"))
 
-    with kimi_subscription_session(tmp_path / "work") as run_copy:
-        assert run_copy != canonical
-        if os.name != "nt":
-            assert run_copy.stat().st_mode & 0o777 == 0o600
-        run_copy.write_text(json.dumps(_oauth("new", "new-refresh")))
-        if os.name != "nt":
-            run_copy.chmod(0o600)
+    with kimi_subscription_session(tmp_path / "work") as shared:
+        assert shared == canonical
+        assert (home / "providers" / "kimi" / "oauth" / "kimi-code").is_file()
+        assert (home / "providers" / "kimi" / "credentials").is_dir()
 
-    assert not run_copy.exists()
-    payload = json.loads(canonical.read_text())
-    assert payload["refresh_token"] == "new-refresh"
+    assert canonical.is_file()
 
 
 def test_kimi_live_probe_uses_proxy_and_writes_back_rotated_token(
@@ -201,7 +196,9 @@ def test_pier_command_uses_private_kimi_adapter_without_secrets(
     (tasks / "task-1").mkdir(parents=True)
     home = tmp_path / "home"
     home.mkdir()
-    auth = _write_auth(tmp_path / "run-auth.json")
+    auth = _write_auth(
+        tmp_path / "providers" / "kimi" / "credentials" / "kimi-code.json"
+    )
     cli = tmp_path / "kimi"
     cli.write_text("binary", encoding="utf-8")
 
@@ -220,6 +217,8 @@ def test_pier_command_uses_private_kimi_adapter_without_secrets(
     assert runner.KIMI_AGENT_IMPORT_PATH in cmd
     assert f"reasoning_effort={effort}" in cmd
     assert f"auth_json_file={auth}" in cmd
+    assert "shared_oauth=true" in cmd
+    assert runner.SHARED_OAUTH_ENV_IMPORT_PATH in cmd
     assert f"kimi_cli_file={cli}" in cmd
     assert f"version={KIMI_CLI_VERSION}" in cmd
     assert "must-not-leak" not in joined

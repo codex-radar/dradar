@@ -203,6 +203,7 @@ class GrokBuild(BaseInstalledAgent):
         auth_json_file: str,
         grok_cli_file: str,
         reasoning_effort: str,
+        shared_oauth: bool = False,
         **kwargs: Any,
     ):
         auth = Path(auth_json_file)
@@ -215,7 +216,10 @@ class GrokBuild(BaseInstalledAgent):
             raise ValueError(
                 "Grok reasoning_effort must be low, medium, high, or xhigh"
             )
+        if not isinstance(shared_oauth, bool):
+            raise ValueError("Grok shared_oauth must be a boolean")
         self._auth_json_file = auth
+        self._shared_oauth = shared_oauth
         self._reasoning_effort = reasoning_effort
         super().__init__(*args, **kwargs)
 
@@ -281,8 +285,18 @@ class GrokBuild(BaseInstalledAgent):
             ),
             env=env,
         )
-        await environment.upload_file(self._auth_json_file, remote_auth)
-        if environment.default_user is not None:
+        if not self._shared_oauth:
+            await environment.upload_file(self._auth_json_file, remote_auth)
+        else:
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"test -r {shlex.quote(remote_auth)} "
+                    f"&& test -w {shlex.quote(remote_auth)}"
+                ),
+                env=env,
+            )
+        if environment.default_user is not None and not self._shared_oauth:
             await self.exec_as_root(
                 environment,
                 command=(
@@ -292,7 +306,7 @@ class GrokBuild(BaseInstalledAgent):
                 ),
                 env=env,
             )
-        else:
+        elif not self._shared_oauth:
             await self.exec_as_agent(
                 environment,
                 command=f"chmod 600 {shlex.quote(remote_auth)}",
@@ -315,7 +329,12 @@ class GrokBuild(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=(
-                f"{shlex.quote(remote_cli)} models "
+                # Do not pipe the Rust CLI directly into grep -q.  grep exits
+                # on the first match, closing stdout while Grok is still
+                # printing the catalog; Grok 1.0.3 then panics on EPIPE and a
+                # valid OAuth slot is misclassified as an agent failure.
+                f"models_output=$({shlex.quote(remote_cli)} models) "
+                f"&& printf '%s\\n' \"$models_output\" "
                 f"| grep -Fq {shlex.quote('grok-4.6')}"
             ),
             env=env,
@@ -356,12 +375,15 @@ class GrokBuild(BaseInstalledAgent):
         finally:
             # Silent refresh mutates auth.json.  Return that mutation to the
             # locked host run-copy even when the model command fails.
-            try:
-                await environment.download_file(remote_auth, self._auth_json_file)
-                if os.name != "nt":
-                    os.chmod(self._auth_json_file, 0o600)
-            except Exception as exc:
-                self.logger.warning("Could not recover refreshed Grok OAuth state: %s", exc)
+            if not self._shared_oauth:
+                try:
+                    await environment.download_file(remote_auth, self._auth_json_file)
+                    if os.name != "nt":
+                        os.chmod(self._auth_json_file, 0o600)
+                except Exception as exc:
+                    self.logger.warning(
+                        "Could not recover refreshed Grok OAuth state: %s", exc
+                    )
 
     @staticmethod
     def _content_text(content: Any) -> str:

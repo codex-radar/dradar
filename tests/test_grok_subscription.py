@@ -1,4 +1,4 @@
-"""Grok Build integration is subscription OAuth-only and single-slot."""
+"""Grok Build integration is subscription OAuth with native concurrency."""
 
 from __future__ import annotations
 
@@ -73,22 +73,19 @@ def test_oauth_validator_rejects_api_key_shaped_auth(tmp_path: Path):
     assert "not a refreshable subscription OAuth" in (grok_auth_error(path) or "")
 
 
-def test_subscription_session_is_private_and_writes_back_refresh(
+def test_subscription_session_uses_canonical_native_lock_store(
     tmp_path: Path, monkeypatch
 ):
     home = tmp_path / "home"
     monkeypatch.setenv("DRADAR_HOME", str(home))
     canonical = _write_auth(grok_auth_path(), _oauth("old", "old-refresh"))
 
-    with grok_subscription_session(tmp_path / "work") as run_copy:
-        assert run_copy != canonical
+    with grok_subscription_session(tmp_path / "work") as shared:
+        assert shared == canonical
         if os.name != "nt":
-            assert run_copy.stat().st_mode & 0o777 == 0o600
-        run_copy.write_text(json.dumps(_oauth("new", "new-refresh")))
+            assert shared.parent.stat().st_mode & 0o777 == 0o700
 
-    assert not run_copy.exists()
-    payload = json.loads(canonical.read_text())
-    assert next(iter(payload.values()))["refresh_token"] == "new-refresh"
+    assert canonical.is_file()
 
 
 def test_pier_command_uses_private_adapter_without_key_in_argv(
@@ -100,7 +97,7 @@ def test_pier_command_uses_private_adapter_without_key_in_argv(
     (tasks / "task-1").mkdir(parents=True)
     home = tmp_path / "home"
     home.mkdir()
-    auth = _write_auth(tmp_path / "run-auth.json")
+    auth = _write_auth(tmp_path / "providers" / "grok" / "auth.json")
     cli = tmp_path / "grok"
     cli.write_text("binary", encoding="utf-8")
 
@@ -112,6 +109,8 @@ def test_pier_command_uses_private_adapter_without_key_in_argv(
 
     assert runner.GROK_AGENT_IMPORT_PATH in cmd
     assert f"auth_json_file={auth}" in cmd
+    assert "shared_oauth=true" in cmd
+    assert runner.SHARED_OAUTH_ENV_IMPORT_PATH in cmd
     assert f"grok_cli_file={cli}" in cmd
     assert f"version={GROK_CLI_VERSION}" in cmd
     assert "must-not-leak" not in " ".join(cmd)
@@ -129,7 +128,7 @@ def test_all_grok_46_efforts_build_the_pinned_command(
     monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
     tasks = tmp_path / "tasks"
     (tasks / "task-1").mkdir(parents=True)
-    auth = _write_auth(tmp_path / "auth.json")
+    auth = _write_auth(tmp_path / "providers" / "grok" / "auth.json")
     cli = tmp_path / "grok"
     cli.write_text("binary", encoding="utf-8")
     cmd = runner.build_pier_command(
@@ -188,7 +187,8 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
     assert '_REMOTE_HOME = _REMOTE_USER_HOME / ".grok"' in source
     assert '"HOME": remote_user_home' in source
     assert '"GROK_HOME": remote_home' not in source
-    assert 'f"{shlex.quote(remote_cli)} models "' in source
+    assert 'f"models_output=$({shlex.quote(remote_cli)} models) "' in source
+    assert "closing stdout while Grok is still" in source
     assert "grep -Fq" in source
     assert "grok-4.6" in source
     assert '"grok.com"' in source

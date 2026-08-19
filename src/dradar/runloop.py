@@ -1670,14 +1670,20 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "model_config_version": GROK_RUN_CONFIG_VERSION,
             "model_runtime_profile": GROK_RUNTIME_PROFILE,
             "subscription_oauth": True,
-            "subscription_concurrency": 1,
+            "subscription_concurrency": (
+                telemetry.target_workers if telemetry is not None else 1
+            ),
+            "subscription_oauth_coordination": "native-shared-lock-v1",
         })
     if assignment.get("agent") == KIMI_AGENT:
         meta.update({
             "model_config_version": KIMI_RUN_CONFIG_VERSION,
             "model_runtime_profile": KIMI_RUNTIME_PROFILE,
             "subscription_oauth": True,
-            "subscription_concurrency": 1,
+            "subscription_concurrency": (
+                telemetry.target_workers if telemetry is not None else 1
+            ),
+            "subscription_oauth_coordination": "native-shared-lock-v1",
             "kimi_native_efforts": ["low", "high", "max"],
         })
     if assignment.get("agent") == ZCODE_AGENT:
