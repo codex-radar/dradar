@@ -1090,6 +1090,7 @@ def _upload_trial(
             "timed_usage_incomplete_reason", "usage_aggregate_source",
             "usage_incomplete_reason",
             "session_usage_model_request_count", "request_ledger_duplicate_count",
+            "request_ledger_source",
             "cache_creation_tokens", "subscription_reported_cost_usd",
             "subscription_reported_cost_basis",
         ):
