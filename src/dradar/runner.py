@@ -1982,16 +1982,64 @@ def _pier_install_lock():
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def _pier_version(pier: str) -> str | None:
+def _pier_metadata_interpreters(pier: str) -> tuple[Path, ...]:
+    """Return likely Python interpreters for the uv tool owning ``pier``.
+
+    Importing Pier just to print its version also imports LiteLLM, which may
+    fetch its remote model-price map.  Under a concurrent worker start that
+    network-bound probe can time out and must never be mistaken for a missing
+    installation.  Query the owning virtualenv's distribution metadata
+    instead; this is local-only and does not import Pier.
+    """
+    try:
+        executable = Path(pier).resolve(strict=True)
+    except OSError:
+        return ()
+    candidates = (
+        executable.parent / "python3",
+        executable.parent / "python",
+        executable.parent / "python.exe",
+        executable.parent.parent / "python.exe",
+    )
+    return tuple(dict.fromkeys(
+        candidate for candidate in candidates
+        if candidate.is_file() and os.access(candidate, os.X_OK)
+    ))
+
+
+def _pier_metadata_version(pier: str) -> str | None:
+    script = (
+        "from importlib.metadata import version; "
+        "print(version('datacurve-pier'))"
+    )
+    for interpreter in _pier_metadata_interpreters(pier):
+        try:
+            proc = subprocess.run(
+                [str(interpreter), "-c", script],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    return None
+
+
+def _pier_cli_version(pier: str) -> str | None:
     try:
         proc = subprocess.run(
-            [pier, "--version"], capture_output=True, text=True, timeout=10,
+            [pier, "--version"], capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() or None
+
+
+def _pier_version(pier: str) -> str | None:
+    """Read Pier's version locally, with its CLI only as a compatibility fallback."""
+    return _pier_metadata_version(pier) or _pier_cli_version(pier)
 
 
 def _pier_version_compatible(installed_version: str | None) -> bool:
@@ -2030,6 +2078,12 @@ def ensure_pier() -> None:
         installed_version = _pier_version(pier) if pier else None
         if _pier_version_compatible(installed_version):
             return
+        if pier and installed_version is None:
+            raise RunnerError(
+                "couldn't verify the existing Pier installation; refusing to replace "
+                "a shared tool that may be serving another worker. Run "
+                f"`{PIER_INSTALL_COMMAND}` after active runs finish"
+            )
         if pier:
             print(f"Pier {installed_version or 'unknown'} lacks persistent resume — "
                   f"installing SecurityMind build {PIER_VERSION}...")

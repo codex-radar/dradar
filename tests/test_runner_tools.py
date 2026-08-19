@@ -334,6 +334,38 @@ def test_ensure_pier_accepts_newer_compatible_post_release(monkeypatch):
     assert called == []
 
 
+def test_pier_version_prefers_local_distribution_metadata(monkeypatch):
+    monkeypatch.setattr(
+        runner_mod, "_pier_metadata_version", lambda _: runner_mod.PIER_VERSION,
+    )
+    monkeypatch.setattr(
+        runner_mod, "_pier_cli_version",
+        lambda _: pytest.fail("compatible local metadata must avoid importing Pier"),
+    )
+
+    assert runner_mod._pier_version("/usr/bin/pier") == runner_mod.PIER_VERSION
+
+
+def test_pier_metadata_version_uses_tool_interpreter(monkeypatch, tmp_path):
+    interpreter = tmp_path / "python3"
+    interpreter.touch(mode=0o755)
+    monkeypatch.setattr(
+        runner_mod, "_pier_metadata_interpreters", lambda _: (interpreter,),
+    )
+    seen = []
+
+    def fake_run(cmd, *args, **kwargs):
+        seen.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="0.3.0.post3\n")
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+
+    assert runner_mod._pier_metadata_version("/usr/bin/pier") == "0.3.0.post3"
+    assert seen[0][0][0] == str(interpreter)
+    assert seen[0][0][1] == "-c"
+    assert seen[0][1]["timeout"] == 5
+
+
 def test_ensure_pier_installs_via_uv_when_missing(monkeypatch):
     seen = {"pier": None}  # pier missing first, present after "install"
     def which(name):
@@ -398,6 +430,18 @@ def test_ensure_pier_rechecks_version_after_waiting_for_install_lock(monkeypatch
     )
 
     ensure_pier()
+
+
+def test_ensure_pier_never_reinstalls_unverifiable_existing_tool(monkeypatch):
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(runner_mod, "_pier_version", lambda _: None)
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run",
+        lambda *a, **k: pytest.fail("must not mutate an in-use shared Pier tool"),
+    )
+
+    with pytest.raises(RunnerError, match="refusing to replace a shared tool"):
+        ensure_pier()
 
 
 def test_ensure_pier_errors_when_no_uv(monkeypatch):
