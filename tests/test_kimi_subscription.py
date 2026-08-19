@@ -299,6 +299,9 @@ def test_kimi_adapter_source_has_fixed_security_contract() -> None:
     assert 'event = "PreToolUse"' in source
     assert '"KIMI_CODE_HOME": remote_home' in source
     assert "run_with_kimi_resume" in source
+    assert '"/logs/agent/kimi-code.stderr.log"' in source
+    assert "tail -n 1" in source
+    assert "classify_retryable_error=classify_retryable_error" in source
     assert '"--session", session_id' in source
     assert 'tee = "tee -a" if append else "tee"' in source
     assert '"--config-file"' not in source

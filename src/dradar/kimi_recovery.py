@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
 KIMI_RETRYABLE_EXIT_CODE = 75
+KIMI_PROVIDER_CONNECTION_EXIT_CODE = 1
 KIMI_RESUME_DELAYS_SECONDS = (10, 30)
 KIMI_RESUME_PROMPT = (
     "Continue the unfinished task from where the previous turn stopped. "
@@ -21,6 +22,9 @@ KIMI_RESUME_PROMPT = (
 )
 
 _PIER_EXIT_CODE_RE = re.compile(r"^Command failed \(exit ([0-9]+)\):")
+_KIMI_PROVIDER_CONNECTION_ERROR = (
+    "error: failed to run prompt: provider.connection_error: Connection error."
+)
 
 
 def pier_exit_code(error: BaseException) -> int | None:
@@ -28,6 +32,28 @@ def pier_exit_code(error: BaseException) -> int | None:
 
     match = _PIER_EXIT_CODE_RE.match(str(error))
     return int(match.group(1)) if match else None
+
+
+def kimi_provider_connection_stderr_is_retryable(stderr_line: str) -> bool:
+    """Accept only Kimi 0.36.1's exact CLI-owned terminal error line."""
+
+    return stderr_line.rstrip("\r\n") == _KIMI_PROVIDER_CONNECTION_ERROR
+
+
+async def _failure_is_retryable(
+    error: BaseException,
+    classify_retryable_error: (
+        Callable[[BaseException], Awaitable[bool]] | None
+    ),
+) -> bool:
+    if pier_exit_code(error) == KIMI_RETRYABLE_EXIT_CODE:
+        return True
+    if classify_retryable_error is None:
+        return False
+    try:
+        return bool(await classify_retryable_error(error))
+    except Exception:
+        return False
 
 
 def validated_session_id(value: str | None) -> str | None:
@@ -50,6 +76,9 @@ async def run_with_kimi_resume(
     delays: Sequence[float] = KIMI_RESUME_DELAYS_SECONDS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     on_retry: Callable[[int, float, str], None] | None = None,
+    classify_retryable_error: (
+        Callable[[BaseException], Awaitable[bool]] | None
+    ) = None,
 ) -> tuple[int, str | None]:
     """Run once, then resume only Kimi-declared temporary failures.
 
@@ -61,7 +90,7 @@ async def run_with_kimi_resume(
         await run_initial()
         return 0, None
     except Exception as error:
-        if pier_exit_code(error) != KIMI_RETRYABLE_EXIT_CODE:
+        if not await _failure_is_retryable(error, classify_retryable_error):
             raise
         last_error = error
 
@@ -80,7 +109,7 @@ async def run_with_kimi_resume(
             await run_resume(session_id, KIMI_RESUME_PROMPT)
             return attempt, session_id
         except Exception as error:
-            if pier_exit_code(error) != KIMI_RETRYABLE_EXIT_CODE:
+            if not await _failure_is_retryable(error, classify_retryable_error):
                 raise
             last_error = error
 
@@ -90,7 +119,9 @@ async def run_with_kimi_resume(
 __all__ = [
     "KIMI_RESUME_DELAYS_SECONDS",
     "KIMI_RESUME_PROMPT",
+    "KIMI_PROVIDER_CONNECTION_EXIT_CODE",
     "KIMI_RETRYABLE_EXIT_CODE",
+    "kimi_provider_connection_stderr_is_retryable",
     "pier_exit_code",
     "run_with_kimi_resume",
     "validated_session_id",

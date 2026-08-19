@@ -24,7 +24,13 @@ from pier.models.agent.network import NetworkAllowlist
 from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
 
-from _dradar_kimi_recovery import run_with_kimi_resume, validated_session_id
+from _dradar_kimi_recovery import (
+    KIMI_PROVIDER_CONNECTION_EXIT_CODE,
+    kimi_provider_connection_stderr_is_retryable,
+    pier_exit_code,
+    run_with_kimi_resume,
+    validated_session_id,
+)
 
 
 KIMI_CONFIG = """\
@@ -76,6 +82,7 @@ import sys
 
 PROTECTED = (
     "/tmp/dradar-kimi-home",
+    "/logs/agent/kimi-code.stderr.log",
     "KIMI_CODE_HOME",
     "credentials/kimi-code.json",
     "oauth/kimi-code",
@@ -473,6 +480,19 @@ class KimiCode(BaseInstalledAgent):
                 env=env,
             )
 
+        async def classify_retryable_error(error: BaseException) -> bool:
+            if pier_exit_code(error) != KIMI_PROVIDER_CONNECTION_EXIT_CODE:
+                return False
+            try:
+                result = await self.exec_as_agent(
+                    environment,
+                    command=f"tail -n 1 {shlex.quote(stderr_log)}",
+                    env=env,
+                )
+            except Exception:
+                return False
+            return kimi_provider_connection_stderr_is_retryable(result.stdout)
+
         def announce_retry(attempt: int, delay: float, session_id: str) -> None:
             self.logger.warning(
                 "Kimi temporary provider failure; resuming session %s in %ss "
@@ -488,6 +508,7 @@ class KimiCode(BaseInstalledAgent):
                 find_session_id=remote_session_id,
                 run_resume=run_resume,
                 on_retry=announce_retry,
+                classify_retryable_error=classify_retryable_error,
             )
         finally:
             try:

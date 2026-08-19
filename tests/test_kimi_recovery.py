@@ -6,6 +6,7 @@ import pytest
 
 from dradar.kimi_recovery import (
     KIMI_RESUME_PROMPT,
+    kimi_provider_connection_stderr_is_retryable,
     pier_exit_code,
     run_with_kimi_resume,
     validated_session_id,
@@ -15,13 +16,48 @@ SESSION = "832d7f94-ab9a-4f83-b630-37a3dab65025"
 
 
 class CommandFailed(RuntimeError):
-    def __init__(self, code: int):
-        super().__init__(f"Command failed (exit {code}): kimi --print")
+    def __init__(self, code: int, *, stdout: str = "", stderr: str = ""):
+        super().__init__(
+            f"Command failed (exit {code}): kimi --print\n"
+            f"stdout: {stdout}\nstderr: {stderr}"
+        )
 
 
 def test_pier_exit_code_is_fail_closed() -> None:
     assert pier_exit_code(CommandFailed(75)) == 75
     assert pier_exit_code(RuntimeError("model said exit 75")) is None
+
+
+def test_exact_kimi_connection_error_on_stderr_is_retryable() -> None:
+    assert kimi_provider_connection_stderr_is_retryable(
+        (
+            "error: failed to run prompt: provider.connection_error: "
+            "Connection error.\n"
+        )
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "stderr_line",
+    [
+        "",
+        (
+            "warning: provider request failed after 10 retries\n"
+            "error: failed to run prompt: provider.connection_error: "
+            "Connection error."
+        ),
+        (
+            "error: failed to run prompt: provider.connection_error: "
+            "Connection error.\nunrelated terminal failure"
+        ),
+        (
+            "error: failed to run prompt: provider.connection_error: "
+            "Connection error. "
+        ),
+    ],
+)
+def test_kimi_connection_fallback_is_fail_closed(stderr_line: str) -> None:
+    assert kimi_provider_connection_stderr_is_retryable(stderr_line) is False
 
 
 @pytest.mark.parametrize(
@@ -91,6 +127,59 @@ def test_exit_75_resumes_same_session_and_workspace() -> None:
     assert asyncio.run(scenario()) == (1, SESSION)
     assert calls == [
         "initial",
+        "find",
+        ("sleep", 10),
+        ("resume", SESSION, KIMI_RESUME_PROMPT),
+    ]
+
+
+def test_exit_1_with_exact_provider_signal_resumes_same_session() -> None:
+    calls: list[object] = []
+
+    async def scenario() -> tuple[int, str | None]:
+        async def initial() -> None:
+            calls.append("initial")
+            raise CommandFailed(
+                1,
+                stderr=(
+                    "error: failed to run prompt: provider.connection_error: "
+                    "Connection error."
+                ),
+            )
+
+        async def find() -> str | None:
+            calls.append("find")
+            return SESSION
+
+        async def resume(session_id: str, prompt: str) -> None:
+            calls.append(("resume", session_id, prompt))
+
+        async def no_wait(delay: float) -> None:
+            calls.append(("sleep", delay))
+
+        async def classify(error: BaseException) -> bool:
+            calls.append(("classify", pier_exit_code(error)))
+            return (
+                pier_exit_code(error) == 1
+                and kimi_provider_connection_stderr_is_retryable(
+                    "error: failed to run prompt: provider.connection_error: "
+                    "Connection error.\n"
+                )
+            )
+
+        return await run_with_kimi_resume(
+            run_initial=initial,
+            find_session_id=find,
+            run_resume=resume,
+            delays=(10, 30),
+            sleep=no_wait,
+            classify_retryable_error=classify,
+        )
+
+    assert asyncio.run(scenario()) == (1, SESSION)
+    assert calls == [
+        "initial",
+        ("classify", 1),
         "find",
         ("sleep", 10),
         ("resume", SESSION, KIMI_RESUME_PROMPT),
