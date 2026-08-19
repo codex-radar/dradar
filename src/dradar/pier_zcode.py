@@ -94,7 +94,7 @@ class ProtocolError(RuntimeError):
 
 (
     node, cli, key_path, instruction_path, effort, session_timeout_raw,
-    outcome_path, events_path, stderr_path, diagnostic_path,
+    outcome_path, events_path, stderr_path, diagnostic_path, compact_usage_path,
 ) = sys.argv[1:]
 try:
     session_timeout_sec = int(session_timeout_raw)
@@ -294,6 +294,191 @@ def collect_rollout_usage(
     return result(facts, invalid, duplicate)
 
 
+class CompactRolloutUsageCollector:
+    """Incrementally persist only billing facts from ZCode's raw rollout."""
+
+    def __init__(
+        self, session_id, output_path, *, max_files=8,
+        max_directory_entries=64, max_line_bytes=64 * 1024 * 1024,
+        max_records=10_000, max_compact_bytes=8 * 1024 * 1024,
+    ):
+        self.session_id = session_id
+        self.output_path = Path(output_path)
+        self.limit_reason = None
+        try:
+            self.output_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Failure to reset the audit sidecar must fail the compact ledger
+            # closed; the bounded post-run scanner remains available.
+            self.limit_reason = "compact_reset_failed"
+        self.max_files = max_files
+        self.max_directory_entries = max_directory_entries
+        self.max_line_bytes = max_line_bytes
+        self.max_records = max_records
+        self.max_compact_bytes = max_compact_bytes
+        self.offsets = {}
+        self.file_ids = {}
+        self.pending = {}
+        self.events = []
+        self.seen = set()
+        self.invalid = 0
+        self.duplicate = 0
+        self.compact_bytes = 0
+
+    def _limit(self, reason):
+        if self.limit_reason is None:
+            self.limit_reason = reason
+
+    def _append_record(self, record):
+        if not isinstance(record, dict) or record.get("sessionId") != self.session_id:
+            return
+        try:
+            model = record["model"]
+            response = record["response"]
+            usage = response["usage"]
+            if (record.get("type") != "model_io"
+                    or not isinstance(model, dict)
+                    or model.get("modelId") != "glm-5.3"
+                    or not isinstance(usage, dict)):
+                raise ValueError
+            values = {
+                name: usage.get(name, 0) if name in {
+                    "cacheReadTokens", "cacheWriteTokens"
+                } else usage[name]
+                for name in (
+                    "inputTokens", "cacheReadTokens", "cacheWriteTokens",
+                    "outputTokens", "totalTokens",
+                )
+            }
+            if any(not isinstance(value, int) or isinstance(value, bool)
+                   or value < 0 for value in values.values()):
+                raise ValueError
+            if (values["cacheReadTokens"] + values["cacheWriteTokens"]
+                    > values["inputTokens"]
+                    or values["totalTokens"]
+                    != values["inputTokens"] + values["outputTokens"]):
+                raise ValueError
+            completed = record["completedAt"]
+            if not isinstance(completed, (str, int, float)):
+                raise ValueError
+            request_id = record.get("requestId")
+            attempt = record.get("attempt")
+            identity = (request_id, attempt)
+            if request_id is None:
+                identity = (
+                    completed, values["inputTokens"], values["outputTokens"],
+                )
+            if identity in self.seen:
+                self.duplicate += 1
+                return
+            if len(self.events) >= self.max_records:
+                self._limit("record_count")
+                return
+            fact = {"occurredAt": completed, **values}
+            encoded = json.dumps(fact, separators=(",", ":")) + "\n"
+            encoded_bytes = encoded.encode("utf-8")
+            if self.compact_bytes + len(encoded_bytes) > self.max_compact_bytes:
+                self._limit("compact_bytes")
+                return
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.output_path.open("ab") as stream:
+                stream.write(encoded_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(self.output_path, 0o600)
+            self.compact_bytes += len(encoded_bytes)
+            self.seen.add(identity)
+            self.events.append(fact)
+        except (KeyError, TypeError, ValueError, OSError):
+            self.invalid += 1
+
+    def _consume(self, key, chunk, *, final=False):
+        data = self.pending.pop(key, b"") + chunk
+        lines = data.split(b"\n")
+        if not final and data and not data.endswith(b"\n"):
+            tail = lines.pop()
+            if len(tail) > self.max_line_bytes:
+                self._limit("line_bytes")
+                return
+            self.pending[key] = tail
+        for line in lines:
+            if not line:
+                continue
+            if len(line) > self.max_line_bytes:
+                self._limit("line_bytes")
+                return
+            try:
+                record = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.invalid += 1
+                continue
+            self._append_record(record)
+
+    def poll(self, *, final=False):
+        if self.limit_reason is not None:
+            return
+        root = Path.home() / ".zcode" / "cli" / "rollout"
+        paths = []
+        try:
+            for entry_count, path in enumerate(root.iterdir(), start=1):
+                if entry_count > self.max_directory_entries:
+                    self._limit("directory_entry_count")
+                    return
+                if not (path.name.startswith("model-io-")
+                        and path.name.endswith(".jsonl")):
+                    continue
+                if path.is_symlink() or not path.is_file():
+                    self.invalid += 1
+                    continue
+                paths.append(path)
+                if len(paths) > self.max_files:
+                    self._limit("file_count")
+                    return
+        except FileNotFoundError:
+            return
+        except OSError:
+            self.invalid += 1
+            return
+        for path in sorted(paths):
+            key = str(path)
+            try:
+                info = path.stat()
+                size = info.st_size
+                offset = self.offsets.get(key, 0)
+                file_id = (info.st_dev, info.st_ino)
+                if self.file_ids.get(key) not in {None, file_id} or size < offset:
+                    offset = 0
+                    self.pending.pop(key, None)
+                self.file_ids[key] = file_id
+                with path.open("rb") as stream:
+                    stream.seek(offset)
+                    while True:
+                        chunk = stream.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        self._consume(key, chunk)
+                        self.offsets[key] = stream.tell()
+                        if self.limit_reason is not None:
+                            return
+                    if final:
+                        self._consume(key, b"", final=True)
+            except OSError:
+                self.invalid += 1
+                continue
+
+    def result(self):
+        return {
+            "events": self.events,
+            "invalidRecordCount": self.invalid,
+            "duplicateRecordCount": self.duplicate,
+            "limitExceeded": self.limit_reason is not None,
+            "limitReason": self.limit_reason,
+            "source": "incremental-compact-v1",
+        }
+
+
 proc = subprocess.Popen(
     [node, cli, "app-server"],
     stdin=subprocess.PIPE,
@@ -401,6 +586,7 @@ def optional_call(method, params, *, timeout=30.0):
 
 session_id = None
 outcome = None
+compact_collector = None
 try:
     created = call(
         "session/create",
@@ -449,6 +635,9 @@ try:
     session_id = session.get("sessionId") if isinstance(session, dict) else None
     if not isinstance(session_id, str) or not session_id.startswith("sess_"):
         raise ProtocolError("session/create returned no valid session id")
+    compact_collector = CompactRolloutUsageCollector(
+        session_id, compact_usage_path,
+    )
     settings = created.get("settings") if isinstance(created, dict) else None
     thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
     available = {
@@ -472,6 +661,7 @@ try:
     write_runtime_diagnostic(None, 0, False, False)
     while time.monotonic() < deadline:
         state = call("session/read", {"sessionId": session_id}, timeout=60.0)
+        compact_collector.poll()
         projection = state.get("projection") if isinstance(state, dict) else None
         status = projection.get("status") if isinstance(projection, dict) else None
         turns = projection.get("turnCount", 0) if isinstance(projection, dict) else 0
@@ -515,6 +705,7 @@ try:
         "session/events", {"sessionId": session_id, "afterSeq": 0, "limit": 5000}
     )
     usage = optional_call("session/usage", {"sessionId": session_id})
+    compact_collector.poll()
     outcome = {
         "schema": "dradar-zcode-outcome-v1",
         "sessionId": session_id,
@@ -554,7 +745,16 @@ finally:
 
 if outcome is None:
     raise ProtocolError("ZCode produced no outcome")
-outcome["rolloutUsage"] = collect_rollout_usage(session_id)
+if compact_collector is not None:
+    compact_collector.poll(final=True)
+    compact_usage = compact_collector.result()
+else:
+    compact_usage = None
+if (isinstance(compact_usage, dict) and compact_usage.get("events")
+        and not compact_usage.get("limitExceeded")):
+    outcome["rolloutUsage"] = compact_usage
+else:
+    outcome["rolloutUsage"] = collect_rollout_usage(session_id)
 safe_outcome = redact(outcome)
 encoded = json.dumps(safe_outcome, ensure_ascii=False, separators=(",", ":"))
 if key in encoded:
@@ -662,6 +862,14 @@ def _zcode_usage_facts(payload: dict) -> dict:
     events = []
     event_created = 0
     rollout = payload.get("rolloutUsage")
+    request_ledger_source = (
+        "incremental-compact-v1"
+        if isinstance(rollout, dict)
+        and rollout.get("source") == "incremental-compact-v1"
+        else "postrun-bounded-scan-v1"
+        if isinstance(rollout, dict)
+        else None
+    )
     rollout_invalid = 0
     rollout_duplicate = 0
     rollout_limited = isinstance(rollout, dict) and rollout.get("limitExceeded") is True
@@ -788,6 +996,7 @@ def _zcode_usage_facts(payload: dict) -> dict:
         "request_ledger_duplicate_count": (
             rollout_duplicate if isinstance(rollout_duplicate, int) else 0
         ),
+        "request_ledger_source": request_ledger_source,
     }
 
 
@@ -805,6 +1014,7 @@ class ZCodeBigModel(BaseInstalledAgent):
     _EVENTS_FILE = "zcode-protocol-events.json"
     _STDERR_FILE = "zcode-stderr.log"
     _DIAGNOSTIC_FILE = "zcode-runtime-diagnostic.json"
+    _COMPACT_USAGE_FILE = "zcode-compact-usage.jsonl"
     _STREAM_FILE = "zcode-protocol.log"
     _USAGE_FILE = "provider-usage.json"
 
@@ -923,6 +1133,7 @@ class ZCodeBigModel(BaseInstalledAgent):
         events = f"/logs/agent/{self._EVENTS_FILE}"
         stderr = f"/logs/agent/{self._STDERR_FILE}"
         diagnostic = f"/logs/agent/{self._DIAGNOSTIC_FILE}"
+        compact_usage = f"/logs/agent/{self._COMPACT_USAGE_FILE}"
         stream = f"/logs/agent/{self._STREAM_FILE}"
         instruction_path = f"{remote_secret}/instruction.txt"
         env = self.build_process_env({
@@ -985,7 +1196,7 @@ class ZCodeBigModel(BaseInstalledAgent):
             for item in (
                 "node", remote_cli, remote_key, instruction_path,
                 self._reasoning_effort, str(self._session_timeout_sec),
-                outcome, events, stderr, diagnostic,
+                outcome, events, stderr, diagnostic, compact_usage,
             )
         )
         command = (
