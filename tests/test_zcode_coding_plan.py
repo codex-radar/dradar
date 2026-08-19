@@ -221,7 +221,7 @@ def test_pier_command_uses_private_zcode_adapter_without_secret(
     assert f"reasoning_effort={effort}" in cmd
     assert f"api_key_file={key}" in cmd
     assert f"zcode_cli_file={cli}" in cmd
-    assert "session_timeout_sec=3660" in cmd
+    assert "session_timeout_sec=7260" in cmd
     assert f"version={ZCODE_CLI_VERSION}" in cmd
     assert "must-not-leak" not in joined
     assert (home / runner.ZCODE_AGENT_MODULE_FILENAME).read_bytes() == (

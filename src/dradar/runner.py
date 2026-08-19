@@ -168,6 +168,8 @@ ZCODE_AGENT_IMPORT_PATH = "_dradar_pier_zcode:ZCodeBigModel"
 ZCODE_AGENT_MODULE_FILENAME = "_dradar_pier_zcode.py"
 DSH_AGENT_IMPORT_PATH = "_dradar_pier_dsh:DshMinimal"
 DSH_AGENT_MODULE_FILENAME = "_dradar_pier_dsh.py"
+BETA_SUBSCRIPTION_TRIAL_TIMEOUT_FLOOR_SEC = 120 * 60
+BETA_SUBSCRIPTION_AGENTS = frozenset({GROK_AGENT, KIMI_AGENT, ZCODE_AGENT})
 
 # Public Pier 0.3.0 only runs ``<task>/pre_artifacts.sh``.  Older published
 # DeepSWE packs may not contain that hook, so DSH gets a per-run compatibility
@@ -759,11 +761,7 @@ def _agent_timeout_multiplier(assignment: dict, task_path: Path) -> float:
         # so unusual task defaults can stop a fraction early, never after 90m.
         raw = POMPEII_AGENT_TIMEOUT_SEC / base
         return math.floor(raw * 1_000_000) / 1_000_000
-    watchdog_sec = (
-        _zcode_session_timeout_sec(assignment)
-        if assignment.get("agent") == ZCODE_AGENT
-        else _trial_timeout_sec(assignment) + 60
-    )
+    watchdog_sec = _effective_trial_timeout_sec(assignment) + 60
     raw = watchdog_sec / base
     if raw <= 1.0:
         return 1.0
@@ -2143,6 +2141,14 @@ def _trial_timeout_sec(assignment: dict) -> int:
     return max(3600, int(est_min) * 60 * 4)
 
 
+def _subscription_trial_timeout_sec(assignment: dict) -> int:
+    """Give public-beta subscription harnesses room for underestimated tasks."""
+    return max(
+        BETA_SUBSCRIPTION_TRIAL_TIMEOUT_FLOOR_SEC,
+        _trial_timeout_sec(assignment),
+    )
+
+
 def _zcode_session_timeout_sec(assignment: dict) -> int:
     """Keep ZCode behind Pier's watchdog; DRadar's outer cap stays authoritative."""
     return _zcode_trial_timeout_sec(assignment) + 60
@@ -2150,7 +2156,16 @@ def _zcode_session_timeout_sec(assignment: dict) -> int:
 
 def _zcode_trial_timeout_sec(assignment: dict) -> int:
     """Leave one minute before ZCode's protocol-safe 24-hour ceiling."""
-    return min(_trial_timeout_sec(assignment), 24 * 60 * 60 - 60)
+    return min(_subscription_trial_timeout_sec(assignment), 24 * 60 * 60 - 60)
+
+
+def _effective_trial_timeout_sec(assignment: dict) -> int:
+    agent = assignment.get("agent")
+    if agent == ZCODE_AGENT:
+        return _zcode_trial_timeout_sec(assignment)
+    if agent in BETA_SUBSCRIPTION_AGENTS:
+        return _subscription_trial_timeout_sec(assignment)
+    return _trial_timeout_sec(assignment)
 
 
 def _zcode_runtime_diagnostic(jobs_dir: Path, job_name: str) -> dict[str, object]:
@@ -2379,11 +2394,7 @@ def run_trial(
     # A mid-task rate-limit death just ends the run (no sleep-and-resume) --
     # it surfaces as a nonzero pier rc, which _run_and_submit reports as
     # `interrupted` -> the server marks it invalid and the cell reopens.
-    timeout_sec = (
-        _zcode_trial_timeout_sec(effective_assignment)
-        if effective_assignment.get("agent") == ZCODE_AGENT
-        else _trial_timeout_sec(effective_assignment)
-    )
+    timeout_sec = _effective_trial_timeout_sec(effective_assignment)
     terminal_error: RunnerError | None = None
     live_error_offsets: dict[Path, int] = {}
     live_error_counts: dict[str, int] = {}

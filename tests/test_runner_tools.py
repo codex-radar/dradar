@@ -449,7 +449,12 @@ def test_ensure_tasks_root_clones_when_missing(tmp_path, monkeypatch):
 # --- run_trial / summarize_result (stubbed pier) ------------------------------
 import json
 
-from dradar.runner import _trial_timeout_sec, run_trial, summarize_result
+from dradar.runner import (
+    _effective_trial_timeout_sec,
+    _trial_timeout_sec,
+    run_trial,
+    summarize_result,
+)
 from dradar.runner import _normalize_utf16_patch, _verify_dsh_artifact_binding
 
 
@@ -849,6 +854,26 @@ def test_trial_timeout_scales_with_estimate():
     assert _trial_timeout_sec({"est_minutes": 20}) == 4800
     assert _trial_timeout_sec({"est_minutes": 30}) == 7200
     assert _trial_timeout_sec({"est_minutes": 120}) == 28800
+
+
+def test_beta_subscription_harnesses_have_two_hour_floor():
+    for agent in (
+        runner_mod.KIMI_AGENT,
+        runner_mod.GROK_AGENT,
+        runner_mod.ZCODE_AGENT,
+    ):
+        assert _effective_trial_timeout_sec({
+            "agent": agent,
+            "est_minutes": 5,
+        }) == 7200
+        assert _effective_trial_timeout_sec({
+            "agent": agent,
+            "est_minutes": 40,
+        }) == 9600
+    assert _effective_trial_timeout_sec({
+        "agent": "codex",
+        "est_minutes": 5,
+    }) == 3600
 
 
 def test_summarize_result_exception_info_present(tmp_path):
