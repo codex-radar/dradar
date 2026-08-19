@@ -64,6 +64,7 @@ def _grok_usage_facts(events: list[dict]) -> dict:
     response_totals = {name: 0 for name in names}
     response_count = 0
     token_usage_events = []
+    response_ledger_valid = True
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant":
             continue
@@ -71,6 +72,7 @@ def _grok_usage_facts(events: list[dict]) -> dict:
         response_usage = message.get("usage") if isinstance(message, dict) else None
         if not isinstance(response_usage, dict):
             valid = False
+            response_ledger_valid = False
             continue
         response_count += 1
         response_values = {}
@@ -78,6 +80,7 @@ def _grok_usage_facts(events: list[dict]) -> dict:
             value = response_usage.get(name)
             if (not isinstance(value, int) or isinstance(value, bool) or value < 0):
                 valid = False
+                response_ledger_valid = False
                 continue
             response_values[name] = value
             response_totals[name] += value
@@ -91,11 +94,11 @@ def _grok_usage_facts(events: list[dict]) -> dict:
                 "n_cache_tokens": response_values["cache_read_input_tokens"],
                 "n_output_tokens": response_values["output_tokens"],
             })
-    prompt = (
+    terminal_prompt = (
         current["input_tokens"] + current["cache_read_input_tokens"]
         + current["cache_creation_input_tokens"]
     )
-    expected_total = prompt + current["output_tokens"]
+    expected_total = terminal_prompt + current["output_tokens"]
     reported_total = usage.get("total_tokens") if isinstance(usage, dict) else None
     if (reported_total is not None
             and (not isinstance(reported_total, int)
@@ -115,6 +118,20 @@ def _grok_usage_facts(events: list[dict]) -> dict:
     if response_count != request_count or response_totals != current:
         valid = False
     complete = valid and expected_total > 0
+    observed = (
+        not complete
+        and response_ledger_valid
+        and bool(token_usage_events)
+        and response_count == len(token_usage_events)
+    )
+    selected = current if complete else response_totals if observed else {
+        name: 0 for name in names
+    }
+    prompt = (
+        selected["input_tokens"] + selected["cache_read_input_tokens"]
+        + selected["cache_creation_input_tokens"]
+    )
+    selected_request_count = request_count if complete else response_count if observed else 0
     reported_cost = None
     if terminal is not None and terminal.get("cost_is_partial") is not True:
         value = terminal.get("total_cost_usd")
@@ -129,20 +146,31 @@ def _grok_usage_facts(events: list[dict]) -> dict:
         "provider": "grok",
         "model": "grok-4.6",
         "complete": complete,
-        "request_count": request_count,
+        "request_count": selected_request_count,
         "n_input_tokens": prompt,
-        "n_cache_tokens": current["cache_read_input_tokens"],
-        "n_output_tokens": current["output_tokens"],
-        "cache_creation_tokens": current["cache_creation_input_tokens"],
+        "n_cache_tokens": selected["cache_read_input_tokens"],
+        "n_output_tokens": selected["output_tokens"],
+        "cache_creation_tokens": selected["cache_creation_input_tokens"],
         "subscription_reported_cost_usd": reported_cost,
         "subscription_reported_cost_basis": "official-grok-cli",
         # Grok's official stream exposes one usage object per response.  It
         # does not expose a trustworthy request timestamp, but Grok's API
         # tariff is context-banded rather than time-banded, so the complete
         # per-request token ledger is still sufficient for server repricing.
-        "token_usage_events": token_usage_events if complete else [],
+        "token_usage_events": token_usage_events if (complete or observed) else [],
         "request_usage_complete": complete,
+        "request_usage_observed": complete or observed,
         "timed_usage_complete": False,
+        "usage_incomplete_reason": (
+            None if complete else
+            "terminal_aggregate_missing_or_inconsistent" if observed else
+            "request_ledger_unavailable_or_invalid"
+        ),
+        "usage_evidence_tier": (
+            "complete_reconciled" if complete
+            else "observed_unreconciled" if observed
+            else "unavailable"
+        ),
     }
 
 

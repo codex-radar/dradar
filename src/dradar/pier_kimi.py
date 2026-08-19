@@ -187,6 +187,12 @@ def _kimi_usage_facts(records: list[dict]) -> dict:
         and ended_turns == len(events)
         and prompt_tokens + totals["output"] > 0
     )
+    observed = (
+        not complete
+        and valid
+        and bool(events)
+        and prompt_tokens + totals["output"] > 0
+    )
     timed_complete = complete and all(event["occurred_at"] for event in events)
     return {
         "schema": "dradar-subscription-provider-usage-v1",
@@ -199,9 +205,20 @@ def _kimi_usage_facts(records: list[dict]) -> dict:
         "n_cache_tokens": totals["inputCacheRead"],
         "n_output_tokens": totals["output"],
         "cache_creation_tokens": totals["inputCacheCreation"],
-        "token_usage_events": events if complete else [],
+        "token_usage_events": events if (complete or observed) else [],
         "request_usage_complete": complete,
+        "request_usage_observed": complete or observed,
         "timed_usage_complete": timed_complete,
+        "usage_incomplete_reason": (
+            None if complete else
+            "turn_completion_ledger_mismatch" if observed else
+            "request_ledger_unavailable_or_invalid"
+        ),
+        "usage_evidence_tier": (
+            "complete_reconciled" if complete
+            else "observed_unreconciled" if observed
+            else "unavailable"
+        ),
     }
 
 

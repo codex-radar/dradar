@@ -368,6 +368,13 @@ def test_kimi_wire_usage_sums_request_records_without_cache_overlap() -> None:
         {"type": "turn.ended"},
     ])
     assert incomplete["complete"] is False
+    assert incomplete["request_usage_complete"] is False
+    assert incomplete["request_usage_observed"] is True
+    assert incomplete["usage_evidence_tier"] == "observed_unreconciled"
+    assert incomplete["n_input_tokens"] == 21_164
+    assert incomplete["n_cache_tokens"] == 19_200
+    assert incomplete["n_output_tokens"] == 27
+    assert len(incomplete["token_usage_events"]) == 1
 
 
 def test_kimi_copies_only_the_main_agent_durable_wire() -> None:

@@ -280,6 +280,22 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
         response_events[0], terminal,
     ])
     assert missing_response["complete"] is False
+    assert missing_response["request_usage_observed"] is True
+    assert missing_response["request_count"] == 1
+    assert missing_response["n_input_tokens"] == 610
+    assert missing_response["n_cache_tokens"] == 250
+    assert missing_response["n_output_tokens"] == 30
+
+    missing_terminal = namespace["_grok_usage_facts"](response_events)
+    assert missing_terminal["complete"] is False
+    assert missing_terminal["request_usage_complete"] is False
+    assert missing_terminal["request_usage_observed"] is True
+    assert missing_terminal["usage_evidence_tier"] == "observed_unreconciled"
+    assert missing_terminal["request_count"] == 2
+    assert missing_terminal["n_input_tokens"] == 1_000
+    assert missing_terminal["n_cache_tokens"] == 400
+    assert missing_terminal["n_output_tokens"] == 50
+    assert len(missing_terminal["token_usage_events"]) == 2
 
 
 def test_grok_live_probe_uses_native_private_home(

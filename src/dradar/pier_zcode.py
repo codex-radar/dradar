@@ -953,12 +953,31 @@ def _zcode_usage_facts(payload: dict) -> dict:
     timed_complete = (
         aggregate is not None
         and bool(events)
+        and events_valid
         and request_count == len(events)
         and summed == {"input": prompt, "cache": cached, "output": output}
         and event_created == created
         and rollout_invalid == 0
         and not rollout_limited
     )
+    observed_ledger = (
+        aggregate is None
+        and request_ledger_source is not None
+        and bool(events)
+        and events_valid
+        and rollout_invalid == 0
+        and not rollout_limited
+    )
+    if observed_ledger:
+        # The isolated collector is session-bound, model-bound, deduplicated,
+        # and fsynced as requests finish. A missing turn.completed aggregate
+        # means it cannot earn the verified beta bonus, but discarding these
+        # counters would turn useful billing evidence into fake zero usage.
+        prompt = summed["input"]
+        cached = summed["cache"]
+        output = summed["output"]
+        created = event_created
+        request_count = len(events)
     if aggregate is None:
         incomplete_reason = "provider_aggregate_missing_or_invalid"
     elif timed_complete:
@@ -981,8 +1000,9 @@ def _zcode_usage_facts(payload: dict) -> dict:
         "n_cache_tokens": cached,
         "n_output_tokens": output,
         "cache_creation_tokens": created,
-        "token_usage_events": events if timed_complete else [],
+        "token_usage_events": events if (timed_complete or observed_ledger) else [],
         "request_usage_complete": timed_complete,
+        "request_usage_observed": timed_complete or observed_ledger,
         "timed_usage_complete": timed_complete,
         "timed_usage_incomplete_reason": incomplete_reason,
         "usage_incomplete_reason": (
@@ -990,7 +1010,15 @@ def _zcode_usage_facts(payload: dict) -> dict:
         ),
         "usage_aggregate_source": (
             "zcode-session-events-turn-completed-provider-v1"
-            if aggregate is not None else None
+            if aggregate is not None
+            else f"zcode-{request_ledger_source}-unreconciled"
+            if observed_ledger else None
+        ),
+        "usage_evidence_tier": (
+            "complete_reconciled" if timed_complete
+            else "observed_unreconciled" if observed_ledger
+            else "aggregate_only" if aggregate is not None
+            else "unavailable"
         ),
         "session_usage_model_request_count": session_request_count,
         "request_ledger_duplicate_count": (

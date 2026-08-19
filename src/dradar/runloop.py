@@ -763,7 +763,7 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
 
 
 def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
-    """Read normalized usage or a fixed-code ZCode incomplete diagnostic."""
+    """Read normalized usage or a structurally checked observed ledger."""
 
     path = trial_dir / "agent" / "provider-usage.json"
     try:
@@ -785,11 +785,20 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         return None
     complete = value.get("complete") is True
     incomplete_reason = value.get("usage_incomplete_reason")
-    if not complete and not (
-        expected_provider == "zcode"
-        and value.get("complete") is False
-        and incomplete_reason == "provider_aggregate_missing_or_invalid"
-    ):
+    allowed_incomplete_reasons = {
+        "zcode": {"provider_aggregate_missing_or_invalid"},
+        "grok": {
+            "terminal_aggregate_missing_or_inconsistent",
+            "request_ledger_unavailable_or_invalid",
+        },
+        "kimi-code": {
+            "turn_completion_ledger_mismatch",
+            "request_ledger_unavailable_or_invalid",
+        },
+    }
+    if (not complete and (
+            value.get("complete") is not False
+            or incomplete_reason not in allowed_incomplete_reasons[expected_provider])):
         return None
     names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
     if any(
@@ -806,12 +815,22 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
     timed = value.get("timed_usage_complete") is True
     if not complete and timed:
         return None
+    observed = value.get("request_usage_observed") is True
+    if observed and value.get("usage_evidence_tier") not in {
+        "complete_reconciled", "observed_unreconciled",
+    }:
+        return None
+    if complete and not observed:
+        # Current adapters always attest that a complete reconciled ledger was
+        # observed. Retain compatibility with the immediately preceding
+        # sidecar schema, which did not carry the explicit flag.
+        observed = "request_usage_observed" not in value
     request_complete = (
         value.get("request_usage_complete") is True
         or ("request_usage_complete" not in value and timed)
     )
     events = value.get("token_usage_events")
-    if request_complete:
+    if request_complete or observed:
         if not isinstance(events, list) or len(events) != request_count:
             return None
         totals = {name: 0 for name in names}
@@ -844,6 +863,7 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         **value,
         "token_usage_events": events,
         "request_usage_complete": request_complete,
+        "request_usage_observed": observed,
         "timed_usage_complete": timed,
     }
 
@@ -1086,9 +1106,9 @@ def _upload_trial(
             "subagent_session_count", "agent_session_usage", "request_count",
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
-            "request_usage_complete",
+            "request_usage_complete", "request_usage_observed",
             "timed_usage_incomplete_reason", "usage_aggregate_source",
-            "usage_incomplete_reason",
+            "usage_incomplete_reason", "usage_evidence_tier",
             "session_usage_model_request_count", "request_ledger_duplicate_count",
             "request_ledger_source",
             "cache_creation_tokens", "subscription_reported_cost_usd",
@@ -1098,7 +1118,11 @@ def _upload_trial(
             if source_key in usage:
                 upload_meta[key] = usage[source_key]
         for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens"):
-            upload_meta[key] = usage[key] if usage["complete"] else None
+            upload_meta[key] = (
+                usage[key]
+                if usage["complete"] or usage.get("request_usage_observed") is True
+                else None
+            )
 
     with tempfile.TemporaryDirectory() as td:
         scrubbed = Path(td)

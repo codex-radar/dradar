@@ -122,3 +122,48 @@ def test_zcode_incomplete_reason_survives_without_token_totals(tmp_path) -> None
     assert _subscription_trial_usage(
         tmp_path, {"zcode_cli_version": "0.16.3"},
     ) is None
+
+
+def test_unreconciled_grok_ledger_retains_observed_tokens(tmp_path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    payload = {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "grok",
+        "model": "grok-4.6",
+        "complete": False,
+        "request_count": 2,
+        "n_input_tokens": 300,
+        "n_cache_tokens": 120,
+        "n_output_tokens": 30,
+        "request_usage_complete": False,
+        "request_usage_observed": True,
+        "timed_usage_complete": False,
+        "usage_evidence_tier": "observed_unreconciled",
+        "usage_incomplete_reason": (
+            "terminal_aggregate_missing_or_inconsistent"
+        ),
+        "token_usage_events": [
+            {"n_input_tokens": 100, "n_cache_tokens": 40,
+             "n_output_tokens": 10},
+            {"n_input_tokens": 200, "n_cache_tokens": 80,
+             "n_output_tokens": 20},
+        ],
+    }
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+
+    facts = _subscription_trial_usage(
+        tmp_path, {"grok_cli_version": "1.0.3"},
+    )
+
+    assert facts is not None
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is True
+    assert facts["n_input_tokens"] == 300
+    assert len(facts["token_usage_events"]) == 2
+
+    payload["n_input_tokens"] += 1
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+    assert _subscription_trial_usage(
+        tmp_path, {"grok_cli_version": "1.0.3"},
+    ) is None

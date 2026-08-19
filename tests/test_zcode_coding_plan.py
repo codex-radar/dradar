@@ -594,6 +594,41 @@ def test_zcode_missing_provider_aggregate_is_explicitly_incomplete() -> None:
     )
 
 
+def test_zcode_missing_terminal_aggregate_preserves_isolated_request_ledger() -> None:
+    facts = _zcode_usage({
+        "usage": {"modelRequestCount": 2},
+        "events": {"events": []},
+        "notifications": [],
+        "rolloutUsage": {
+            "source": "incremental-compact-v1",
+            "events": [{
+                "occurredAt": "2026-08-18T06:00:00Z",
+                "inputTokens": 4_000,
+                "cacheReadTokens": 1_500,
+                "cacheWriteTokens": 100,
+                "outputTokens": 300,
+                "totalTokens": 4_300,
+            }],
+            "invalidRecordCount": 0,
+            "duplicateRecordCount": 0,
+            "limitExceeded": False,
+        },
+    })
+
+    assert facts["complete"] is False
+    assert facts["request_usage_complete"] is False
+    assert facts["request_usage_observed"] is True
+    assert facts["usage_evidence_tier"] == "observed_unreconciled"
+    assert facts["request_count"] == 1
+    assert facts["n_input_tokens"] == 4_000
+    assert facts["n_cache_tokens"] == 1_500
+    assert facts["n_output_tokens"] == 300
+    assert len(facts["token_usage_events"]) == 1
+    assert facts["usage_incomplete_reason"] == (
+        "provider_aggregate_missing_or_invalid"
+    )
+
+
 def test_zcode_provider_aggregate_rejects_cross_session_event() -> None:
     facts = _zcode_usage({
         "sessionId": "sess_A",
