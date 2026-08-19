@@ -397,6 +397,27 @@ def _collect_rollout(session_id: str, **limits: int) -> dict:
     return namespace["collect_rollout_usage"](session_id, **limits)
 
 
+def _compact_rollout_collector(*args, **kwargs):
+    source = Path(providers.__file__).with_name("pier_zcode.py").read_text()
+    module = ast.parse(source)
+    runner_assignment = next(
+        node for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_PROTOCOL_RUNNER"
+                for target in node.targets)
+    )
+    runner_module = ast.parse(ast.literal_eval(runner_assignment.value))
+    collector = next(
+        node for node in runner_module.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "CompactRolloutUsageCollector"
+    )
+    namespace = {"json": json, "os": os, "Path": Path}
+    exec(compile(ast.Module(body=[collector], type_ignores=[]), "runner.py", "exec"),
+         namespace)
+    return namespace["CompactRolloutUsageCollector"](*args, **kwargs)
+
+
 def _provider_turn(
     *, session_id: str = "sess_contract", event_id: object = "evt-terminal-1",
     **overrides: int,
@@ -719,6 +740,82 @@ def test_zcode_rollout_large_file_only_disables_timed_ledger(
     assert facts["timed_usage_incomplete_reason"] == (
         "request_ledger_resource_limit_exceeded"
     )
+
+
+def test_zcode_incremental_compact_ledger_survives_large_raw_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    session_id = "sess_contract"
+    rollout = tmp_path / ".zcode" / "cli" / "rollout"
+    rollout.mkdir(parents=True)
+    raw = rollout / "model-io-no-session.jsonl"
+    compact = tmp_path / "agent" / "zcode-compact-usage.jsonl"
+    collector = _compact_rollout_collector(session_id, compact)
+
+    # The old post-run scanner rejects this file after 16 MiB. The live
+    # collector processes it incrementally and persists billing facts only.
+    with raw.open("w", encoding="utf-8") as stream:
+        for index in range(154):
+            stream.write(json.dumps({
+                "type": "model_io",
+                "sessionId": session_id,
+                "requestId": f"request-{index}",
+                "attempt": 1,
+                "completedAt": 1_787_051_447_467 + index * 1_000,
+                "model": {"modelId": "glm-5.3"},
+                "request": {"prompt": "SECRET PROMPT" + "x" * 120_000},
+                "response": {
+                    "text": "SECRET RESPONSE",
+                    "usage": {
+                        "inputTokens": 1_000,
+                        "cacheReadTokens": 900,
+                        "cacheWriteTokens": 0,
+                        "outputTokens": 10,
+                        "totalTokens": 1_010,
+                    },
+                },
+            }, separators=(",", ":")) + "\n")
+    collector.poll()
+
+    result = collector.result()
+    assert len(result["events"]) == 154
+    assert result["limitExceeded"] is False
+    assert result["invalidRecordCount"] == 0
+    assert compact.stat().st_mode & 0o777 == 0o600
+    compact_text = compact.read_text(encoding="utf-8")
+    assert "SECRET" not in compact_text
+    assert compact.stat().st_size < 100_000
+
+    old = _collect_rollout(session_id)
+    assert old["limitExceeded"] is True
+    assert old["limitReason"] == "single_file_bytes"
+
+    facts = _zcode_usage({
+        "usage": {"modelRequestCount": 154},
+        "events": _provider_turn(
+            modelRequestCount=154, inputTokens=154_000,
+            cacheReadTokens=138_600, outputTokens=1_540,
+            totalTokens=155_540,
+        ),
+        "rolloutUsage": result,
+    })
+    assert facts["complete"] is True
+    assert facts["timed_usage_complete"] is True
+    assert len(facts["token_usage_events"]) == 154
+    assert facts["request_ledger_source"] == "incremental-compact-v1"
+
+
+def test_zcode_incremental_collector_allows_rollout_directory_to_appear_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    collector = _compact_rollout_collector(
+        "sess_contract", tmp_path / "compact.jsonl",
+    )
+    collector.poll()
+    assert collector.result()["invalidRecordCount"] == 0
+    assert collector.result()["limitExceeded"] is False
 
 
 def test_zcode_rollout_too_many_files_is_bounded(
