@@ -325,8 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--worker-target-file", metavar="PATH",
             help="dynamically resize a fixed worker pool by atomically writing "
-                 "a number from 1 through --workers to PATH; scale-down lets "
-                 "in-flight tasks finish",
+                 "a number from 0 through --workers to PATH; 0 drains the pool, "
+                 "and scale-down lets in-flight tasks finish",
         )
         p.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
         p.add_argument(

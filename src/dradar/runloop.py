@@ -350,6 +350,26 @@ def _worker_slot_is_enabled() -> bool:
     return slot <= target
 
 
+def _sync_worker_refill_target() -> int | None:
+    """Make a worker's shared refill plan follow the latest live pool size."""
+
+    path = _pool_target_file()
+    if path is None:
+        return None
+    try:
+        maximum = int(os.environ.get("DRADAR_POOL_MAX_SIZE", "40"))
+        previous = int(os.environ.get("DRADAR_POOL_SIZE", str(maximum)))
+    except ValueError as exc:
+        raise refill_plan.RefillError(
+            "worker pool size environment is invalid"
+        ) from exc
+    previous = _POOL_TARGET_CACHE.get(path, previous)
+    target = _read_pool_target(path, default=previous, maximum=maximum)
+    _POOL_TARGET_CACHE[path] = target
+    refill_plan.resize_target(HOME, target)
+    return target
+
+
 def _announce_account_stop(outcome: str) -> None:
     messages = {
         "auth-failure": "agent authentication failed",
@@ -3758,6 +3778,25 @@ def _run_worker_pool(args) -> int:
             if new_target != target:
                 direction = "up" if new_target > target else "down"
                 print(f"scaling worker pool {direction}: {target} -> {new_target}")
+                if getattr(args, "refill", False):
+                    try:
+                        resized = refill_plan.resize_target(HOME, new_target)
+                        if resized is not None:
+                            print(
+                                "live refill queue target: "
+                                f"{resized['refill_to']}"
+                            )
+                            if new_target > target:
+                                refill_plan.refill_once(HOME, client)
+                    except (refill_plan.RefillError, ApiError) as exc:
+                        refill_plan.stop(
+                            HOME, f"live resize failed: {type(exc).__name__}",
+                        )
+                        backfill_disabled = True
+                        print(
+                            "continuous refill stopped after a live resize "
+                            f"failure ({exc}); active workers will finish"
+                        )
                 target = new_target
             if pool_abort_file.is_file():
                 if abort_reason is None:
@@ -3867,11 +3906,29 @@ def _align_refill_target_with_workers(args) -> None:
     workers = getattr(args, "workers", 1)
     if not isinstance(workers, int) or workers <= 1:
         return
-    floor = workers
+    target_file = _pool_target_file(args)
+    if target_file is not None:
+        floor = _read_pool_target(
+            target_file, default=workers, maximum=workers,
+        )
+        if floor == 0:
+            sys.exit(
+                "a refill pool cannot start with worker target 0; start at 1 "
+                "or higher, then write 0 to drain it live"
+            )
+    else:
+        floor = workers
     if getattr(args, "max_tasks", None) is not None:
         floor = min(floor, int(args.max_tasks))
     current = getattr(args, "refill_to", None)
-    if current is None or current < floor:
+    if target_file is not None:
+        if current != floor:
+            args.refill_to = floor
+            print(
+                f"refill queue target synchronized to live worker target {floor}; "
+                "quota/task caps remain unchanged"
+            )
+    elif current is None or current < floor:
         args.refill_to = floor
         print(f"refill queue target raised to {floor} so {workers} worker(s) can stay busy; "
               "quota/task caps remain unchanged")
@@ -4105,6 +4162,14 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 results.append(outcome)
                 break
             refill_plan.mark_submitted(HOME, assignment["assignment_id"])
+            try:
+                _sync_worker_refill_target()
+            except refill_plan.RefillError as exc:
+                refill_plan.stop(HOME, "live worker target synchronization failed")
+                print(
+                    "continuous refill stopped because the live worker target "
+                    f"could not be synchronized ({exc})"
+                )
             replenished = None
             runtime_cfg = _load_config()
             maintenance_allows_refill = True

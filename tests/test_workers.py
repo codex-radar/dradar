@@ -125,6 +125,34 @@ def test_manual_workers_raise_too_small_refill_queue(monkeypatch):
     assert seen == [(3, 3)]
 
 
+def test_dynamic_worker_target_controls_initial_refill_queue(
+        tmp_path, monkeypatch):
+    target = tmp_path / "workers"
+    target.write_text("2")
+    seen = []
+    monkeypatch.setattr(
+        runloop, "_run_worker_pool",
+        lambda args: seen.append(args.refill_to) or 0,
+    )
+    args = _args(
+        workers=4, worker_target_file=str(target), refill=True,
+        refill_to=40, max_tasks=100, max_estimated_quota_pct=5,
+    )
+
+    assert runloop.cmd_go(args) == 0
+    assert seen == [2]
+
+
+def test_refill_pool_cannot_start_at_zero_workers(tmp_path):
+    target = tmp_path / "workers"
+    target.write_text("0")
+    with pytest.raises(SystemExit, match="cannot start with worker target 0"):
+        runloop.cmd_go(_args(
+            workers=4, worker_target_file=str(target), refill=True,
+            refill_to=4, max_tasks=100, max_estimated_quota_pct=5,
+        ))
+
+
 def test_refill_without_any_limit_is_rejected_before_setup():
     with pytest.raises(SystemExit, match="requires --max-estimated-quota-pct"):
         runloop.cmd_go(_args(refill=True))
@@ -472,6 +500,60 @@ def test_pool_live_target_scales_up_without_restarting_existing_workers(
     assert [p.env["DRADAR_WORKER_INDEX"] for p in calls] == ["1", "2", "3", "4"]
     assert calls[0].signals == [] if hasattr(calls[0], "signals") else True
     assert "scaling worker pool up: 2 -> 4" in capsys.readouterr().out
+
+
+def test_pool_live_scale_up_refills_to_new_worker_target(
+        tmp_path, monkeypatch):
+    _patch_pool_setup(monkeypatch, active_count=4)
+    target = tmp_path / "workers"
+    target.write_text("2")
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runloop, "_pool_ready_work_count", lambda _client: 2)
+    resized = []
+    replenished = []
+    monkeypatch.setattr(
+        runloop.refill_plan, "resize_target",
+        lambda _home, value: resized.append(value) or {"refill_to": value},
+    )
+    monkeypatch.setattr(
+        runloop.refill_plan, "refill_once",
+        lambda _home, _client: replenished.append(True) or {"claimed": 2},
+    )
+    calls = []
+
+    def popen(command, env, **kwargs):
+        if len(calls) == 1:
+            target.write_text("4")
+        polls = [None, 0] if len(calls) < 2 else [0]
+        process = _ScriptedProcess(command, env, polls, **kwargs)
+        calls.append(process)
+        return process
+
+    monkeypatch.setattr(runloop.subprocess, "Popen", popen)
+    assert runloop._run_worker_pool(_args(
+        workers=4, worker_target_file=str(target), refill=True,
+        max_tasks=100, max_estimated_quota_pct=5,
+    )) == 0
+    assert resized == [4]
+    assert replenished == [True]
+
+
+def test_worker_syncs_refill_target_before_replenishing(
+        tmp_path, monkeypatch):
+    target = tmp_path / "workers"
+    target.write_text("1")
+    monkeypatch.setenv("DRADAR_POOL_TARGET_FILE", str(target))
+    monkeypatch.setenv("DRADAR_POOL_MAX_SIZE", "4")
+    monkeypatch.setenv("DRADAR_POOL_SIZE", "4")
+    resized = []
+    monkeypatch.setattr(
+        runloop.refill_plan, "resize_target",
+        lambda home, value: resized.append((home, value)) or {"refill_to": value},
+    )
+    runloop._POOL_TARGET_CACHE.clear()
+
+    assert runloop._sync_worker_refill_target() == 1
+    assert resized == [(runloop.HOME, 1)]
 
 
 def test_pool_live_target_scales_down_without_signalling_inflight_workers(

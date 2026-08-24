@@ -100,6 +100,27 @@ def test_plan_persists_only_bounded_public_metadata(tmp_path: Path):
         assert secret not in raw
 
 
+def test_live_resize_updates_refill_target_without_resetting_budget(
+        tmp_path: Path):
+    original = _configure(tmp_path, [], refill_to=3, max_tasks=5)
+
+    drained = refill.resize_target(tmp_path, 0)
+    assert drained["refill_to"] == 0
+    assert drained["plan_id"] == original["plan_id"]
+    assert drained["assignments"] == original["assignments"]
+
+    capped = refill.resize_target(tmp_path, 40)
+    assert capped["refill_to"] == 5
+    assert capped["max_tasks"] == 5
+
+
+@pytest.mark.parametrize("target", (-1, True, 1.5))
+def test_live_resize_rejects_invalid_targets(tmp_path: Path, target):
+    _configure(tmp_path, [])
+    with pytest.raises(refill.RefillError, match="non-negative integer"):
+        refill.resize_target(tmp_path, target)
+
+
 def test_selected_batch_must_all_submit_before_refill(tmp_path: Path):
     initial = [_assignment("a1"), _assignment("a2"), _assignment("a3")]
     client = RefillClient(initial)

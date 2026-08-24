@@ -99,6 +99,35 @@ def load(home: Path) -> dict | None:
         return _load_unlocked(home)
 
 
+def resize_target(home: Path, refill_to: int) -> dict | None:
+    """Atomically align a live refill queue with its worker-pool target.
+
+    Runtime scale-down may use zero to drain without replacing completed work;
+    initial plan creation remains positive-only.  The durable total-task cap
+    always wins over a larger worker target.
+    """
+
+    if (
+        isinstance(refill_to, bool)
+        or not isinstance(refill_to, int)
+        or refill_to < 0
+    ):
+        raise RefillError("live refill target must be a non-negative integer")
+    with _locked(home):
+        plan = _load_unlocked(home)
+        if not plan or plan.get("status") not in RUNNING_STATES:
+            return None
+        try:
+            max_tasks = int(plan["max_tasks"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RefillError("saved refill plan has no valid task cap") from exc
+        target = min(refill_to, max_tasks)
+        if plan.get("refill_to") != target:
+            plan["refill_to"] = target
+            _save_unlocked(home, plan)
+        return dict(plan)
+
+
 def _save_unlocked(home: Path, plan: dict) -> None:
     plan["updated_at"] = _now()
     path = _path(home)
