@@ -1,6 +1,6 @@
 [project]
 name = "dradar"
-version = "0.5.102"
+version = "0.5.104"
 description = "Distributed Radar client — run benchmark tasks locally and submit them for independent server-side grading"
 requires-python = ">=3.11"
 dependencies = ["httpx[socks]>=0.27"]

@@ -104,9 +104,13 @@ def test_diagnose_classifies_403_as_auth_terminal(tmp_path):
     assert d["kind"] == "auth"
 
 
-def test_diagnose_does_not_treat_bare_403_as_account_auth_terminal(tmp_path):
-    d = diagnose_exception(_result(tmp_path, "403 Forbidden: request rejected"))
-    assert d["kind"] is None
+def test_diagnose_classifies_https_api_403_as_auth_terminal(tmp_path):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "HTTP 403 Forbidden, "
+        "url: https://chatgpt.com/backend-api/codex/responses",
+    ))
+    assert d["kind"] == "auth"
 
 
 def test_diagnose_classifies_codex_websocket_403_as_provider_transport(tmp_path):
@@ -118,6 +122,15 @@ def test_diagnose_classifies_codex_websocket_403_as_provider_transport(tmp_path)
     assert d["kind"] == "provider-transport"
 
 
+def test_diagnose_keeps_unrelated_websocket_403_account_terminal(tmp_path):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "failed to connect to websocket: HTTP error: 403 Forbidden, "
+        "url: wss://provider.example/v1/responses",
+    ))
+    assert d["kind"] == "auth"
+
+
 def test_diagnose_classifies_codex_websocket_retries_exhausted_as_transport(
     tmp_path,
 ):
@@ -126,6 +139,24 @@ def test_diagnose_classifies_codex_websocket_retries_exhausted_as_transport(
         "Reconnecting... 5/5 (unexpected status 403 Forbidden)",
     ))
     assert d["kind"] == "provider-transport"
+
+
+@pytest.mark.parametrize("terminal_marker", [
+    "unauthorized",
+    "invalid credentials",
+    "token expired",
+    "account suspended",
+])
+def test_diagnose_explicit_auth_wins_over_codex_websocket_403(
+    tmp_path, terminal_marker,
+):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "Reconnecting... 3/5 (unexpected status 403 Forbidden, "
+        "url: wss://chatgpt.com/backend-api/codex/responses; "
+        f"{terminal_marker})",
+    ))
+    assert d["kind"] == "auth"
 
 
 def test_diagnose_does_not_treat_bare_task_numbers_as_http_errors(tmp_path):

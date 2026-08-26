@@ -908,9 +908,39 @@ def test_live_error_watchdog_allows_codex_http_fallback_after_websocket_403(
 ):
     path = tmp_path / "jobs" / "a1" / "task__t0" / "agent" / "codex.txt"
     path.parent.mkdir(parents=True)
+    records = [
+        {"type": "error", "message": (
+            f"Reconnecting... {attempt}/5 (unexpected status 403 Forbidden, "
+            "url: wss://chatgpt.com/backend-api/codex/responses)"
+        )}
+        for attempt in range(1, 6)
+    ]
+    records.extend((
+        {"type": "error", "message": (
+            "Falling back from WebSockets to HTTPS transport. unexpected "
+            "status 403 Forbidden, "
+            "url: wss://chatgpt.com/backend-api/codex/responses"
+        )},
+        {"type": "turn.completed"},
+    ))
+    path.write_text("".join(
+        json.dumps(record) + "\n" for record in records
+    ))
+    offsets = {}
+    counts = {}
+
+    assert runner_mod._scan_live_account_errors(
+        tmp_path / "jobs", "a1", offsets, counts,
+    ) is None
+    assert counts == {}
+
+
+def test_live_error_watchdog_keeps_explicit_websocket_auth_terminal(tmp_path):
+    path = tmp_path / "jobs" / "a1" / "task__t0" / "agent" / "codex.txt"
+    path.parent.mkdir(parents=True)
     message = (
-        "failed to connect to websocket: HTTP error: 403 Forbidden, "
-        "url: wss://chatgpt.com/backend-api/codex/responses"
+        "Reconnecting... 3/5 (unexpected status 403 Forbidden, "
+        "url: wss://chatgpt.com/backend-api/codex/responses; account suspended)"
     )
     path.write_text("".join(
         json.dumps({"type": "error", "message": message}) + "\n"
@@ -921,8 +951,8 @@ def test_live_error_watchdog_allows_codex_http_fallback_after_websocket_403(
 
     assert runner_mod._scan_live_account_errors(
         tmp_path / "jobs", "a1", offsets, counts,
-    ) is None
-    assert counts == {}
+    ) == "auth"
+    assert counts == {"auth": runner_mod.LIVE_ACCOUNT_ERROR_CONFIRMATIONS}
 
 
 def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
