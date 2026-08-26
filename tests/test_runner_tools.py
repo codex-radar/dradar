@@ -903,6 +903,28 @@ def test_live_error_watchdog_ignores_prompt_and_transient_errors(tmp_path):
     assert counts == {}
 
 
+def test_live_error_watchdog_allows_codex_http_fallback_after_websocket_403(
+    tmp_path,
+):
+    path = tmp_path / "jobs" / "a1" / "task__t0" / "agent" / "codex.txt"
+    path.parent.mkdir(parents=True)
+    message = (
+        "failed to connect to websocket: HTTP error: 403 Forbidden, "
+        "url: wss://chatgpt.com/backend-api/codex/responses"
+    )
+    path.write_text("".join(
+        json.dumps({"type": "error", "message": message}) + "\n"
+        for _ in range(runner_mod.LIVE_ACCOUNT_ERROR_CONFIRMATIONS)
+    ))
+    offsets = {}
+    counts = {}
+
+    assert runner_mod._scan_live_account_errors(
+        tmp_path / "jobs", "a1", offsets, counts,
+    ) is None
+    assert counts == {}
+
+
 def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
     """A paid run that reached artifacts must report cost, never vanish."""
     captured = {}

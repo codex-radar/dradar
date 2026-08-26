@@ -90,9 +90,42 @@ def test_diagnose_classifies_quota_limit_before_generic_429(tmp_path):
     assert d["kind"] == "quota-limit"
 
 
+def test_diagnose_classifies_wrapped_codex_usage_limit_as_quota_limit(tmp_path):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "Command failed (exit 1): codex exec\n"
+        "You've hit your usage limit. Try again after the reset.",
+    ))
+    assert d["kind"] == "quota-limit"
+
+
 def test_diagnose_classifies_403_as_auth_terminal(tmp_path):
     d = diagnose_exception(_result(tmp_path, "403 Forbidden: account suspended"))
     assert d["kind"] == "auth"
+
+
+def test_diagnose_does_not_treat_bare_403_as_account_auth_terminal(tmp_path):
+    d = diagnose_exception(_result(tmp_path, "403 Forbidden: request rejected"))
+    assert d["kind"] is None
+
+
+def test_diagnose_classifies_codex_websocket_403_as_provider_transport(tmp_path):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "failed to connect to websocket: HTTP error: 403 Forbidden, "
+        "url: wss://chatgpt.com/backend-api/codex/responses",
+    ))
+    assert d["kind"] == "provider-transport"
+
+
+def test_diagnose_classifies_codex_websocket_retries_exhausted_as_transport(
+    tmp_path,
+):
+    d = diagnose_exception(_result(
+        tmp_path,
+        "Reconnecting... 5/5 (unexpected status 403 Forbidden)",
+    ))
+    assert d["kind"] == "provider-transport"
 
 
 def test_diagnose_does_not_treat_bare_task_numbers_as_http_errors(tmp_path):

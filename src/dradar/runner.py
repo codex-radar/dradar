@@ -3574,9 +3574,31 @@ def classify_exception_message(message: str) -> str | None:
         "you've hit your usage limit", "you have hit your usage limit",
     )):
         return "quota-limit"
-    if has_http_status(401) or has_http_status(403) or any(s in low for s in (
-        "unauthorized", "forbidden", "authentication failed",
-        "invalid api key", "token expired", "account suspended",
+    # Codex can receive a 403 while negotiating its optional WebSocket
+    # transport, then recover by falling back to HTTPS.  Treating that
+    # transport response as an account-wide auth failure makes the live
+    # watchdog kill Pier before Codex gets a chance to perform the fallback.
+    # Keep this deliberately narrow so explicit account-auth failures remain
+    # terminal below without promoting every bare HTTP 403 to account-wide.
+    if (
+        (
+            any(marker in low for marker in (
+                "responses_websocket",
+                "websocket",
+                "wss://chatgpt.com/backend-api/codex/responses",
+            ))
+            or (
+                "reconnecting" in low
+                and "unexpected status 403 forbidden" in low
+            )
+        )
+        and has_http_status(403)
+    ):
+        return "provider-transport"
+    if has_http_status(401) or any(s in low for s in (
+        "unauthorized", "authentication failed", "invalid authentication",
+        "invalid api key", "invalid credentials", "token expired",
+        "account suspended", "account disabled", "account deactivated",
     )):
         return "auth"
     if has_http_status(429) or any(s in low for s in (
