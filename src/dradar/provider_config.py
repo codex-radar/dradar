@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import ipaddress
 import os
 import platform
 import shutil
@@ -14,7 +15,7 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import certifi
 import httpx
@@ -83,6 +84,10 @@ _GROK_INSTALLER_SHA256 = (
 )
 _ANTIGRAVITY_SETUP_IMAGE = "debian:bookworm-slim"
 _ANTIGRAVITY_CA_BUNDLE_TARGET = "/tmp/dradar-ca-certificates.crt"
+_PROXY_ENV_NAMES = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+)
 
 
 def _private_directory(path: Path) -> None:
@@ -127,6 +132,46 @@ def _provider_httpx_get(url: str, **kwargs):
         follow_redirects=follow_redirects,
     ) as client:
         return client.get(url, **kwargs)
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _containerize_proxy_environment(
+    source: dict[str, str],
+) -> tuple[dict[str, str], bool]:
+    """Translate host loopback proxy URLs for a Docker child process."""
+
+    env = dict(source)
+    translated = False
+    for name in _PROXY_ENV_NAMES:
+        if name.lower() == "no_proxy":
+            continue
+        value = env.get(name)
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        if not host or not _is_loopback_host(host):
+            continue
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"{name} contains an invalid proxy port") from exc
+        userinfo, separator, _host_port = parsed.netloc.rpartition("@")
+        authority = f"{userinfo}@" if separator else ""
+        authority += "host.docker.internal"
+        if port is not None:
+            authority += f":{port}"
+        env[name] = urlunsplit(parsed._replace(netloc=authority))
+        translated = True
+    return env, translated
 
 
 def _grok_cli_version(executable: str | Path) -> str | None:
@@ -464,11 +509,12 @@ def _antigravity_container_command(
             f"target={_ANTIGRAVITY_CA_BUNDLE_TARGET},readonly"
         ),
     ]
-    env = provider_subprocess_env()
-    for name in (
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-    ):
+    env, loopback_proxy = _containerize_proxy_environment(
+        provider_subprocess_env(),
+    )
+    if loopback_proxy:
+        command += ["--add-host", "host.docker.internal:host-gateway"]
+    for name in _PROXY_ENV_NAMES:
         if env.get(name):
             command += ["--env", name]
     for name in (

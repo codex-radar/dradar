@@ -353,6 +353,37 @@ def test_antigravity_setup_mounts_a_verified_ca_bundle_readonly(
     ]
 
 
+def test_antigravity_setup_bridges_host_loopback_proxy_into_docker(
+    tmp_path, monkeypatch,
+):
+    executable = tmp_path / "antigravity"
+    executable.write_bytes(b"official-binary")
+    monkeypatch.setattr(
+        provider_config,
+        "provider_subprocess_env",
+        lambda: {
+            "HTTP_PROXY": "http://localhost:7897",
+            "HTTPS_PROXY": "http://user:p%40ss@127.0.0.1:7897",
+            "ALL_PROXY": "socks5://[::1]:7897",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+    )
+
+    command, env = provider_config._antigravity_container_command(
+        "/usr/bin/docker", executable, ["models"], interactive=False,
+    )
+
+    assert env["HTTP_PROXY"] == "http://host.docker.internal:7897"
+    assert env["HTTPS_PROXY"] == (
+        "http://user:p%40ss@host.docker.internal:7897"
+    )
+    assert env["ALL_PROXY"] == "socks5://host.docker.internal:7897"
+    assert env["NO_PROXY"] == "localhost,127.0.0.1"
+    add_host = command.index("--add-host")
+    assert command[add_host + 1] == "host.docker.internal:host-gateway"
+    assert "http://user:p%40ss@host.docker.internal:7897" not in command
+
+
 @pytest.mark.parametrize("kind", ["missing", "directory", "empty", "invalid"])
 def test_antigravity_setup_rejects_an_unusable_ca_bundle(
     kind, tmp_path, monkeypatch,
