@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import shlex
 import stat
 import subprocess
 from pathlib import Path
@@ -216,6 +217,22 @@ def _model_line_pattern_helper():
         namespace,
     )
     return namespace["_model_line_pattern"]
+
+
+def _shared_oauth_guard_helper():
+    source = Path(providers.__file__).with_name("pier_antigravity.py").read_text()
+    module = ast.parse(source)
+    helper = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_shared_oauth_guarded_command"
+    )
+    namespace = {"shlex": shlex}
+    exec(
+        compile(ast.Module(body=[helper], type_ignores=[]), "pier_antigravity.py", "exec"),
+        namespace,
+    )
+    return namespace["_shared_oauth_guarded_command"]
 
 
 def _usage(input_tokens: int, output_tokens: int, cache: int, thinking: int) -> dict:
@@ -494,6 +511,26 @@ def test_subscription_session_does_not_create_a_missing_oauth_tree(
     assert not antigravity_auth_path().exists()
 
 
+def test_subscription_session_discards_concurrent_cli_log_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth = _ready_home(tmp_path, monkeypatch)
+    log_dir = auth / "antigravity-cli" / "log"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "cli-current.log"
+    log_file.write_text("official log", encoding="utf-8")
+    if os.name != "nt":
+        log_dir.chmod(0o700)
+        log_file.chmod(0o600)
+    cli_log = log_dir.parent / "cli.log"
+    cli_log.symlink_to(Path("log") / log_file.name)
+
+    with antigravity_subscription_session(tmp_path / "work"):
+        assert not cli_log.exists()
+
+    assert antigravity_auth_error() is None
+
+
 @pytest.mark.parametrize("raises", [False, True])
 def test_subscription_session_restores_policy_after_every_trial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raises: bool,
@@ -615,6 +652,23 @@ def test_adapter_uses_full_permissions_inside_pier_container() -> None:
     assert '"lh3.googleusercontent.com"' in source
     assert "*.googleapis.com" not in source
     assert "*.googleusercontent.com" not in source
+
+
+def test_shared_oauth_guard_hands_rootful_runtime_state_back_to_host() -> None:
+    helper = _shared_oauth_guard_helper()
+    command = helper(
+        "antigravity models", remote_gemini="/tmp/dradar-antigravity-user/.gemini",
+    )
+    assert "stat -c" in command
+    assert "find" in command
+    assert "-xdev" in command
+    assert "! -type l" in command
+    assert "chown -h" in command
+    assert "antigravity-cli/cli.log" in command
+    assert "sleep 0.02" in command
+    assert "trap oauth_cleanup EXIT" in command
+    assert "antigravity models" in command
+    subprocess.run(["bash", "-n", "-c", command], check=True)
 
 
 def test_runtime_model_preflight_accepts_the_official_tabular_output() -> None:
