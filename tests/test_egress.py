@@ -35,10 +35,6 @@ def test_legacy_mode_is_an_explicit_one_release_escape_hatch(monkeypatch):
 
 
 def test_loopback_http_proxy_is_bridged_into_docker(monkeypatch):
-    monkeypatch.setattr(
-        egress,
-        "provider_subprocess_env", lambda: pytest.fail("not used for container config"),
-    )
     monkeypatch.setenv(
         egress.DRADAR_HTTP_PROXY_ENV,
         "http://user:p%40ss@127.0.0.1:39127",
@@ -56,12 +52,53 @@ def test_loopback_http_proxy_is_bridged_into_docker(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("port", [7890, 7897, 8080, 10809, 65535])
+def test_os_loopback_proxy_is_discovered_for_docker_without_mutating_host_env(
+    monkeypatch, port,
+):
+    host_env = {
+        "HTTP_PROXY": f"http://127.0.0.1:{port}",
+        "HTTPS_PROXY": f"http://127.0.0.1:{port}",
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+    monkeypatch.setattr(
+        egress, "provider_subprocess_env", lambda: dict(host_env),
+    )
+
+    runtime = egress.pier_egress_environment(_TEST_IMAGE)
+
+    assert runtime["DRADAR_EGRESS_UPSTREAM_HOST"] == "host.docker.internal"
+    assert runtime["DRADAR_EGRESS_UPSTREAM_PORT"] == str(port)
+    assert runtime["DRADAR_EGRESS_BUILD_PROXY"] == (
+        f"http://host.docker.internal:{port}"
+    )
+    assert runtime["DRADAR_EGRESS_BUILD_NO_PROXY"] == "localhost,127.0.0.1"
+    assert host_env["HTTP_PROXY"] == f"http://127.0.0.1:{port}"
+
+
+def test_os_remote_proxy_is_discovered_without_rewriting_its_address(monkeypatch):
+    monkeypatch.setattr(
+        egress,
+        "provider_subprocess_env",
+        lambda: {"HTTPS_PROXY": "http://proxy.corp.example:43128"},
+    )
+
+    runtime = egress.pier_egress_environment(_TEST_IMAGE)
+
+    assert runtime["DRADAR_EGRESS_UPSTREAM_HOST"] == "proxy.corp.example"
+    assert runtime["DRADAR_EGRESS_UPSTREAM_PORT"] == "43128"
+    assert runtime["DRADAR_EGRESS_BUILD_PROXY"] == (
+        "http://proxy.corp.example:43128"
+    )
+
+
 def test_no_proxy_configuration_does_not_invent_one(monkeypatch):
     for name in (
         egress.DRADAR_HTTP_PROXY_ENV, "HTTPS_PROXY", "https_proxy",
         "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(egress, "provider_subprocess_env", lambda: {})
 
     runtime = egress.pier_egress_environment(_TEST_IMAGE)
 

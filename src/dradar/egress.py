@@ -538,11 +538,12 @@ def _validate_proxy_credential(value: str, label: str) -> str:
 def _upstream_proxy_environment(
     source_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    # Container egress uses only explicit, portable configuration. In
-    # particular, do not infer a volunteer's Docker topology from the
-    # developer's macOS/OrbStack setup. provider_subprocess_env still handles
-    # OS proxy discovery for host-side OAuth, independently.
-    env = source_env if source_env is not None else dict(os.environ)
+    # Use the same host-side proxy discovery as provider setup/live checks, then
+    # translate only the container copy below. This keeps the host process on
+    # its real loopback address while Docker receives host.docker.internal and
+    # the exact discovered port. DRADAR_CONTAINER_HTTP_PROXY remains the
+    # authoritative escape hatch when Docker needs a different address.
+    env = source_env if source_env is not None else provider_subprocess_env()
     raw = _container_proxy_value(env)
     if not raw:
         return {}
