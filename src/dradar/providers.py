@@ -1086,6 +1086,17 @@ def mark_antigravity_ready(home: Path | None = None) -> Path:
     return path
 
 
+def _remove_antigravity_cli_log_link(home: Path | None = None) -> None:
+    """Remove only AGY's known disposable convenience log symlink."""
+
+    cli_log = antigravity_auth_path(home) / "antigravity-cli" / "cli.log"
+    try:
+        if stat.S_ISLNK(cli_log.lstat().st_mode):
+            cli_log.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def privatize_antigravity_home(home: Path | None = None) -> None:
     root = antigravity_home(home)
     if not root.exists():
@@ -1094,12 +1105,7 @@ def privatize_antigravity_home(home: Path | None = None) -> None:
     # unnecessary in the credential mount and would make the otherwise
     # symlink-free tree fail closed after every real login.  Unlink the known
     # path without following it; every other symlink remains an error.
-    cli_log = antigravity_auth_path(home) / "antigravity-cli" / "cli.log"
-    try:
-        if stat.S_ISLNK(cli_log.lstat().st_mode):
-            cli_log.unlink()
-    except FileNotFoundError:
-        pass
+    _remove_antigravity_cli_log_link(home)
     runtime = root / "runtime"
     for path in [root, *root.rglob("*")]:
         try:
@@ -1148,6 +1154,11 @@ def antigravity_subscription_session(
 ):
     """Expose only DRadar's validated .gemini tree to one Pier trial."""
 
+    # Another active AGY process may have just recreated its convenience log
+    # link.  It is the one reviewed exception that ``privatize`` also removes;
+    # discard it before the otherwise fail-closed tree validation so parallel
+    # workers do not race on a harmless runtime artifact.
+    _remove_antigravity_cli_log_link(home)
     issue = antigravity_auth_error(home)
     if issue is not None:
         raise ValueError(issue + "; run `dradar provider setup antigravity` first")

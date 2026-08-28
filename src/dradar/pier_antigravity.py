@@ -51,6 +51,51 @@ def _model_line_pattern(model: str) -> str:
     return "^" + re.escape(model) + r"([[:space:]]|$)"
 
 
+def _shared_oauth_guarded_command(command: str, *, remote_gemini: str) -> str:
+    """Return a rootful-container command with a bounded OAuth handoff guard.
+
+    The official CLI atomically replaces files below its ``.gemini`` home and
+    creates ``antigravity-cli/cli.log`` as a convenience symlink.  In a
+    rootful task container those new inodes otherwise become root-owned on the
+    host bind mount, so a concurrent worker (or the host-side post-run policy
+    restore) cannot inspect them.  Derive the numeric host owner from the
+    mounted directory, never follow links while repairing ownership, remove
+    only the known disposable log link, and make one synchronous final repair
+    before control returns to the host.
+    """
+
+    oauth_root = shlex.quote(remote_gemini)
+    cli_log = shlex.quote(remote_gemini + "/antigravity-cli/cli.log")
+    guarded = (
+        f"oauth_root={oauth_root}; oauth_cli_log={cli_log}; "
+        "oauth_owner=$(stat -c '%u:%g' \"$oauth_root\") || exit 1; "
+        "oauth_uid=${oauth_owner%%:*}; oauth_gid=${oauth_owner#*:}; "
+        "oauth_guard_pid=''; "
+        "oauth_repair() { "
+        "if [ -L \"$oauth_cli_log\" ]; then rm -f -- \"$oauth_cli_log\"; fi; "
+        "find \"$oauth_root\" -xdev ! -type l "
+        "\\( ! -uid \"$oauth_uid\" -o ! -gid \"$oauth_gid\" \\) "
+        "-exec chown -h -- \"$oauth_owner\" {} +; "
+        "}; "
+        "oauth_cleanup() { "
+        "oauth_status=$?; "
+        "if [ -n \"$oauth_guard_pid\" ]; then "
+        "kill \"$oauth_guard_pid\" 2>/dev/null || true; "
+        "wait \"$oauth_guard_pid\" 2>/dev/null || true; fi; "
+        "oauth_repair || true; "
+        "exit \"$oauth_status\"; "
+        "}; "
+        "if [ \"$(id -u)\" = 0 ]; then "
+        "oauth_repair || exit 1; "
+        "(while :; do oauth_repair || true; sleep 0.02; done) & "
+        "oauth_guard_pid=$!; "
+        "trap oauth_cleanup EXIT; "
+        "trap 'exit 130' INT; trap 'exit 143' TERM; fi; "
+        + command
+    )
+    return "bash -o pipefail -c " + shlex.quote(guarded)
+
+
 def _nonnegative_int(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
@@ -353,12 +398,18 @@ class Antigravity(BaseInstalledAgent):
             )
             for slug in ANTIGRAVITY_RUNTIME_MODELS.values()
         )
+        models_command = (
+            f"umask 077; {shlex.quote(remote_cli)} models > {shlex.quote(models_file)} "
+            f"&& {model_checks}"
+        )
+        if self._shared_oauth:
+            models_command = _shared_oauth_guarded_command(
+                models_command,
+                remote_gemini=remote_gemini,
+            )
         await self.exec_as_agent(
             environment,
-            command=(
-                f"umask 077; {shlex.quote(remote_cli)} models > {shlex.quote(models_file)} "
-                f"&& {model_checks}"
-            ),
+            command=models_command,
             env=env,
         )
         stream = f"/logs/agent/{self._STREAM_FILE}"
@@ -376,12 +427,17 @@ class Antigravity(BaseInstalledAgent):
             "--print-timeout", "120m",
         ]
         command = " ".join(shlex.quote(part) for part in invocation)
+        invocation_command = "bash -o pipefail -c " + shlex.quote(
+            f"umask 077; cd /app && {command} 2>{shlex.quote(stderr)} "
+            f"| tee {shlex.quote(stream)}"
+        )
+        if self._shared_oauth:
+            invocation_command = _shared_oauth_guarded_command(
+                invocation_command, remote_gemini=remote_gemini,
+            )
         await self.exec_as_agent(
             environment,
-            command="bash -o pipefail -c " + shlex.quote(
-                f"umask 077; cd /app && {command} 2>{shlex.quote(stderr)} "
-                f"| tee {shlex.quote(stream)}"
-            ),
+            command=invocation_command,
             env=env,
         )
 
