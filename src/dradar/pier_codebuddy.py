@@ -18,7 +18,7 @@ from pier.models.agent.network import NetworkAllowlist
 
 CODEBUDDY_CLI_VERSION = "2.137.1"
 SUPPORTED_MODEL = "hy4-preview"
-SUPPORTED_EFFORTS = {"max"}
+SUPPORTED_EFFORTS = {"medium", "xhigh", "max"}
 _BASE_URL = (
     "https://acc-1258344699.cos.ap-guangzhou.myqcloud.com/"
     "@tencent-ai/codebuddy-code/releases/download"
@@ -403,8 +403,8 @@ class CodeBuddySubscription(ClaudeCode):
             await self.exec_as_agent(environment, command=command, env=run_env)
         finally:
             # Preserve a valid provider refresh in the private run copy.  The
-            # host-side provider context validates and atomically promotes it
-            # while holding the single-run lock.
+            # host-side provider context validates it and promotes it only if
+            # it is newer than the credential returned by concurrent workers.
             for source in self._auth_files:
                 try:
                     await environment.download_file(

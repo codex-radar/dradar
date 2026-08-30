@@ -2737,10 +2737,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "model_config_version": CODEBUDDY_RUN_CONFIG_VERSION,
             "model_runtime_profile": CODEBUDDY_RUNTIME_PROFILE,
             "subscription_oauth": True,
-            "subscription_concurrency": 1,
-            "subscription_oauth_coordination": "host-serialized-run-copy-v1",
+            "subscription_concurrency": (
+                telemetry.target_workers if telemetry is not None else 1
+            ),
+            "subscription_oauth_coordination": "host-monotonic-merge-v2",
             "codebuddy_native_efforts": list(CODEBUDDY_NATIVE_EFFORTS),
-            "codebuddy_credential_mode": "isolated-run-copy-v1",
+            "codebuddy_credential_mode": "isolated-run-copy-concurrent-v2",
             "codebuddy_mcp_mode": "strict-empty-v1",
             "codebuddy_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep"],
         })
@@ -4456,12 +4458,6 @@ def _run_worker_pool(args) -> int:
     active, _free_pick = _prepare_batch(args, client)
     if not active:
         return 0
-    if any(item.get("agent") == CODEBUDDY_AGENT for item in active):
-        print(
-            "CodeBuddy HY4 canary assignments require the serial runner; "
-            "re-run `dradar resume -y` without --workers"
-        )
-        return 1
     boundary_path = _assignment_boundary_path(args)
     if cfg.get("benchmark"):
         boundary_path = _prepare_assignment_boundary(

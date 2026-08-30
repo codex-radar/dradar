@@ -43,7 +43,13 @@ def _write_login(
     opaque.write_text('{"opaque":true}', encoding="utf-8")
     auth = source_auth / "account.info"
     auth.write_text(json.dumps({
-        "auth": {"accessToken": token, "refreshToken": f"refresh-{token}"},
+        "auth": {
+            "accessToken": token,
+            "refreshToken": f"refresh-{token}",
+            "lastRefreshTime": 1,
+            "expiresAt": 2,
+            "refreshExpiresAt": 3,
+        },
         "account": {"id": "test-account"},
     }), encoding="utf-8")
     if os.name != "nt":
@@ -81,18 +87,21 @@ def _usage_function():
     return namespace["_codebuddy_usage_facts"]
 
 
-def test_codebuddy_public_contract_is_pinned_and_max_only() -> None:
+def test_codebuddy_public_contract_is_pinned_to_three_efforts() -> None:
     assert CODEBUDDY_AGENT == "codebuddy"
     assert CODEBUDDY_PROVIDER == "codebuddy-subscription"
     assert CODEBUDDY_MODEL == "hy4-preview"
     assert CODEBUDDY_CLI_VERSION == "2.137.1"
-    assert CODEBUDDY_SUPPORTED_EFFORTS == {"max"}
+    assert CODEBUDDY_SUPPORTED_EFFORTS == {"medium", "xhigh", "max"}
     assert CODEBUDDY_NATIVE_EFFORTS == (
         "minimal", "low", "medium", "high", "xhigh", "max",
     )
     assert CODEBUDDY_CAPABILITY == CODEBUDDY_RUN_CONFIG_VERSION
+    assert CODEBUDDY_CAPABILITY == (
+        "codebuddy-hy4-preview-subscription-oauth-three-effort-concurrent-v3"
+    )
     assert CODEBUDDY_RUNTIME_PROFILE == (
-        "pier-codebuddy-hy4-preview-isolated-copy-single-v1"
+        "pier-codebuddy-hy4-preview-isolated-copy-concurrent-v2"
     )
 
 
@@ -118,12 +127,58 @@ def test_login_import_is_private_atomic_and_refreshable(tmp_path: Path) -> None:
         refreshed = run_login / "auth" / "account.info"
         payload = json.loads(refreshed.read_text(encoding="utf-8"))
         payload["auth"]["accessToken"] = "rotated"
+        payload["auth"]["lastRefreshTime"] = 10
+        payload["auth"]["expiresAt"] = 20
+        payload["auth"]["refreshExpiresAt"] = 30
         refreshed.write_text(json.dumps(payload), encoding="utf-8")
         if os.name != "nt":
             os.chmod(refreshed, 0o600)
     saved = json.loads((managed_auth_dir(dradar_home) / "account.info").read_text())
     assert saved["auth"]["accessToken"] == "rotated"
     assert not (work / "codebuddy-login").exists()
+
+
+def test_concurrent_sessions_keep_the_newest_oauth_refresh(tmp_path: Path) -> None:
+    source_home = tmp_path / "host-codebuddy"
+    source_auth = tmp_path / "host-auth"
+    dradar_home = tmp_path / "dradar-home"
+    _write_login(source_home, source_auth)
+    import_host_login(
+        source_home=source_home, source_auth=source_auth, home=dradar_home,
+    )
+    first_work = tmp_path / "first-work"
+    second_work = tmp_path / "second-work"
+    first_work.mkdir()
+    second_work.mkdir()
+
+    with codebuddy_subscription_session(
+        first_work, home=dradar_home,
+    ) as first_login:
+        with codebuddy_subscription_session(
+            second_work, home=dradar_home,
+        ) as second_login:
+            first = first_login / "auth" / "account.info"
+            second = second_login / "auth" / "account.info"
+            first_payload = json.loads(first.read_text(encoding="utf-8"))
+            second_payload = json.loads(second.read_text(encoding="utf-8"))
+            first_payload["auth"].update({
+                "accessToken": "first-refresh", "lastRefreshTime": 10,
+            })
+            second_payload["auth"].update({
+                "accessToken": "second-refresh", "lastRefreshTime": 20,
+            })
+            first.write_text(json.dumps(first_payload), encoding="utf-8")
+            second.write_text(json.dumps(second_payload), encoding="utf-8")
+            if os.name != "nt":
+                os.chmod(first, 0o600)
+                os.chmod(second, 0o600)
+
+    saved = json.loads(
+        (managed_auth_dir(dradar_home) / "account.info").read_text()
+    )
+    assert saved["auth"]["accessToken"] == "second-refresh"
+    assert not (first_work / "codebuddy-login").exists()
+    assert not (second_work / "codebuddy-login").exists()
 
 
 def test_login_import_rejects_symlinked_records(tmp_path: Path) -> None:
@@ -191,6 +246,11 @@ def test_assignment_boundary_fails_closed(field: str, value: str) -> None:
     _validate_codebuddy_assignment(_valid_assignment())
     with pytest.raises(RunnerError):
         _validate_codebuddy_assignment(_valid_assignment(**{field: value}))
+
+
+@pytest.mark.parametrize("effort", ["max", "xhigh", "medium"])
+def test_assignment_boundary_accepts_each_public_codebuddy_effort(effort: str) -> None:
+    _validate_codebuddy_assignment(_valid_assignment(effort=effort))
 
 
 def test_process_environment_scrubs_every_ambient_codebuddy_secret(
@@ -479,4 +539,6 @@ def test_adapter_and_pier_bootstrap_keep_credentials_and_tools_narrow() -> None:
     assert "COPY --from=dradar_codebuddy_source" in bootstrap
     assert "CodeBuddy source image is missing or version-mismatched" in bootstrap
     runloop = (root / "runloop.py").read_text(encoding="utf-8")
-    assert "CodeBuddy HY4 canary assignments require the serial runner" in runloop
+    assert '"subscription_oauth_coordination": "host-monotonic-merge-v2"' in runloop
+    assert '"codebuddy_credential_mode": "isolated-run-copy-concurrent-v2"' in runloop
+    assert "CodeBuddy HY4 canary assignments require the serial runner" not in runloop

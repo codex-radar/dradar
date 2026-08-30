@@ -779,7 +779,7 @@ def _setup_codebuddy_subscription() -> int:
     print(
         f"CodeBuddy subscription login imported to {target} (values hidden).\n"
         f"Pinned Linux runtime ready as {image}; model {CODEBUDDY_MODEL}, "
-        "single-run concurrency."
+        "isolated concurrent task sessions enabled."
     )
     print(
         "No provider request was made. To spend one minimal probe request and "
@@ -814,7 +814,7 @@ def _status_codebuddy_subscription(*, live: bool) -> int:
     print(
         f"CodeBuddy provider ready via {managed_codebuddy_home()} "
         f"({detail}, CLI {CODEBUDDY_CLI_VERSION}, model {CODEBUDDY_MODEL}, "
-        "API keys disabled, concurrency 1)."
+        "API keys disabled, concurrent task sessions enabled)."
     )
     return _live_codebuddy_status() if live else 0
 

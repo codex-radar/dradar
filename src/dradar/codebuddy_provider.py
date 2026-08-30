@@ -28,15 +28,17 @@ CODEBUDDY_CLI_VERSION = "2.137.1"
 CODEBUDDY_NATIVE_EFFORTS = (
     "minimal", "low", "medium", "high", "xhigh", "max",
 )
-# HY4 exposes the native tiers above, but the first distributed canary is
-# intentionally a single max-only cell. Keep the assignment boundary narrow.
-CODEBUDDY_SUPPORTED_EFFORTS = frozenset({"max"})
-CODEBUDDY_CAPABILITY = "codebuddy-hy4-preview-subscription-oauth-single-v1"
+# Keep the public surface narrower than CodeBuddy's native tier list until each
+# tier has been explicitly approved for the distributed runner.
+CODEBUDDY_SUPPORTED_EFFORTS = frozenset({"medium", "xhigh", "max"})
+CODEBUDDY_CAPABILITY = (
+    "codebuddy-hy4-preview-subscription-oauth-three-effort-concurrent-v3"
+)
 CODEBUDDY_RUN_CONFIG_VERSION = (
-    "codebuddy-hy4-preview-subscription-oauth-single-v1"
+    "codebuddy-hy4-preview-subscription-oauth-three-effort-concurrent-v3"
 )
 CODEBUDDY_RUNTIME_PROFILE = (
-    "pier-codebuddy-hy4-preview-isolated-copy-single-v1"
+    "pier-codebuddy-hy4-preview-isolated-copy-concurrent-v2"
 )
 CODEBUDDY_CONTAINER_IMAGE = f"dradar-codebuddy:{CODEBUDDY_CLI_VERSION}"
 CODEBUDDY_SOURCE_IMAGE_ENV = "DRADAR_CODEBUDDY_SOURCE_IMAGE"
@@ -341,7 +343,9 @@ def local_storage_files(home: Path | None = None) -> tuple[Path, ...]:
 
 
 @contextmanager
-def _exclusive_provider_lock(home: Path | None = None) -> Iterator[None]:
+def _exclusive_provider_lock(
+    home: Path | None = None, *, blocking: bool = False,
+) -> Iterator[None]:
     root = managed_codebuddy_home(home).parent
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
@@ -360,14 +364,18 @@ def _exclusive_provider_lock(home: Path | None = None) -> Iterator[None]:
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+                msvcrt.locking(fd, mode, 1)
             else:
                 import fcntl
 
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                operation = fcntl.LOCK_EX
+                if not blocking:
+                    operation |= fcntl.LOCK_NB
+                fcntl.flock(fd, operation)
         except (BlockingIOError, OSError) as exc:
             raise ValueError(
-                "another CodeBuddy benchmark is active; HY4 canary concurrency is 1"
+                "CodeBuddy credential maintenance is active; retry shortly"
             ) from exc
         yield
     finally:
@@ -386,13 +394,38 @@ def _exclusive_provider_lock(home: Path | None = None) -> Iterator[None]:
         os.close(fd)
 
 
+def _credential_freshness(files: tuple[Path, ...]) -> tuple[int, int, int]:
+    """Return a non-secret ordering key for monotonic OAuth refresh merges."""
+
+    freshest = (0, 0, 0)
+    for path in files:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        auth = payload.get("auth") if isinstance(payload, dict) else None
+        values = tuple(
+            value if isinstance(value, int) and not isinstance(value, bool) else 0
+            for value in (
+                auth.get("lastRefreshTime") if isinstance(auth, dict) else None,
+                auth.get("expiresAt") if isinstance(auth, dict) else None,
+                auth.get("refreshExpiresAt") if isinstance(auth, dict) else None,
+            )
+        )
+        freshest = max(freshest, values)
+    return freshest
+
+
 @contextmanager
 def codebuddy_subscription_session(
     directory: Path, *, home: Path | None = None,
 ) -> Iterator[Path]:
-    """Expose one private login copy and serialize refresh-token rotation."""
+    """Expose a per-run login copy and monotonically merge OAuth refreshes.
 
-    with _exclusive_provider_lock(home):
+    Independent tasks never share a writable credential tree.  The short host
+    lock covers only snapshot and merge operations, so provider calls can run
+    concurrently while a late-finishing stale copy cannot overwrite a newer
+    refresh produced by another worker.
+    """
+
+    with _exclusive_provider_lock(home, blocking=True):
         canonical = managed_codebuddy_home(home)
         storage = _validated_storage_files(canonical / "local_storage")
         auth = _validated_auth_files(canonical / "auth")
@@ -402,26 +435,32 @@ def codebuddy_subscription_session(
                 f"temporary CodeBuddy login path already exists: {run_home}"
             )
         _replace_login_snapshot(storage, auth, run_home)
-        body_failed = False
+    body_failed = False
+    try:
+        yield run_home
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
         try:
-            yield run_home
-        except BaseException:
-            body_failed = True
-            raise
+            refreshed_storage = _validated_storage_files(
+                run_home / "local_storage"
+            )
+            refreshed_auth = _validated_auth_files(run_home / "auth")
+            with _exclusive_provider_lock(home, blocking=True):
+                current_auth = _validated_auth_files(canonical / "auth")
+                if (
+                    _credential_freshness(refreshed_auth)
+                    > _credential_freshness(current_auth)
+                ):
+                    _replace_login_snapshot(
+                        refreshed_storage, refreshed_auth, canonical,
+                    )
+        except (OSError, ValueError):
+            if not body_failed:
+                raise
         finally:
-            try:
-                refreshed_storage = _validated_storage_files(
-                    run_home / "local_storage"
-                )
-                refreshed_auth = _validated_auth_files(run_home / "auth")
-                _replace_login_snapshot(
-                    refreshed_storage, refreshed_auth, canonical,
-                )
-            except (OSError, ValueError):
-                if not body_failed:
-                    raise
-            finally:
-                shutil.rmtree(run_home, ignore_errors=True)
+            shutil.rmtree(run_home, ignore_errors=True)
 
 
 def codebuddy_runtime_image_error(docker: str | None = None) -> str | None:
