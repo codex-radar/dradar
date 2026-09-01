@@ -33,6 +33,13 @@ LEDGER_NAME = "image-cache.json"
 LOCK_NAME = "image-cache.lock"
 MAINTENANCE_STAMP_NAME = "image-cache-maintenance.stamp"
 BUILDER_PREFIX = "dradar-task-"
+# docker-container BuildKit auto can select the native snapshotter, which
+# copies a full rootfs for every Dockerfile RUN. That peak has filled a
+# volunteer Linux disk during a single DeepSWE compose build, then vanished
+# when the per-task volume was deleted after Pier exited. Pin fuse-overlayfs
+# so the isolated builder stays copy-on-write even when kernel overlay is
+# unavailable inside the privileged BuildKit container.
+ISOLATED_SNAPSHOTTER = "fuse-overlayfs"
 GIB = 1024 ** 3
 DEFAULT_MIN_FREE_GIB = 25.0
 _PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9-]*__[a-z0-9]{6,8}$")
@@ -201,6 +208,15 @@ def trial_builder_name(home: Path, assignment_id: str) -> str:
     return BUILDER_PREFIX + hashlib.sha256(identity).hexdigest()[:20]
 
 
+def _trial_builder_create_command(name: str) -> list[str]:
+    return [
+        "buildx", "create", "--name", name,
+        "--driver", "docker-container",
+        "--buildkitd-flags",
+        f"--oci-worker-snapshotter={ISOLATED_SNAPSHOTTER}",
+    ]
+
+
 def _builder_proxy_is_safe(runtime: dict[str, str]) -> tuple[bool, str | None]:
     """Whether a dedicated bridge builder can use the configured build proxy.
 
@@ -233,6 +249,8 @@ def prepare_trial_builder(
     The builder is never selected globally. ``BUILDX_BUILDER`` is applied only
     to Pier's child environment, and deleting the builder removes its dedicated
     BuildKit state volume without touching the user's default builder cache.
+    The docker-container node is pinned to fuse-overlayfs so BuildKit cannot
+    fall back to the native snapshotter's full-rootfs copies.
     """
     runtime = runtime or {}
     safe, note = _builder_proxy_is_safe(runtime)
@@ -253,10 +271,9 @@ def prepare_trial_builder(
             # assignment concurrently. A matching builder is stale residue
             # from a crashed prior attempt and is safe to replace exactly.
             _run_docker(["buildx", "rm", name], timeout=180)
-        created = _run_docker([
-            "buildx", "create", "--name", name,
-            "--driver", "docker-container",
-        ], timeout=120, allow_fail=True)
+        created = _run_docker(
+            _trial_builder_create_command(name), timeout=120, allow_fail=True,
+        )
         if created.returncode != 0:
             detail = (created.stderr or created.stdout or "").strip()
             return TrialBuilderLease(
@@ -1212,6 +1229,7 @@ __all__ = [
     "automatic_maintenance", "cleanup_trial_resources", "discover_pier_images",
     "claim_periodic_maintenance", "disk_allows_new_tasks", "disk_free_bytes",
     "effective_policy", "is_wsl", "load", "plan_cleanup",
+    "ISOLATED_SNAPSHOTTER",
     "prepare_trial_builder", "proxy_detected", "record_trial_images",
     "remove_assignment_images", "remove_images", "remove_trial_builder",
     "trial_builder_name",

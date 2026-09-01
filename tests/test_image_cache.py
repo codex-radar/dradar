@@ -106,8 +106,11 @@ def test_trial_builder_is_assignment_scoped_and_never_selected_globally(
     assert calls[-1] == [
         "buildx", "create", "--name", lease.name,
         "--driver", "docker-container",
+        "--buildkitd-flags",
+        f"--oci-worker-snapshotter={image_cache.ISOLATED_SNAPSHOTTER}",
     ]
     assert "--use" not in calls[-1]
+    assert image_cache.ISOLATED_SNAPSHOTTER == "fuse-overlayfs"
 
 
 def test_trial_builder_falls_back_without_exposing_loopback_proxy(

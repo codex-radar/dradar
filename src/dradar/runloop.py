@@ -86,7 +86,7 @@ from .providers import (
 )
 from .runner import (
     CODEX_TRAJECTORY_BUNDLE_SCHEMA, DIAG_ADVICE,
-    BuildFlakeError, RunnerError,
+    BuildDiskFullError, BuildFlakeError, RunnerError,
     RunnerCleanupUnconfirmedError, RunnerTaskRetryableError,
     POMPEII_BENCHMARK_ID,
     POMPEII_FINALIZATION_RESERVE_SEC, POMPEII_SOFT_BUDGET_SEC,
@@ -2514,6 +2514,21 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         + (builder_note or "Docker 未返回具体原因")
                     )
             break
+        except BuildDiskFullError as exc:
+            # ENOSPC during compose build is not a transient mirror flake.
+            # Retrying immediately re-creates the same per-task builder and
+            # fills the disk again. Stop this worker so the volunteer can
+            # free space; the agent never started.
+            print(
+                f"trial failed: {exc}\n"
+                "the build ran out of disk space — free space and re-run "
+                "`dradar resume` (still free: the agent never started), or "
+                "use `dradar release` if you do not want to keep the cell"
+            )
+            _mark_stopped_quietly(
+                client, assignment, failure_kind="environment_build_failed",
+            )
+            return "environment-build-failed"
         except BuildFlakeError as exc:
             # The image build died before the agent ran — a free failure
             # (zero quota), and mirror flakes usually pass on the second

@@ -115,7 +115,9 @@ def test_quota_share_tiny_pct_never_shows_zero():
 
 import pytest
 
-from dradar.runner import BuildFlakeError, RunnerError, run_trial
+from dradar.runner import (
+    BuildDiskFullError, BuildFlakeError, RunnerError, run_trial,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +204,46 @@ def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
     assert tag == "submitted" and calls["n"] == 2
     assert "retrying once automatically" in capsys.readouterr().out
+
+
+def test_disk_full_build_is_not_a_mirror_flake(tmp_path, monkeypatch):
+    _flaky_pier(
+        monkeypatch, tmp_path, fail_times=99,
+        log_line=(
+            "ERROR: failed to solve: failed to copy files: "
+            "copy_file_range: no space left on device"
+        ),
+    )
+    with pytest.raises(BuildDiskFullError) as exc:
+        run_trial({"assignment_id": "a1", "task_id": "t", "agent": "codex",
+                   "model": "m", "effort": "low", "est_minutes": 2}, tmp_path, tmp_path)
+    assert "disk is full" in str(exc.value)
+    assert "no quota was used" in str(exc.value)
+    assert "copy_file_range" in str(exc.value)
+
+
+def test_run_and_submit_does_not_retry_disk_full(monkeypatch, capsys, tmp_path):
+    from test_go_menu import ASSIGNMENT, SubmitClient
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    calls = {"n": 0}
+
+    def disk_full(*a, **kw):
+        calls["n"] += 1
+        raise BuildDiskFullError("disk is full")
+
+    monkeypatch.setattr(runloop, "run_trial", disk_full)
+    client = SubmitClient({})
+    stopped = []
+    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
+    assert tag == "environment-build-failed" and calls["n"] == 1
+    assert stopped == [(
+        ASSIGNMENT["assignment_id"],
+        {"defer_seconds": 300, "failure_kind": "environment_build_failed"},
+    )]
+    out = capsys.readouterr().out
+    assert "ran out of disk space" in out
+    assert "retrying once automatically" not in out
 
 
 def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_path):

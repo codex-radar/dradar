@@ -433,6 +433,15 @@ class BuildFlakeError(RunnerError):
     blaming the agent for a mirror hiccup)."""
 
 
+class BuildDiskFullError(RunnerError):
+    """The trial died while BUILDING because the host disk was full.
+
+    Distinct from BuildFlakeError: retrying cannot create space, and BuildKit
+    ENOSPC lines almost always also contain ``failed to solve``, which would
+    otherwise be misread as a mirror/network flake.
+    """
+
+
 # Signatures (in the pier log tail) of an image build / infra failure that
 # happened before any agent ran. Deliberately specific: a false positive here
 # would auto-retry a run that DID burn quota.
@@ -441,9 +450,22 @@ _BUILD_FLAKE_MARKERS = (
     "apt-get update", "Temporary failure resolving", "proxyconnect",
     "TLS handshake timeout", "error getting credentials",
 )
+_DISK_FULL_MARKERS = (
+    "no space left",
+    "enospc",
+    "copy_file_range",
+    "disk quota exceeded",
+)
+
+
+def _looks_like_disk_full(log_tail: str) -> bool:
+    lowered = log_tail.lower()
+    return any(marker in lowered for marker in _DISK_FULL_MARKERS)
 
 
 def _looks_like_build_flake(log_tail: str) -> bool:
+    if _looks_like_disk_full(log_tail):
+        return False
     return any(m in log_tail for m in _BUILD_FLAKE_MARKERS)
 
 
@@ -3961,6 +3983,11 @@ def run_trial(
                     _zcode_runtime_diagnostic(jobs_dir, job_name)
                 )
             raise terminal_error
+        if _looks_like_disk_full(tail):
+            raise BuildDiskFullError(
+                "the task environment failed to BUILD because the disk is full "
+                "— the agent never started and no quota was used.\n"
+                f"last lines of the log:\n{tail}")
         if _looks_like_build_flake(tail):
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "
@@ -4006,6 +4033,11 @@ def run_trial(
         # agent for a mirror hiccup.
         result_exception = _result_exception_text(result)
         diagnostic = "\n".join(x for x in (tail, result_exception) if x)
+        if _looks_like_disk_full(diagnostic):
+            raise BuildDiskFullError(
+                "the task environment failed to BUILD because the disk is full "
+                "— the agent never started and no quota was used.\n"
+                f"build diagnostic:\n{_diagnostic_tail(diagnostic)}")
         if _looks_like_build_flake(diagnostic):
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "

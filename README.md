@@ -790,10 +790,13 @@ dradar cleanup --docker --all-task-images  # 一次性处理升级前遗留镜�
 本地诊断文件和题目镜像，但仍会停止容器并删除临时构建空间。
 
 每道题使用独立、一次性的 Docker 构建空间，题目结束时直接删除该构建空间，因此不会
-清理或占用用户其他项目的 BuildKit 缓存。容器、网络、卷和镜像仍须同时通过精确任务
-目录、Compose 标签、镜像引用和镜像 ID 校验；不会运行全局 `docker system prune`、
-`docker image prune` 或默认 builder 的全局缓存清理。任何一步无法确认时，本题结果仍会
-保存，但该 worker 会停止继续领取或运行下一题，并显示可操作的原因。
+清理或占用用户其他项目的 BuildKit 缓存。该构建空间固定使用 fuse-overlayfs，避免
+BuildKit 在 native snapshotter 下落到每条 Dockerfile `RUN` 都复制完整 rootfs，从而在
+构建过程中把磁盘打满。构建因磁盘耗尽失败时不会当成镜像源/网络抽风自动重试。容器、
+网络、卷和镜像仍须同时通过精确任务目录、Compose 标签、镜像引用和镜像 ID 校验；不会
+运行全局 `docker system prune`、`docker image prune` 或默认 builder 的全局缓存清理。
+任何一步无法确认时，本题结果仍会保存，但该 worker 会停止继续领取或运行下一题，并显示
+可操作的原因。
 
 升级前已经积累的 Pier 镜像必须显式使用 `--all-task-images`，仍会经过标签、容器和本地
 恢复状态校验；旧版本写入默认 builder 的历史缓存无法证明只属于 DRadar，因此不会在
