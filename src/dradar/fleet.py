@@ -98,6 +98,7 @@ REQUEST_TIMEOUT_SECONDS = 60.0
 HEARTBEAT_SECONDS = 1.0
 HEARTBEAT_STALE_SECONDS = 60.0
 IDLE_EXIT_SECONDS = 30.0
+ENVIRONMENT_BUILD_FAILED_EXIT_CODE = 78
 SETTLED_BATCH_STATUSES = {"completed", "failed", "interrupted", "stopped"}
 STARTUP_OBSERVE_SECONDS = 3.0
 
@@ -1272,13 +1273,21 @@ def _settle_pool(
     requested_stop = item.get("status") == "stopping"
     startup_failed = item.get("startup_status") == "failed"
     run_plan_item = _is_run_plan_item(item)
+    environment_build_failed = bool(
+        returncode == ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+        and not startup_failed
+        and not requested_stop
+    )
     device_stop_warning: str | None = None
     if run_plan_item and (returncode != 0 or startup_failed) and not requested_stop:
         device_stop_warning = _stop_run_plan_device(
             item,
             (
                 f"local startup failed ({item.get('startup_error_code')})"
-                if startup_failed else f"local runner exit code {returncode}"
+                if startup_failed else
+                "local isolated environment build failed before model start"
+                if environment_build_failed else
+                f"local runner exit code {returncode}"
             ),
         )
         if device_stop_warning:
@@ -1317,6 +1326,17 @@ def _settle_pool(
         item["detail"] = (
             "active work stopped with a local recovery item still requiring attention"
         )
+    elif environment_build_failed:
+        item.update({
+            "failure_kind": "environment_build_failed",
+            "failure_state": "needs_attention",
+            "retryable": True,
+            "detail": (
+                "The isolated task environment could not resolve its base image; "
+                "the model did not start. Check Docker registry access and retry."
+            ),
+            "occurred_at": _now(),
+        })
     item["updated_at"] = _now()
     log_handle = logs.pop(batch_id, None)
     if log_handle is not None:
@@ -1686,6 +1706,8 @@ def cmd_fleet_status(args) -> int:
             )
             + suffix
         )
+        if item.get("failure_state") == "needs_attention" and item.get("detail"):
+            print(f"    needs attention: {item['detail']}")
     return 0
 
 

@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.parse
 from contextlib import contextmanager
@@ -33,6 +34,8 @@ LEDGER_NAME = "image-cache.json"
 LOCK_NAME = "image-cache.lock"
 MAINTENANCE_STAMP_NAME = "image-cache-maintenance.stamp"
 BUILDER_PREFIX = "dradar-task-"
+BUILDER_MIRRORS_ENV = "DRADAR_BUILDKIT_REGISTRY_MIRRORS_V1"
+BUILDER_PREFLIGHT_IMAGE = "node:22-bookworm"
 GIB = 1024 ** 3
 DEFAULT_MIN_FREE_GIB = 25.0
 _PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9-]*__[a-z0-9]{6,8}$")
@@ -95,6 +98,16 @@ class TrialBuilderLease:
     name: str | None
     isolated: bool
     note: str | None = None
+
+
+@dataclass(frozen=True)
+class TrialBuilderPreflight:
+    ok: bool
+    returncode: int
+    stage: str
+    failure_code: str | None
+    detail: str
+    registry_mirrors: tuple[str, ...] = ()
 
 
 @dataclass
@@ -201,6 +214,152 @@ def trial_builder_name(home: Path, assignment_id: str) -> str:
     return BUILDER_PREFIX + hashlib.sha256(identity).hexdigest()[:20]
 
 
+def _validated_registry_mirror(value: object) -> str:
+    """Return one credential-free HTTPS registry mirror URL.
+
+    Buildx copies this value into the BuildKit daemon configuration.  Reject
+    userinfo, query strings, fragments, and non-HTTPS schemes so a daemon's
+    legacy/insecure mirror cannot silently widen the task builder's trust
+    boundary or leak credentials through process output.
+    """
+
+    if not isinstance(value, str):
+        raise DockerUnavailable("Docker returned a non-string registry mirror")
+    raw = value.strip().rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError as exc:
+        raise DockerUnavailable("Docker returned an invalid registry mirror") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DockerUnavailable(
+            "the Docker registry mirror is not a credential-free HTTPS URL"
+        )
+    return raw
+
+
+def docker_registry_mirrors() -> tuple[str, ...]:
+    """Snapshot the daemon's reviewed mirrors for an isolated BuildKit.
+
+    A docker-container builder does not inherit Docker Engine's
+    ``registry-mirrors`` setting.  The parent worker pool serializes this
+    validated snapshot into an internal environment variable so forty child
+    processes use the exact configuration proven by the one preflight instead
+    of racing forty ``docker info`` calls.
+    """
+
+    inherited = os.environ.get(BUILDER_MIRRORS_ENV)
+    if inherited is not None:
+        try:
+            values = json.loads(inherited)
+        except json.JSONDecodeError as exc:
+            raise DockerUnavailable(
+                "the inherited BuildKit registry mirror snapshot is invalid"
+            ) from exc
+    else:
+        proc = _run_docker(
+            ["info", "--format", "{{json .RegistryConfig.Mirrors}}"],
+            timeout=30,
+            allow_fail=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "Docker info failed").strip()
+            raise DockerUnavailable(redact_docker_diagnostic(detail, limit=300))
+        try:
+            values = json.loads(proc.stdout.strip() or "[]")
+        except json.JSONDecodeError as exc:
+            raise DockerUnavailable(
+                "Docker returned malformed registry mirror metadata"
+            ) from exc
+    if not isinstance(values, list) or len(values) > 8:
+        raise DockerUnavailable("Docker returned invalid registry mirror metadata")
+    return tuple(dict.fromkeys(_validated_registry_mirror(value) for value in values))
+
+
+@contextmanager
+def _buildkit_registry_config(
+    registry_mirrors: tuple[str, ...],
+) -> Iterator[Path | None]:
+    if not registry_mirrors:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="dradar-buildkit-config-") as directory:
+        path = Path(directory) / "buildkitd.toml"
+        encoded = ", ".join(json.dumps(value) for value in registry_mirrors)
+        path.write_text(
+            '[registry."docker.io"]\n'
+            f"  mirrors = [{encoded}]\n",
+            encoding="utf-8",
+        )
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        yield path
+
+
+def redact_docker_diagnostic(output: object, *, limit: int = 1200) -> str:
+    """Bound Docker/BuildKit diagnostics after removing credential material."""
+
+    text = re.sub(r"(?i)https?://[^\s]+", "<url>", str(output or ""))
+    # Header values may contain several authentication parameters. Redact the
+    # whole remaining line instead of trying to identify only its first token.
+    text = re.sub(
+        r"(?im)\b((?:proxy-)?authorization|x-registry-auth)\b"
+        r"(\s*[:=]\s*)[^\r\n]*",
+        r"\1\2<redacted>",
+        text,
+    )
+    # Docker and registry clients also surface schemes without a header label.
+    text = re.sub(
+        r"(?i)\b(bearer|basic)\s+[^\s,;]+",
+        r"\1 <redacted>",
+        text,
+    )
+    # Cover Docker auth JSON and common key/value spellings in command errors.
+    text = re.sub(
+        r'''(?ix)
+        (?P<prefix>["']?(?:
+            access[_-]?token|refresh[_-]?token|identity[_-]?token|
+            registry[_-]?token|token|password|passwd|secret|
+            client[_-]?secret|api[_-]?key|credential(?:s)?|
+            docker[_-]?auth[_-]?config|auth
+        )["']?\s*[:=]\s*)
+        (?P<quote>["']?)[^"'\s,;}]+(?P=quote)
+        ''',
+        r"\g<prefix>\g<quote><redacted>\g<quote>",
+        text,
+    )
+    text = re.sub(r"sha256:[0-9a-f]{64}", "sha256:<digest>", text)
+    lines = [line[:500] for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[-12:])[-limit:]
+
+
+def _redacted_build_excerpt(output: str, *, limit: int = 1200) -> str:
+    return redact_docker_diagnostic(output, limit=limit)
+
+
+def _build_failure_code(output: str) -> str:
+    low = output.lower()
+    if "network is unreachable" in low or "connection refused" in low:
+        return "registry_network_unreachable"
+    if "i/o timeout" in low or "deadline exceeded" in low or "timed out" in low:
+        return "registry_timeout"
+    if "no such host" in low or "temporary failure resolving" in low:
+        return "registry_dns_failed"
+    if "x509" in low or "tls handshake" in low:
+        return "registry_tls_failed"
+    if "failed to fetch anonymous token" in low or "toomanyrequests" in low:
+        return "registry_auth_or_limit"
+    return "registry_metadata_failed"
+
+
 def _builder_proxy_is_safe(runtime: dict[str, str]) -> tuple[bool, str | None]:
     """Whether a dedicated bridge builder can use the configured build proxy.
 
@@ -227,6 +386,7 @@ def _builder_proxy_is_safe(runtime: dict[str, str]) -> tuple[bool, str | None]:
 
 def prepare_trial_builder(
     home: Path, *, assignment_id: str, runtime: dict[str, str] | None = None,
+    registry_mirrors: tuple[str, ...] | None = None,
 ) -> TrialBuilderLease:
     """Create an isolated BuildKit builder for exactly one assignment.
 
@@ -238,6 +398,19 @@ def prepare_trial_builder(
     safe, note = _builder_proxy_is_safe(runtime)
     if not safe:
         return TrialBuilderLease(None, False, note)
+    try:
+        mirrors = (
+            docker_registry_mirrors()
+            if registry_mirrors is None else
+            tuple(_validated_registry_mirror(value) for value in registry_mirrors)
+        )
+    except DockerUnavailable as exc:
+        return TrialBuilderLease(
+            None,
+            False,
+            "临时构建镜像源不可用："
+            + redact_docker_diagnostic(exc, limit=300),
+        )
     name = trial_builder_name(home, assignment_id)
     try:
         version = _run_docker(["buildx", "version"], timeout=30, allow_fail=True)
@@ -253,20 +426,108 @@ def prepare_trial_builder(
             # assignment concurrently. A matching builder is stale residue
             # from a crashed prior attempt and is safe to replace exactly.
             _run_docker(["buildx", "rm", name], timeout=180)
-        created = _run_docker([
-            "buildx", "create", "--name", name,
-            "--driver", "docker-container",
-        ], timeout=120, allow_fail=True)
+        with _buildkit_registry_config(mirrors) as config_path:
+            command = [
+                "buildx", "create", "--name", name,
+                "--driver", "docker-container",
+            ]
+            if config_path is not None:
+                command += ["--buildkitd-config", str(config_path)]
+            created = _run_docker(command, timeout=120, allow_fail=True)
         if created.returncode != 0:
             detail = (created.stderr or created.stdout or "").strip()
             return TrialBuilderLease(
                 None, False,
                 "无法创建隔离的临时构建空间"
-                + (f"：{detail[:160]}" if detail else ""),
+                + (
+                    f"：{redact_docker_diagnostic(detail, limit=160)}"
+                    if detail else ""
+                ),
             )
     except DockerUnavailable as exc:
-        return TrialBuilderLease(None, False, f"临时构建空间不可用：{exc}")
+        return TrialBuilderLease(
+            None,
+            False,
+            "临时构建空间不可用："
+            + redact_docker_diagnostic(exc, limit=300),
+        )
     return TrialBuilderLease(name, True)
+
+
+def preflight_trial_builder(
+    home: Path,
+    *,
+    image: str = BUILDER_PREFLIGHT_IMAGE,
+    registry_mirrors: tuple[str, ...] | None = None,
+) -> TrialBuilderPreflight:
+    """Resolve one base image through the same isolated builder as a task.
+
+    ``--check --pull`` requests current metadata without executing a Dockerfile
+    instruction or starting a model. The exact temporary builder is removed in
+    every path; a cleanup failure is itself fail-closed because later workers
+    must not multiply unowned BuildKit state.
+    """
+
+    try:
+        mirrors = (
+            docker_registry_mirrors()
+            if registry_mirrors is None else
+            tuple(_validated_registry_mirror(value) for value in registry_mirrors)
+        )
+    except DockerUnavailable as exc:
+        return TrialBuilderPreflight(
+            False, 1, "registry_configuration", "registry_config_invalid",
+            redact_docker_diagnostic(exc, limit=500),
+        )
+    preflight_id = f"preflight-{os.getpid()}-{time.time_ns()}"
+    lease = prepare_trial_builder(
+        home,
+        assignment_id=preflight_id,
+        registry_mirrors=mirrors,
+    )
+    if not lease.isolated or lease.name is None:
+        return TrialBuilderPreflight(
+            False, 1, "builder_create", "builder_create_failed",
+            str(lease.note or "isolated builder unavailable")[:500], mirrors,
+        )
+    result: TrialBuilderPreflight
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="dradar-buildkit-preflight-",
+        ) as context:
+            dockerfile = Path(context) / "Dockerfile"
+            dockerfile.write_text(f"FROM {image}\n", encoding="utf-8")
+            proc = _run_docker(
+                [
+                    "buildx", "build", "--builder", lease.name,
+                    "--check", "--pull", "--progress=plain",
+                    "--file", str(dockerfile), context,
+                ],
+                timeout=90,
+                allow_fail=True,
+            )
+        output = f"{proc.stdout}\n{proc.stderr}"
+        result = TrialBuilderPreflight(
+            proc.returncode == 0,
+            proc.returncode,
+            "base_image_metadata",
+            None if proc.returncode == 0 else _build_failure_code(output),
+            "" if proc.returncode == 0 else _redacted_build_excerpt(output),
+            mirrors,
+        )
+    except DockerUnavailable as exc:
+        result = TrialBuilderPreflight(
+            False, 1, "base_image_metadata", "builder_preflight_unavailable",
+            _redacted_build_excerpt(str(exc)), mirrors,
+        )
+    removed, removal_note = remove_trial_builder(home, preflight_id)
+    if not removed:
+        return TrialBuilderPreflight(
+            False, 1, "builder_cleanup", "builder_cleanup_failed",
+            _redacted_build_excerpt(removal_note or "builder cleanup failed"),
+            mirrors,
+        )
+    return result
 
 
 def remove_trial_builder(home: Path, assignment_id: str) -> tuple[bool, str | None]:
@@ -282,10 +543,10 @@ def remove_trial_builder(home: Path, assignment_id: str) -> tuple[bool, str | No
             ["buildx", "rm", name], timeout=180, allow_fail=True,
         )
     except DockerUnavailable as exc:
-        return False, str(exc)
+        return False, redact_docker_diagnostic(exc, limit=300)
     if removed.returncode != 0:
         detail = (removed.stderr or removed.stdout or "Docker 拒绝清理").strip()
-        return False, detail[:300]
+        return False, redact_docker_diagnostic(detail, limit=300)
     return True, None
 
 
@@ -1059,7 +1320,13 @@ def cleanup_trial_resources(
     elif not builder_removed:
         result.success = False
         notes.append(f"临时构建空间清理失败：{builder_note or 'unknown error'}")
-    result.note = "；".join(notes) if notes else None
+    result.note = (
+        "；".join(
+            redact_docker_diagnostic(note, limit=600)
+            for note in notes
+        )[-1200:]
+        if notes else None
+    )
     return result
 
 
@@ -1207,12 +1474,16 @@ def cmd_config_set(args) -> int:
 
 
 __all__ = [
+    "BUILDER_MIRRORS_ENV", "BUILDER_PREFLIGHT_IMAGE",
     "CachePolicy", "CleanupPlan", "DockerImage", "DockerUnavailable",
     "MaintenanceResult", "TaskCleanupResult", "TrialBuilderLease",
+    "TrialBuilderPreflight",
     "automatic_maintenance", "cleanup_trial_resources", "discover_pier_images",
     "claim_periodic_maintenance", "disk_allows_new_tasks", "disk_free_bytes",
     "effective_policy", "is_wsl", "load", "plan_cleanup",
+    "docker_registry_mirrors", "preflight_trial_builder",
     "prepare_trial_builder", "proxy_detected", "record_trial_images",
+    "redact_docker_diagnostic",
     "remove_assignment_images", "remove_images", "remove_trial_builder",
     "trial_builder_name",
     "wsl_host_disk_free_bytes", "cmd_config_set", "cmd_config_show",

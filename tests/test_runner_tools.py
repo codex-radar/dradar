@@ -1975,6 +1975,34 @@ def test_run_trial_classifies_build_failure_from_nested_result(tmp_path, monkeyp
     assert "failed to solve" in str(exc.value)
 
 
+def test_registry_io_timeout_is_a_build_failure_with_bounded_diagnostic():
+    credentials = (
+        "bearer-" + "G" * 48,
+        "basic-" + "H" * 48,
+    )
+    output = (
+        "#3 [internal] load metadata for docker.io/library/node:22-bookworm\n"
+        f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}\n"
+        "Head https://registry-1.docker.io/v2/: "
+        "dial tcp 203.0.113.10:443: i/o timeout"
+    )
+
+    assert runner_mod._looks_like_build_flake(output)
+    diagnostic = runner_mod.environment_build_failure_diagnostic(
+        output, exit_status=1,
+    )
+
+    assert diagnostic["stage"] == "base_image_metadata"
+    assert diagnostic["failure_code"] == "registry_timeout"
+    assert diagnostic["exit_status"] == 1
+    assert diagnostic["model_started"] is False
+    assert all(
+        diagnostic["stderr_excerpt"].find(value) == -1
+        for value in credentials
+    )
+    assert "https://" not in diagnostic["stderr_excerpt"]
+
+
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
     captured = {}
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):

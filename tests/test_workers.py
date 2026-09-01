@@ -511,6 +511,74 @@ def _patch_pool_setup(monkeypatch, active_count=5):
     )
 
 
+def test_isolated_builder_preflight_fails_before_batch_or_worker_session(
+    monkeypatch, capsys,
+):
+    _patch_pool_setup(monkeypatch, active_count=40)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "preflight_trial_builder",
+        lambda *_a, **_k: runloop.image_cache.TrialBuilderPreflight(
+            False,
+            1,
+            "base_image_metadata",
+            "registry_timeout",
+            "load metadata for docker.io/library/node:22-bookworm: i/o timeout",
+            (),
+        ),
+    )
+    monkeypatch.setattr(
+        runloop,
+        "_prepare_batch",
+        lambda *_a, **_k: pytest.fail("preflight must happen before batch preparation"),
+    )
+    monkeypatch.setattr(
+        runloop.subprocess,
+        "Popen",
+        lambda *_a, **_k: pytest.fail("preflight must happen before worker sessions"),
+    )
+
+    rc = runloop._run_worker_pool(_args(workers=40))
+
+    assert rc == runloop._ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+    output = capsys.readouterr().out
+    assert "before worker sessions or task checkout" in output
+    assert "stage=base_image_metadata" in output
+    assert "exit=1" in output
+
+
+def test_pool_children_inherit_the_preflighted_https_mirror_snapshot(monkeypatch):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "preflight_trial_builder",
+        lambda *_a, **_k: runloop.image_cache.TrialBuilderPreflight(
+            True,
+            0,
+            "base_image_metadata",
+            None,
+            "",
+            ("https://mirror.example",),
+        ),
+    )
+    calls = []
+    monkeypatch.setattr(
+        runloop.subprocess,
+        "Popen",
+        lambda command, env, **kwargs: (
+            calls.append(_Process(command, env, **kwargs)) or calls[-1]
+        ),
+    )
+
+    assert runloop._run_worker_pool(_args(workers=2)) == 0
+    assert len(calls) == 2
+    assert all(
+        process.env[runloop.image_cache.BUILDER_MIRRORS_ENV]
+        == '["https://mirror.example"]'
+        for process in calls
+    )
+
+
 def test_auto_workers_use_capacity_recommendation(monkeypatch, capsys):
     _patch_pool_setup(monkeypatch, active_count=5)
     from dradar.capacity import CapacityReport
@@ -1721,9 +1789,11 @@ def test_pool_abort_never_restores_a_worker(monkeypatch):
         polls = [None, 0]
         if len(calls) == 1:
             polls = [0]
-            on_poll = lambda: runloop.Path(
-                env["DRADAR_POOL_ABORT_FILE"]
-            ).write_text("account stop")
+
+            def on_poll():
+                runloop.Path(env["DRADAR_POOL_ABORT_FILE"]).write_text(
+                    "account stop",
+                )
         process = _ScriptedProcess(
             command, env, polls, on_poll=on_poll, **kwargs,
         )
@@ -1770,7 +1840,49 @@ def test_pool_drain_keeps_active_siblings_running_without_backfill(
     assert len(calls) == 2
     out = capsys.readouterr().out
     assert "active workers will finish" in out
-    assert "drained cleanly" in out
+    assert "worker pool drained after account stop" in out
+
+
+def test_environment_build_drain_keeps_siblings_and_returns_distinct_failure(
+        monkeypatch, capsys):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        runloop, "_pool_ready_work_count",
+        lambda _client: pytest.fail("environment drain must not backfill"),
+    )
+    monkeypatch.setattr(
+        runloop, "_signal_workers",
+        lambda _processes: pytest.fail("environment drain must not signal siblings"),
+    )
+    calls = []
+
+    def popen(command, env, **kwargs):
+        if not calls:
+            def mark_environment_drain():
+                runloop.Path(env["DRADAR_POOL_ABORT_FILE"]).write_text(
+                    "drain:environment build unavailable: registry timeout",
+                )
+
+            process = _ScriptedProcess(
+                command,
+                env,
+                [runloop._ENVIRONMENT_BUILD_FAILED_EXIT_CODE],
+                on_poll=mark_environment_drain,
+                **kwargs,
+            )
+        else:
+            process = _ScriptedProcess(command, env, [None, 0], **kwargs)
+        calls.append(process)
+        return process
+
+    monkeypatch.setattr(runloop.subprocess, "Popen", popen)
+
+    assert runloop._run_worker_pool(_args(workers=2)) == 78
+    assert len(calls) == 2
+    out = capsys.readouterr().out
+    assert "active workers will finish" in out
+    assert "shared environment build failure" in out
 
 
 def test_scoped_plan_drain_with_lost_upload_settles_as_recoverable_failure(

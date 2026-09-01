@@ -190,26 +190,56 @@ def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient, _fake_art
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     calls = {"n": 0}
+    credentials = (
+        "bearer-" + "T" * 48,
+        "basic-" + "U" * 48,
+    )
 
     def flaky_run(*a, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise BuildFlakeError("mirror flake")
+            raise BuildFlakeError(
+                f"Authorization: Bearer {credentials[0]}",
+            )
         return _fake_art(tmp_path, rc=0)
 
     monkeypatch.setattr(runloop, "run_trial", flaky_run)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "cleanup_trial_resources",
+        lambda *_a, **_k: runloop.image_cache.TaskCleanupResult(
+            success=False,
+            note=f"Proxy-Authorization: Basic {credentials[1]}",
+        ),
+    )
     client = SubmitClient({})
-    tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
+    args = _args()
+    tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, args, "abc")
     assert tag == "submitted" and calls["n"] == 2
-    assert "retrying once automatically" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "retrying once automatically" in output
+    assert all(output.find(value) == -1 for value in credentials)
+    assert all(
+        args._docker_cleanup_blocked.find(value) == -1
+        for value in credentials
+    )
+    assert "<redacted>" in args._docker_cleanup_blocked
 
 
 def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    abort = tmp_path / "pool-abort"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort))
+    credentials = (
+        "bearer-" + "V" * 48,
+        "basic-" + "W" * 48,
+    )
 
     def always_flaky(*a, **kw):
-        raise BuildFlakeError("mirror flake")
+        raise BuildFlakeError(
+            f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}",
+        )
 
     monkeypatch.setattr(runloop, "run_trial", always_flaky)
     client = SubmitClient({})
@@ -221,4 +251,44 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
         ASSIGNMENT["assignment_id"],
         {"defer_seconds": 300, "failure_kind": "environment_build_failed"},
     )]
-    assert "failed twice" in capsys.readouterr().out
+    assert abort.read_text().startswith(
+        "drain:" + runloop._ENVIRONMENT_BUILD_ABORT_PREFIX
+    )
+    output = capsys.readouterr().out
+    assert "failed twice" in output
+    assert all(output.find(value) == -1 for value in credentials)
+
+
+def test_mark_stopped_redacts_nested_failure_diagnostic_before_upload():
+    credentials = (
+        "bearer-" + "I" * 48,
+        "basic-" + "J" * 48,
+        "proxy-" + "K" * 48,
+        "config-" + "L" * 48,
+    )
+    captured = {}
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            captured["assignment_id"] = assignment_id
+            captured.update(kwargs)
+            return {"ok": True}
+
+    diagnostic = {
+        "schema": "dradar-environment-build-failure-v1",
+        "stderr_excerpt": (
+            f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}\n"
+            f"Proxy-Authorization: Basic {credentials[2]}"
+        ),
+        "nested": [{"auth": f'auth="{credentials[3]}"'}],
+    }
+
+    assert runloop._mark_stopped_quietly(
+        Client(),
+        "assignment-1",
+        failure_kind="environment_build_failed",
+        failure_diagnostic=diagnostic,
+    )
+    payload = repr(captured)
+    assert all(payload.find(value) == -1 for value in credentials)
+    assert "<redacted>" in payload
