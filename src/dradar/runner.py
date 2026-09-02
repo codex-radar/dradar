@@ -3376,7 +3376,18 @@ def _validate_task_base_commit_before_build(
     task_id = assignment.get("task_id")
     if not isinstance(task_id, str) or not task_id or Path(task_id).name != task_id:
         raise RunnerError(f"unsafe task id {task_id!r}")
-    task_toml = tasks_root / task_id / "task.toml"
+    task_root = tasks_root / task_id
+    hook = task_root / "pre_artifacts.sh"
+    # A reviewed task-owned hook does not use DRadar's generated base-ref
+    # substitution. Antigravity is the exception because its overlay replaces
+    # even an existing hook and therefore still consumes base_commit_hash.
+    if (
+        effective_agent != ANTIGRAVITY_AGENT
+        and hook.is_file()
+        and not hook.is_symlink()
+    ):
+        return
+    task_toml = task_root / "task.toml"
     if not task_toml.is_file():
         return
     try:
