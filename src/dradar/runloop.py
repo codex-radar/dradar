@@ -4341,13 +4341,9 @@ def _legacy_checkout_fallback_reason(active: object) -> str | None:
     if (
         has_unsafe_runtime_history
         or assignment.get("started_at") is not None
-        or assignment.get("checkpoint_id") is not None
-        or assignment.get("runner_phase") is not None
         or assignment.get("stale") is True
         or assignment.get("heartbeat_gap") is True
         or assignment.get("heartbeat_lost") is True
-        or "heartbeat_running" in assignment
-        or "runner_state" in assignment
         or any(
             not _legacy_history_value_is_safe_zero(assignment.get(field))
             for field in (

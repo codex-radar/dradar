@@ -180,9 +180,13 @@ def test_checkout_404_falls_back_to_legacy_batch(monkeypatch, tmp_path):
          "stale_assignment_rejected"),
         ([{**_legacy_waiting_cell("started"), "started_at": "2026-09-02T00:00:00Z"}],
          "stale_assignment_rejected"),
-        ([{**_legacy_waiting_cell("lost"), "heartbeat_running": False}],
+        ([{**_legacy_waiting_cell("lost"), "heartbeat_running": True}],
          "stale_assignment_rejected"),
         ([{**_legacy_waiting_cell("phase"), "runner_phase": "running"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-state"), "runner_state": "running"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("checkpoint"), "checkpoint_id": "cp-1"}],
          "stale_assignment_rejected"),
         ([{**_legacy_waiting_cell("stale"), "heartbeat_lost": True}],
          "stale_assignment_rejected"),
@@ -240,6 +244,10 @@ def test_checkout_404_allows_explicit_safe_zero_legacy_history(
         "resume_generation": 0,
         "session_id": "",
         "recovery_epoch": 0,
+        "heartbeat_running": False,
+        "runner_state": "",
+        "checkpoint_id": "",
+        "runner_phase": "",
     }
     client = CheckoutClient(
         {"active": [waiting], "free_pick": True},
@@ -309,7 +317,7 @@ def test_legacy_rejection_survives_restart_and_never_refills(
     monkeypatch.setattr(
         runloop, "_setup_refill", lambda _args, _client, active, _free_pick: active,
     )
-    stale = {**_legacy_waiting_cell("stale"), "heartbeat_running": False}
+    stale = {**_legacy_waiting_cell("stale"), "heartbeat_running": True}
     args = _args()
     args.refill = True
     args.worker_child = False
