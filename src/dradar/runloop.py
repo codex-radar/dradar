@@ -4361,6 +4361,32 @@ def _record_worker_checkout(assignment_id: str) -> bool:
     return _write_worker_activity_state(str(assignment_id))
 
 
+def _record_supervised_worker_checkout(args, assignment_id: str) -> bool:
+    """Publish checkout proof for both pooled and direct Fleet workers.
+
+    Multi-worker Fleet parents observe the activity marker and publish the
+    ready acknowledgement themselves.  A one-worker Fleet runs this checkout
+    loop directly, so there is no intermediate pool parent to perform that
+    promotion.  In that exact topology the worker must publish the same
+    controller-bound acknowledgement before starting the provider.
+    """
+
+    if not _record_worker_checkout(assignment_id):
+        return False
+    if not (
+        getattr(args, "fleet_pool", False)
+        and not getattr(args, "worker_child", False)
+    ):
+        return True
+    from . import fleet
+
+    try:
+        fleet.publish_pool_startup_ready(HOME, args.batch_id)
+    except (fleet.FleetError, OSError, ValueError):
+        return False
+    return True
+
+
 def _pool_backfill_delay(attempt: int) -> float:
     """Bounded exponential delay for a repeatedly vacant worker slot."""
     exponent = max(0, attempt - 1)
@@ -5663,7 +5689,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             )
             results.append("assignment-boundary-failed")
             break
-        if not _record_worker_checkout(assignment["assignment_id"]):
+        if not _record_supervised_worker_checkout(
+            args, assignment["assignment_id"],
+        ):
             _mark_stopped_quietly(
                 client, assignment, defer_seconds=0,
                 failure_kind="runner_failed",

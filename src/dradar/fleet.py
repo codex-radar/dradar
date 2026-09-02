@@ -1292,7 +1292,12 @@ def _refresh_pool_startups(
         item["startup_status"] = event["status"]
         item["updated_at"] = _now()
         if event["status"] == "ready":
-            item["status"] = "running"
+            # A stop request can land after the child proves checkout but
+            # before this refresh consumes the ready event.  Readiness is
+            # still true, but it must not roll the newer drain intent back to
+            # running or make a clean exit look like an unrequested finish.
+            if item.get("status") == "starting":
+                item["status"] = "running"
             item["ready_at"] = event.get("recorded_at") or _now()
         else:
             item["startup_error_code"] = str(

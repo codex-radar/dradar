@@ -510,6 +510,51 @@ def test_terminal_local_upload_rejection_stops_multi_cell_checkout(
     assert checkout_calls == [set()]
 
 
+def test_checkout_acknowledges_direct_fleet_before_provider_starts(
+    monkeypatch, tmp_path: Path,
+):
+    events = []
+
+    class AtomicClient:
+        sent = False
+
+        def checkout(self, exclude_assignment_ids=None):
+            if not self.sent:
+                self.sent = True
+                return {"assignment": ASSIGNMENT, "held": 1, "unstarted": 0}
+            return {"assignment": None, "held": 1, "unstarted": 0}
+
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runloop, "_record_supervised_worker_checkout",
+        lambda args, assignment_id: events.append(
+            ("ready", args.fleet_pool, assignment_id)
+        ) or True,
+    )
+
+    def run_and_submit(_client, assignment, *_args, **_kwargs):
+        assert events == [("ready", True, assignment["assignment_id"])]
+        events.append(("provider", assignment["assignment_id"]))
+        return "submitted"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", run_and_submit)
+    monkeypatch.setattr(
+        runloop, "_record_assignment_boundary", lambda *_args: True,
+    )
+    args = _args(yes=True)
+    args.fleet_pool = True
+    args.worker_child = False
+    args.batch_id = "550e8400e29b41d4a716446655440000"
+
+    assert runloop._run_checkout_loop(
+        args, AtomicClient(), tmp_path, [ASSIGNMENT],
+    ) == 0
+    assert events == [
+        ("ready", True, ASSIGNMENT["assignment_id"]),
+        ("provider", ASSIGNMENT["assignment_id"]),
+    ]
+
+
 def test_choose_menu_entry_numeric_pick(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_: "2")
     assert runloop._choose_menu_entry(MENU, yes=False) is MENU[1]

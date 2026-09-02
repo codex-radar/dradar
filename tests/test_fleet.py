@@ -822,6 +822,83 @@ def test_conditional_timeout_stop_cannot_interrupt_a_ready_parent(
     assert state["batches"][BATCH_A]["startup_status"] == "ready"
 
 
+def test_ready_stop_race_preserves_drain_and_clean_exit_zero(
+    tmp_path, monkeypatch,
+):
+    """running -> safe stop -> natural completion must never become failed."""
+
+    fleet._prepare_dirs(tmp_path)
+    controller_id = "controller-1"
+    state = fleet._initial_state(controller_id, None)
+    state["status"] = "active"
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A,
+        "workers": 1,
+        "status": "starting",
+        "startup_status": "pending",
+        "plan_id": "plan-a",
+        "credentials_file": str(tmp_path / "plan-a.json"),
+    }
+
+    class Process:
+        pid = os.getpid()
+
+        def poll(self):
+            return None
+
+    process = Process()
+    processes = {BATCH_A: process}
+    logs = {BATCH_A: io.StringIO()}
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, controller_id)
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, BATCH_A)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, BATCH_A)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+    monkeypatch.setattr(fleet, "_stop_run_plan_device", lambda *_args: None)
+    monkeypatch.setattr(fleet, "_request_pool_drain", lambda *_args: None)
+
+    # The child has checked out real work, but the coordinator has not yet
+    # refreshed the ready file when the user's supported stop arrives.
+    fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+    fleet._handle_request(
+        tmp_path, state, processes, logs,
+        {
+            "request_id": "request-stop-after-ready",
+            "controller_id": controller_id,
+            "command": "stop",
+            "batch_id": BATCH_A,
+            "all": False,
+            "only_if_startup_pending": False,
+        },
+    )
+    assert state["batches"][BATCH_A]["status"] == "stopping"
+
+    fleet._refresh_pool_startups(tmp_path, state, processes)
+    assert state["batches"][BATCH_A]["startup_status"] == "ready"
+    assert state["batches"][BATCH_A]["status"] == "stopping"
+
+    fleet._settle_pool(
+        tmp_path, state, processes, logs, BATCH_A, 0,
+    )
+    item = state["batches"][BATCH_A]
+    assert item["status"] == "stopped"
+    assert item["startup_status"] == "ready"
+    assert item["returncode"] == 0
+    assert "startup_error_code" not in item
+
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch_id: item)
+    observed = fleet._observe_pool_startup({
+        "batch": {
+            "batch_id": BATCH_A,
+            "status": "starting",
+            "startup_status": "pending",
+        },
+    }, BATCH_A)
+    assert observed["batch"]["status"] == "stopped"
+
+
 def test_conditional_timeout_reserves_failure_before_interrupting_parent(
     tmp_path, monkeypatch,
 ):
