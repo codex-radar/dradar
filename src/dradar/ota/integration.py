@@ -228,6 +228,9 @@ def diagnose_update(home: Path = HOME) -> tuple[bool, tuple[str, ...]]:
     root = ota_root(home)
     if root.exists() and root.is_symlink():
         notes.append("OTA root is a symlink")
+    releases = root / "releases"
+    if os.path.lexists(releases) and releases.is_symlink():
+        notes.append("OTA releases directory is a symlink")
     if os.name != "nt" and root.exists():
         try:
             if root.stat().st_mode & 0o077:
@@ -373,6 +376,12 @@ def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
         wintypes.HANDLE,
     )
     create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    move_file_ex = kernel32.MoveFileExW
+    move_file_ex.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+    move_file_ex.restype = wintypes.BOOL
     path = Path(tempfile.gettempdir()) / f"dradar-ota-{uuid.uuid4().hex}.pyz"
     handle = create_file(
         str(path),
@@ -386,7 +395,12 @@ def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
     invalid_handle = wintypes.HANDLE(-1).value
     if handle == invalid_handle:
         raise OSError(ctypes.get_last_error(), "cannot create locked OTA candidate")
-    fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+    except OSError:
+        close_handle(handle)
+        _cleanup_windows_candidate(path, move_file_ex)
+        raise
     try:
         view = memoryview(data)
         while view:
@@ -398,7 +412,18 @@ def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
         yield path
     finally:
         os.close(fd)
+        _cleanup_windows_candidate(path, move_file_ex)
+
+
+def _cleanup_windows_candidate(path: Path, move_file_ex: Callable[..., Any]) -> bool:
+    """Best-effort cleanup that can never change the candidate exit result."""
+
+    try:
         path.unlink(missing_ok=True)
+        return True
+    except OSError:
+        move_file_ex(str(path), None, 0x00000004)  # delete on reboot
+        return False
 
 
 def _run_windows_candidate(

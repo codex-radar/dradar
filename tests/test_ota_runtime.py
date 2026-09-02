@@ -559,6 +559,16 @@ def test_legacy_bridge_rejects_any_existing_untrusted_ota_metadata(tmp_path):
     assert not (root / "pending.json").exists()
 
 
+def test_legacy_bridge_rejects_releases_symlink_to_empty_external_directory(tmp_path):
+    root = tmp_path / "ota"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "releases").symlink_to(outside, target_is_directory=True)
+    controller = UpdateController(root)
+    assert controller.pristine_for_legacy_bootstrap() is False
+
+
 def test_caller_cannot_spoof_the_durable_anti_rollback_baseline(tmp_path):
     class NoDownload(Client):
         def stream(self, method, url, **kwargs):

@@ -7,6 +7,7 @@ import dradar.ota.download as download_module
 from dradar.ota.download import (
     VerifiedArtifact,
     download_verified_artifact,
+    open_verified_artifact,
     stage_verified_artifact,
 )
 from dradar.ota.manifest import Artifact, ManifestError, PlatformTarget
@@ -228,9 +229,9 @@ def test_final_name_replacement_after_last_check_returns_open_inode_capability(
     original = download_module._name_matches_open_file
     raced = False
 
-    def replace_after_check(dir_fd, filename, file_fd):
+    def replace_after_check(dir_fd, filename, file_fd, **kwargs):
         nonlocal raced
-        result = original(dir_fd, filename, file_fd)
+        result = original(dir_fd, filename, file_fd, **kwargs)
         if not raced:
             raced = True
             final = destination / "candidate.whl"
@@ -335,3 +336,50 @@ def test_verified_artifact_close_is_idempotent_and_does_not_close_reused_fd(tmp_
         assert os.write(sentinel, b"still-open") == len(b"still-open")
     finally:
         os.close(sentinel)
+
+
+def test_windows_filesystem_path_never_uses_dir_fd(tmp_path, monkeypatch):
+    body = b"windows-candidate"
+    destination = tmp_path / "downloads"
+    monkeypatch.setattr(download_module, "_WINDOWS", True)
+    monkeypatch.setattr(os, "O_BINARY", 0, raising=False)
+    calls = []
+    real_open, real_stat = os.open, os.stat
+    real_link, real_unlink = os.link, os.unlink
+
+    def checked_open(*args, **kwargs):
+        assert "dir_fd" not in kwargs
+        calls.append("open")
+        return real_open(*args, **kwargs)
+
+    def checked_stat(*args, **kwargs):
+        assert "dir_fd" not in kwargs
+        calls.append("stat")
+        return real_stat(*args, **kwargs)
+
+    def checked_link(*args, **kwargs):
+        assert "src_dir_fd" not in kwargs and "dst_dir_fd" not in kwargs
+        calls.append("link")
+        return real_link(*args, **kwargs)
+
+    def checked_unlink(*args, **kwargs):
+        assert "dir_fd" not in kwargs
+        calls.append("unlink")
+        return real_unlink(*args, **kwargs)
+
+    monkeypatch.setattr(os, "open", checked_open)
+    monkeypatch.setattr(os, "stat", checked_stat)
+    monkeypatch.setattr(os, "link", checked_link)
+    monkeypatch.setattr(os, "unlink", checked_unlink)
+    verified = download_verified_artifact(
+        FakeClient(FakeResponse([body])), _artifact(body), destination
+    )
+    verified.verify()
+    verified.close()
+    reopened = open_verified_artifact(destination / "candidate.whl", _artifact(body))
+    try:
+        assert reopened.read_bytes() == body
+        assert reopened.binding_is_current() is True
+    finally:
+        reopened.close()
+    assert {"open", "stat", "link", "unlink"} <= set(calls)

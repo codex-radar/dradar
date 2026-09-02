@@ -13,6 +13,8 @@ from typing import Protocol, Self
 
 from .manifest import Artifact, ManifestError
 
+_WINDOWS = os.name == "nt"
+
 
 class StreamingResponse(Protocol):
     def __enter__(self): ...
@@ -55,6 +57,7 @@ class VerifiedArtifact:
             self._directory_fd,
             self.path.name,
             self._file_fd,
+            directory=self.path.parent,
         )
 
     def read_bytes(self) -> bytes:
@@ -92,7 +95,8 @@ class VerifiedArtifact:
         try:
             os.close(file_fd)
         finally:
-            os.close(directory_fd)
+            if directory_fd >= 0:
+                os.close(directory_fd)
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -116,14 +120,14 @@ def _open_safe_directory(path: Path) -> int:
     """Open/create a directory without following any POSIX symlink component."""
 
     absolute = path.absolute()
-    if os.name == "nt":  # pragma: no cover - exercised by Windows CI
+    if _WINDOWS:  # pragma: no cover - exercised by Windows CI
         absolute.mkdir(parents=True, exist_ok=True, mode=0o700)
         cursor = Path(absolute.anchor)
         for part in absolute.parts[1:]:
             cursor /= part
             if cursor.is_symlink():
                 raise ManifestError("download destination is not a safe directory")
-        return os.open(absolute, os.O_RDONLY)
+        return -1
 
     directory_flags = os.O_RDONLY | os.O_DIRECTORY
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -168,9 +172,18 @@ def _verify_open_artifact(
         raise ManifestError("downloaded artifact SHA-256 mismatch")
 
 
-def _open_existing(dir_fd: int, filename: str) -> int | None:
+def _open_existing(
+    dir_fd: int, filename: str, *, directory: Path | None = None
+) -> int | None:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
+        if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+            if directory is None:
+                raise ManifestError("Windows artifact directory is unavailable")
+            path = directory / filename
+            if path.is_symlink():
+                raise ManifestError("immutable artifact path is a symlink")
+            return os.open(path, flags | getattr(os, "O_BINARY", 0))
         return os.open(filename, flags, dir_fd=dir_fd)
     except FileNotFoundError:
         return None
@@ -185,7 +198,7 @@ def open_verified_artifact(path: Path, artifact: Artifact) -> VerifiedArtifact:
 
     directory_fd = _open_safe_directory(path.parent)
     try:
-        file_fd = _open_existing(directory_fd, path.name)
+        file_fd = _open_existing(directory_fd, path.name, directory=path.parent)
         if file_fd is None:
             raise ManifestError("verified artifact is unavailable")
         result = VerifiedArtifact(path, artifact, directory_fd, file_fd)
@@ -204,6 +217,17 @@ def open_verified_artifact(path: Path, artifact: Artifact) -> VerifiedArtifact:
 
 
 def _directory_matches_path(dir_fd: int, path: Path) -> bool:
+    if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+        absolute = path.absolute()
+        cursor = Path(absolute.anchor)
+        try:
+            for part in absolute.parts[1:]:
+                cursor /= part
+                if cursor.is_symlink() or not cursor.is_dir():
+                    return False
+        except OSError:
+            return False
+        return True
     try:
         opened = os.fstat(dir_fd)
         current = os.stat(path, follow_symlinks=False)
@@ -224,9 +248,20 @@ def _same_open_file(left_fd: int, right_fd: int) -> bool:
     )
 
 
-def _name_matches_open_file(dir_fd: int, filename: str, file_fd: int) -> bool:
+def _name_matches_open_file(
+    dir_fd: int,
+    filename: str,
+    file_fd: int,
+    *,
+    directory: Path | None = None,
+) -> bool:
     try:
-        named = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+        if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+            if directory is None:
+                return False
+            named = os.stat(directory / filename, follow_symlinks=False)
+        else:
+            named = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
         opened = os.fstat(file_fd)
     except OSError:
         return False
@@ -246,9 +281,12 @@ def download_verified_artifact(
     directory_fd = _open_safe_directory(destination)
     final = destination / artifact.filename
     try:
-        existing_fd = _open_existing(directory_fd, artifact.filename)
+        existing_fd = _open_existing(
+            directory_fd, artifact.filename, directory=destination
+        )
     except BaseException:
-        os.close(directory_fd)
+        if directory_fd >= 0:
+            os.close(directory_fd)
         raise
     if existing_fd is not None:
         try:
@@ -257,7 +295,8 @@ def download_verified_artifact(
                 raise ManifestError("download destination changed during verification")
         except ManifestError as exc:
             os.close(existing_fd)
-            os.close(directory_fd)
+            if directory_fd >= 0:
+                os.close(directory_fd)
             raise ManifestError(
                 "immutable artifact already exists with different content"
             ) from exc
@@ -265,12 +304,11 @@ def download_verified_artifact(
     temporary_name = f".{artifact.filename}.{uuid.uuid4().hex}.partial"
     fd: int | None = None
     try:
-        fd = os.open(
-            temporary_name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-            dir_fd=directory_fd,
-        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+            fd = os.open(destination / temporary_name, flags | os.O_BINARY, 0o600)
+        else:
+            fd = os.open(temporary_name, flags, 0o600, dir_fd=directory_fd)
         written = 0
         digest = hashlib.sha256()
         with os.fdopen(fd, "wb") as handle:
@@ -296,21 +334,32 @@ def download_verified_artifact(
         if not hmac.compare_digest(digest.hexdigest(), artifact.sha256):
             raise ManifestError("downloaded artifact SHA-256 mismatch")
         published = False
-        temporary_fd = _open_existing(directory_fd, temporary_name)
+        temporary_fd: int | None = _open_existing(
+            directory_fd, temporary_name, directory=destination
+        )
         if temporary_fd is None:
             raise ManifestError("verified temporary artifact disappeared")
         final_fd: int | None = None
         try:
-            os.link(
-                temporary_name,
-                artifact.filename,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-                follow_symlinks=False,
-            )
+            if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+                os.link(
+                    destination / temporary_name,
+                    destination / artifact.filename,
+                    follow_symlinks=False,
+                )
+            else:
+                os.link(
+                    temporary_name,
+                    artifact.filename,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
             published = True
         except FileExistsError:
-            existing_fd = _open_existing(directory_fd, artifact.filename)
+            existing_fd = _open_existing(
+                directory_fd, artifact.filename, directory=destination
+            )
             if existing_fd is None:
                 raise ManifestError("artifact publication raced with removal")
             try:
@@ -322,17 +371,25 @@ def download_verified_artifact(
             finally:
                 os.close(existing_fd)
         try:
-            final_fd = _open_existing(directory_fd, artifact.filename)
+            final_fd = _open_existing(
+                directory_fd, artifact.filename, directory=destination
+            )
             if final_fd is None or not _same_open_file(temporary_fd, final_fd):
                 raise ManifestError("artifact name changed during publication")
             _verify_open_artifact(final_fd, artifact, expected_links=2)
             if not _directory_matches_path(directory_fd, destination):
                 raise ManifestError("download destination changed during publication")
-            os.unlink(temporary_name, dir_fd=directory_fd)
+            if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+                os.close(temporary_fd)
+                temporary_fd = None
+                (destination / temporary_name).unlink()
+            else:
+                os.unlink(temporary_name, dir_fd=directory_fd)
             if os.fstat(final_fd).st_nlink != 1 or not _name_matches_open_file(
                 directory_fd,
                 artifact.filename,
                 final_fd,
+                directory=destination,
             ):
                 raise ManifestError("artifact name changed during publication")
             result = VerifiedArtifact(final, artifact, directory_fd, final_fd)
@@ -347,17 +404,25 @@ def download_verified_artifact(
                     directory_fd,
                     artifact.filename,
                     final_fd,
+                    directory=destination,
                 )
             ):
-                os.unlink(artifact.filename, dir_fd=directory_fd)
+                if _WINDOWS:  # pragma: no cover - Windows CI
+                    (destination / artifact.filename).unlink()
+                else:
+                    os.unlink(artifact.filename, dir_fd=directory_fd)
             raise
         finally:
-            os.close(temporary_fd)
+            if temporary_fd is not None:
+                os.close(temporary_fd)
             if final_fd is not None:
                 os.close(final_fd)
     except BaseException:
         try:
-            os.unlink(temporary_name, dir_fd=directory_fd)
+            if _WINDOWS:  # pragma: no cover - exercised by Windows CI
+                (destination / temporary_name).unlink()
+            else:
+                os.unlink(temporary_name, dir_fd=directory_fd)
         except FileNotFoundError:
             pass
         raise

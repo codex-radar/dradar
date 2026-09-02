@@ -385,7 +385,11 @@ class UpdateController:
             return False
         if os.path.lexists(self.releases):
             try:
-                return self.releases.is_dir() and not any(self.releases.iterdir())
+                return (
+                    not self.releases.is_symlink()
+                    and self.releases.is_dir()
+                    and not any(self.releases.iterdir())
+                )
             except OSError:
                 return False
         return True

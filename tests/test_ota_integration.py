@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from dradar.ota.integration import (
+    _cleanup_windows_candidate,
     _locked_windows_candidate,
     _run_windows_candidate,
     cmd_update_doctor,
@@ -133,3 +134,35 @@ def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
     source = inspect.getsource(_locked_windows_candidate)
     assert "FILE_SHARE_READ: deny writers, delete and rename" in source
     assert "NamedTemporaryFile" not in source
+
+
+def test_windows_cleanup_failure_cannot_change_candidate_result(tmp_path, monkeypatch):
+    candidate = tmp_path / "candidate.pyz"
+    candidate.write_bytes(b"candidate")
+    scheduled = []
+
+    def denied(*args, **kwargs):
+        raise PermissionError("held by scanner")
+
+    monkeypatch.setattr(candidate.__class__, "unlink", denied)
+    assert (
+        _cleanup_windows_candidate(
+            candidate,
+            lambda path, replacement, flags: scheduled.append(
+                (path, replacement, flags)
+            ),
+        )
+        is False
+    )
+    assert scheduled == [(str(candidate), None, 0x00000004)]
+
+
+def test_releases_symlink_is_diagnosed_and_never_legacy_healthy(tmp_path):
+    root = tmp_path / "ota"
+    root.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "releases").symlink_to(outside, target_is_directory=True)
+    healthy, notes = diagnose_update(tmp_path)
+    assert healthy is False
+    assert "OTA releases directory is a symlink" in notes
