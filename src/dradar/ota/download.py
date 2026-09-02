@@ -121,12 +121,9 @@ def _open_safe_directory(path: Path) -> int:
 
     absolute = path.absolute()
     if _WINDOWS:  # pragma: no cover - exercised by Windows CI
-        absolute.mkdir(parents=True, exist_ok=True, mode=0o700)
-        cursor = Path(absolute.anchor)
-        for part in absolute.parts[1:]:
-            cursor /= part
-            if cursor.is_symlink():
-                raise ManifestError("download destination is not a safe directory")
+        if os.name == "nt":
+            return _open_windows_directory_chain(absolute)
+        _validate_or_create_windows_path(absolute)
         return -1
 
     directory_flags = os.O_RDONLY | os.O_DIRECTORY
@@ -148,6 +145,127 @@ def _open_safe_directory(path: Path) -> int:
         return current
     except OSError as exc:
         os.close(current)
+        raise ManifestError("download destination is not a safe directory") from exc
+
+
+def _validate_or_create_windows_path(absolute: Path) -> None:
+    """Path-level mirror used by non-Windows tests of Windows ordering."""
+
+    cursor = Path(absolute.anchor)
+    is_junction = getattr(os.path, "isjunction", lambda value: False)
+    for part in absolute.parts[1:]:
+        if cursor.is_symlink() or is_junction(cursor) or not cursor.is_dir():
+            raise ManifestError("download destination is not a safe directory")
+        child = cursor / part
+        if os.path.lexists(child):
+            if child.is_symlink() or is_junction(child) or not child.is_dir():
+                raise ManifestError("download destination is not a safe directory")
+        else:
+            try:
+                child.mkdir(mode=0o700)
+            except OSError as exc:
+                raise ManifestError(
+                    "download destination is not a safe directory"
+                ) from exc
+            if child.is_symlink() or is_junction(child) or not child.is_dir():
+                raise ManifestError("download destination is not a safe directory")
+        cursor = child
+
+
+def _open_windows_directory_chain(absolute: Path) -> int:
+    """Hold each safe parent HANDLE while creating and opening its child."""
+
+    import ctypes  # pragma: no cover - Windows-only imports
+    import msvcrt  # pragma: no cover
+    from ctypes import wintypes  # pragma: no cover
+
+    class AttributeTagInfo(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("reparse_tag", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    get_info = kernel32.GetFileInformationByHandleEx
+    get_info.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    get_info.restype = wintypes.BOOL
+    create_directory = kernel32.CreateDirectoryW
+    create_directory.argtypes = (wintypes.LPCWSTR, wintypes.LPVOID)
+    create_directory.restype = wintypes.BOOL
+    invalid = wintypes.HANDLE(-1).value
+
+    def open_directory(candidate: Path):
+        handle = create_file(
+            str(candidate),
+            0x80000000,  # GENERIC_READ
+            0x00000001 | 0x00000002,  # share read/write; deny delete/rename
+            None,
+            3,  # OPEN_EXISTING
+            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            None,
+        )
+        if handle == invalid:
+            raise OSError(ctypes.get_last_error(), "cannot open OTA directory")
+        info = AttributeTagInfo()
+        if not get_info(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            error = ctypes.get_last_error()
+            close_handle(handle)
+            raise OSError(error, "cannot inspect OTA directory")
+        if info.file_attributes & 0x00000400:  # FILE_ATTRIBUTE_REPARSE_POINT
+            close_handle(handle)
+            raise ManifestError("download destination is not a safe directory")
+        return handle
+
+    cursor = Path(absolute.anchor)
+    try:
+        current = open_directory(cursor)
+    except (OSError, ManifestError) as exc:
+        if isinstance(exc, ManifestError):
+            raise
+        raise ManifestError("download destination is not a safe directory") from exc
+    try:
+        for part in absolute.parts[1:]:
+            child = cursor / part
+            if not os.path.lexists(child) and not create_directory(str(child), None):
+                error = ctypes.get_last_error()
+                if error != 183:  # ERROR_ALREADY_EXISTS from a bounded race
+                    raise OSError(error, "cannot create OTA directory")
+            next_handle = open_directory(child)
+            close_handle(current)
+            current = next_handle
+            cursor = child
+        try:
+            fd = msvcrt.open_osfhandle(current, os.O_RDONLY | os.O_BINARY)
+        except OSError:
+            close_handle(current)
+            current = invalid
+            raise
+        current = invalid
+        return fd
+    except (OSError, ManifestError) as exc:
+        if current != invalid:
+            close_handle(current)
+        if isinstance(exc, ManifestError):
+            raise
         raise ManifestError("download destination is not a safe directory") from exc
 
 

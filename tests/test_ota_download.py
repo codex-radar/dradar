@@ -383,3 +383,19 @@ def test_windows_filesystem_path_never_uses_dir_fd(tmp_path, monkeypatch):
     finally:
         reopened.close()
     assert {"open", "stat", "link", "unlink"} <= set(calls)
+
+
+def test_windows_directory_walk_rejects_symlink_before_external_write(
+    tmp_path, monkeypatch
+):
+    ota = tmp_path / "ota"
+    ota.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (ota / "releases").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(download_module, "_WINDOWS", True)
+
+    with pytest.raises(ManifestError, match="safe directory"):
+        download_module._open_safe_directory(ota / "releases" / "release-600")
+
+    assert not (outside / "release-600").exists()
