@@ -151,6 +151,11 @@ _POOL_DRAIN_PREFIX = "drain:"
 # EX_TEMPFAIL: a supervised child uses this to distinguish one unsafe slot
 # from a generic failure that must freeze the pool's shared waiting queue.
 _WORKER_SLOT_QUARANTINED_EXIT_CODE = 75
+# EX_CONFIG: a task never reached the model because its isolated BuildKit
+# could not resolve the base image. Fleet and shell callers must see a
+# non-zero, distinguishable result instead of a clean account-drain exit.
+_ENVIRONMENT_BUILD_FAILED_EXIT_CODE = 78
+_ENVIRONMENT_BUILD_ABORT_PREFIX = "environment build unavailable:"
 _POOL_SUPERVISOR_POLL_SECONDS = 0.2
 _POOL_BACKFILL_REFRESH_SECONDS = 2.0
 _POOL_BACKFILL_ERROR_RETRY_SECONDS = 10.0
@@ -2398,6 +2403,32 @@ def _mark_stopped_quietly(
         None if isinstance(assignment, str)
         else assignment.get("_runner_session_id")
     )
+    if failure_diagnostic is not None:
+        sensitive_key_parts = {
+            "auth", "authorization", "token", "secret", "password", "passwd",
+        }
+
+        def is_sensitive_key(key: object) -> bool:
+            normalized = re.sub(
+                r"[^a-z0-9]+", "_", str(key).strip().lower(),
+            ).strip("_")
+            return bool(set(normalized.split("_")) & sensitive_key_parts)
+
+        def sanitize_value(value: object, *, key: object | None = None) -> object:
+            if key is not None and is_sensitive_key(key):
+                return "<redacted>"
+            if isinstance(value, str):
+                return image_cache.redact_docker_diagnostic(value, limit=1000)
+            if isinstance(value, dict):
+                return {
+                    item_key: sanitize_value(item, key=item_key)
+                    for item_key, item in value.items()
+                }
+            if isinstance(value, (list, tuple)):
+                return [sanitize_value(item) for item in value]
+            return value
+
+        failure_diagnostic = sanitize_value(failure_diagnostic)
     last_error: Exception | None = None
     for attempt in range(3):
         try:
@@ -2517,7 +2548,20 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     work_dir = HOME / "work"
     print("running trial (this can take a while)...")
 
+    ownership_state = "needs_bind"
+
     def bind_owner() -> None:
+        nonlocal ownership_state
+        if ownership_state == "bound":
+            # BuildFlake retry is still the same logical assignment attempt.
+            # The first successful bind already fenced this process/session;
+            # never replay the ownership write merely because Pier rebuilds.
+            return
+        if ownership_state == "stop_unconfirmed":
+            raise RunnerError(
+                "server ownership stop was not confirmed; refusing to rebind "
+                "the assignment for another model attempt"
+            )
         try:
             response = client.mark_started(
                 assignment["assignment_id"],
@@ -2527,6 +2571,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             raise RunnerError(
                 f"server ownership bind failed before model start: {exc}"
             ) from exc
+        ownership_state = "bound"
         if response.get("owner_epoch") is not None:
             assignment["owner_epoch"] = int(response["owner_epoch"])
         if telemetry is not None:
@@ -2575,9 +2620,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         HOME, assignment["assignment_id"],
                     )
                 if not builder_removed:
-                    args._docker_cleanup_blocked = (
+                    args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
                         "临时构建空间未能删除："
-                        + (builder_note or "Docker 未返回具体原因")
+                        + (builder_note or "Docker 未返回具体原因"),
+                        limit=1200,
                     )
             break
         except BuildFlakeError as exc:
@@ -2586,16 +2632,23 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             # attempt, so retry once automatically instead of bouncing the
             # volunteer. A second flake in a row is likely a real network
             # problem worth a human look.
+            safe_exc = image_cache.redact_docker_diagnostic(exc, limit=1200)
             if attempt == 1:
-                print(f"environment build failed ({exc})\n"
+                print(f"environment build failed ({safe_exc})\n"
                       "no quota was consumed — retrying once automatically...")
                 continue
-            print(f"trial failed: {exc}\n"
+            print(f"trial failed: {safe_exc}\n"
                   "the build failed twice — check your network/proxy and re-run "
                   "`dradar resume` (still free: the agent never started), or "
                   "use `dradar release` if you do not want to keep the cell")
+            _signal_pool_abort(
+                _ENVIRONMENT_BUILD_ABORT_PREFIX
+                + " repeated isolated builder failure",
+                interrupt_siblings=False,
+            )
             _mark_stopped_quietly(
                 client, assignment, failure_kind="environment_build_failed",
+                failure_diagnostic=exc.failure_diagnostic,
             )
             return "environment-build-failed"
         except RunnerCleanupUnconfirmedError as exc:
@@ -2631,6 +2684,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     defer_seconds=0,
                     failure_kind="provider-transport",
                     failure_diagnostic=exc.failure_diagnostic,
+                )
+                ownership_state = (
+                    "needs_bind" if stopped else "stop_unconfirmed"
                 )
                 if stopped:
                     print(
@@ -2736,7 +2792,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             f"预计释放 {reclaimed}）"
         )
     else:
-        args._docker_cleanup_blocked = cleanup.note or "题目运行环境未能完整清理"
+        args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
+            cleanup.note or "题目运行环境未能完整清理",
+            limit=1200,
+        )
         print(
             "  提示：本题运行环境没有清理完整；这一路运行不会继续下一题"
         )
@@ -4468,6 +4527,32 @@ def _run_worker_pool(args) -> int:
     maximum = args.workers
     target_file = _pool_target_file(args)
     target = _read_pool_target(target_file, default=maximum, maximum=maximum)
+    registry_mirrors: tuple[str, ...] = ()
+    if target > 1:
+        builder_preflight = image_cache.preflight_trial_builder(HOME)
+        if not builder_preflight.ok:
+            print(
+                "isolated BuildKit preflight failed before worker sessions or "
+                "task checkout: "
+                f"stage={builder_preflight.stage} "
+                f"failure={builder_preflight.failure_code or 'unknown'} "
+                f"exit={builder_preflight.returncode}"
+            )
+            if builder_preflight.detail:
+                print(builder_preflight.detail)
+            print(
+                "no worker was started; check Docker registry access or its "
+                "credential-free HTTPS mirror, then run `dradar resume`"
+            )
+            return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+        registry_mirrors = builder_preflight.registry_mirrors
+        print(
+            "isolated BuildKit preflight passed before parallel checkout"
+            + (
+                f" ({len(registry_mirrors)} HTTPS mirror(s) inherited)"
+                if registry_mirrors else " (direct Docker Hub path)"
+            )
+        )
     active, _free_pick = _prepare_batch(args, client)
     if _scoped_fleet_refill(args):
         pending_now = _pending_uploads_for_batch(args.batch_id)
@@ -4602,6 +4687,9 @@ def _run_worker_pool(args) -> int:
         # shared provider state and accidentally dropping one capability.
         env[_POOL_CAPABILITIES_ENV] = json.dumps(
             list(parent_capabilities), separators=(",", ":"),
+        )
+        env[image_cache.BUILDER_MIRRORS_ENV] = json.dumps(
+            list(registry_mirrors), separators=(",", ":"),
         )
         if boundary_path is not None:
             env[_ASSIGNMENT_BOUNDARY_ENV] = str(boundary_path)
@@ -4924,9 +5012,17 @@ def _run_worker_pool(args) -> int:
         cleanup_abort_file()
         return 1
     cleanup_abort_file()
+    environment_build_failures = [
+        (slot, rc) for slot, rc in returncodes
+        if rc == _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+    ]
     failed = [
         (slot, rc) for slot, rc in returncodes
         if rc not in (0, _WORKER_SLOT_QUARANTINED_EXIT_CODE)
+    ]
+    non_environment_failures = [
+        (slot, rc) for slot, rc in failed
+        if rc != _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
     ]
     if not fleet_pool:
         _maintain_image_cache(client, cfg, phase="after worker pool")
@@ -4951,7 +5047,20 @@ def _run_worker_pool(args) -> int:
         if abort_interrupts_siblings:
             print(f"worker pool stopped cleanly by circuit breaker: {abort_reason}")
         else:
-            print(f"worker pool drained cleanly after account stop: {abort_reason}")
+            print(
+                "worker pool drained after "
+                + (
+                    "a shared environment build failure: "
+                    if abort_reason.startswith(_ENVIRONMENT_BUILD_ABORT_PREFIX)
+                    else "account stop: "
+                )
+                + abort_reason
+            )
+        if (
+            abort_reason.startswith(_ENVIRONMENT_BUILD_ABORT_PREFIX)
+            or (environment_build_failures and not non_environment_failures)
+        ):
+            return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
         return 0
     if backfill_error:
         print("worker pool finished after a backfill spawn error; completed uploads "
@@ -4963,6 +5072,12 @@ def _run_worker_pool(args) -> int:
             "failures; held assignments remain waiting for a later resume"
         )
         return 1
+    if environment_build_failures and not non_environment_failures:
+        print(
+            "worker pool needs attention after repeated isolated environment "
+            "build failures; held assignments remain retryable"
+        )
+        return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
     if failed:
         detail = ", ".join(f"worker {i}=exit {rc}" for i, rc in failed)
         print(f"worker pool finished with errors: {detail}")
@@ -5168,6 +5283,8 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
                 "task checkout"
             )
             break
+    if "environment-build-failed" in results:
+        return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
     ok = all(o in _NON_FAULT_RUNNER_OUTCOMES for o in results)
     return 0 if ok else 1
 
@@ -5465,6 +5582,8 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         if outcome == "failed" or outcome in _TERMINAL_LOCAL_OUTCOMES:
             failed_ids.add(assignment["assignment_id"])
         results.append(outcome)
+    if "environment-build-failed" in results:
+        return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
     ok = all(o in _NON_FAULT_RUNNER_OUTCOMES for o in results)
     return 0 if ok else 1
 

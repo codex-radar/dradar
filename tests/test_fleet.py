@@ -573,6 +573,48 @@ def test_structured_startup_failure_survives_parent_exit(
     ]
 
 
+def test_environment_build_exit_is_persisted_as_retryable_needs_attention(
+    tmp_path, monkeypatch,
+):
+    fleet._prepare_dirs(tmp_path)
+    state = fleet._initial_state("controller-1", None)
+    state["status"] = "active"
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A,
+        "workers": 40,
+        "status": "running",
+        "refill": True,
+        "plan_id": "plan-a",
+        "credentials_file": str(tmp_path / "plan-a.json"),
+    }
+    stopped = []
+    monkeypatch.setattr(
+        fleet,
+        "_stop_run_plan_device",
+        lambda item, reason: stopped.append((item["plan_id"], reason)),
+    )
+
+    fleet._settle_pool(
+        tmp_path,
+        state,
+        {BATCH_A: object()},
+        {BATCH_A: io.StringIO()},
+        BATCH_A,
+        fleet.ENVIRONMENT_BUILD_FAILED_EXIT_CODE,
+    )
+
+    item = state["batches"][BATCH_A]
+    assert item["status"] == "failed"
+    assert item["returncode"] == 78
+    assert item["failure_kind"] == "environment_build_failed"
+    assert item["failure_state"] == "needs_attention"
+    assert item["retryable"] is True
+    assert "model did not start" in item["detail"]
+    assert stopped == [(
+        "plan-a", "local isolated environment build failed before model start",
+    )]
+
+
 def test_refill_pool_command_keeps_exact_batch_and_total_cap(tmp_path, monkeypatch):
     fleet._prepare_dirs(tmp_path)
     captured = {}

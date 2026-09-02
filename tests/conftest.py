@@ -51,3 +51,11 @@ def _disable_live_egress_image_pull(monkeypatch):
         "ensure_egress_runtime_ready",
         lambda *_args, **_kwargs: dict(runtime),
     )
+    from dradar import image_cache
+    monkeypatch.setattr(
+        image_cache,
+        "preflight_trial_builder",
+        lambda *_args, **_kwargs: image_cache.TrialBuilderPreflight(
+            True, 0, "base_image_metadata", None, "", (),
+        ),
+    )
