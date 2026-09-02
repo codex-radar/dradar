@@ -44,10 +44,12 @@ def _cell(aid):
     return {"assignment_id": aid, "task_id": f"task-{aid}", "agent": "codex",
             "model": "gpt-5.6-sol", "effort": "low", "nonce": "n",
             "expires_at": "2099-01-01T00:00:00+00:00", "est_minutes": 2,
-            "est_quota_pct": 0.5}
+            "est_quota_pct": 0.5, "started_at": None,
+            "execution_state": "waiting"}
 
 
-def test_free_pick_continues_with_cells_claimed_mid_run(monkeypatch, capsys, tmp_path):
+def test_legacy_free_pick_does_not_backfill_cells_claimed_mid_run(
+        monkeypatch, capsys, tmp_path):
     ran = []
     _patch_run(monkeypatch, ran=ran)
     client = FakeClient([
@@ -57,8 +59,8 @@ def test_free_pick_continues_with_cells_claimed_mid_run(monkeypatch, capsys, tmp
     ])
     rc = runloop._go_menu(_args(), {}, client, tmp_path)
     assert rc == 0
-    assert ran == ["a1", "a2", "a3"]
-    assert "claimed while that batch ran" in capsys.readouterr().out
+    assert ran == ["a1"]
+    assert "without batch backfill" in capsys.readouterr().out
 
 
 def test_free_pick_still_held_cells_do_not_loop(monkeypatch, tmp_path):

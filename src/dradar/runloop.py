@@ -4261,6 +4261,78 @@ def _assignment_is_ready_for_checkout(
     return ready_at <= (now or datetime.now(timezone.utc))
 
 
+def _modern_checkout_rejection_reason(assignment: object) -> str | None:
+    """Reject only explicit stale/conflicting facts after atomic checkout."""
+    if not isinstance(assignment, dict) or not assignment.get("assignment_id"):
+        return "stale_assignment_rejected"
+    if (
+        assignment.get("stale") is True
+        or assignment.get("heartbeat_gap") is True
+        or assignment.get("heartbeat_lost") is True
+        or assignment.get("runner_state")
+        in {"paused", "resumable", "stale", "checkpoint_retired"}
+        or assignment.get("execution_state") in {"paused", "stale"}
+        or (
+            assignment.get("runner_phase") == "running"
+            and assignment.get("heartbeat_running") is False
+        )
+    ):
+        return "stale_assignment_rejected"
+    return None
+
+
+def _legacy_checkout_fallback_reason(active: object) -> str | None:
+    """Allow one provably untouched pre-heartbeat assignment, or fail closed.
+
+    A 404 proves only that the atomic endpoint is absent. It does not prove a
+    whole batch is safe. Legacy fallback therefore requires the old server to
+    expose one explicit waiting row with no started/session/heartbeat facts.
+    ``None`` means this narrow fallback is allowed; otherwise the returned
+    value is a bounded audit reason.
+    """
+    if not isinstance(active, list) or len(active) != 1:
+        return "legacy_checkout_unsupported"
+    assignment = active[0]
+    if not isinstance(assignment, dict) or not assignment.get("assignment_id"):
+        return "legacy_checkout_unsupported"
+    if "started_at" not in assignment or "execution_state" not in assignment:
+        return "legacy_checkout_unsupported"
+    if assignment.get("execution_state") != "waiting":
+        return "stale_assignment_rejected"
+    if (
+        assignment.get("started_at") is not None
+        or assignment.get("checkpoint_id") is not None
+        or assignment.get("runner_phase") is not None
+        or assignment.get("stale") is True
+        or assignment.get("heartbeat_gap") is True
+        or assignment.get("heartbeat_lost") is True
+        or "heartbeat_running" in assignment
+        or "runner_state" in assignment
+        or any(
+            assignment.get(field) is not None
+            for field in (
+                "run_session", "run_session_id", "runner_session_id", "session_id",
+            )
+        )
+    ):
+        return "stale_assignment_rejected"
+    if not _assignment_is_ready_for_checkout(assignment):
+        return "stale_assignment_rejected"
+    return None
+
+
+def _checkout_404_is_legacy_capability_gap(exc: ApiError) -> bool:
+    """Distinguish a missing endpoint from an assignment-specific 404."""
+    if exc.status_code != 404:
+        return False
+    return exc.code in {
+        None,
+        "checkout_endpoint_not_found",
+        "checkout_unsupported",
+        "endpoint_not_found",
+    }
+
+
 def _pool_ready_work_count(
     client: ApiClient, *, claimed_after: datetime | None = None,
     desired_workers: int | None = None,
@@ -4375,6 +4447,15 @@ def _record_worker_precheckout_failure(code: str) -> bool:
     }:
         return False
     return _write_worker_activity_state(f"preparing:{code}")
+
+
+def _record_worker_checkout_gate_failure(code: str) -> bool:
+    """Persist a terminal pre-checkout fence that must not trigger backfill."""
+    if code not in {
+        "legacy_checkout_unsupported", "stale_assignment_rejected",
+    }:
+        return False
+    return _write_worker_activity_state(f"blocked:{code}")
 
 
 def _record_worker_returned_assignment(assignment_id: str) -> bool:
@@ -5416,8 +5497,8 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
     check out the next not-yet-started cell, run it, repeat until drained.
     N sessions (or machines) doing this concurrently partition the held
     batch instead of racing over a shared snapshot. Returns None when the
-    server predates the checkout endpoint — the caller falls back to the
-    legacy whole-batch flow."""
+    server predates the checkout endpoint — the caller then applies a narrow
+    single-assignment legacy safety proof instead of trusting a batch snapshot."""
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
@@ -5480,7 +5561,19 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 except ApiError as retry_exc:
                     _exit_for(retry_exc)
             elif exc.status_code == 404:
-                return None if not results else 0  # old server / endpoint gone
+                if _checkout_404_is_legacy_capability_gap(exc):
+                    return None if not results else 0
+                checkout_rejection = "stale_assignment_rejected"
+                _record_worker_checkout_gate_failure(checkout_rejection)
+                if getattr(args, "refill", False):
+                    refill_plan.stop(HOME, checkout_rejection)
+                print(
+                    f"checkout rejected: {checkout_rejection}; the server "
+                    "reported an assignment-specific 404, so legacy fallback "
+                    "was not attempted"
+                )
+                results.append(checkout_rejection)
+                break
             else:
                 _exit_for(exc)
         assignment = data.get("assignment")
@@ -5491,6 +5584,21 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 print("nothing left to start — every held cell is already "
                       "checked out (another session?) or submitted. "
                       "`dradar leases` shows exactly what is still held.")
+            break
+        checkout_rejection = _modern_checkout_rejection_reason(assignment)
+        if checkout_rejection is not None:
+            _mark_stopped_quietly(
+                client, assignment, defer_seconds=0,
+                failure_kind="runner_failed",
+            )
+            _record_worker_checkout_gate_failure(checkout_rejection)
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, checkout_rejection)
+            print(
+                f"checkout rejected: {checkout_rejection}; no model, refill or "
+                "replacement checkout was started"
+            )
+            results.append(checkout_rejection)
             break
         if telemetry:
             # Checkout has already bound this assignment to the exact runner
@@ -6183,10 +6291,22 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
         rc = _run_checkout_loop(args, client, tasks_root, active, telemetry=telemetry)
         if rc is not None:
             return rc
-        if getattr(args, "refill", False):
-            refill_plan.stop(HOME, "server has no atomic checkout endpoint")
-            print("continuous refill stopped: this server lacks atomic checkout support")
+        fallback_rejection = _legacy_checkout_fallback_reason(active)
+        if fallback_rejection is not None:
+            _record_worker_checkout_gate_failure(fallback_rejection)
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, fallback_rejection)
+            print(
+                f"legacy checkout rejected: {fallback_rejection}; the server "
+                "cannot prove one untouched waiting assignment, so no model, "
+                "refill or replacement checkout was started"
+            )
             return 1
+        print(
+            "atomic checkout is unavailable; running one explicitly waiting "
+            "legacy assignment without batch backfill"
+        )
+        return _run_batch(args, client, tasks_root, active, telemetry=telemetry)
     rc = _run_batch(args, client, tasks_root, active, telemetry=telemetry)
     # Free-pick: the batch was a snapshot taken at startup, but the classic
     # first-session flow is "paste the command, then go claim more on the
