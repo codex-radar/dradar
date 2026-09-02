@@ -389,6 +389,18 @@ def test_runtime_probe_keeps_credentials_out_of_process_arguments(monkeypatch):
             )
         return SimpleNamespace(returncode=0, stdout="container-id", stderr="")
 
+    class Process:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            calls.append((command, kwargs))
+
+        def communicate(self, timeout=None):
+            return "container-id", ""
+
+        def kill(self):
+            pytest.fail("healthy probe must not be killed")
+
     class Client:
         def __init__(self, **_kwargs):
             pass
@@ -403,6 +415,7 @@ def test_runtime_probe_keeps_credentials_out_of_process_arguments(monkeypatch):
             return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(egress.subprocess, "run", run)
+    monkeypatch.setattr(egress.subprocess, "Popen", Process)
     monkeypatch.setattr(egress.httpx, "Client", Client)
     monkeypatch.setattr(egress, "provider_subprocess_env", lambda: {})
     runtime = {
@@ -420,6 +433,124 @@ def test_runtime_probe_keeps_credentials_out_of_process_arguments(monkeypatch):
     assert "UPSTREAM_PROXY_PASSWORD" in run_command
     assert "do-not-leak" not in " ".join(run_command)
     assert calls[-1][0][0:3] == ["docker", "rm", "--force"]
+
+
+@pytest.mark.parametrize("ready_after", [21.0, 90.0])
+def test_runtime_probe_allows_slow_but_bounded_container_start(
+    monkeypatch, ready_after,
+):
+    clock = {"seconds": 0.0}
+    events = []
+    monkeypatch.setattr(egress.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        egress.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
+    )
+
+    class Process:
+        returncode = None
+
+        def __init__(self, command, **_kwargs):
+            self.command = command
+
+        def communicate(self, timeout=None):
+            if clock["seconds"] + timeout < ready_after:
+                clock["seconds"] += timeout
+                raise egress.subprocess.TimeoutExpired(self.command, timeout)
+            clock["seconds"] = ready_after
+            self.returncode = 0
+            return "container-id", ""
+
+        def kill(self):
+            pytest.fail("bounded slow start must not be killed")
+
+    def run(command, **_kwargs):
+        if command[1] == "port":
+            return SimpleNamespace(
+                returncode=0, stdout="127.0.0.1:43119\n", stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, _url):
+            return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(egress.subprocess, "Popen", Process)
+    monkeypatch.setattr(egress.subprocess, "run", run)
+    monkeypatch.setattr(egress.httpx, "Client", Client)
+    monkeypatch.setattr(egress, "provider_subprocess_env", lambda: {})
+
+    egress._probe_runtime_egress(
+        "docker",
+        _TEST_IMAGE,
+        {},
+        event_sink=lambda event_type, elapsed_ms: events.append(
+            (event_type, elapsed_ms)
+        ),
+    )
+
+    assert events[0] == ("probe_start", 0)
+    assert events[-1] == ("probe_ready", int(ready_after * 1000))
+    assert any(event == "probe_progress" for event, _elapsed in events)
+    assert all(event != "probe_timeout" for event, _elapsed in events)
+
+
+def test_runtime_probe_times_out_a_genuinely_stuck_container_start(monkeypatch):
+    clock = {"seconds": 0.0}
+    events = []
+
+    class Process:
+        returncode = None
+
+        def __init__(self, command, **_kwargs):
+            self.command = command
+            self.killed = False
+
+        def communicate(self, timeout=None):
+            if timeout is None:
+                return "", ""
+            clock["seconds"] += timeout
+            raise egress.subprocess.TimeoutExpired(self.command, timeout)
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(egress.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(egress.subprocess, "Popen", Process)
+    monkeypatch.setattr(
+        egress.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr="",
+        ),
+    )
+    monkeypatch.setattr(egress, "provider_subprocess_env", lambda: {})
+
+    with pytest.raises(egress.EgressProxyError, match="no ready transition"):
+        egress._probe_runtime_egress(
+            "docker",
+            _TEST_IMAGE,
+            {},
+            event_sink=lambda event_type, elapsed_ms: events.append(
+                (event_type, elapsed_ms)
+            ),
+        )
+
+    assert events[0] == ("probe_start", 0)
+    assert events[-1] == (
+        "probe_timeout", egress._RUNTIME_PROBE_TIMEOUT_SEC * 1000,
+    )
+    assert [event for event, _elapsed in events].count("probe_progress") >= 1
 
 
 def test_runtime_failure_explains_host_container_proxy_split(monkeypatch):

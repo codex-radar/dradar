@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import urllib.parse
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -50,7 +51,8 @@ DRADAR_CONTAINER_HTTP_PROXY_ENV = "DRADAR_CONTAINER_HTTP_PROXY"
 DRADAR_CONTAINER_NO_PROXY_ENV = "DRADAR_CONTAINER_NO_PROXY"
 _IMAGE_PULL_TIMEOUT_SEC = 300
 _IMAGE_INSPECT_TIMEOUT_SEC = 15
-_RUNTIME_PROBE_TIMEOUT_SEC = 20
+_RUNTIME_PROBE_TIMEOUT_SEC = 120
+_RUNTIME_PROBE_PROGRESS_SEC = 15
 _MAX_IMAGE_ARCHIVE_BYTES = 512 * 1024 * 1024
 _RUNTIME_PROBE_HOST = "registry.npmjs.org"
 _RUNTIME_PROBE_URL = f"https://{_RUNTIME_PROBE_HOST}/-/ping"
@@ -739,8 +741,22 @@ def _runtime_proxy_failure_hint(
 
 
 def _probe_runtime_egress(
-    docker: str, image: str, runtime: dict[str, str],
+    docker: str,
+    image: str,
+    runtime: dict[str, str],
+    *,
+    event_sink: Callable[[str, int], None] | None = None,
 ) -> None:
+    def emit(event_type: str, started_at: float) -> None:
+        if event_sink is None:
+            return
+        elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+        try:
+            event_sink(event_type, elapsed_ms)
+        except Exception:
+            # Probe diagnostics must never decide whether the runtime is safe.
+            pass
+
     token = secrets.token_urlsafe(24)
     name = f"dradar-egress-preflight-{os.getpid()}-{secrets.token_hex(4)}"
     container_env = _runtime_proxy_container_env(runtime, token)
@@ -759,21 +775,46 @@ def _probe_runtime_egress(
     command.append(image)
     process_env = provider_subprocess_env()
     process_env.update(container_env)
-    started = False
+    command_started = False
+    probe_started_at = time.monotonic()
+    emit("probe_start", probe_started_at)
     try:
-        proc = subprocess.run(
+        process = subprocess.Popen(
             command,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=_RUNTIME_PROBE_TIMEOUT_SEC,
-            check=False,
             env=process_env,
         )
+        command_started = True
+        deadline = probe_started_at + _RUNTIME_PROBE_TIMEOUT_SEC
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                emit("probe_timeout", probe_started_at)
+                process.kill()
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+                raise EgressProxyError(
+                    "the Pier egress preflight made no ready transition within "
+                    f"{_RUNTIME_PROBE_TIMEOUT_SEC} seconds"
+                )
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(_RUNTIME_PROBE_PROGRESS_SEC, remaining),
+                )
+                proc = subprocess.CompletedProcess(
+                    command, process.returncode, stdout, stderr,
+                )
+                break
+            except subprocess.TimeoutExpired:
+                emit("probe_progress", probe_started_at)
         if proc.returncode != 0:
             raise EgressProxyError(
                 "Docker could not start the disposable Pier egress preflight"
             )
-        started = True
         port = _published_host_port(docker, name)
         if port is None:
             raise EgressProxyError(
@@ -799,10 +840,13 @@ def _probe_runtime_egress(
                 "container network policy and the configured "
                 f"{DRADAR_CONTAINER_HTTP_PROXY_ENV}/{DRADAR_HTTP_PROXY_ENV} interface"
             )
-    except subprocess.TimeoutExpired as exc:
-        raise EgressProxyError("the Pier egress preflight timed out") from exc
+        emit("probe_ready", probe_started_at)
+    except OSError as exc:
+        raise EgressProxyError(
+            "Docker could not start the disposable Pier egress preflight"
+        ) from exc
     finally:
-        if started:
+        if command_started:
             try:
                 subprocess.run(
                     [docker, "rm", "--force", name],
@@ -816,7 +860,10 @@ def _probe_runtime_egress(
 
 
 def ensure_egress_runtime_ready(
-    docker: str | None = None, *, announce: bool = False,
+    docker: str | None = None,
+    *,
+    announce: bool = False,
+    event_sink: Callable[[str, int], None] | None = None,
 ) -> dict[str, str]:
     docker = docker or shutil.which("docker")
     if not docker:
@@ -824,7 +871,9 @@ def ensure_egress_runtime_ready(
     runtime = prepare_egress_proxy_runtime(docker, announce=announce)
     image = runtime.get("DRADAR_EGRESS_PROXY_IMAGE")
     if image:
-        _probe_runtime_egress(docker, image, runtime)
+        _probe_runtime_egress(
+            docker, image, runtime, event_sink=event_sink,
+        )
     return runtime
 
 

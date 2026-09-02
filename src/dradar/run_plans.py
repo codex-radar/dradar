@@ -2051,6 +2051,30 @@ def cmd_run_plan(args) -> int:
 def cmd_progress_plan(args) -> int:
     def operate() -> dict[str, Any]:
         _run_code, path, state, client = _state_and_client(args)
+        pending_capacity = state.get("pending_local_capacity")
+        if (
+            isinstance(pending_capacity, dict)
+            and float(pending_capacity.get("expires_at") or 0) > time.time()
+        ):
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "blocked",
+                "interaction": "notify",
+                "decision_required": False,
+                "user_message": (
+                    "这次运行仍在等待你确认本机同时运行数量；在你回答刚才的"
+                    "安全确认前，不会启动题目，当前状态仍是等待你的选择。"
+                ),
+                "agent_action": "notify_only",
+                "error_code": "local_capacity_decision_pending",
+                "retryable": False,
+                "choices": [],
+                "agent": {
+                    "pending_user_decision": True,
+                    "requested_concurrency": pending_capacity.get("requested"),
+                    "recommended_concurrency": pending_capacity.get("recommended"),
+                },
+            }
         snapshot_generation = _intent_generation(state)
         response = _validate_response(client.run_plan_progress(state["plan_id"]))
 

@@ -519,6 +519,275 @@ def test_pool_is_not_running_until_exact_parent_acknowledges_readiness(
     assert state["batches"][BATCH_A]["ready_at"]
 
 
+def test_startup_observation_times_out_as_failure_instead_of_returning_starting(
+    monkeypatch,
+):
+    clock = {"seconds": 0.0}
+    stopped = []
+    monkeypatch.setattr(fleet, "STARTUP_OBSERVE_SECONDS", 0.1)
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
+    )
+    monkeypatch.setattr(
+        fleet,
+        "batch_status",
+        lambda _batch_id: {
+            "batch_id": BATCH_A,
+            "status": "starting",
+            "startup_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        fleet,
+        "stop_batch",
+        lambda batch_id, **kwargs: stopped.append((batch_id, kwargs)) or {
+            "ok": True,
+            "stopping": [batch_id],
+            "condition_changed": [],
+            "warnings": [],
+        },
+    )
+
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({
+            "batch": {
+                "batch_id": BATCH_A,
+                "status": "starting",
+                "startup_status": "pending",
+            },
+        }, BATCH_A)
+
+    assert raised.value.code == "local_start_timeout"
+    assert "已确认停止请求，正在安全停止" in raised.value.user_message
+    assert stopped == [(
+        BATCH_A, {"only_if_startup_pending": True},
+    )]
+
+
+def test_startup_timeout_does_not_claim_stop_when_coordinator_rejects_it(
+    monkeypatch,
+):
+    clock = {"seconds": 0.0}
+    monkeypatch.setattr(fleet, "STARTUP_OBSERVE_SECONDS", 0.1)
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
+    )
+    monkeypatch.setattr(
+        fleet,
+        "batch_status",
+        lambda _batch_id: {
+            "batch_id": BATCH_A,
+            "status": "starting",
+            "startup_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        fleet,
+        "stop_batch",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fleet.FleetError("coordinator unavailable")
+        ),
+    )
+
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({
+            "batch": {
+                "batch_id": BATCH_A,
+                "status": "starting",
+                "startup_status": "pending",
+            },
+        }, BATCH_A)
+
+    assert raised.value.code == "local_start_timeout_stop_unconfirmed"
+    assert raised.value.retryable is False
+    assert "无法确认" in raised.value.user_message
+    assert "本地启动已停止" not in raised.value.user_message
+    assert "dradar fleet status" in raised.value.user_message
+
+
+def test_ready_winning_at_timeout_is_returned_instead_of_stopped(monkeypatch):
+    clock = {"seconds": 0.0}
+    calls = {"status": 0, "stop": 0}
+    monkeypatch.setattr(fleet, "STARTUP_OBSERVE_SECONDS", 0.1)
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
+    )
+
+    def status(_batch_id):
+        calls["status"] += 1
+        if calls["status"] < 3:
+            return {
+                "batch_id": BATCH_A,
+                "status": "starting",
+                "startup_status": "pending",
+            }
+        return {
+            "batch_id": BATCH_A,
+            "status": "running",
+            "startup_status": "ready",
+        }
+
+    monkeypatch.setattr(fleet, "batch_status", status)
+    monkeypatch.setattr(
+        fleet,
+        "stop_batch",
+        lambda *_args, **_kwargs: calls.__setitem__("stop", calls["stop"] + 1),
+    )
+
+    response = fleet._observe_pool_startup({
+        "batch": {
+            "batch_id": BATCH_A,
+            "status": "starting",
+            "startup_status": "pending",
+        },
+    }, BATCH_A)
+
+    assert response["batch"]["startup_status"] == "ready"
+    assert calls["stop"] == 0
+
+
+def test_conditional_timeout_stop_cannot_interrupt_a_ready_parent(
+    tmp_path, monkeypatch,
+):
+    fleet._prepare_dirs(tmp_path)
+    controller_id = "controller-1"
+    state = fleet._initial_state(controller_id, None)
+    state["status"] = "active"
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A,
+        "workers": 2,
+        "status": "starting",
+        "startup_status": "pending",
+        "plan_id": "plan-a",
+        "credentials_file": str(tmp_path / "plan-a.json"),
+    }
+
+    class Process:
+        pid = os.getpid()
+
+        def __init__(self):
+            self.signals = []
+
+        def poll(self):
+            return None
+
+        def send_signal(self, value):
+            self.signals.append(value)
+
+    process = Process()
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, controller_id)
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, BATCH_A)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, BATCH_A)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+    fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+
+    fleet._handle_request(
+        tmp_path,
+        state,
+        {BATCH_A: process},
+        {},
+        {
+            "request_id": "request-ready-race",
+            "controller_id": controller_id,
+            "command": "stop",
+            "batch_id": BATCH_A,
+            "all": False,
+            "only_if_startup_pending": True,
+        },
+    )
+
+    response = fleet._read_json(
+        fleet._root(tmp_path) / fleet.RESPONSE_DIR / "request-ready-race.json"
+    )
+    assert response["stopping"] == []
+    assert response["condition_changed"] == [BATCH_A]
+    assert process.signals == []
+    assert state["batches"][BATCH_A]["status"] == "running"
+    assert state["batches"][BATCH_A]["startup_status"] == "ready"
+
+
+def test_conditional_timeout_reserves_failure_before_interrupting_parent(
+    tmp_path, monkeypatch,
+):
+    fleet._prepare_dirs(tmp_path)
+    controller_id = "controller-1"
+    state = fleet._initial_state(controller_id, None)
+    state["status"] = "active"
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A,
+        "workers": 2,
+        "status": "starting",
+        "startup_status": "pending",
+        "plan_id": "plan-a",
+        "credentials_file": str(tmp_path / "plan-a.json"),
+    }
+
+    class Process:
+        pid = os.getpid()
+
+        def __init__(self):
+            self.signals = []
+
+        def poll(self):
+            return None
+
+        def send_signal(self, value):
+            self.signals.append(value)
+
+    process = Process()
+    monkeypatch.setattr(fleet, "_stop_run_plan_device", lambda *_args: None)
+    monkeypatch.setattr(fleet, "_request_pool_drain", lambda *_args: None)
+
+    fleet._handle_request(
+        tmp_path,
+        state,
+        {BATCH_A: process},
+        {},
+        {
+            "request_id": "request-pending-timeout",
+            "controller_id": controller_id,
+            "command": "stop",
+            "batch_id": BATCH_A,
+            "all": False,
+            "only_if_startup_pending": True,
+        },
+    )
+
+    event = fleet._read_json(fleet._pool_startup_path(tmp_path, BATCH_A))
+    response = fleet._read_json(
+        fleet._root(tmp_path) / fleet.RESPONSE_DIR
+        / "request-pending-timeout.json"
+    )
+    assert event["status"] == "failed"
+    assert event["error_code"] == "local_start_timeout"
+    assert response["stopping"] == [BATCH_A]
+    assert response["condition_changed"] == []
+    assert process.signals == [signal.SIGINT]
+    assert state["batches"][BATCH_A]["status"] == "stopping"
+
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, controller_id)
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, BATCH_A)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, BATCH_A)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+    with pytest.raises(fleet.FleetError, match="already marked failed"):
+        fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+
+
 def test_structured_startup_failure_survives_parent_exit(
     tmp_path, monkeypatch,
 ):

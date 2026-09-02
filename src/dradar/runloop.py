@@ -43,6 +43,7 @@ from .local_config import (
     tasks_root_from_config,
 )
 from .machine import acquire_run_lock, sweep_orphan_compose
+from .flight_recorder import FlightRecorder
 from .patch_guard import check_pompeii_patch, format_patch_guard_report
 from .providers import (
     ANTIGRAVITY_AGENT,
@@ -258,12 +259,18 @@ def _ensure_selected_tasks_root(tasks_root: Path, benchmark_id: str) -> None:
         ensure_tasks_root(tasks_root, benchmark_id)
 
 
-def _ensure_egress_runtime(*, probe_connectivity: bool = True) -> None:
+def _ensure_egress_runtime(
+    *,
+    probe_connectivity: bool = True,
+    event_sink=None,
+) -> None:
     """Finish the only shared image pull before any automatic CLI claim."""
 
     try:
         if probe_connectivity:
-            egress.ensure_egress_runtime_ready(announce=True)
+            egress.ensure_egress_runtime_ready(
+                announce=True, event_sink=event_sink,
+            )
         else:
             egress.prepare_egress_proxy_runtime(announce=True)
     except egress.EgressProxyError as exc:
@@ -3763,6 +3770,12 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
             "这台设备未能准备与判分一致的题目环境；已有本地文件没有被修改。"
             "请检查网络和磁盘空间后，再次使用原运行说明。"
         )
+    elif "egress preflight" in detail and "ready transition" in detail:
+        code = "egress_probe_timeout"
+        message = (
+            "这台设备的隔离网络环境在 120 秒内仍未完成启动；题目没有开始执行。"
+            "请检查 Docker 与网络代理后，再次使用原运行说明。"
+        )
     elif any(word in detail for word in ("docker", "pier", "egress", "disk space")):
         code = "local_environment_not_ready"
         message = (
@@ -3799,22 +3812,6 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
         # The original startup result remains authoritative. A dead coordinator
         # or an already-ready pool must never be replaced by reporting cleanup.
         pass
-
-
-def _ack_fleet_startup_ready(args) -> None:
-    if not getattr(args, "fleet_pool", False):
-        return
-    from . import fleet
-
-    if not os.environ.get(fleet.POOL_STARTUP_FILE_ENV):
-        return
-    try:
-        fleet.publish_pool_startup_ready(HOME, args.batch_id)
-    except (fleet.FleetError, OSError, ValueError) as exc:
-        raise SystemExit(
-            "couldn't confirm that the local run finished preparing; no task "
-            "will be started"
-        ) from exc
 
 
 def cmd_go(args) -> int:
@@ -4588,6 +4585,19 @@ def _run_worker_pool(args) -> int:
         client = _client(cfg, auto_register=True)
         _scope_client_to_batch(client, getattr(args, "batch_id", None))
     tasks_root = _selected_tasks_root(cfg)
+    flight = FlightRecorder(HOME, client) if fleet_pool else None
+
+    def record_probe_event(event_type: str, elapsed_ms: int) -> None:
+        if flight is None:
+            return
+        flight.try_record(
+            event_type,
+            component="cli",
+            batch_id=args.batch_id,
+            attributes={"elapsed_ms": elapsed_ms, "phase": "preparing"},
+        )
+        flight.flush()
+
     if fleet_pool:
         args.allow_new_claims = bool(getattr(args, "refill", False))
     else:
@@ -4608,7 +4618,9 @@ def _run_worker_pool(args) -> int:
                     raise RunnerError(str(exc)) from exc
             _ensure_selected_tasks_root(tasks_root, cfg["benchmark"])
             ensure_pier()
-            _ensure_egress_runtime()
+            _ensure_egress_runtime(
+                event_sink=record_probe_event if fleet_pool else None,
+            )
     except RunnerError as exc:
         sys.exit(str(exc))
     if fleet_pool:
@@ -4734,6 +4746,64 @@ def _run_worker_pool(args) -> int:
     failure_cutoff: datetime | None = None
     abort_reason: str | None = None
     abort_interrupts_siblings = False
+    startup_ready = False
+    startup_failure_published = False
+
+    def record_supervisor_event(
+        event_type: str,
+        *,
+        reason_code: str | None = None,
+        attributes: dict | None = None,
+    ) -> None:
+        if flight is None:
+            return
+        flight.try_record(
+            event_type,
+            component="cli",
+            batch_id=args.batch_id,
+            reason_code=reason_code,
+            attributes=attributes,
+        )
+        flight.flush()
+
+    def acknowledge_child_ready(slot: int, activity_state: str | None) -> None:
+        nonlocal startup_ready
+        if startup_ready or not fleet_pool or not activity_state:
+            return
+        if not (
+            len(activity_state) == 32
+            and all(char in "0123456789abcdef" for char in activity_state)
+        ):
+            return
+        fleet.publish_pool_startup_ready(HOME, args.batch_id)
+        startup_ready = True
+        record_supervisor_event(
+            "child_ready", attributes={"worker_slot": slot},
+        )
+
+    def publish_startup_failure(
+        error_code: str,
+        user_message: str,
+        *,
+        reason_code: str = "startup-failed",
+    ) -> None:
+        nonlocal startup_failure_published
+        if startup_ready or startup_failure_published or not fleet_pool:
+            return
+        try:
+            startup_failure_published = fleet.publish_pool_startup_failure(
+                HOME,
+                args.batch_id,
+                error_code=error_code,
+                user_message=user_message,
+                retryable=True,
+            )
+        except (fleet.FleetError, OSError, ValueError):
+            startup_failure_published = True
+        record_supervisor_event(
+            "startup_failed", reason_code=reason_code,
+            attributes={"target_workers": target},
+        )
 
     def cleanup_abort_file() -> None:
         if owns_abort_file:
@@ -4793,26 +4863,13 @@ def _run_worker_pool(args) -> int:
     try:
         for index in range(1, count + 1):
             spawn_worker(index)
-        if fleet_pool and os.environ.get(fleet.POOL_STARTUP_FILE_ENV):
-            try:
-                fleet.publish_pool_startup_ready(HOME, args.batch_id)
-            except (fleet.FleetError, OSError, ValueError):
-                print(
-                    "couldn't confirm that the local run finished preparing; "
-                    "stopping the newly started workers safely"
-                )
-                _signal_workers(processes)
-                cleanup_abort_file()
-                return 1
+        record_supervisor_event(
+            "supervisor_spawned", attributes={"target_workers": target},
+        )
 
         next_backfill_check = 0.0
         while True:
             for slot, process in list(active_processes.items()):
-                returncode = process.poll()
-                if returncode is None:
-                    continue
-                returncodes.append((slot, returncode))
-                del active_processes[slot]
                 activity_file = worker_activity_files.get(slot)
                 try:
                     activity_state = (
@@ -4821,6 +4878,43 @@ def _run_worker_pool(args) -> int:
                     )
                 except OSError:
                     activity_state = None
+                try:
+                    acknowledge_child_ready(slot, activity_state)
+                except (fleet.FleetError, OSError, ValueError):
+                    publish_startup_failure(
+                        "local_ready_ack_failed",
+                        "worker 已开始首个题目，但本地监督器无法确认启动状态；"
+                        "已停止本次本地启动，题目仍然保留。",
+                    )
+                    _signal_workers(processes)
+                    backfill_error = "could not persist verified child readiness"
+                    backfill_disabled = True
+                returncode = process.poll()
+                if returncode is None:
+                    continue
+                # The child can atomically publish checkout immediately before
+                # exit. Re-read after poll so the supervisor never classifies
+                # that final ready marker from the stale pre-poll snapshot.
+                try:
+                    activity_state = (
+                        activity_file.read_text(encoding="utf-8")
+                        if activity_file is not None else None
+                    )
+                except OSError:
+                    activity_state = None
+                try:
+                    acknowledge_child_ready(slot, activity_state)
+                except (fleet.FleetError, OSError, ValueError):
+                    publish_startup_failure(
+                        "local_ready_ack_failed",
+                        "worker 已开始首个题目，但本地监督器无法确认启动状态；"
+                        "已停止本次本地启动，题目仍然保留。",
+                    )
+                    _signal_workers(processes)
+                    backfill_error = "could not persist verified child readiness"
+                    backfill_disabled = True
+                returncodes.append((slot, returncode))
+                del active_processes[slot]
                 capacity_blocked = (
                     activity_state
                     == "preparing:runner_session_capacity_reached"
@@ -4853,9 +4947,19 @@ def _run_worker_pool(args) -> int:
                     _write_pool_returned_assignments(
                         returned_assignments_file, returned_assignment_ids,
                     )
-                precheckout_exit = (
-                    activity_state == "preparing" or capacity_blocked
+                precheckout_exit = bool(
+                    activity_state == "preparing"
+                    or (
+                        activity_state is not None
+                        and activity_state.startswith("preparing:")
+                    )
                 )
+                if precheckout_exit:
+                    record_supervisor_event(
+                        "precheckout_exit",
+                        reason_code="precheckout-exit",
+                        attributes={"worker_slot": slot},
+                    )
                 # Unknown marker state is safety-significant: never turn a
                 # lost checkout signal into automatic retry of paid work.
                 consumed_assignment = not precheckout_exit
@@ -5103,6 +5207,42 @@ def _run_worker_pool(args) -> int:
             _maintain_image_cache(client, cfg, phase="after failed worker pool")
         cleanup_abort_file()
         return 1
+    if fleet_pool and not startup_ready:
+        if abort_reason is not None:
+            environment_abort = abort_reason.startswith(
+                _ENVIRONMENT_BUILD_ABORT_PREFIX
+            )
+            publish_startup_failure(
+                (
+                    "environment_build_failed_before_start"
+                    if environment_abort else
+                    "startup_aborted_by_circuit"
+                    if abort_interrupts_siblings else
+                    "startup_aborted_by_account_stop"
+                ),
+                (
+                    "本地环境构建在首个题目开始前失败；题目仍然保留，"
+                    "请修复 Docker 或网络后重试。"
+                    if environment_abort else
+                    "本地安全熔断在首个题目开始前停止了这次启动；"
+                    "题目仍然保留，请检查本机日志后再决定是否重试。"
+                    if abort_interrupts_siblings else
+                    "账号停止指令在首个题目开始前终止了这次本地启动；"
+                    "题目仍然保留，请确认账号状态后再重试。"
+                ),
+            )
+        else:
+            publish_startup_failure(
+                (
+                    "worker_precheckout_exhausted"
+                    if backfill_exhausted else "local_runner_never_ready"
+                ),
+                (
+                    "所有本地 worker 都在完成注册和首个题目 checkout 前退出；"
+                    "题目仍然保留，请检查本机日志后重试。"
+                ),
+                reason_code="precheckout-exit",
+            )
     cleanup_abort_file()
     environment_build_failures = [
         (slot, rc) for slot, rc in returncodes
@@ -5153,7 +5293,19 @@ def _run_worker_pool(args) -> int:
             or (environment_build_failures and not non_environment_failures)
         ):
             return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+        if fleet_pool and not startup_ready:
+            print(
+                "worker pool stopped before verified child readiness; held "
+                "assignments remain waiting and Fleet will record a startup failure"
+            )
+            return 1
         return 0
+    if fleet_pool and not startup_ready:
+        print(
+            "worker pool never reached verified child readiness; held assignments "
+            "remain waiting for a later retry"
+        )
+        return 1
     if backfill_error:
         print("worker pool finished after a backfill spawn error; completed uploads "
               "are preserved and the next resume can restore the full pool")
@@ -5295,8 +5447,6 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
-    _ack_fleet_startup_ready(args)
-
     n = len(active)
     if n > 1:
         print(f"you're holding {n} cells — running them one at a time "
@@ -5398,7 +5548,6 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
-    _ack_fleet_startup_ready(args)
     results, failed_ids = [], set()
     batch_assignment_ids = {
         item["assignment_id"] for item in active if item.get("assignment_id")

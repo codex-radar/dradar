@@ -41,6 +41,9 @@ EVENT_TYPES = frozenset({
     "update_paused", "update_activated", "update_self_testing",
     "update_committed", "update_rollback_pending", "update_rolled_back",
     "update_failed",
+    "supervisor_spawned", "child_ready", "precheckout_exit",
+    "startup_failed", "probe_start", "probe_progress", "probe_timeout",
+    "probe_ready",
 })
 COMPONENTS = frozenset({
     "cli", "claim", "build", "provider", "heartbeat", "checkpoint",
@@ -68,6 +71,7 @@ REASON_CODES = frozenset({
     "update_stage_failed", "update_safe_point_blocked",
     "update_self_test_failed", "update_crash_recovery", "candidate_failed",
     "update_state_corrupt", "update_state_incompatible",
+    "precheckout-exit", "startup-timeout", "startup-failed",
 })
 OUTCOMES = frozenset({
     "completed", "interrupted", "submitted", "artifact-staging-failed",

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from dradar import cli, runloop
+from dradar import cli, fleet, runloop
 from dradar.api_client import ApiClient
 
 
@@ -1436,6 +1436,224 @@ def test_precheckout_capability_failure_has_bounded_backfill(
     output = capsys.readouterr().out
     assert "exited 1 before checkout" in output
     assert "bounded replacement is exhausted" in output
+
+
+def test_fleet_pool_fails_after_24_seconds_when_every_child_exits_precheckout(
+    tmp_path, monkeypatch,
+):
+    """A spawned parent is not ready until a child proves real checkout."""
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(
+        runloop,
+        "_run_config",
+        lambda _args: {
+            "benchmark": runloop.DEFAULT_BENCHMARK,
+            "run_plan_id": "plan-a",
+        },
+    )
+    monkeypatch.setattr(
+        runloop, "_selected_tasks_root", lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runloop, "_pool_ready_work_count", lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        runloop, "_retry_pending_uploads", lambda *_args, **_kwargs: None,
+    )
+    fleet._prepare_dirs(tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch_id)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, batch_id)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+
+    clock = {"seconds": 0.0}
+    monkeypatch.setattr(runloop.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        runloop.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
+    )
+    observed_events = []
+
+    class Recorder:
+        def __init__(self, _home, _client):
+            pass
+
+        def try_record(self, event_type, **kwargs):
+            observed_events.append((event_type, kwargs))
+
+        def flush(self):
+            return 0
+
+    monkeypatch.setattr(runloop, "FlightRecorder", Recorder)
+
+    class DelayedPrecheckoutExit(_Process):
+        def __init__(self, command, env, **kwargs):
+            super().__init__(command, env, returncode=1, **kwargs)
+            self.returncode = None
+
+        def poll(self):
+            if clock["seconds"] < 24.0:
+                assert not fleet._pool_startup_path(tmp_path, batch_id).exists()
+                return None
+            self.returncode = 0
+            return 0
+
+    monkeypatch.setattr(
+        runloop.subprocess,
+        "Popen",
+        lambda command, env, **kwargs: DelayedPrecheckoutExit(
+            command, env, **kwargs,
+        ),
+    )
+
+    result = runloop._run_worker_pool(_args(
+        workers=2,
+        fleet_pool=True,
+        batch_id=batch_id,
+        credentials_file="/private/plan.json",
+    ))
+
+    startup = fleet._read_json(fleet._pool_startup_path(tmp_path, batch_id))
+    assert result == 1
+    assert clock["seconds"] >= 24.0
+    assert startup["status"] == "failed"
+    assert startup["error_code"] == "local_runner_never_ready"
+    assert [event for event, _kwargs in observed_events].count(
+        "precheckout_exit"
+    ) == 2
+    assert [event for event, _kwargs in observed_events] == [
+        "supervisor_spawned",
+        "precheckout_exit",
+        "precheckout_exit",
+        "startup_failed",
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker,error_code,message_fragment",
+    [
+        (
+            "drain:account quota exhausted",
+            "startup_aborted_by_account_stop",
+            "账号停止指令",
+        ),
+        (
+            "account safety circuit opened",
+            "startup_aborted_by_circuit",
+            "本地安全熔断",
+        ),
+    ],
+)
+def test_fleet_precheckout_abort_is_never_completed(
+    tmp_path, monkeypatch, marker, error_code, message_fragment,
+):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(
+        runloop,
+        "_run_config",
+        lambda _args: {
+            "benchmark": runloop.DEFAULT_BENCHMARK,
+            "run_plan_id": "plan-a",
+        },
+    )
+    monkeypatch.setattr(
+        runloop, "_selected_tasks_root", lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runloop, "_retry_pending_uploads", lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    fleet._prepare_dirs(tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch_id)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, batch_id)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+
+    class Recorder:
+        def __init__(self, _home, _client):
+            pass
+
+        def try_record(self, *_args, **_kwargs):
+            return None
+
+        def flush(self):
+            return 0
+
+    monkeypatch.setattr(runloop, "FlightRecorder", Recorder)
+    calls = []
+
+    def popen(command, env, **kwargs):
+        is_first = not calls
+
+        def publish_abort():
+            if is_first:
+                runloop.Path(env[runloop._POOL_ABORT_ENV]).write_text(marker)
+
+        process = _ScriptedProcess(
+            command,
+            env,
+            [0],
+            on_poll=publish_abort,
+            mark_activity=False,
+            **kwargs,
+        )
+        calls.append(process)
+        return process
+
+    monkeypatch.setattr(runloop.subprocess, "Popen", popen)
+
+    result = runloop._run_worker_pool(_args(
+        workers=2,
+        fleet_pool=True,
+        batch_id=batch_id,
+        credentials_file="/private/plan.json",
+    ))
+
+    startup = fleet._read_json(fleet._pool_startup_path(tmp_path, batch_id))
+    assert result == 1
+    assert startup["status"] == "failed"
+    assert startup["error_code"] == error_code
+    assert message_fragment in startup["user_message"]
+
+
+def test_egress_probe_timeout_is_the_user_visible_startup_failure(
+    tmp_path, monkeypatch,
+):
+    fleet._prepare_dirs(tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch_id)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, batch_id)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+
+    runloop._publish_fleet_startup_failure(
+        _args(workers=2, fleet_pool=True, batch_id=batch_id),
+        runloop.RunnerError(
+            "Pier egress environment is not ready: the Pier egress preflight "
+            "made no ready transition within 120 seconds; no task was started"
+        ),
+    )
+
+    startup = fleet._read_json(fleet._pool_startup_path(tmp_path, batch_id))
+    assert startup["status"] == "failed"
+    assert startup["error_code"] == "egress_probe_timeout"
+    assert "120 秒内仍未完成启动" in startup["user_message"]
+    assert "题目没有开始执行" in startup["user_message"]
 
 
 def test_transient_session_capacity_failure_keeps_short_backoff(

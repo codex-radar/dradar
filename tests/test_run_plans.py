@@ -1268,6 +1268,32 @@ def test_fixed_capacity_decision_precedes_server_start_and_is_one_use(
     assert len(client.start_calls) == 1
 
 
+def test_progress_preserves_a_pending_local_capacity_barrier(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=2, task_count=2)
+    client = FakeClient(progress=[pytest.fail])
+    path, state = _prepare_run(
+        monkeypatch, tmp_path, plan=plan, client=client,
+        snapshot=_snapshot(available=1, auto_workers=1),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    decision = json.loads(capsys.readouterr().out)
+    assert decision["decision_required"] is True
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    blocked = json.loads(capsys.readouterr().out)
+
+    assert blocked["status"] == "blocked"
+    assert blocked["agent_action"] == "notify_only"
+    assert blocked["error_code"] == "local_capacity_decision_pending"
+    assert blocked["agent"]["pending_user_decision"] is True
+    assert "没有设备" not in blocked["user_message"]
+    assert client.progress_calls == []
+    assert run_plans._read_private_json(path)["pending_local_capacity"]
+
+
 def test_keep_requested_confirmation_survives_nonworsening_capacity_churn(
     tmp_path, monkeypatch, capsys,
 ):
