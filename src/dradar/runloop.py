@@ -4281,6 +4281,40 @@ def _modern_checkout_rejection_reason(assignment: object) -> str | None:
     return None
 
 
+def _legacy_history_field_name(field: object) -> bool:
+    """Return whether a legacy field can carry prior-run ownership history."""
+    if not isinstance(field, str):
+        return True
+    normalized = field.lower()
+    if normalized == "started_at":
+        return False
+    return (
+        any(
+            token in normalized
+            for token in (
+                "heartbeat",
+                "session",
+                "runner",
+                "checkpoint",
+                "stale",
+                "recovery",
+                "ownership",
+            )
+        )
+        or normalized.startswith(("started_", "resume_", "owner_"))
+    )
+
+
+def _legacy_history_value_is_safe_zero(value: object) -> bool:
+    """Allow only explicit empty sentinels for unknown legacy history fields."""
+    return (
+        value is None
+        or value is False
+        or (type(value) is int and value == 0)
+        or value == ""
+    )
+
+
 def _legacy_checkout_fallback_reason(active: object) -> str | None:
     """Allow one provably untouched pre-heartbeat assignment, or fail closed.
 
@@ -4299,8 +4333,14 @@ def _legacy_checkout_fallback_reason(active: object) -> str | None:
         return "legacy_checkout_unsupported"
     if assignment.get("execution_state") != "waiting":
         return "stale_assignment_rejected"
+    has_unsafe_runtime_history = any(
+        _legacy_history_field_name(field)
+        and not _legacy_history_value_is_safe_zero(value)
+        for field, value in assignment.items()
+    )
     if (
-        assignment.get("started_at") is not None
+        has_unsafe_runtime_history
+        or assignment.get("started_at") is not None
         or assignment.get("checkpoint_id") is not None
         or assignment.get("runner_phase") is not None
         or assignment.get("stale") is True
@@ -4309,7 +4349,7 @@ def _legacy_checkout_fallback_reason(active: object) -> str | None:
         or "heartbeat_running" in assignment
         or "runner_state" in assignment
         or any(
-            assignment.get(field) is not None
+            not _legacy_history_value_is_safe_zero(assignment.get(field))
             for field in (
                 "run_session", "run_session_id", "runner_session_id", "session_id",
             )

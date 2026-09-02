@@ -186,6 +186,28 @@ def test_checkout_404_falls_back_to_legacy_batch(monkeypatch, tmp_path):
          "stale_assignment_rejected"),
         ([{**_legacy_waiting_cell("stale"), "heartbeat_lost": True}],
          "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("last-heartbeat"),
+           "last_heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("heartbeat-at"),
+           "heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-heartbeat"),
+           "runner_last_heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("owner-epoch"), "owner_epoch": 1}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("resume-generation"), "resume_generation": 1}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-closed"),
+           "runner_closed_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("camel-heartbeat"),
+           "lastHeartbeatAt": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("historical-heartbeat"),
+           "historical_heartbeat_v1": {"at": "2026-09-02T00:00:00Z"}}],
+         "stale_assignment_rejected"),
     ],
 )
 def test_checkout_404_rejects_unproven_or_stale_legacy_inventory(
@@ -203,6 +225,29 @@ def test_checkout_404_rejects_unproven_or_stale_legacy_inventory(
     assert ran == []
     assert reason in capsys.readouterr().out
     assert marker.read_text() == f"blocked:{reason}"
+
+
+def test_checkout_404_allows_explicit_safe_zero_legacy_history(
+        monkeypatch, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    waiting = {
+        **_legacy_waiting_cell("safe-zero"),
+        "last_heartbeat_at": None,
+        "heartbeat_at": "",
+        "runner_closed_at": None,
+        "owner_epoch": 0,
+        "resume_generation": 0,
+        "session_id": "",
+        "recovery_epoch": 0,
+    }
+    client = CheckoutClient(
+        {"active": [waiting], "free_pick": True},
+        [ApiError("not found", status_code=404)],
+    )
+
+    assert runloop._go_menu(_args(), {}, client, tmp_path) == 0
+    assert ran == ["safe-zero"]
 
 
 def test_modern_checkout_rejects_explicit_stale_assignment_before_model(
