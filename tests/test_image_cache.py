@@ -11,6 +11,7 @@ import pytest
 PROJECT = "some-task__abc1234"
 MAIN_REF = f"{PROJECT}-main:latest"
 PROXY_REF = f"{PROJECT}-pier-egress-proxy:latest"
+_REAL_PREFLIGHT_TRIAL_BUILDER = image_cache.preflight_trial_builder
 
 
 def _inspect(reference=MAIN_REF, *, project=PROJECT, service="main", image_id="sha256:abc"):
@@ -99,7 +100,7 @@ def test_trial_builder_is_assignment_scoped_and_never_selected_globally(
 
     monkeypatch.setattr(image_cache, "_run_docker", run)
     lease = image_cache.prepare_trial_builder(
-        tmp_path, assignment_id="a1", runtime={},
+        tmp_path, assignment_id="a1", runtime={}, registry_mirrors=(),
     )
 
     assert lease.isolated and lease.name == image_cache.trial_builder_name(tmp_path, "a1")
@@ -131,6 +132,7 @@ def test_shared_trial_builder_is_bootstrapped_and_reusable(
     monkeypatch.setattr(image_cache, "_run_docker", run)
     lease = image_cache.prepare_trial_builder(
         tmp_path, assignment_id="a1", runtime={}, mode="shared",
+        registry_mirrors=(),
     )
 
     assert lease.isolated and lease.reusable
@@ -142,6 +144,7 @@ def test_shared_trial_builder_is_bootstrapped_and_reusable(
     calls.clear()
     second = image_cache.prepare_trial_builder(
         tmp_path / "other-harness", assignment_id="a2", runtime={}, mode="shared",
+        registry_mirrors=(),
     )
     assert second.name == lease.name and second.reusable
     assert [command for command in calls if "--bootstrap" in command] == []
@@ -175,6 +178,158 @@ def test_shared_build_cache_prune_targets_only_dradar_builder(
             "--max-used-space", str(50 * image_cache.GIB),
         ],
     ]
+
+
+def test_trial_builder_passes_only_valid_https_mirrors_to_buildkit(
+    tmp_path: Path, monkeypatch,
+):
+    calls = []
+    config = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        if command[:2] == ["buildx", "inspect"]:
+            return subprocess.CompletedProcess(command, 1, "", "not found")
+        if command[:2] == ["buildx", "create"]:
+            path = Path(command[command.index("--buildkitd-config") + 1])
+            config.append(path.read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(image_cache, "_run_docker", run)
+    lease = image_cache.prepare_trial_builder(
+        tmp_path,
+        assignment_id="a1",
+        runtime={},
+        registry_mirrors=("https://mirror.example",),
+    )
+
+    assert lease.isolated
+    assert "--buildkitd-config" in calls[-1]
+    assert config == [
+        (
+            '[registry."docker.io"]\n'
+            '  mirrors = ["https://mirror.example"]\n'
+        )
+    ]
+
+
+@pytest.mark.parametrize("mirror", [
+    "http://mirror.example",
+    "https://user:secret@mirror.example",
+    "ftp://mirror.example",
+    "https://mirror.example?token=secret",
+])
+def test_trial_builder_rejects_insecure_or_credentialed_mirror(
+    tmp_path: Path, monkeypatch, mirror,
+):
+    monkeypatch.setattr(
+        image_cache,
+        "_run_docker",
+        lambda *_a, **_k: pytest.fail("invalid mirror must fail before Docker"),
+    )
+
+    lease = image_cache.prepare_trial_builder(
+        tmp_path,
+        assignment_id="a1",
+        runtime={},
+        registry_mirrors=(mirror,),
+    )
+
+    assert not lease.isolated
+    assert "HTTPS" in (lease.note or "")
+
+
+def test_builder_preflight_preserves_stage_exit_and_redacted_stderr(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(
+        image_cache, "preflight_trial_builder", _REAL_PREFLIGHT_TRIAL_BUILDER,
+    )
+    removed = []
+    monkeypatch.setattr(
+        image_cache,
+        "prepare_trial_builder",
+        lambda *_a, **_k: image_cache.TrialBuilderLease("probe", True),
+    )
+    monkeypatch.setattr(
+        image_cache,
+        "remove_trial_builder",
+        lambda home, assignment_id: removed.append((home, assignment_id))
+        or (True, None),
+    )
+    monkeypatch.setattr(
+        image_cache,
+        "_run_docker",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            "",
+            "load metadata for docker.io/library/node:22-bookworm\n"
+            "Head https://user:secret@registry-1.docker.io/v2/token: "
+            "network is unreachable",
+        ),
+    )
+
+    result = image_cache.preflight_trial_builder(
+        tmp_path, registry_mirrors=(),
+    )
+
+    assert not result.ok
+    assert result.returncode == 1
+    assert result.stage == "base_image_metadata"
+    assert result.failure_code == "registry_network_unreachable"
+    assert "secret" not in result.detail
+    assert "https://" not in result.detail
+    assert len(removed) == 1
+
+
+def test_docker_diagnostic_redacts_multisegment_auth_values():
+    credentials = (
+        "bearer-" + "A" * 48,
+        "basic-" + "B" * 48,
+        "proxy-" + "C" * 48,
+        "config-" + "D" * 48,
+        "challenge-" + "M" * 48,
+        "fallback-" + "N" * 48,
+    )
+    diagnostic = "\n".join((
+        f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}",
+        f"Proxy-Authorization: Basic {credentials[2]}",
+        f'client response {{"auth":"{credentials[3]}"}}',
+        f"registry challenge Bearer {credentials[4]}; Basic {credentials[5]}",
+    ))
+
+    redacted = image_cache.redact_docker_diagnostic(diagnostic)
+
+    assert all(value not in redacted for value in credentials)
+    assert redacted.count("<redacted>") >= 3
+
+
+def test_preflight_redacts_docker_info_failure_before_returning_detail(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(
+        image_cache, "preflight_trial_builder", _REAL_PREFLIGHT_TRIAL_BUILDER,
+    )
+    credentials = ("bearer-" + "E" * 48, "basic-" + "F" * 48)
+    monkeypatch.setattr(
+        image_cache,
+        "_run_docker",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            "",
+            "docker info failed\n"
+            f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}",
+        ),
+    )
+
+    result = image_cache.preflight_trial_builder(tmp_path)
+
+    assert not result.ok
+    assert result.stage == "registry_configuration"
+    assert all(value not in result.detail for value in credentials)
+    assert "<redacted>" in result.detail
 
 
 def test_trial_builder_falls_back_without_exposing_loopback_proxy(
@@ -266,6 +421,55 @@ def test_remove_trial_builder_deletes_only_deterministic_assignment_builder(
         ["buildx", "inspect", name],
         ["buildx", "rm", name],
     ]
+
+
+@pytest.mark.parametrize("output_channel", ["stderr", "stdout"])
+def test_remove_trial_builder_redacts_failed_cleanup_output(
+    tmp_path: Path, monkeypatch, output_channel,
+):
+    credentials = ("bearer-" + "P" * 48, "basic-" + "Q" * 48)
+
+    def run(command, **_kwargs):
+        if command[1] == "inspect":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        output = (
+            f"Proxy-Authorization: Bearer {credentials[0]}, "
+            f"Basic {credentials[1]}"
+        )
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            output if output_channel == "stdout" else "",
+            output if output_channel == "stderr" else "",
+        )
+
+    monkeypatch.setattr(image_cache, "_run_docker", run)
+
+    removed, detail = image_cache.remove_trial_builder(tmp_path, "a1")
+
+    assert not removed
+    assert detail is not None
+    assert all(value not in detail for value in credentials)
+    assert "<redacted>" in detail
+
+
+def test_remove_trial_builder_redacts_docker_unavailable(
+    tmp_path: Path, monkeypatch,
+):
+    credential = "opaque-" + "Z" * 48
+    monkeypatch.setattr(
+        image_cache,
+        "_run_docker",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            image_cache.DockerUnavailable(f"Authorization: Bearer {credential}")
+        ),
+    )
+
+    removed, detail = image_cache.remove_trial_builder(tmp_path, "a1")
+
+    assert not removed
+    assert credential not in (detail or "")
+    assert "<redacted>" in (detail or "")
 
 
 def test_invalid_trial_name_never_queries_docker(tmp_path: Path, monkeypatch):
@@ -443,6 +647,56 @@ def test_task_cleanup_refuses_a_directory_outside_managed_jobs(
 
     assert not result.success
     assert "不属于 DRadar" in result.note
+
+
+def test_task_cleanup_diagnostics_are_fairly_bounded_across_sources(
+    tmp_path: Path, monkeypatch,
+):
+    assignment_id = "a1"
+    job_dir = tmp_path / "work" / "jobs" / f"a{assignment_id}"
+    trial_dir = job_dir / PROJECT
+    trial_dir.mkdir(parents=True)
+    secret = "never-expose-this-token"
+    runtime_detail = "runtime-marker " + ("r" * 500) + f" token={secret}"
+    image_detail = "image-marker " + ("i" * 500) + f" password={secret}"
+    builder_detail = "builder-marker " + ("b" * 500) + f" secret={secret}"
+
+    monkeypatch.setattr(
+        image_cache,
+        "_remove_project_runtime",
+        lambda *_a: (_ for _ in ()).throw(
+            image_cache.DockerUnavailable(runtime_detail)
+        ),
+    )
+    monkeypatch.setattr(
+        image_cache,
+        "remove_assignment_images",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            image_cache.DockerUnavailable(image_detail)
+        ),
+    )
+    monkeypatch.setattr(
+        image_cache,
+        "remove_trial_builder",
+        lambda *_a, **_k: (False, builder_detail),
+    )
+
+    result = image_cache.cleanup_trial_resources(
+        tmp_path,
+        assignment_id=assignment_id,
+        job_dir=job_dir,
+        trial_name=PROJECT,
+        builder_isolated=True,
+    )
+
+    assert not result.success
+    assert result.note is not None
+    assert len(result.note) <= 1200
+    assert "运行环境清理失败" in result.note
+    assert "题目镜像检查失败" in result.note
+    assert "临时构建空间清理失败" in result.note
+    assert secret not in result.note
+    assert result.note.count("<redacted>") == 3
 
 
 def test_remove_revalidates_id_and_never_uses_force(monkeypatch):

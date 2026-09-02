@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from contextlib import contextmanager
@@ -34,6 +35,8 @@ LEDGER_NAME = "image-cache.json"
 LOCK_NAME = "image-cache.lock"
 MAINTENANCE_STAMP_NAME = "image-cache-maintenance.stamp"
 BUILDER_PREFIX = "dradar-task-"
+BUILDER_MIRRORS_ENV = "DRADAR_BUILDKIT_REGISTRY_MIRRORS_V1"
+BUILDER_PREFLIGHT_IMAGE = "node:22-bookworm"
 SHARED_BUILDER_PREFIX = "dradar-cache-"
 SHARED_BUILDER_LOCK_NAME = "shared-build-cache.lock"
 SHARED_BUILDER_READY_STAMP_NAME = "shared-build-cache.ready.json"
@@ -112,6 +115,16 @@ class TrialBuilderLease:
     # survives one trial so BuildKit can reuse immutable layers for the next
     # task, even when Fleet gives each harness a separate DRADAR_HOME.
     reusable: bool = False
+
+
+@dataclass(frozen=True)
+class TrialBuilderPreflight:
+    ok: bool
+    returncode: int
+    stage: str
+    failure_code: str | None
+    detail: str
+    registry_mirrors: tuple[str, ...] = ()
 
 
 @dataclass
@@ -216,6 +229,192 @@ def trial_builder_name(home: Path, assignment_id: str) -> str:
     """Return a deterministic builder name scoped to one home and assignment."""
     identity = f"{home.resolve()}\0{assignment_id}".encode("utf-8", "surrogatepass")
     return BUILDER_PREFIX + hashlib.sha256(identity).hexdigest()[:20]
+
+
+def _validated_registry_mirror(value: object) -> str:
+    """Return one credential-free HTTPS registry mirror URL."""
+
+    if not isinstance(value, str):
+        raise DockerUnavailable("Docker returned a non-string registry mirror")
+    raw = value.strip().rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError as exc:
+        raise DockerUnavailable("Docker returned an invalid registry mirror") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DockerUnavailable(
+            "the Docker registry mirror is not a credential-free HTTPS URL"
+        )
+    return raw
+
+
+def docker_registry_mirrors() -> tuple[str, ...]:
+    """Snapshot the daemon's reviewed mirrors for a child BuildKit."""
+
+    inherited = os.environ.get(BUILDER_MIRRORS_ENV)
+    if inherited is not None:
+        try:
+            values = json.loads(inherited)
+        except json.JSONDecodeError as exc:
+            raise DockerUnavailable(
+                "the inherited BuildKit registry mirror snapshot is invalid"
+            ) from exc
+    else:
+        proc = _run_docker(
+            ["info", "--format", "{{json .RegistryConfig.Mirrors}}"],
+            timeout=30,
+            allow_fail=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "Docker info failed").strip()
+            raise DockerUnavailable(redact_docker_diagnostic(detail, limit=300))
+        try:
+            values = json.loads(proc.stdout.strip() or "[]")
+        except json.JSONDecodeError as exc:
+            raise DockerUnavailable(
+                "Docker returned malformed registry mirror metadata"
+            ) from exc
+    if not isinstance(values, list) or len(values) > 8:
+        raise DockerUnavailable("Docker returned invalid registry mirror metadata")
+    return tuple(dict.fromkeys(_validated_registry_mirror(value) for value in values))
+
+
+@contextmanager
+def _buildkit_registry_config(
+    registry_mirrors: tuple[str, ...],
+) -> Iterator[Path | None]:
+    if not registry_mirrors:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="dradar-buildkit-config-") as directory:
+        path = Path(directory) / "buildkitd.toml"
+        encoded = ", ".join(json.dumps(value) for value in registry_mirrors)
+        path.write_text(
+            '[registry."docker.io"]\n'
+            f"  mirrors = [{encoded}]\n",
+            encoding="utf-8",
+        )
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        yield path
+
+
+def redact_docker_diagnostic(output: object, *, limit: int = 1200) -> str:
+    """Bound Docker/BuildKit diagnostics after removing credential material."""
+
+    text = re.sub(r"(?i)https?://[^\s]+", "<url>", str(output or ""))
+    text = re.sub(
+        r"(?im)\b((?:proxy-)?authorization|x-registry-auth)\b"
+        r"(\s*[:=]\s*)[^\r\n]*",
+        r"\1\2<redacted>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(bearer|basic)\s+[^\s,;]+",
+        r"\1 <redacted>",
+        text,
+    )
+    text = re.sub(
+        r'''(?ix)
+        (?P<prefix>["']?(?:
+            access[_-]?token|refresh[_-]?token|identity[_-]?token|
+            registry[_-]?token|token|password|passwd|secret|
+            client[_-]?secret|api[_-]?key|credential(?:s)?|
+            docker[_-]?auth[_-]?config|auth
+        )["']?\s*[:=]\s*)
+        (?P<quote>["']?)[^"'\s,;}]+(?P=quote)
+        ''',
+        r"\g<prefix>\g<quote><redacted>\g<quote>",
+        text,
+    )
+    text = re.sub(r"sha256:[0-9a-f]{64}", "sha256:<digest>", text)
+    lines = [
+        _truncate_diagnostic_middle(line, 500)
+        for line in text.splitlines()
+        if line.strip()
+    ]
+    return "\n".join(lines[-12:])[-limit:]
+
+
+def _truncate_diagnostic_middle(text: str, limit: int) -> str:
+    """Keep a diagnostic's source prefix and terminal cause within a bound."""
+
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    marker = "…"
+    content = limit - len(marker)
+    head = (content * 2) // 3
+    tail = content - head
+    return text[:head] + marker + text[-tail:]
+
+
+def _bounded_cleanup_diagnostics(
+    notes: list[str], *, total_limit: int = 1200,
+) -> str | None:
+    """Fairly bound cleanup sources without allowing a tail slice to erase one."""
+
+    if not notes:
+        return None
+    separator = "；"
+    available = max(0, total_limit - len(separator) * (len(notes) - 1))
+    safe = [
+        # redact_docker_diagnostic keeps at most 12 lines of 500 characters.
+        # Request that complete safe envelope here; this helper, not the
+        # redactor's tail bound, owns the fair per-source allocation.
+        redact_docker_diagnostic(note, limit=max(total_limit, 6000))
+        for note in notes
+    ]
+    allocations = [0] * len(safe)
+    remaining = available
+    active = set(range(len(safe)))
+    while active and remaining > 0:
+        share = max(1, remaining // len(active))
+        completed: list[int] = []
+        for index in sorted(active):
+            needed = len(safe[index]) - allocations[index]
+            grant = min(needed, share, remaining)
+            allocations[index] += grant
+            remaining -= grant
+            if allocations[index] >= len(safe[index]):
+                completed.append(index)
+            if remaining == 0:
+                break
+        active.difference_update(completed)
+    parts = [
+        _truncate_diagnostic_middle(value, allocations[index])
+        for index, value in enumerate(safe)
+    ]
+    return separator.join(parts)
+
+
+def _redacted_build_excerpt(output: str, *, limit: int = 1200) -> str:
+    return redact_docker_diagnostic(output, limit=limit)
+
+
+def _build_failure_code(output: str) -> str:
+    low = output.lower()
+    if "network is unreachable" in low or "connection refused" in low:
+        return "registry_network_unreachable"
+    if "i/o timeout" in low or "deadline exceeded" in low or "timed out" in low:
+        return "registry_timeout"
+    if "no such host" in low or "temporary failure resolving" in low:
+        return "registry_dns_failed"
+    if "x509" in low or "tls handshake" in low:
+        return "registry_tls_failed"
+    if "failed to fetch anonymous token" in low or "toomanyrequests" in low:
+        return "registry_auth_or_limit"
+    return "registry_metadata_failed"
 
 
 def shared_builder_name(home: Path) -> str:
@@ -369,7 +568,12 @@ def _shared_builder_lock() -> Iterator[None]:
             fh.close()
 
 
-def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
+def _ensure_named_builder(
+    name: str,
+    *,
+    reusable: bool,
+    registry_mirrors: tuple[str, ...] = (),
+) -> str | None:
     """Create/refresh one builder and return a bounded failure reason."""
 
     existing = _run_docker(
@@ -386,10 +590,14 @@ def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
             return None
 
     if existing.returncode != 0:
-        created = _run_docker([
-            "buildx", "create", "--name", name,
-            "--driver", "docker-container",
-        ], timeout=120, allow_fail=True)
+        with _buildkit_registry_config(registry_mirrors) as config_path:
+            command = [
+                "buildx", "create", "--name", name,
+                "--driver", "docker-container",
+            ]
+            if config_path is not None:
+                command += ["--buildkitd-config", str(config_path)]
+            created = _run_docker(command, timeout=120, allow_fail=True)
         if created.returncode != 0:
             # This is normally a harmless create race.  The shared lock makes
             # it rare, but the bounded inspect proves whether Docker already
@@ -410,13 +618,19 @@ def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
                     detail = (created.stderr or created.stdout or "").strip()
                     return (
                         "无法创建共享构建缓存空间"
-                        + (f"：{detail[:160]}" if detail else "")
+                        + (
+                            f"：{redact_docker_diagnostic(detail, limit=160)}"
+                            if detail else ""
+                        )
                     )
             else:
                 detail = (created.stderr or created.stdout or "").strip()
                 return (
                     "无法创建隔离的临时构建空间"
-                    + (f"：{detail[:160]}" if detail else "")
+                    + (
+                        f"：{redact_docker_diagnostic(detail, limit=160)}"
+                        if detail else ""
+                    )
                 )
 
     if reusable:
@@ -478,6 +692,7 @@ def _builder_proxy_is_safe(runtime: dict[str, str]) -> tuple[bool, str | None]:
 def prepare_trial_builder(
     home: Path, *, assignment_id: str, runtime: dict[str, str] | None = None,
     mode: str = DEFAULT_BUILD_CACHE_MODE,
+    registry_mirrors: tuple[str, ...] | None = None,
 ) -> TrialBuilderLease:
     """Create a BuildKit builder for one assignment or a scoped shared cache.
 
@@ -492,6 +707,19 @@ def prepare_trial_builder(
     safe, note = _builder_proxy_is_safe(runtime)
     if not safe:
         return TrialBuilderLease(None, False, note)
+    try:
+        mirrors = (
+            docker_registry_mirrors()
+            if registry_mirrors is None else
+            tuple(_validated_registry_mirror(value) for value in registry_mirrors)
+        )
+    except DockerUnavailable as exc:
+        return TrialBuilderLease(
+            None,
+            False,
+            "临时构建镜像源不可用："
+            + redact_docker_diagnostic(exc, limit=300),
+        )
     reusable = mode == "shared"
     name = shared_builder_name(home) if reusable else trial_builder_name(
         home, assignment_id,
@@ -507,14 +735,22 @@ def prepare_trial_builder(
             # builder creation/bootstrap outside the per-assignment lock but
             # still prevents a parallel cold-start herd.
             with _shared_builder_lock():
-                failure = _ensure_named_builder(name, reusable=True)
+                failure = _ensure_named_builder(
+                    name, reusable=True, registry_mirrors=mirrors,
+                )
         else:
-            failure = _ensure_named_builder(name, reusable=False)
+            failure = _ensure_named_builder(
+                name, reusable=False, registry_mirrors=mirrors,
+            )
         if failure is not None:
             return TrialBuilderLease(None, False, failure)
     except DockerUnavailable as exc:
         label = "共享构建缓存空间" if reusable else "临时构建空间"
-        return TrialBuilderLease(None, False, f"{label}不可用：{exc}")
+        return TrialBuilderLease(
+            None,
+            False,
+            f"{label}不可用：" + redact_docker_diagnostic(exc, limit=300),
+        )
     except OSError as exc:
         label = "共享构建缓存空间" if reusable else "临时构建空间"
         return TrialBuilderLease(None, False, f"{label}本地锁不可用：{exc}")
@@ -523,6 +759,80 @@ def prepare_trial_builder(
             name, True, "共享 BuildKit 缓存已预热；仅限当前 OS 用户的 Docker 环境", True,
         )
     return TrialBuilderLease(name, True)
+
+
+def preflight_trial_builder(
+    home: Path,
+    *,
+    image: str = BUILDER_PREFLIGHT_IMAGE,
+    registry_mirrors: tuple[str, ...] | None = None,
+) -> TrialBuilderPreflight:
+    """Resolve one base image through an isolated builder without a model."""
+
+    try:
+        mirrors = (
+            docker_registry_mirrors()
+            if registry_mirrors is None else
+            tuple(_validated_registry_mirror(value) for value in registry_mirrors)
+        )
+    except DockerUnavailable as exc:
+        return TrialBuilderPreflight(
+            False, 1, "registry_configuration", "registry_config_invalid",
+            redact_docker_diagnostic(exc, limit=500),
+        )
+    preflight_id = f"preflight-{os.getpid()}-{time.time_ns()}"
+    lease = prepare_trial_builder(
+        home,
+        assignment_id=preflight_id,
+        mode="isolated",
+        registry_mirrors=mirrors,
+    )
+    if not lease.isolated or lease.name is None:
+        return TrialBuilderPreflight(
+            False, 1, "builder_create", "builder_create_failed",
+            redact_docker_diagnostic(
+                lease.note or "isolated builder unavailable", limit=500,
+            ),
+            mirrors,
+        )
+    result: TrialBuilderPreflight
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="dradar-buildkit-preflight-",
+        ) as context:
+            dockerfile = Path(context) / "Dockerfile"
+            dockerfile.write_text(f"FROM {image}\n", encoding="utf-8")
+            proc = _run_docker(
+                [
+                    "buildx", "build", "--builder", lease.name,
+                    "--check", "--pull", "--progress=plain",
+                    "--file", str(dockerfile), context,
+                ],
+                timeout=90,
+                allow_fail=True,
+            )
+        output = f"{proc.stdout}\n{proc.stderr}"
+        result = TrialBuilderPreflight(
+            proc.returncode == 0,
+            proc.returncode,
+            "base_image_metadata",
+            None if proc.returncode == 0 else _build_failure_code(output),
+            "" if proc.returncode == 0 else _redacted_build_excerpt(output),
+            mirrors,
+        )
+    except DockerUnavailable as exc:
+        result = TrialBuilderPreflight(
+            False, 1, "base_image_metadata", "builder_preflight_unavailable",
+            _redacted_build_excerpt(str(exc)), mirrors,
+        )
+    removed, removal_note = remove_trial_builder(home, preflight_id)
+    if not removed:
+        return TrialBuilderPreflight(
+            False, 1, "builder_cleanup", "builder_cleanup_failed",
+            _redacted_build_excerpt(removal_note or "builder cleanup failed"),
+            mirrors,
+        )
+    return result
 
 
 def remove_trial_builder(
@@ -543,10 +853,10 @@ def remove_trial_builder(
             ["buildx", "rm", name], timeout=180, allow_fail=True,
         )
     except DockerUnavailable as exc:
-        return False, str(exc)
+        return False, redact_docker_diagnostic(exc, limit=300)
     if removed.returncode != 0:
         detail = (removed.stderr or removed.stdout or "Docker 拒绝清理").strip()
-        return False, detail[:300]
+        return False, redact_docker_diagnostic(detail, limit=300)
     return True, None
 
 
@@ -1373,7 +1683,7 @@ def cleanup_trial_resources(
         notes.append(f"临时构建空间清理失败：{builder_note or 'unknown error'}")
     # A host-user-scoped shared builder is intentionally retained for the next
     # task; only this task's Compose objects/images are cleaned above.
-    result.note = "；".join(notes) if notes else None
+    result.note = _bounded_cleanup_diagnostics(notes)
     return result
 
 
@@ -1552,12 +1862,16 @@ def cmd_config_set(args) -> int:
 
 
 __all__ = [
+    "BUILDER_MIRRORS_ENV", "BUILDER_PREFLIGHT_IMAGE",
     "CachePolicy", "CleanupPlan", "DockerImage", "DockerUnavailable",
     "MaintenanceResult", "TaskCleanupResult", "TrialBuilderLease",
+    "TrialBuilderPreflight",
     "automatic_maintenance", "cleanup_trial_resources", "discover_pier_images",
     "claim_periodic_maintenance", "disk_allows_new_tasks", "disk_free_bytes",
     "effective_policy", "is_wsl", "load", "plan_cleanup",
+    "docker_registry_mirrors", "preflight_trial_builder",
     "prepare_trial_builder", "proxy_detected", "record_trial_images",
+    "redact_docker_diagnostic",
     "remove_assignment_images", "remove_images", "remove_trial_builder",
     "prune_shared_build_cache",
     "trial_builder_name", "shared_builder_name", "normalize_build_cache_mode",

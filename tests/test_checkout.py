@@ -630,7 +630,7 @@ def test_checkout_loop_fuses_after_environment_build_failure(
 
     rc = runloop._go_menu(_args(), {}, client, tmp_path)
 
-    assert rc == 1
+    assert rc == 78
     assert client.checkout_exclusions == [set()]
     assert len(client._checkouts) == 1
     assert "before the next checkout" in capsys.readouterr().out
