@@ -14,6 +14,7 @@ import pytest
 from dradar import (
     cli,
     codebuddy_provider,
+    docker_runtime,
     doctor,
     fleet,
     pending,
@@ -140,7 +141,7 @@ def _state(tmp_path, plan):
 
 def _args(
     *, concurrency=None, decision_token=None, scope=None, upload_only=False,
-    recheck_generation=None,
+    recheck_generation=None, docker_install_token=None,
 ):
     return SimpleNamespace(
         plan=RUN_CODE,
@@ -150,6 +151,7 @@ def _args(
         scope=scope,
         upload_only=upload_only,
         recheck_generation=recheck_generation,
+        docker_install_token=docker_install_token,
         json=True,
     )
 
@@ -312,6 +314,11 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
         "--server", "https://api.claudecoderadar.com",
         "--recheck-generation", "7", "--json",
     ]) == 0
+    assert cli.main([
+        "run", "--plan", RUN_CODE,
+        "--server", "https://api.claudecoderadar.com",
+        "--docker-install-token", "drdi_once", "--json",
+    ]) == 0
 
     assert seen[0][1].upload_only is True
     assert seen[0][1].server == "https://api.claudecoderadar.com"
@@ -319,6 +326,7 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
     assert seen[2][1].scope == "all-devices"
     assert seen[2][1].decision_token == "drd_once"
     assert seen[3][1].recheck_generation == 7
+    assert seen[4][1].docker_install_token == "drdi_once"
 
 
 def test_exchange_keeps_run_code_out_of_state_and_uses_private_files(
@@ -2035,6 +2043,172 @@ def test_current_plan_environment_failure_happens_before_server_start(
     assert client.start_calls == []
 
 
+def test_missing_docker_requires_human_choice_without_installing_or_starting(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan()
+    client = FakeClient(starts=[_server_response(plan)])
+    path, state = _prepare_run(
+        monkeypatch, tmp_path, plan=plan, client=client,
+        environment_issue={
+            "error_code": "docker_install_confirmation_required",
+            "user_message": "这台设备尚未安装可用的 Docker。是否安装推荐的 Docker 环境？",
+            "agent_action": "install_docker",
+            "install_required": True,
+            "agent": {"requires_user_action": True},
+        },
+    )
+    monkeypatch.setattr(
+        run_plans, "_capacity_snapshot",
+        lambda *_args: pytest.fail("no capacity check before install consent"),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["decision_required"] is True
+    assert [choice["label"] for choice in payload["choices"]] == [
+        "安装推荐的 Docker 环境", "暂不安装",
+    ]
+    assert payload["agent"]["choice_actions"]["cancel"] == {
+        "mode": "no_command", "args": [],
+    }
+    install_action = payload["agent"]["choice_actions"]["install"]
+    assert install_action["mode"] == "replay_current_command_with_args"
+    assert install_action["args"][0] == "--docker-install-token"
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "brew install" not in serialized
+    assert "winget install" not in serialized
+    assert "apt-get" not in serialized
+    assert client.start_calls == []
+    assert state["pending_docker_install"] is not None
+    assert json.loads(path.read_text())["pending_docker_install"] is not None
+
+
+def test_approved_docker_install_is_consumed_once_then_original_plan_starts_once(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(task_count=1)
+    client = FakeClient(starts=[_server_response(plan)])
+    path, state = _prepare_run(
+        monkeypatch, tmp_path, plan=plan, client=client,
+        snapshot=_snapshot(available=1, auto_workers=1),
+        environment_issue={
+            "error_code": "docker_install_confirmation_required",
+            "user_message": "这台设备尚未安装可用的 Docker。是否安装推荐环境？",
+            "agent_action": "install_docker",
+            "install_required": True,
+        },
+    )
+    local = {}
+    monkeypatch.setattr(fleet, "batch_status", lambda batch: local.get(batch))
+    monkeypatch.setattr(
+        fleet, "add_batch",
+        lambda **kwargs: {
+            "batch": local.setdefault(kwargs["batch_id"], {
+                "status": "running", "plan_id": kwargs["plan_id"],
+                "workers": kwargs["workers"],
+            }),
+        },
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    prompt = json.loads(capsys.readouterr().out)
+    token = prompt["agent"]["choice_actions"]["install"]["args"][1]
+    calls = []
+
+    def recovered(_plan, *, allow_docker_install=False):
+        calls.append(allow_docker_install)
+        return None
+
+    monkeypatch.setattr(doctor, "plan_environment_issue", recovered)
+
+    assert run_plans.cmd_run_plan(_args(docker_install_token=token)) == 0
+    started = json.loads(capsys.readouterr().out)
+
+    assert calls == [True]
+    assert started["agent_action"] == "monitor"
+    assert len(client.start_calls) == 1
+    assert state["pending_docker_install"] is None
+    assert json.loads(path.read_text())["pending_docker_install"] is None
+
+    # The exact same approval is spent, so it cannot install or start twice.
+    assert run_plans.cmd_run_plan(_args(docker_install_token=token)) == 1
+    stale = json.loads(capsys.readouterr().out)
+    assert stale["error_code"] == "docker_install_decision_invalid"
+    assert len(client.start_calls) == 1
+
+
+def test_docker_install_approval_fails_closed_when_original_arguments_change(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=2)
+    client = FakeClient(starts=[_server_response(plan)])
+    _path, _state_value = _prepare_run(
+        monkeypatch, tmp_path, plan=plan, client=client,
+        environment_issue={
+            "error_code": "docker_install_confirmation_required",
+            "user_message": "需要安装 Docker。",
+            "agent_action": "install_docker",
+            "install_required": True,
+        },
+    )
+
+    assert run_plans.cmd_run_plan(_args(concurrency=1)) == 0
+    prompt = json.loads(capsys.readouterr().out)
+    token = prompt["agent"]["choice_actions"]["install"]["args"][1]
+
+    assert run_plans.cmd_run_plan(
+        _args(concurrency=2, docker_install_token=token),
+    ) == 1
+    stale = json.loads(capsys.readouterr().out)
+    assert stale["error_code"] == "docker_install_decision_invalid"
+    assert client.start_calls == []
+
+
+def test_old_agent_can_stop_on_new_install_choice_without_unknown_command(
+    tmp_path, monkeypatch, capsys,
+):
+    """Schema-v1 Agents can safely choose no_command and never install."""
+
+    plan = _plan()
+    client = FakeClient(starts=[])
+    _prepare_run(
+        monkeypatch, tmp_path, plan=plan, client=client,
+        environment_issue={
+            "error_code": "docker_install_confirmation_required",
+            "user_message": "需要安装 Docker。",
+            "agent_action": "install_docker",
+            "install_required": True,
+        },
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    assert payload["agent"]["choice_actions"]["cancel"]["mode"] == "no_command"
+    assert client.start_calls == []
+
+
+def test_install_choice_from_capacity_recheck_drops_spent_generation(tmp_path):
+    plan = _plan()
+    path, state = _state(tmp_path, plan)
+    state["intent_generation"] = 7
+    state["pending_recheck_generation"] = None
+    args = _args(recheck_generation=7)
+
+    payload = run_plans._docker_install_response(
+        path, state, args, user_message="需要安装 Docker。",
+    )
+    action = payload["agent"]["choice_actions"]["install"]
+
+    assert action["mode"] == "replay_plan_command"
+    assert action["command"] == "run"
+    assert action["inherit"] == ["--plan", "--server"]
+    assert "--recheck-generation" not in action["args"]
+    assert "--docker-install-token" in action["args"]
+
+
 def test_codex_plan_does_not_probe_unrelated_grok_or_kimi_credentials(
     tmp_path, monkeypatch,
 ):
@@ -2431,14 +2605,19 @@ def test_codex_login_and_docker_recovery_require_user_action(monkeypatch):
     assert codex["next_commands"][0]["interactive"] is True
 
     monkeypatch.setattr(doctor.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        docker_runtime,
+        "ensure_docker",
+        lambda **_kwargs: docker_runtime.Recovery(
+            False, "docker_install_confirmation_required",
+            "这台设备尚未安装可用的 Docker。是否安装推荐环境？",
+            True, "install_confirmation", install_required=True,
+        ),
+    )
     issue = doctor.plan_environment_issue(_plan(harness="codex"))
-    assert issue["error_code"] == "docker_not_installed"
+    assert issue["error_code"] == "docker_install_confirmation_required"
     assert issue["agent"]["requires_user_action"] is True
-    assert issue["agent"]["next_commands"] == [{
-        "argv": ["dradar", "doctor", "--agent", "codex"],
-        "interactive": False,
-        "purpose": "verify_current_environment",
-    }]
+    assert issue["agent"]["next_commands"] == []
 
 
 @pytest.mark.parametrize("status_code", [409, 410, 429])
