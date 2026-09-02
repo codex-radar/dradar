@@ -33,6 +33,7 @@ from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
 from .image_cache import cmd_config_set, cmd_config_show
 from .leases import cmd_leases, cmd_release
 from .provider_config import cmd_provider_setup, cmd_provider_status
+from .ota.integration import cmd_update_doctor, cmd_update_prepare, cmd_update_status
 from .run_plans import cmd_progress_plan, cmd_run_plan, cmd_stop_plan
 from .runloop import (
     cmd_cleanup, cmd_go, cmd_refill_status, cmd_refill_stop, cmd_retry_upload,
@@ -457,6 +458,38 @@ def main(argv: list[str] | None = None) -> int:
     p_refill_status.set_defaults(func=cmd_refill_status)
     p_refill_stop = refill_sub.add_parser("stop", help="stop claiming new refill tasks")
     p_refill_stop.set_defaults(func=cmd_refill_stop)
+
+    p_update = sub.add_parser("update", help="inspect safe signed CLI updates")
+    update_sub = p_update.add_subparsers(dest="update_command", required=True)
+    p_update_status = update_sub.add_parser(
+        "status", help="show local OTA state without network access"
+    )
+    p_update_status.add_argument(
+        "--json", action="store_true", help="emit machine-readable JSON"
+    )
+    p_update_status.set_defaults(func=cmd_update_status)
+    p_update_doctor = update_sub.add_parser(
+        "doctor", help="diagnose OTA target, state, and permissions"
+    )
+    p_update_doctor.set_defaults(func=cmd_update_doctor)
+    p_update_prepare = update_sub.add_parser(
+        "prepare", help="verify and stage a signed update for the next safe point"
+    )
+    p_update_prepare.add_argument(
+        "--manifest", required=True, metavar="FILE", help="signed manifest JSON file"
+    )
+    p_update_prepare.add_argument(
+        "--trusted-key",
+        required=True,
+        action="append",
+        metavar="KEY_ID=FILE",
+        help="raw 32-byte Ed25519 public key (repeatable for rotation)",
+    )
+    p_update_prepare.add_argument(
+        "--ring", choices=("internal", "canary", "general"), default="general"
+    )
+    p_update_prepare.add_argument("--channel", default="stable")
+    p_update_prepare.set_defaults(func=cmd_update_prepare)
 
     p_sessions = sub.add_parser(
         "sessions", help="manage opt-in local Codex session archives")

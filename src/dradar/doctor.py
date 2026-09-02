@@ -602,6 +602,17 @@ def cmd_doctor(args) -> int:
     hints = _DOCKER_HINTS[plat]
     all_ok = True
 
+    # OTA diagnostics are local and read-only. A legacy install is healthy:
+    # it keeps running the installed version until a trusted baseline exists.
+    from .ota.integration import diagnose_update
+
+    ota_ok, ota_notes = diagnose_update()
+    all_ok &= _check(
+        "signed CLI update state",
+        ota_ok,
+        "; ".join(ota_notes) if ota_notes else None,
+    )
+
     docker = shutil.which("docker")
     all_ok &= _check("docker CLI", bool(docker), hints["cli"])
     daemon_ready = False

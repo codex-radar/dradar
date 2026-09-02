@@ -1,10 +1,10 @@
-# DRadar CLI OTA 架构（#0012 非生产骨架）
+# DRadar CLI OTA 架构（#0012 本地集成候选）
 
 ## 安全目标与边界
 
 OTA 只能提升“下一次安全启动”的版本，不能中断当前 assignment、Pier、Provider 会话、上传、ledger 或历史 checkpoint 写入。不存在 `force release` 或“到点强切”路径。Manifest 不可读取、验签失败、摘要不符、协议不兼容、灰度暂停、未知平台、候选自检失败时都失败关闭；当前版本继续工作。
 
-本候选不接生产服务、不修改 `refill.py` / `doctor.py`，也不下载真实发布物。它已把 #0011 的统一 event envelope、稳定 `client_id`、`request_id` 关联和离线事件落库接入 `UpdateRuntime`；OTA 不生成第二套身份或飞行记录格式。任意异常文本、版本号和 release 名都不会写入飞行记录，只保留白名单状态、单调 sequence 与 release 名的不可逆摘要关联 ID。
+本候选不接生产服务、不发布真实制品。它提供 `dradar update status|doctor|prepare`，并把 #0011 的统一 event envelope、稳定 `client_id`、`request_id` 关联和离线事件落库接入 `UpdateRuntime`；OTA 不生成第二套身份或飞行记录格式。任意异常文本、版本号和 release 名都不会写入飞行记录，只保留白名单状态、单调 sequence 与 release 名的不可逆摘要关联 ID。
 
 ## 稳定 launcher 与磁盘布局
 
@@ -21,7 +21,7 @@ ota-root/
   update.lock               # 全主机唯一更新写锁
 ```
 
-launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。每个已提交版本还包含不可变且不得为 symlink 的 `release-record.json`，其中保存精确 pointer 与原始签名 Manifest；launcher 每次启动都用内置信任根重新验签，并核对 release/version/sequence、固定制品路径、size 与 SHA-256。`current` 与 LKG 都有效但不同步时选择最高有效 sequence；相同最高 sequence 却指向不同内容则失败关闭。仅有一个根内普通文件、伪造 pointer 或未签名 LKG 不构成可启动版本，也不能成为防回滚基线。`current` 缺失、越界、符号链接、记录不匹配或制品被事后篡改时才尝试有效 LKG；两者都不可用则失败关闭，不从网络临时执行代码。首次安装必须由独立安装器建立带签名 release record 的 current/LKG，OTA 不承担无回滚基线的首次安装。
+launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。每个已提交版本还包含不可变且不得为 symlink 的 `release-record.json`，其中保存精确 pointer 与原始签名 Manifest；launcher 每次启动都用受信公钥重新验签，并核对 release/version/sequence、固定制品路径、size 与 SHA-256。`current` 与 LKG 都有效但不同步时选择最高有效 sequence；相同最高 sequence 却指向不同内容则失败关闭。仅有一个根内普通文件、伪造 pointer 或未签名 LKG 不构成可启动版本，也不能成为防回滚基线。首个 OTA 可从 sequence 0 的包内旧版桥接：只有本机完全没有可信 pointer 时才允许准备首个签名候选；其 previous 是专用 `legacy_fallback` 标记，只表示继续运行包内旧版，绝不作为可信 pointer 或防回滚基线。首个候选提交后，后续更新必须具有完整 signed release record。
 
 ## Manifest、供应链与防回滚
 
@@ -44,8 +44,23 @@ rollout stage 为 `internal → canary → progressive → general`。稳定 `cl
 
 旧客户端桥接分两层：
 
-1. 尚无 launcher 的旧客户端只收到“下一题前需要升级”的兼容提示/退出码，必须自然完成当前题后退出；不允许服务端终止进程。
-2. 已安装 launcher 的客户端使用签名 Manifest 和本地状态机。generic `uvx --refresh` 原型只能作为一次性引导，不能作为最终 OTA 激活机制，因为它没有本机 LKG、主机锁和 crash recovery。
+1. 本候选把 console script 固定为 `dradar.launcher:main`；无 keys、无 Manifest、离线、pointer 损坏或执行候选失败时继续运行包内 CLI。
+2. `dradar update prepare` 只接受本地普通 Manifest 文件和显式 `KEY_ID=FILE` 的原始 32-byte Ed25519 公钥；候选制品仍只能从签名 Manifest 中的 credential-free HTTPS URL 下载。generic `uvx --refresh` 不参与激活。
+
+## 发布输入契约与本地端到端演练
+
+发布方必须离线生成 Ed25519 签名 Manifest，并为六个唯一目标提供 zipapp：`macos/linux/windows × x86_64/arm64`。每个 zipapp 必须支持 `python candidate.pyz --version` 自检；Manifest 中的 filename、HTTPS URL、精确 byte size 和小写 SHA-256 必须与最终不可变对象一致。签名覆盖 rollout、有效期、sequence 及全部兼容合同。公钥轮换通过重复 `--trusted-key next-id=/path/to/raw.pub` 同时携带旧/新公钥，不允许从 Manifest 自行引入信任根。
+
+```text
+dradar update status --json
+dradar update doctor
+dradar update prepare --manifest ./release-manifest.json \
+  --trusted-key release-2026=./release-2026.pub --ring internal
+dradar go ...  # 当前任务自然结束且 pending upload=0 后，由父进程单飞激活
+dradar update status
+```
+
+演练必须验证：旧版无状态时保持包内版本；签名候选 prepare 后在 40 个 active worker、checkout/upload、durable upload、refill 或 supervisor 未空闲时均不切换；全部归零后候选 `--version` 成功才 commit；自检失败恢复 `legacy_fallback` 或上一个 signed LKG。`update status/doctor` 不创建目录、不联网、不写锁。
 
 ## 多 worker 安全点
 

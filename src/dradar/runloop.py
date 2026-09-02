@@ -117,6 +117,28 @@ from .telemetry import RunnerTelemetry
 from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 
 
+def _try_ota_idle_activation(*, supervisor_idle: bool, refill_accepting: bool) -> None:
+    """Activate a prepared candidate only after all model/upload work drained."""
+
+    from .ota.integration import activate_prepared_update, runloop_safe_point
+
+    snapshot = runloop_safe_point(
+        home=HOME,
+        active_assignments=0,
+        checkouts_inflight=0,
+        uploads_inflight=0,
+        refill_accepting_new=refill_accepting,
+        worker_supervisor_idle=supervisor_idle,
+    )
+    try:
+        result = activate_prepared_update(snapshot, home=HOME)
+    except Exception as exc:  # noqa: BLE001 - running version must survive OTA failure
+        print(f"signed CLI update remained on the current version ({type(exc).__name__})")
+        return
+    if result is not None:
+        print(f"signed CLI update: {result.value}; it will be used next launch")
+
+
 # Quota is the user-facing campaign limit. Keep a deliberately high internal
 # count ceiling as a last-resort guard against corrupt estimates or a logic
 # regression; normal quota-bounded plans should never reach it.
@@ -4047,6 +4069,16 @@ def cmd_go(args) -> int:
             args, client, _assignment_boundary_path(args),
         ):
             rc = 1
+        if (
+            rc == 0
+            and not getattr(args, "worker_child", False)
+            and not getattr(args, "parallel", False)
+            and not fleet_pool
+        ):
+            _try_ota_idle_activation(
+                supervisor_idle=True,
+                refill_accepting=bool(getattr(args, "refill", False)),
+            )
         close_reason = "completed" if rc == 0 else "paused"
         return rc
     except (KeyboardInterrupt, EOFError):
@@ -5155,6 +5187,11 @@ def _run_worker_pool(args) -> int:
             "before starting replacement workers."
         )
         return 1
+    if not getattr(args, "parallel", False) and not fleet_pool:
+        _try_ota_idle_activation(
+            supervisor_idle=True,
+            refill_accepting=bool(getattr(args, "refill", False)),
+        )
     print("all workers finished")
     return 0
 

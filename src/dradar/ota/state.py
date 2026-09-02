@@ -14,7 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from .download import VerifiedArtifact, stage_verified_artifact
+from .download import VerifiedArtifact, open_verified_artifact, stage_verified_artifact
 from .manifest import (
     Artifact,
     ManifestError,
@@ -573,9 +573,10 @@ class UpdateController:
             self.last_known_good_path,
         )
         if previous is None:
-            raise InvalidTransition(
-                "OTA requires an existing current or last-known-good release",
-            )
+            # Pre-OTA clients have no signed pointer. The stable launcher
+            # interprets this marker only as "run the bundled version"; it is
+            # never accepted as a release pointer or anti-rollback baseline.
+            previous = {"schema_version": 1, "legacy_fallback": True}
         release_dir = self.releases / manifest.release_id
         if release_dir.is_symlink():
             raise InvalidTransition("staging requires a safe release directory")
@@ -783,6 +784,30 @@ class UpdateController:
                 raise InvalidTransition("conflicting committed OTA pointers")
             return winners[0][1]
         raise InvalidTransition("no current or last-known-good release is available")
+
+    def launch_artifact(self) -> VerifiedArtifact:
+        """Return the selected executable bound to the inode just verified."""
+
+        value = self.launch_pointer()
+        pointer = ReleasePointer(**value)
+        record = _load_json(self._record_path(pointer))
+        if not record or not isinstance(record.get("manifest"), dict):
+            raise InvalidTransition("signed launch record is unavailable")
+        manifest = verify_signed_manifest(record["manifest"], self.trusted_keys)
+        artifact = next(
+            (
+                item
+                for item in manifest.artifacts
+                if item.filename == Path(pointer.artifact).name
+            ),
+            None,
+        )
+        if artifact is None:
+            raise InvalidTransition("signed launch artifact is unavailable")
+        try:
+            return open_verified_artifact(self.root / pointer.artifact, artifact)
+        except ManifestError as exc:
+            raise InvalidTransition("signed launch artifact changed") from exc
 
     def _record_path(self, pointer: ReleasePointer) -> Path:
         if Path(

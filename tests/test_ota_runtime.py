@@ -469,6 +469,61 @@ def test_old_runner_protocol_fails_closed_before_download_and_is_audited(tmp_pat
     assert event_names(recorder) == ["update_policy_rejected"]
 
 
+def test_legacy_client_first_signed_update_commits_and_launches_open_inode(tmp_path):
+    document, keys = signed_release()
+    recorder = FlightRecorder(tmp_path)
+    runtime = UpdateRuntime(
+        tmp_path / "ota",
+        recorder=recorder,
+        download_client=Client(Response([BODY])),
+    )
+    decision = runtime.prepare(
+        document,
+        trusted_keys=keys,
+        current_version="0.5.175",
+        committed_sequence=0,
+        compatibility=compatibility(),
+        rollout=RolloutContext(subject="legacy-client"),
+        target=PlatformTarget("linux", "x86_64"),
+    )
+    assert decision.eligible is True
+    assert (
+        runtime.activate_and_self_test(SafePointSnapshot(), lambda item: True)
+        is UpdateState.COMMITTED
+    )
+    launched = runtime.controller.launch_artifact()
+    try:
+        assert launched.read_bytes() == BODY
+    finally:
+        launched.close()
+
+
+def test_legacy_client_failed_candidate_restores_bundled_fallback(tmp_path):
+    document, keys = signed_release()
+    runtime = UpdateRuntime(
+        tmp_path / "ota",
+        recorder=FlightRecorder(tmp_path),
+        download_client=Client(Response([BODY])),
+    )
+    runtime.prepare(
+        document,
+        trusted_keys=keys,
+        current_version="0.5.175",
+        committed_sequence=0,
+        compatibility=compatibility(),
+        rollout=RolloutContext(subject="legacy-client"),
+        target=PlatformTarget("linux", "x86_64"),
+    )
+    assert (
+        runtime.activate_and_self_test(SafePointSnapshot(), lambda item: False)
+        is UpdateState.ROLLED_BACK
+    )
+    assert json.loads((tmp_path / "ota" / "current.json").read_text()) == {
+        "schema_version": 1,
+        "legacy_fallback": True,
+    }
+
+
 def test_caller_cannot_spoof_the_durable_anti_rollback_baseline(tmp_path):
     class NoDownload(Client):
         def stream(self, method, url, **kwargs):

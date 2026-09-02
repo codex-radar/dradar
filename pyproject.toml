@@ -16,7 +16,7 @@ dev = [
 ]
 
 [project.scripts]
-dradar = "dradar.cli:main"
+dradar = "dradar.launcher:main"
 
 [build-system]
 requires = ["hatchling"]

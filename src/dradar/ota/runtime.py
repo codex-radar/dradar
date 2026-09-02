@@ -20,6 +20,7 @@ from .manifest import (
 )
 from .state import (
     InvalidTransition,
+    ReleasePointer,
     SafePointSnapshot,
     UpdateController,
     UpdateState,
@@ -143,7 +144,19 @@ class UpdateRuntime:
             self.audit.policy_rejected("update_manifest_invalid")
             raise
         self.controller.set_trusted_keys(trusted_keys)
-        baseline = self.controller.committed_pointer()
+        try:
+            baseline = self.controller.committed_pointer()
+        except InvalidTransition:
+            # One-time bridge for clients installed before the stable launcher
+            # existed. Sequence zero is never accepted after a signed commit.
+            if committed_sequence != 0:
+                raise
+            baseline = ReleasePointer(
+                release_id="legacy-installed-client",
+                version=current_version,
+                sequence=0,
+                artifact="",
+            )
         if (
             current_version != baseline.version
             or committed_sequence != baseline.sequence

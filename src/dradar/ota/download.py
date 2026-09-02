@@ -180,6 +180,29 @@ def _open_existing(dir_fd: int, filename: str) -> int | None:
         ) from exc
 
 
+def open_verified_artifact(path: Path, artifact: Artifact) -> VerifiedArtifact:
+    """Open and verify an existing artifact as one inode-bound capability."""
+
+    directory_fd = _open_safe_directory(path.parent)
+    try:
+        file_fd = _open_existing(directory_fd, path.name)
+        if file_fd is None:
+            raise ManifestError("verified artifact is unavailable")
+        result = VerifiedArtifact(path, artifact, directory_fd, file_fd)
+        directory_fd = -1
+        try:
+            result.verify()
+            if not result.binding_is_current():
+                raise ManifestError("verified artifact name is no longer safely bound")
+        except BaseException:
+            result.close()
+            raise
+        return result
+    finally:
+        if directory_fd >= 0:
+            os.close(directory_fd)
+
+
 def _directory_matches_path(dir_fd: int, path: Path) -> bool:
     try:
         opened = os.fstat(dir_fd)
