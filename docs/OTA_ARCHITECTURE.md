@@ -1,5 +1,8 @@
 # DRadar CLI OTA 架构（#0012 本地集成候选）
 
+发布方的签名、R2 不可变对象、权限和回滚合同见
+[`OTA_RELEASE_CENTER.md`](OTA_RELEASE_CENTER.md)。
+
 ## 安全目标与边界
 
 OTA 只能提升“下一次安全启动”的版本，不能中断当前 assignment、Pier、Provider 会话、上传、ledger 或历史 checkpoint 写入。不存在 `force release` 或“到点强切”路径。Manifest 不可读取、验签失败、摘要不符、协议不兼容、灰度暂停、未知平台、候选自检失败时都失败关闭；当前版本继续工作。

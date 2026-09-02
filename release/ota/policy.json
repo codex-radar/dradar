@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "channel": "stable",
+  "minimum_version": "0.5.177",
+  "max_manifest_validity_days": 45,
+  "targets": [
+    {"os": "linux", "arch": "x86_64"},
+    {"os": "linux", "arch": "arm64"},
+    {"os": "macos", "arch": "x86_64"},
+    {"os": "macos", "arch": "arm64"},
+    {"os": "windows", "arch": "x86_64"},
+    {"os": "windows", "arch": "arm64"}
+  ],
+  "compatibility": {
+    "launcher_min_version": "1.0.0",
+    "runner_protocol": {"min": 3, "max": 3},
+    "doctor_contract": 1,
+    "provider_contract": 1,
+    "ledger_schema": {"min": 1, "max": 1},
+    "checkpoint_schema": {"min": 0, "max": 0}
+  }
+}

@@ -1,0 +1,216 @@
+name: Publish signed CLI OTA to R2
+
+on:
+  workflow_dispatch:
+    inputs:
+      sequence:
+        description: Monotonic positive stable-channel sequence
+        required: true
+        type: number
+      expires_at:
+        description: Signed manifest expiry (ISO-8601 with timezone, max 45 days)
+        required: true
+        type: string
+      rollout_stage:
+        description: Initial rollout ring
+        required: true
+        default: internal
+        type: choice
+        options:
+          - internal
+          - canary
+          - progressive
+          - general
+      basis_points:
+        description: Eligible cohort in basis points (0..10000)
+        required: true
+        default: "0"
+        type: string
+      paused:
+        description: Publish a signed paused release
+        required: true
+        default: true
+        type: boolean
+      bootstrap:
+        description: First release only; requires sequence 1 and absent current pointer
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dradar-cli-ota-production
+  cancel-in-progress: false
+
+env:
+  DRADAR_OTA_R2_ACCOUNT_ID: 4d94f3bcb89bc16989d5ea715eaac061
+  DRADAR_OTA_R2_BUCKET: dradar-cli-ota-production
+  DRADAR_OTA_PUBLIC_BASE_URL: https://updates.codexradar.com
+  PYTHONPATH: src
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: ota-production
+      url: https://updates.codexradar.com/channels/stable/current.json
+    steps:
+      - name: Check out the reviewed main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: 0.9.7
+          enable-cache: false
+
+      - name: Create the hash-locked release environment
+        run: |
+          set -euo pipefail
+          release_venv="${RUNNER_TEMP}/dradar-ota-venv"
+          echo "DRADAR_OTA_VENV=${release_venv}" >> "${GITHUB_ENV}"
+          uv venv "${release_venv}" --python 3.13
+          uv pip install --python "${release_venv}/bin/python" \
+            --require-hashes -r release/ota/requirements.lock
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"
+
+      - name: Verify immutable R2 production policy
+        env:
+          DRADAR_OTA_CLOUDFLARE_API_TOKEN: >-
+            ${{ secrets.DRADAR_OTA_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py \
+            cloudflare-preflight \
+            --account-id "${DRADAR_OTA_R2_ACCOUNT_ID}" \
+            --bucket "${DRADAR_OTA_R2_BUCKET}" \
+            --public-base-url "${DRADAR_OTA_PUBLIC_BASE_URL}"
+
+      - name: Resolve prior chain and build deterministic candidates
+        id: build
+        env:
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          BASIS_POINTS: ${{ inputs.basis_points }}
+          EXPIRES_AT: ${{ inputs.expires_at }}
+          PAUSED: ${{ inputs.paused }}
+          ROLLOUT_STAGE: ${{ inputs.rollout_stage }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/ota
+          current_url="${DRADAR_OTA_PUBLIC_BASE_URL}/channels/stable/current.json"
+          previous_args=()
+          if [[ "${BOOTSTRAP}" == "true" ]]; then
+            "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py \
+              fetch-current --url "${current_url}" --expect-absent
+          else
+            "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py \
+              fetch-current --url "${current_url}" \
+              --output dist/ota/previous-manifest.json
+            previous_args=(--previous-manifest dist/ota/previous-manifest.json)
+          fi
+          published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          paused_args=()
+          if [[ "${PAUSED}" == "true" ]]; then
+            paused_args=(--paused)
+          fi
+          "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py build \
+            --source-root . \
+            --output-dir dist/ota \
+            --sequence "${SEQUENCE}" \
+            --source-commit "${GITHUB_SHA}" \
+            --source-tree "${source_tree}" \
+            --base-url "${DRADAR_OTA_PUBLIC_BASE_URL}" \
+            --published-at "${published_at}" \
+            --expires-at "${EXPIRES_AT}" \
+            --rollout-stage "${ROLLOUT_STAGE}" \
+            --basis-points "${BASIS_POINTS}" \
+            --rollout-salt "stable-sequence-${SEQUENCE}" \
+            "${paused_args[@]}"
+          echo "source_tree=${source_tree}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign with the protected environment key
+        env:
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          DRADAR_OTA_ED25519_PRIVATE_KEY_B64: >-
+            ${{ secrets.DRADAR_OTA_ED25519_PRIVATE_KEY_B64 }}
+          DRADAR_OTA_KEY_ID: ${{ vars.DRADAR_OTA_KEY_ID }}
+        run: |
+          set -euo pipefail
+          chain_args=()
+          if [[ "${BOOTSTRAP}" == "true" ]]; then
+            chain_args=(--bootstrap)
+          else
+            chain_args=(--previous-manifest dist/ota/previous-manifest.json)
+          fi
+          "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py sign \
+            --plan dist/ota/release-plan.json \
+            --registry release/ota/trusted-keys.json \
+            --key-id "${DRADAR_OTA_KEY_ID}" \
+            --private-key-env DRADAR_OTA_ED25519_PRIVATE_KEY_B64 \
+            --output dist/ota/manifest.json \
+            "${chain_args[@]}"
+
+      - name: Verify the signed release without secrets
+        env:
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          set -euo pipefail
+          chain_args=()
+          if [[ "${BOOTSTRAP}" == "true" ]]; then
+            chain_args=(--bootstrap)
+          else
+            chain_args=(--previous-manifest dist/ota/previous-manifest.json)
+          fi
+          "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py verify \
+            --plan dist/ota/release-plan.json \
+            --manifest dist/ota/manifest.json \
+            --registry release/ota/trusted-keys.json \
+            --artifact-dir dist/ota \
+            --audit-output dist/ota/release-audit.json \
+            --checksums-output dist/ota/SHA256SUMS \
+            "${chain_args[@]}"
+
+      - name: Publish immutable objects, then CAS the stable pointer
+        env:
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          DRADAR_OTA_R2_ACCESS_KEY_ID: >-
+            ${{ secrets.DRADAR_OTA_R2_ACCESS_KEY_ID }}
+          DRADAR_OTA_R2_SECRET_ACCESS_KEY: >-
+            ${{ secrets.DRADAR_OTA_R2_SECRET_ACCESS_KEY }}
+          SOURCE_TREE: ${{ steps.build.outputs.source_tree }}
+        run: |
+          set -euo pipefail
+          chain_args=()
+          if [[ "${BOOTSTRAP}" == "true" ]]; then
+            chain_args=(--bootstrap)
+          else
+            chain_args=(--previous-manifest dist/ota/previous-manifest.json)
+          fi
+          set +e
+          "${DRADAR_OTA_VENV}/bin/python" scripts/ota_release.py publish-r2 \
+            --plan dist/ota/release-plan.json \
+            --bundle dist/ota \
+            --manifest dist/ota/manifest.json \
+            --registry release/ota/trusted-keys.json \
+            --audit dist/ota/release-audit.json \
+            --checksums dist/ota/SHA256SUMS \
+            --account-id "${DRADAR_OTA_R2_ACCOUNT_ID}" \
+            --bucket "${DRADAR_OTA_R2_BUCKET}" \
+            --public-base-url "${DRADAR_OTA_PUBLIC_BASE_URL}" \
+            --expected-commit "${GITHUB_SHA}" \
+            --expected-tree "${SOURCE_TREE}" \
+            "${chain_args[@]}"
+          publish_rc=$?
+          set -e
+          if [[ "${publish_rc}" -eq 3 ]]; then
+            echo "::error::Stable pointer committed but verification is unknown. Do not rerun publication; follow the emitted read-only verification steps."
+          fi
+          exit "${publish_rc}"
