@@ -149,7 +149,10 @@ class UpdateRuntime:
         except InvalidTransition:
             # One-time bridge for clients installed before the stable launcher
             # existed. Sequence zero is never accepted after a signed commit.
-            if committed_sequence != 0:
+            if (
+                committed_sequence != 0
+                or not self.controller.pristine_for_legacy_bootstrap()
+            ):
                 raise
             baseline = ReleasePointer(
                 release_id="legacy-installed-client",

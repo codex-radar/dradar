@@ -1,9 +1,13 @@
+import inspect
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 
 from dradar.ota.integration import (
+    _locked_windows_candidate,
+    _run_windows_candidate,
     cmd_update_doctor,
     cmd_update_status,
     diagnose_update,
@@ -73,3 +77,59 @@ def test_update_commands_render_status(monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["state"] == "legacy"
     assert cmd_update_doctor(SimpleNamespace()) == 0
     assert "OTA diagnostics: PASS" in capsys.readouterr().out
+
+
+def test_malformed_or_symlinked_state_is_not_reported_as_legacy(tmp_path):
+    root = tmp_path / "ota"
+    root.mkdir(mode=0o700)
+    state = root / "update-state.json"
+    state.write_text("{")
+    assert update_status(tmp_path)["state"] == "invalid"
+    healthy, notes = diagnose_update(tmp_path)
+    assert healthy is False
+    assert "persisted OTA state is invalid" in notes
+
+    state.unlink()
+    target = tmp_path / "outside.json"
+    target.write_text("{}")
+    state.symlink_to(target)
+    assert update_status(tmp_path)["state"] == "invalid"
+    assert diagnose_update(tmp_path)[0] is False
+
+
+def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
+    events = []
+    candidate = tmp_path / "candidate.pyz"
+
+    @contextmanager
+    def locked(data):
+        candidate.write_bytes(data)
+        events.append("handle-open")
+        try:
+            yield candidate
+        finally:
+            events.append("handle-close")
+            candidate.unlink()
+
+    def runner(command, *, check):
+        assert check is False
+        assert events == ["handle-open"]
+        assert command[1] == str(candidate)
+        assert candidate.read_bytes() == b"verified candidate"
+        events.append("child-finished")
+        return SimpleNamespace(returncode=0)
+
+    assert (
+        _run_windows_candidate(
+            b"verified candidate",
+            ["--version"],
+            locked_candidate=locked,
+            runner=runner,
+        )
+        == 0
+    )
+    assert events == ["handle-open", "child-finished", "handle-close"]
+    assert not candidate.exists()
+    source = inspect.getsource(_locked_windows_candidate)
+    assert "FILE_SHARE_READ: deny writers, delete and rename" in source
+    assert "NamedTemporaryFile" not in source

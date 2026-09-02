@@ -8,6 +8,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +46,22 @@ def ota_root(home: Path = HOME) -> Path:
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
+    status, value = _inspect_json(path)
+    return value if status == "valid" else None
+
+
+def _inspect_json(path: Path) -> tuple[str, dict[str, Any] | None]:
+    if not os.path.lexists(path):
+        return "absent", None
+    if path.is_symlink() or not path.is_file():
+        return "invalid", None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
+        return "invalid", None
+    if not isinstance(value, dict):
+        return "invalid", None
+    return "valid", value
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -157,17 +171,43 @@ def update_status(home: Path = HOME) -> dict[str, Any]:
     """Return a stable, non-secret status document for CLI and doctor."""
 
     root = ota_root(home)
-    record = _read_json(root / "update-state.json")
-    current = _read_json(root / "current.json")
-    lkg = _read_json(root / "last-known-good.json")
+    if os.path.lexists(root) and (root.is_symlink() or not root.is_dir()):
+        record_status, record = "invalid", None
+        current_status, current = "invalid", None
+        lkg_status, lkg = "invalid", None
+        pending_status = "invalid"
+    else:
+        record_status, record = _inspect_json(root / "update-state.json")
+        current_status, current = _inspect_json(root / "current.json")
+        lkg_status, lkg = _inspect_json(root / "last-known-good.json")
+        pending_status, _ = _inspect_json(root / "pending.json")
+    invalid = "invalid" in {
+        record_status,
+        current_status,
+        lkg_status,
+        pending_status,
+    }
+    if record_status == "absent" and any(
+        item == "valid" for item in (current_status, lkg_status, pending_status)
+    ):
+        invalid = True
+    state = (
+        "invalid"
+        if invalid
+        else "legacy"
+        if record_status == "absent"
+        else record.get("state", "invalid")
+    )
+    if not isinstance(state, str):
+        state = "invalid"
     result: dict[str, Any] = {
         "root": str(root),
         "target": None,
-        "state": "legacy" if record is None else record.get("state", "invalid"),
+        "state": state,
         "current_version": current.get("version") if current else None,
         "current_sequence": current.get("sequence") if current else None,
         "last_known_good_version": lkg.get("version") if lkg else None,
-        "pending": (root / "pending.json").is_file(),
+        "pending": pending_status != "absent",
         "lock_present": (root / "update.lock").is_file(),
     }
     try:
@@ -305,23 +345,78 @@ def _self_test(candidate) -> bool:
                 check=False,
             )
         else:  # pragma: no cover - exercised on Windows CI
-            with tempfile.NamedTemporaryFile(suffix=".pyz", delete=False) as handle:
-                handle.write(candidate.read_bytes())
-                temporary = Path(handle.name)
-            try:
-                result = subprocess.run(
-                    [sys.executable, str(temporary), "--version"],
-                    capture_output=True,
-                    timeout=30,
-                    check=False,
-                )
-            finally:
-                temporary.unlink(missing_ok=True)
+            return _run_windows_candidate(candidate.read_bytes(), ["--version"]) == 0
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
     finally:
         os.close(fd)
+
+
+@contextmanager
+def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
+    """Materialize bytes under a handle that denies writes/delete/rename."""
+
+    import ctypes  # pragma: no cover - Windows-only imports
+    import msvcrt  # pragma: no cover
+    from ctypes import wintypes  # pragma: no cover
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    path = Path(tempfile.gettempdir()) / f"dradar-ota-{uuid.uuid4().hex}.pyz"
+    handle = create_file(
+        str(path),
+        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+        0x00000001,  # FILE_SHARE_READ: deny writers, delete and rename
+        None,
+        1,  # CREATE_NEW
+        0x00000100,  # FILE_ATTRIBUTE_TEMPORARY
+        None,
+    )
+    invalid_handle = wintypes.HANDLE(-1).value
+    if handle == invalid_handle:
+        raise OSError(ctypes.get_last_error(), "cannot create locked OTA candidate")
+    fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write to locked OTA candidate")
+            view = view[written:]
+        os.fsync(fd)
+        yield path
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+
+
+def _run_windows_candidate(
+    data: bytes,
+    arguments: list[str],
+    *,
+    locked_candidate: Callable[[bytes], Any] | None = None,
+    runner: Callable[..., Any] = subprocess.run,
+) -> int:
+    """Keep the replacement-denying handle alive until the child exits."""
+
+    factory = locked_candidate or _locked_windows_candidate
+    with factory(data) as path:
+        result = runner(
+            [sys.executable, str(path), *arguments],
+            check=False,
+        )
+    return int(result.returncode)
 
 
 def activate_prepared_update(

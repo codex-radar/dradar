@@ -524,6 +524,41 @@ def test_legacy_client_failed_candidate_restores_bundled_fallback(tmp_path):
     }
 
 
+def test_legacy_bridge_rejects_any_existing_untrusted_ota_metadata(tmp_path):
+    class NoDownload(Client):
+        def stream(self, method, url, **kwargs):
+            raise AssertionError("non-pristine legacy state must not download")
+
+    root = tmp_path / "ota"
+    root.mkdir()
+    _atomic_json(
+        root / "current.json",
+        {
+            "release_id": "forged",
+            "version": "0.5.175",
+            "sequence": 0,
+            "artifact": "releases/forged/client.pyz",
+        },
+    )
+    document, keys = signed_release()
+    runtime = UpdateRuntime(
+        root,
+        recorder=FlightRecorder(tmp_path),
+        download_client=NoDownload(None),
+    )
+    with pytest.raises(InvalidTransition, match="trusted committed OTA baseline"):
+        runtime.prepare(
+            document,
+            trusted_keys=keys,
+            current_version="0.5.175",
+            committed_sequence=0,
+            compatibility=compatibility(),
+            rollout=RolloutContext(subject="not-pristine"),
+            target=PlatformTarget("linux", "x86_64"),
+        )
+    assert not (root / "pending.json").exists()
+
+
 def test_caller_cannot_spoof_the_durable_anti_rollback_baseline(tmp_path):
     class NoDownload(Client):
         def stream(self, method, url, **kwargs):

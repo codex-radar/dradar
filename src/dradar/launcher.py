@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
-from pathlib import Path
 
 from .local_config import HOME
-from .ota.integration import load_trusted_keys, ota_root
+from .ota.integration import _run_windows_candidate, load_trusted_keys, ota_root
 from .ota.state import InvalidTransition, UpdateController
 
 
@@ -28,13 +26,8 @@ def main() -> int:
                         sys.executable,
                         [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
                     )
-                with tempfile.NamedTemporaryFile(  # pragma: no cover - Windows CI
-                    suffix=".pyz", delete=False
-                ) as handle:
-                    handle.write(artifact.read_bytes())
-                    copy = Path(handle.name)
-                os.execv(  # pragma: no cover
-                    sys.executable, [sys.executable, str(copy), *sys.argv[1:]]
+                return _run_windows_candidate(  # pragma: no cover - Windows CI
+                    artifact.read_bytes(), sys.argv[1:]
                 )
             finally:
                 artifact.close()

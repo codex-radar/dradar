@@ -372,6 +372,24 @@ class UpdateController:
             raise InvalidTransition("trusted OTA key set cannot change during runtime")
         self.trusted_keys = keys
 
+    def pristine_for_legacy_bootstrap(self) -> bool:
+        """Whether this host has never created any OTA release metadata."""
+
+        metadata = (
+            self.current_path,
+            self.last_known_good_path,
+            self.pending_path,
+            self.state_path,
+        )
+        if any(os.path.lexists(path) for path in metadata):
+            return False
+        if os.path.lexists(self.releases):
+            try:
+                return self.releases.is_dir() and not any(self.releases.iterdir())
+            except OSError:
+                return False
+        return True
+
     def lock(self, *, timeout_seconds: float = 0.0) -> UpdateLock:
         return UpdateLock(self.lock_path, timeout_seconds=timeout_seconds)
 
