@@ -86,7 +86,7 @@ from .providers import (
 )
 from .runner import (
     CODEX_TRAJECTORY_BUNDLE_SCHEMA, DIAG_ADVICE,
-    BuildFlakeError, RunnerError,
+    BuildFlakeError, CodeBuddyFalseSuccessError, RunnerError,
     RunnerCleanupUnconfirmedError, RunnerTaskRetryableError,
     POMPEII_BENCHMARK_ID,
     POMPEII_FINALIZATION_RESERVE_SEC, POMPEII_SOFT_BUDGET_SEC,
@@ -132,7 +132,7 @@ _NON_FAULT_RUNNER_OUTCOMES = {
 _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
     "runtime-incompatible", "provider-preflight-failed",
-    "repeat-agent-failure",
+    "repeat-agent-failure", "codebuddy-false-success",
 }
 _POOL_ABORT_ENV = "DRADAR_POOL_ABORT_FILE"
 _POOL_TARGET_FILE_ENV = "DRADAR_POOL_TARGET_FILE"
@@ -532,6 +532,9 @@ def _announce_account_stop(outcome: str) -> None:
         "repeat-agent-failure": (
             "the same zero-progress agent command failure repeated"
         ),
+        "codebuddy-false-success": (
+            "CodeBuddy returned no gradeable terminal evidence"
+        ),
     }
     reason = messages.get(outcome, "an account-wide stop condition was detected")
     print(
@@ -624,6 +627,7 @@ def _repeat_failure_signature(
 def _observe_repeat_failure(
     assignment: dict, signature: tuple[str, str] | None, *, success: bool,
     codex_cli_version=None, invocation_id: str | None = None,
+    failure_description: str = "zero-progress agent command failure",
 ) -> bool:
     if signature is None and not success:
         return False
@@ -640,11 +644,11 @@ def _observe_repeat_failure(
     )
     if not opened:
         return False
-    reason = f"repeated zero-progress agent command failure ({count} consecutive)"
+    reason = f"repeated {failure_description} ({count} consecutive)"
     _signal_pool_abort(reason, interrupt_siblings=False)
     print(
         f"safety circuit opened after {count} consecutive identical "
-        "zero-progress agent command failures; no later waiting task or "
+        f"{failure_description}s; no later waiting task or "
         "automatic refill will start. Existing sibling runs are left alone. "
         "Inspect the local agent login/runtime, then explicitly run "
         "`dradar resume` after it is fixed."
@@ -2658,6 +2662,47 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "this worker slot is quarantined to prevent a duplicate agent"
             )
             return "cleanup-unconfirmed"
+        except CodeBuddyFalseSuccessError as exc:
+            # A false success has no gradeable result and must never enter the
+            # submission or refill ledgers. Keep the current lease untouched:
+            # runner/session close is observational, while lease convergence
+            # belongs to the server's owner-fenced lifecycle policy.
+            signature = (
+                _repeat_failure_scope(assignment),
+                json.dumps({
+                    "failure_kind": "codebuddy-false-success",
+                    "provider": "codebuddy",
+                    "protocol": "rc0-terminal-evidence-v1",
+                }, sort_keys=True, separators=(",", ":")),
+            )
+            opened = _observe_repeat_failure(
+                assignment,
+                signature,
+                success=False,
+                invocation_id=getattr(
+                    args, "_repeat_failure_invocation_id", None,
+                ),
+                failure_description="CodeBuddy rc=0 terminal-evidence failure",
+            )
+            if opened:
+                # Scoped refill plans persist across child/session restarts.
+                # Latch the same provider fault locally so a fresh invocation
+                # cannot silently rearm the invalid-producing campaign. This
+                # changes no server lease; explicit ``dradar refill stop`` is
+                # still the sole recovery action after the provider is fixed.
+                refill_plan.open_circuit(
+                    HOME, assignment, "provider_false_success",
+                )
+            print(f"trial rejected locally: {exc}")
+            print(
+                "the local artifacts and existing lease were preserved; no "
+                "submission, release, retry, refill or replacement checkout "
+                "was triggered by this worker"
+            )
+            return (
+                "repeat-agent-failure" if opened
+                else "codebuddy-false-success"
+            )
         except RunnerTaskRetryableError as exc:
             stopped = _mark_stopped_quietly(
                 client,

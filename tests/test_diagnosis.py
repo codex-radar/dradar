@@ -4,6 +4,7 @@ image caches that shipped Codex too old for gpt-5.6), print the actual
 in-container exception instead of a blanket "wait for your quota", and keep
 the failure artifacts instead of deleting the only evidence."""
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -385,6 +386,120 @@ def test_real_success_resets_zero_progress_failure_streak(monkeypatch, tmp_path:
     ]
 
     assert outcomes == ["interrupted", "submitted", "interrupted"]
+
+
+def _codebuddy_assignment(assignment_id: str) -> dict:
+    return {
+        **ASSIGNMENT,
+        "assignment_id": assignment_id,
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+        "effort": "max",
+        "agent_version": "2.137.1",
+        "batch_id": "batch-codebuddy",
+    }
+
+
+def test_codebuddy_false_success_never_uploads_or_releases_and_opens_circuit(
+        monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    abort_file = tmp_path / "POOL_ABORT"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort_file))
+
+    def false_success(*_args, **_kwargs):
+        raise runner_mod.CodeBuddyFalseSuccessError((
+            "empty_patch",
+            "request_ledger_missing_or_inconsistent",
+            "trajectory_missing_or_invalid",
+        ))
+
+    monkeypatch.setattr(runloop, "run_trial", false_success)
+    client = InvalidAckClient({})
+    first = runloop._run_and_submit(
+        client, _codebuddy_assignment("cb-first"), tmp_path, _args(), "abc123",
+    )
+    second = runloop._run_and_submit(
+        client, _codebuddy_assignment("cb-second"), tmp_path, _args(), "abc123",
+    )
+
+    assert first == "codebuddy-false-success"
+    assert second == "repeat-agent-failure"
+    assert client.submissions == []
+    assert abort_file.read_text().startswith("drain:repeated CodeBuddy rc=0")
+    output = capsys.readouterr().out
+    assert "no submission, release, retry, refill or replacement checkout" in output
+    assert "safety circuit opened" in output
+
+
+def test_ten_codebuddy_workers_share_one_false_success_circuit(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    abort_file = tmp_path / "POOL_ABORT"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort_file))
+
+    def false_success(*_args, **_kwargs):
+        raise runner_mod.CodeBuddyFalseSuccessError(("empty_patch",))
+
+    monkeypatch.setattr(runloop, "run_trial", false_success)
+    client = InvalidAckClient({})
+    outcomes = []
+    lock = threading.Lock()
+
+    def worker(index: int) -> None:
+        outcome = runloop._run_and_submit(
+            client,
+            _codebuddy_assignment(f"cb-worker-{index}"),
+            tmp_path,
+            _args(),
+            "abc123",
+        )
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert outcomes.count("codebuddy-false-success") == 1
+    assert outcomes.count("repeat-agent-failure") == 9
+    assert client.submissions == []
+    assert abort_file.is_file()
+
+
+def test_codebuddy_success_observation_rearms_false_success_streak(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    assignment = _codebuddy_assignment("cb-recovery")
+    signature = (
+        runloop._repeat_failure_scope(assignment),
+        json.dumps({
+            "failure_kind": "codebuddy-false-success",
+            "provider": "codebuddy",
+            "protocol": "rc0-terminal-evidence-v1",
+        }, sort_keys=True, separators=(",", ":")),
+    )
+
+    assert runloop._observe_repeat_failure(
+        assignment, signature, success=False,
+    ) is False
+    assert runloop._observe_repeat_failure(
+        assignment, None, success=True,
+    ) is False
+    assert runloop._observe_repeat_failure(
+        assignment, signature, success=False,
+    ) is False
 
 
 def test_interrupted_prints_cause_keeps_artifacts_no_quota_claim(

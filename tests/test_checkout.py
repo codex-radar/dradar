@@ -615,6 +615,53 @@ def test_repeat_failure_stops_refill_before_second_replenishment(
     assert len(client._checkouts) == 1
 
 
+def test_codebuddy_false_success_stops_refill_without_upload_or_recheckout(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        runloop, "_run_and_submit",
+        lambda *_args, **_kwargs: "codebuddy-false-success",
+    )
+    monkeypatch.setattr(runloop.refill_plan, "is_running", lambda _home: True)
+    stopped = []
+    monkeypatch.setattr(
+        runloop.refill_plan, "stop",
+        lambda _home, reason: stopped.append(reason),
+    )
+    monkeypatch.setattr(
+        runloop.refill_plan,
+        "refill_once",
+        lambda *_args: pytest.fail("false success must stop before refill"),
+    )
+    first = {
+        **_cell("codebuddy-empty"),
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+    }
+    second = {
+        **_cell("must-not-checkout"),
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+    }
+    client = CheckoutClient(
+        {"active": [first, second], "free_pick": True},
+        [
+            {"assignment": first, "held": 2, "unstarted": 1},
+            {"assignment": second, "held": 2, "unstarted": 0},
+        ],
+    )
+    args = _args()
+    args.refill = True
+    args.worker_child = False
+
+    assert runloop._run_checkout_loop(args, client, tmp_path, [first, second]) == 1
+    assert stopped == ["account stop: codebuddy-false-success"]
+    assert len(client.checkout_exclusions) == 1
+    assert client.stopped == []
+
+
 def test_checkout_loop_fuses_after_environment_build_failure(
         monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)

@@ -32,6 +32,7 @@ RUNNING_STATES = {"active", "draining"}
 FAULTED_STATE = "faulted"
 REFILL_FAULT_FAMILIES = frozenset({
     "checkpoint_invalid", "checkpoint_incompatible", "provider_not_ready",
+    "provider_false_success",
 })
 TIERS = ("plus", "pro-5x", "pro-20x")
 REFILL_ORDERS = ("cost", "least-run")

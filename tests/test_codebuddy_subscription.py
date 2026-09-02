@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,6 +86,26 @@ def _usage_function():
     namespace = {"SUPPORTED_MODEL": CODEBUDDY_MODEL}
     exec(compile(module, str(source), "exec"), namespace)  # noqa: S102
     return namespace["_codebuddy_usage_facts"]
+
+
+def _trajectory_function():
+    source = (Path(__file__).parents[1] / "src" / "dradar" / "pier_codebuddy.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    module = ast.Module(
+        body=[
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_codebuddy_trajectory_payload"
+        ],
+        type_ignores=[],
+    )
+    namespace = {
+        "CODEBUDDY_CLI_VERSION": CODEBUDDY_CLI_VERSION,
+        "SUPPORTED_MODEL": CODEBUDDY_MODEL,
+        "uuid": uuid,
+    }
+    exec(compile(module, str(source), "exec"), namespace)  # noqa: S102
+    return namespace["_codebuddy_trajectory_payload"]
 
 
 def test_codebuddy_public_contract_is_pinned_to_three_efforts() -> None:
@@ -433,6 +454,72 @@ def test_usage_reconciles_request_ledger_and_terminal_aggregate() -> None:
     assert facts["n_output_tokens"] == 30
     assert facts["provider_actual_cost_observed"] is False
     assert facts["cost_semantics"] == "server-priced-api-equivalent"
+
+
+def test_complete_codebuddy_turn_materializes_auditable_atif_trajectory() -> None:
+    events = [
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m1", "model": CODEBUDDY_MODEL,
+                "usage": {
+                    "input_tokens": 125,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 5,
+                    "output_tokens": 30,
+                },
+            },
+        },
+        {
+            "type": "result", "subtype": "success", "is_error": False,
+            "session_id": "session-real-request", "result": "Patch completed.",
+            "usage": {
+                "input_tokens": 125,
+                "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 5,
+                "output_tokens": 30,
+            },
+        },
+    ]
+    usage = _usage_function()(events)
+
+    trajectory = _trajectory_function()(
+        events, "Implement the task.", "max", usage,
+    )
+
+    assert trajectory is not None
+    assert trajectory["schema_version"] == "ATIF-v1.7"
+    assert trajectory["session_id"] == "session-real-request"
+    assert trajectory["steps"][1]["llm_call_count"] == 1
+    assert trajectory["final_metrics"] == {
+        "total_prompt_tokens": 125,
+        "total_cached_tokens": 20,
+        "total_completion_tokens": 30,
+        "total_cost_usd": None,
+        "total_steps": 2,
+        "extra": {
+            "billing_basis": "subscription",
+            "cost_not_reported": True,
+            "usage_complete": True,
+        },
+    }
+
+
+def test_incomplete_codebuddy_turn_never_fabricates_trajectory() -> None:
+    events = [{
+        "type": "result", "subtype": "success", "is_error": False,
+        "session_id": "session-no-request", "result": "",
+        "usage": {
+            "input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }]
+    usage = _usage_function()(events)
+
+    assert usage["request_count"] == 0
+    assert _trajectory_function()(events, "task", "max", usage) is None
 
 
 def test_usage_accepts_real_stream_fragments_and_ignores_num_turns() -> None:

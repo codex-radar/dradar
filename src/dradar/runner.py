@@ -366,6 +366,32 @@ class RunnerTaskRetryableError(RunnerError):
     """The exact local runtime is gone, so only this assignment must retry."""
 
 
+class CodeBuddyFalseSuccessError(RunnerError):
+    """CodeBuddy exited zero without the evidence required for a submission.
+
+    This is deliberately separate from ``RunnerTaskRetryableError``: the
+    supervised pool must correlate the same provider-wide false-success across
+    workers before anyone can check out replacement work. The caller keeps the
+    lease and artifacts untouched; only the server can decide how a closed
+    runner session later converges.
+    """
+
+    def __init__(self, reasons: tuple[str, ...]) -> None:
+        self.reasons = reasons
+        super().__init__(
+            "CodeBuddy returned process status 0 without gradeable terminal "
+            f"evidence ({', '.join(reasons)}); no result was uploaded and the "
+            "existing lease was left untouched",
+            failure_diagnostic={
+                "schema": "dradar-runner-failure-v1",
+                "failure_family": "codebuddy_false_success",
+                "provider": "codebuddy",
+                "pier_returncode": 0,
+                "evidence_failures": list(reasons),
+            },
+        )
+
+
 class LiveAccountTerminalError(RunnerError):
     """A running agent reported an account-wide terminal provider failure."""
 
@@ -3119,6 +3145,7 @@ def _zcode_failure_diagnostic(
 
 
 _ZCODE_TERMINAL_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024
+_CODEBUDDY_TERMINAL_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024
 
 
 def _read_capped_json_object(path: Path | None, max_bytes: int) -> dict:
@@ -3288,6 +3315,113 @@ def _zcode_false_success_reason(
     if not meaningful_agent_result and not provider_turn_completed:
         return "empty_agent_result"
     return None
+
+
+def _codebuddy_false_success_reasons(
+    patch_path: Path,
+    trajectory_path: Path | None,
+    usage_path: Path,
+    *,
+    expected_model: str = CODEBUDDY_MODEL,
+) -> tuple[str, ...]:
+    """Return bounded reasons that make a CodeBuddy rc=0 result ungradeable.
+
+    CodeBuddy has produced process status zero after making no provider
+    request. Pier still creates the artifact paths in that case, so existence
+    alone is not completion evidence. A successful result requires all three
+    independent products: a non-empty patch, a reconciled positive request
+    ledger, and the finalized ATIF trajectory that will be uploaded.
+
+    Only allowlisted enums leave this function; provider output, credentials,
+    request identifiers and local paths never enter the diagnostic or circuit
+    signature.
+    """
+
+    reasons: list[str] = []
+    try:
+        patch_bytes = patch_path.read_bytes() if _plain_file(patch_path) else b""
+    except OSError:
+        patch_bytes = b""
+    if not patch_bytes.strip():
+        reasons.append("empty_patch")
+
+    usage = _read_capped_json_object(
+        usage_path, _CODEBUDDY_TERMINAL_ARTIFACT_MAX_BYTES,
+    )
+    request_count = usage.get("request_count")
+    usage_header_valid = bool(
+        usage.get("schema") == "dradar-subscription-provider-usage-v1"
+        and usage.get("provider") == "codebuddy"
+        and usage.get("model") == expected_model
+    )
+    request_ledger_valid = bool(
+        usage_header_valid
+        and usage.get("complete") is True
+        and usage.get("request_usage_complete") is True
+        and usage.get("request_usage_observed") is True
+        and isinstance(request_count, int)
+        and not isinstance(request_count, bool)
+        and request_count > 0
+    )
+    names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
+    events = usage.get("token_usage_events")
+    if request_ledger_valid:
+        request_ledger_valid = bool(
+            isinstance(events, list)
+            and len(events) == request_count
+            and all(
+                isinstance(event, dict)
+                and all(
+                    isinstance(event.get(name), int)
+                    and not isinstance(event.get(name), bool)
+                    and event[name] >= 0
+                    for name in names
+                )
+                and event["n_cache_tokens"] <= event["n_input_tokens"]
+                for event in events
+            )
+        )
+    if request_ledger_valid:
+        totals = {
+            name: sum(event[name] for event in events)
+            for name in names
+        }
+        request_ledger_valid = all(
+            isinstance(usage.get(name), int)
+            and not isinstance(usage.get(name), bool)
+            and usage[name] == totals[name]
+            for name in names
+        ) and usage["n_cache_tokens"] <= usage["n_input_tokens"]
+    if not request_ledger_valid:
+        reasons.append(
+            "request_ledger_missing_or_inconsistent"
+            if usage_header_valid
+            else "provider_usage_missing_or_invalid"
+        )
+
+    trajectory = _read_capped_json_object(
+        trajectory_path, _CODEBUDDY_TERMINAL_ARTIFACT_MAX_BYTES,
+    )
+    metrics = trajectory.get("final_metrics")
+    trajectory_valid = bool(
+        isinstance(trajectory.get("schema_version"), str)
+        and trajectory["schema_version"].startswith("ATIF-v")
+        and isinstance(trajectory.get("steps"), list)
+        and trajectory["steps"]
+        and isinstance(metrics, dict)
+    )
+    if trajectory_valid and request_ledger_valid:
+        trajectory_valid = all(
+            metrics.get(metric_name) == usage[usage_name]
+            for metric_name, usage_name in (
+                ("total_prompt_tokens", "n_input_tokens"),
+                ("total_cached_tokens", "n_cache_tokens"),
+                ("total_completion_tokens", "n_output_tokens"),
+            )
+        )
+    if not trajectory_valid:
+        reasons.append("trajectory_missing_or_invalid")
+    return tuple(reasons)
 
 
 @contextmanager
@@ -4295,6 +4429,15 @@ def run_trial(
         dsh_artifact_binding = _verify_dsh_artifact_binding(
             trial_dir, effective_assignment,
         )
+    if effective_agent == CODEBUDDY_AGENT and proc.returncode == 0:
+        false_success_reasons = _codebuddy_false_success_reasons(
+            patch,
+            trajectory,
+            trial_dir / "agent" / "provider-usage.json",
+            expected_model=effective_assignment["model"],
+        )
+        if false_success_reasons:
+            raise CodeBuddyFalseSuccessError(false_success_reasons)
     if not patch.is_file():
         if terminal_error is not None:
             raise terminal_error
