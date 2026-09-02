@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import dradar.ota.state as state_module
 from dradar.flight_recorder import FlightRecorder
-from dradar.ota.manifest import verify_signed_manifest
+from dradar.ota.manifest import ManifestError, verify_signed_manifest
 from dradar.ota.runtime import FlightRecorderEventSink
 from dradar.ota.state import (
     InvalidTransition,
@@ -574,6 +574,37 @@ def test_stage_rejects_preexisting_external_hardlink_candidate(tmp_path):
             controller.stage(manifest, artifact, downloaded)
 
     assert outside.read_bytes() == downloaded.read_bytes()
+
+
+def test_failed_state_write_still_closes_staged_capability(tmp_path, monkeypatch):
+    manifest, artifact, downloaded = _release(tmp_path)
+    controller = UpdateController(tmp_path / "ota")
+    _atomic_json(
+        controller.current_path,
+        {
+            "release_id": "dradar-0.5.175",
+            "version": "0.5.175",
+            "sequence": 599,
+            "artifact": "releases/dradar-0.5.175/current.whl",
+        },
+    )
+    with controller.transaction():
+        _prepare_waiting(controller, manifest, artifact, downloaded)
+    staged = controller._staged_artifact
+    original = state_module._atomic_json
+
+    def fail_failed_state(path, value):
+        if path == controller.state_path and value.get("state") == "failed":
+            raise OSError("state ENOSPC")
+        return original(path, value)
+
+    monkeypatch.setattr(state_module, "_atomic_json", fail_failed_state)
+    with controller.transaction(), pytest.raises(OSError, match="state ENOSPC"):
+        controller.transition(UpdateState.FAILED, reason="update_stage_failed")
+
+    assert controller._staged_artifact is None
+    with pytest.raises(ManifestError, match="closed"):
+        staged.read_bytes()
 
 
 def test_launcher_rejects_symlinked_release_record(tmp_path):

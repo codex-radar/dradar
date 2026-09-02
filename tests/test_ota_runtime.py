@@ -1,15 +1,18 @@
 import base64
 import hashlib
 import json
+import os
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import dradar.ota.state as state_module
 from dradar.flight_recorder import FlightRecorder
 from dradar.ota import (
     CompatibilitySnapshot,
     InvalidTransition,
+    ManifestError,
     PlatformTarget,
     RolloutContext,
     SafePointSnapshot,
@@ -216,13 +219,18 @@ def test_pre_adapter_gap_has_no_audit_but_runtime_records_complete_chain(tmp_pat
     )
     decision = prepare(runtime)
     assert decision.eligible is True
+    opened = []
+
+    def self_test(artifact):
+        opened.append(artifact)
+        return artifact.read_bytes() == BODY
+
     assert (
-        runtime.activate_and_self_test(
-            SafePointSnapshot(),
-            lambda artifact: artifact.read_bytes() == BODY,
-        )
+        runtime.activate_and_self_test(SafePointSnapshot(), self_test)
         is UpdateState.COMMITTED
     )
+    with pytest.raises(ManifestError, match="closed"):
+        opened[0].read_bytes()
 
     assert event_names(recorder) == [
         "update_detected",
@@ -293,13 +301,18 @@ def test_failed_self_test_rolls_back_and_preserves_auditable_terminal_state(tmp_
         root, recorder=recorder, download_client=Client(Response([BODY]))
     )
     prepare(runtime)
+    opened = []
+
+    def self_test(artifact):
+        opened.append(artifact)
+        return False
+
     assert (
-        runtime.activate_and_self_test(
-            SafePointSnapshot(),
-            lambda _artifact: False,
-        )
+        runtime.activate_and_self_test(SafePointSnapshot(), self_test)
         is UpdateState.ROLLED_BACK
     )
+    with pytest.raises(ManifestError, match="closed"):
+        opened[0].read_bytes()
     assert json.loads((root / "current.json").read_text()) == previous
     assert event_names(recorder)[-2:] == [
         "update_rollback_pending",
@@ -388,6 +401,40 @@ def test_keyboard_interrupt_during_self_test_rolls_back_before_propagating(tmp_p
         runtime.activate_and_self_test(SafePointSnapshot(), interrupted)
     assert json.loads((root / "current.json").read_text()) == previous
     assert runtime.controller.state()["state"] == "rolled_back"
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/dev/fd"), reason="requires observable POSIX fds"
+)
+def test_lkg_enospc_after_committed_state_closes_staged_capability(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "ota"
+    seed_lkg(root)
+    recorder = FlightRecorder(tmp_path / "audit")
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
+    prepare(runtime)
+    staged = runtime.controller.staged_artifact()
+    before = len(os.listdir("/dev/fd"))
+    original = state_module._atomic_json
+
+    def fail_lkg(path, value):
+        if path == runtime.controller.last_known_good_path:
+            raise OSError("ENOSPC")
+        return original(path, value)
+
+    monkeypatch.setattr(state_module, "_atomic_json", fail_lkg)
+    with pytest.raises(OSError, match="ENOSPC"):
+        runtime.activate_and_self_test(SafePointSnapshot(), lambda _artifact: True)
+
+    assert runtime.controller.state()["state"] == "committed"
+    assert runtime.controller._staged_artifact is None
+    with pytest.raises(ManifestError, match="closed"):
+        staged.read_bytes()
+    assert len(os.listdir("/dev/fd")) <= before - 2
 
 
 def test_old_runner_protocol_fails_closed_before_download_and_is_audited(tmp_path):

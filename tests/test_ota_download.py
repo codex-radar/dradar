@@ -1,4 +1,5 @@
 import hashlib
+import os
 
 import pytest
 
@@ -295,3 +296,42 @@ def test_existing_artifact_name_race_returns_open_inode_capability(
     assert verified.binding_is_current() is False
     verified.close()
     assert outside.read_bytes() == b"outside-safe"
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/dev/fd"), reason="requires observable POSIX fds"
+)
+def test_repeated_final_symlink_rejection_does_not_leak_directory_fds(tmp_path):
+    body = b"candidate-body"
+    destination = tmp_path / "downloads"
+    destination.mkdir()
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(body)
+    (destination / "candidate.whl").symlink_to(outside)
+    before = len(os.listdir("/dev/fd"))
+
+    for _ in range(100):
+        with pytest.raises(ManifestError, match="immutable artifact"):
+            download_verified_artifact(
+                FakeClient(FakeResponse([body])),
+                _artifact(body),
+                destination,
+            )
+
+    assert len(os.listdir("/dev/fd")) <= before + 1
+
+
+def test_verified_artifact_close_is_idempotent_and_does_not_close_reused_fd(tmp_path):
+    body = b"candidate-body"
+    verified = download_verified_artifact(
+        FakeClient(FakeResponse([body])),
+        _artifact(body),
+        tmp_path / "downloads",
+    )
+    verified.close()
+    sentinel = os.open(tmp_path / "sentinel", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        verified.close()
+        assert os.write(sentinel, b"still-open") == len(b"still-open")
+    finally:
+        os.close(sentinel)

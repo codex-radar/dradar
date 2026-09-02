@@ -505,10 +505,12 @@ class UpdateController:
                 f"cannot transition {current.value} -> {target.value}"
             )
         pointer = ReleasePointer(**record["release"])
-        changed = self._write_state(target, release=pointer, reason=reason)
         if target is UpdateState.FAILED:
-            self._close_staged_artifact()
-        return changed
+            try:
+                return self._write_state(target, release=pointer, reason=reason)
+            finally:
+                self._close_staged_artifact()
+        return self._write_state(target, release=pointer, reason=reason)
 
     def pause(self, reason: str) -> dict[str, Any]:
         self._require_transaction()
@@ -610,8 +612,12 @@ class UpdateController:
             "activation_attempted": False,
             "created_at": _now(),
         }
-        _atomic_json(self.pending_path, pending)
-        self._write_state(UpdateState.STAGED, release=pointer)
+        try:
+            _atomic_json(self.pending_path, pending)
+            self._write_state(UpdateState.STAGED, release=pointer)
+        except BaseException:
+            self._close_staged_artifact()
+            raise
         return pointer
 
     def wait_for_safe_point(self) -> dict[str, Any]:
@@ -656,16 +662,20 @@ class UpdateController:
         pending = _load_json(self.pending_path)
         if not pending or not isinstance(pending.get("manifest"), dict):
             raise InvalidTransition("signed pending release record is unavailable")
-        staged = self.staged_artifact()
-        staged.verify()
-        if not staged.binding_is_current():
-            raise InvalidTransition("staged artifact name is no longer safely bound")
-        self._write_committed_record(pointer, pending["manifest"], staged=staged)
-        committed = self._write_state(UpdateState.COMMITTED, release=pointer)
-        _atomic_json(self.last_known_good_path, asdict(pointer))
-        self.pending_path.unlink(missing_ok=True)
-        self._close_staged_artifact()
-        return committed
+        try:
+            staged = self.staged_artifact()
+            staged.verify()
+            if not staged.binding_is_current():
+                raise InvalidTransition(
+                    "staged artifact name is no longer safely bound"
+                )
+            self._write_committed_record(pointer, pending["manifest"], staged=staged)
+            committed = self._write_state(UpdateState.COMMITTED, release=pointer)
+            _atomic_json(self.last_known_good_path, asdict(pointer))
+            self.pending_path.unlink(missing_ok=True)
+            return committed
+        finally:
+            self._close_staged_artifact()
 
     def request_rollback(self, reason: str) -> dict[str, Any]:
         self._require_transaction()
@@ -683,32 +693,36 @@ class UpdateController:
 
     def rollback(self, reason: str = "candidate_failed") -> dict[str, Any]:
         self._require_transaction()
-        record = self.state()
-        pending = _load_json(self.pending_path)
-        if (
-            not record
-            or record.get("state")
-            not in {
-                UpdateState.ACTIVATED.value,
-                UpdateState.SELF_TESTING.value,
-                UpdateState.ROLLBACK_PENDING.value,
-            }
-            or not pending
-        ):
-            raise InvalidTransition("no activated candidate can be rolled back")
-        previous = pending.get("previous")
-        if not isinstance(previous, dict):
-            raise InvalidTransition("last current pointer is unavailable; fail closed")
-        _atomic_json(self.current_path, previous)
-        pointer = ReleasePointer(**record["release"])
-        rolled_back = self._write_state(
-            UpdateState.ROLLED_BACK,
-            release=pointer,
-            reason=reason,
-        )
-        self.pending_path.unlink(missing_ok=True)
-        self._close_staged_artifact()
-        return rolled_back
+        try:
+            record = self.state()
+            pending = _load_json(self.pending_path)
+            if (
+                not record
+                or record.get("state")
+                not in {
+                    UpdateState.ACTIVATED.value,
+                    UpdateState.SELF_TESTING.value,
+                    UpdateState.ROLLBACK_PENDING.value,
+                }
+                or not pending
+            ):
+                raise InvalidTransition("no activated candidate can be rolled back")
+            previous = pending.get("previous")
+            if not isinstance(previous, dict):
+                raise InvalidTransition(
+                    "last current pointer is unavailable; fail closed"
+                )
+            _atomic_json(self.current_path, previous)
+            pointer = ReleasePointer(**record["release"])
+            rolled_back = self._write_state(
+                UpdateState.ROLLED_BACK,
+                release=pointer,
+                reason=reason,
+            )
+            self.pending_path.unlink(missing_ok=True)
+            return rolled_back
+        finally:
+            self._close_staged_artifact()
 
     def recover_on_launcher_start(self) -> bool:
         """Rollback an uncommitted activated pointer after a launcher restart."""
@@ -946,5 +960,6 @@ class UpdateController:
     def _close_staged_artifact(self) -> None:
         if self._staged_artifact is None:
             return
-        self._staged_artifact.close()
+        staged = self._staged_artifact
         self._staged_artifact = None
+        staged.close()

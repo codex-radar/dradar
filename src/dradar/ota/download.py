@@ -84,9 +84,15 @@ class VerifiedArtifact:
     def close(self) -> None:
         if self._closed:
             return
-        os.close(self._file_fd)
-        os.close(self._directory_fd)
         self._closed = True
+        file_fd = self._file_fd
+        directory_fd = self._directory_fd
+        self._file_fd = -1
+        self._directory_fd = -1
+        try:
+            os.close(file_fd)
+        finally:
+            os.close(directory_fd)
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -216,7 +222,11 @@ def download_verified_artifact(
 
     directory_fd = _open_safe_directory(destination)
     final = destination / artifact.filename
-    existing_fd = _open_existing(directory_fd, artifact.filename)
+    try:
+        existing_fd = _open_existing(directory_fd, artifact.filename)
+    except BaseException:
+        os.close(directory_fd)
+        raise
     if existing_fd is not None:
         try:
             _verify_open_artifact(existing_fd, artifact)
