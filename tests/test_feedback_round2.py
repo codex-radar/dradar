@@ -190,26 +190,56 @@ def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient, _fake_art
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     calls = {"n": 0}
+    credentials = (
+        "bearer-" + "T" * 48,
+        "basic-" + "U" * 48,
+    )
 
     def flaky_run(*a, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise BuildFlakeError("mirror flake")
+            raise BuildFlakeError(
+                f"Authorization: Bearer {credentials[0]}",
+            )
         return _fake_art(tmp_path, rc=0)
 
     monkeypatch.setattr(runloop, "run_trial", flaky_run)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "cleanup_trial_resources",
+        lambda *_a, **_k: runloop.image_cache.TaskCleanupResult(
+            success=False,
+            note=f"Proxy-Authorization: Basic {credentials[1]}",
+        ),
+    )
     client = SubmitClient({})
-    tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
+    args = _args()
+    tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, args, "abc")
     assert tag == "submitted" and calls["n"] == 2
-    assert "retrying once automatically" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "retrying once automatically" in output
+    assert all(output.find(value) == -1 for value in credentials)
+    assert all(
+        args._docker_cleanup_blocked.find(value) == -1
+        for value in credentials
+    )
+    assert "<redacted>" in args._docker_cleanup_blocked
 
 
 def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    abort = tmp_path / "pool-abort"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort))
+    credentials = (
+        "bearer-" + "V" * 48,
+        "basic-" + "W" * 48,
+    )
 
     def always_flaky(*a, **kw):
-        raise BuildFlakeError("mirror flake")
+        raise BuildFlakeError(
+            f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}",
+        )
 
     monkeypatch.setattr(runloop, "run_trial", always_flaky)
     client = SubmitClient({})
@@ -221,4 +251,252 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
         ASSIGNMENT["assignment_id"],
         {"defer_seconds": 300, "failure_kind": "environment_build_failed"},
     )]
-    assert "failed twice" in capsys.readouterr().out
+    assert abort.read_text().startswith(
+        "drain:" + runloop._ENVIRONMENT_BUILD_ABORT_PREFIX
+    )
+    output = capsys.readouterr().out
+    assert "failed twice" in output
+    assert all(output.find(value) == -1 for value in credentials)
+
+
+def test_build_flake_retry_binds_started_once_per_logical_assignment(
+    monkeypatch, tmp_path,
+):
+    from test_go_menu import ASSIGNMENT
+
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(tmp_path / "pool-abort"))
+    counts = {"run_trial": 0, "mark_started": 0, "mark_stopped": 0, "release": 0}
+
+    class LifecycleClient:
+        def mark_started(self, assignment_id, **kwargs):
+            counts["mark_started"] += 1
+            return {"owner_epoch": 7}
+
+        def mark_stopped(self, assignment_id, **kwargs):
+            counts["mark_stopped"] += 1
+            return {"ok": True}
+
+        def release_assignments(self, *args, **kwargs):
+            counts["release"] += 1
+            return {"released": 1}
+
+    def always_flaky(*args, on_started=None, **kwargs):
+        counts["run_trial"] += 1
+        assert on_started is not None
+        on_started()
+        raise BuildFlakeError(
+            "isolated environment build failed",
+            failure_diagnostic={"failure_code": "registry_timeout"},
+        )
+
+    monkeypatch.setattr(runloop, "run_trial", always_flaky)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "remove_trial_builder",
+        lambda *_a, **_k: (True, None),
+    )
+
+    outcome = runloop._run_and_submit(
+        LifecycleClient(), dict(ASSIGNMENT), tmp_path, _args(), "abc",
+    )
+
+    assert outcome == "environment-build-failed"
+    assert counts == {
+        "run_trial": 2,
+        "mark_started": 1,
+        "mark_stopped": 1,
+        "release": 0,
+    }
+
+
+def test_zcode_retry_rebinds_started_after_confirmed_stop(
+    monkeypatch, tmp_path,
+):
+    from test_go_menu import ASSIGNMENT, SubmitClient, _fake_art
+
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(runloop, "_ZCODE_NETWORK_RETRY_DELAY_SECONDS", 0)
+    counts = {"run_trial": 0, "mark_started": 0, "mark_stopped": 0}
+
+    class LifecycleClient(SubmitClient):
+        def mark_started(self, assignment_id, **kwargs):
+            counts["mark_started"] += 1
+            return {"owner_epoch": counts["mark_started"]}
+
+        def mark_stopped(self, assignment_id, **kwargs):
+            counts["mark_stopped"] += 1
+            return {"ok": True}
+
+    def network_then_success(*args, on_started=None, **kwargs):
+        counts["run_trial"] += 1
+        assert on_started is not None
+        on_started()
+        if counts["run_trial"] == 1:
+            raise RunnerError(
+                "structured ZCode transport failure",
+                failure_diagnostic={
+                    "schema": "dradar-runner-failure-v1",
+                    "zcode_provider_failure_reason": "network_error",
+                },
+            )
+        return _fake_art(
+            tmp_path,
+            rc=0,
+            zcode_cli_sha256="a" * 64,
+        )
+
+    monkeypatch.setattr(runloop, "run_trial", network_then_success)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "remove_trial_builder",
+        lambda *_a, **_k: (True, None),
+    )
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "cleanup_trial_resources",
+        lambda *_a, **_k: runloop.image_cache.TaskCleanupResult(),
+    )
+    client = LifecycleClient({})
+    assignment = {**ASSIGNMENT, "agent": "zcode"}
+
+    outcome = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc",
+    )
+
+    assert outcome == "submitted"
+    assert counts == {
+        "run_trial": 2,
+        "mark_started": 2,
+        "mark_stopped": 1,
+    }
+    assert len(client.submissions) == 1
+
+
+def test_zcode_retry_never_rebinds_when_stop_is_unconfirmed(
+    monkeypatch, tmp_path,
+):
+    from test_go_menu import ASSIGNMENT
+
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    counts = {"run_trial": 0, "mark_started": 0, "mark_stopped": 0}
+
+    class LifecycleClient:
+        def mark_started(self, assignment_id, **kwargs):
+            counts["mark_started"] += 1
+            return {"owner_epoch": 1}
+
+    def network_failure(*args, on_started=None, **kwargs):
+        counts["run_trial"] += 1
+        assert counts["run_trial"] == 1, "unsafe second provider attempt"
+        assert on_started is not None
+        on_started()
+        raise RunnerError(
+            "structured ZCode transport failure",
+            failure_diagnostic={
+                "schema": "dradar-runner-failure-v1",
+                "zcode_provider_failure_reason": "network_error",
+            },
+        )
+
+    def stop_unconfirmed(*args, **kwargs):
+        counts["mark_stopped"] += 1
+        return False
+
+    monkeypatch.setattr(runloop, "run_trial", network_failure)
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", stop_unconfirmed)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "remove_trial_builder",
+        lambda *_a, **_k: (True, None),
+    )
+
+    outcome = runloop._run_and_submit(
+        LifecycleClient(),
+        {**ASSIGNMENT, "agent": "zcode"},
+        tmp_path,
+        _args(),
+        "abc",
+    )
+
+    assert outcome == "failed"
+    assert counts == {
+        "run_trial": 1,
+        "mark_started": 1,
+        "mark_stopped": 1,
+    }
+
+
+def test_mark_stopped_redacts_nested_failure_diagnostic_before_upload():
+    credentials = (
+        "bearer-" + "I" * 48,
+        "basic-" + "J" * 48,
+        "proxy-" + "K" * 48,
+        "config-" + "L" * 48,
+    )
+    captured = {}
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            captured["assignment_id"] = assignment_id
+            captured.update(kwargs)
+            return {"ok": True}
+
+    diagnostic = {
+        "schema": "dradar-environment-build-failure-v1",
+        "stderr_excerpt": (
+            f"Authorization: Bearer {credentials[0]}, Basic {credentials[1]}\n"
+            f"Proxy-Authorization: Basic {credentials[2]}"
+        ),
+        "nested": [{"auth": f'auth="{credentials[3]}"'}],
+    }
+
+    assert runloop._mark_stopped_quietly(
+        Client(),
+        "assignment-1",
+        failure_kind="environment_build_failed",
+        failure_diagnostic=diagnostic,
+    )
+    payload = repr(captured)
+    assert all(payload.find(value) == -1 for value in credentials)
+    assert "<redacted>" in payload
+
+
+def test_mark_stopped_redacts_sensitive_keys_even_for_opaque_values():
+    opaque_values = {
+        "auth": "opaque-auth-value",
+        "authorization": "opaque-authorization-value",
+        "access_token": "opaque-token-value",
+        "client-secret": "opaque-secret-value",
+        "password": "opaque-password-value",
+    }
+    captured = {}
+
+    class Client:
+        def mark_stopped(self, assignment_id, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+    diagnostic = {
+        "schema": "dradar-environment-build-failure-v1",
+        "failure_code": "registry_timeout",
+        "safe": {"stage": "base_image_metadata", "attempt": 2},
+        "credentials": opaque_values,
+    }
+
+    assert runloop._mark_stopped_quietly(
+        Client(),
+        "assignment-1",
+        failure_kind="environment_build_failed",
+        failure_diagnostic=diagnostic,
+    )
+    uploaded = captured["failure_diagnostic"]
+    payload = repr(uploaded)
+    assert all(value not in payload for value in opaque_values.values())
+    assert all(
+        uploaded["credentials"][key] == "<redacted>"
+        for key in opaque_values
+    )
+    assert uploaded["schema"] == diagnostic["schema"]
+    assert uploaded["failure_code"] == "registry_timeout"
+    assert uploaded["safe"] == diagnostic["safe"]

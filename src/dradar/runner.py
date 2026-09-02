@@ -452,13 +452,78 @@ class BuildFlakeError(RunnerError):
 # would auto-retry a run that DID burn quota.
 _BUILD_FLAKE_MARKERS = (
     "ports.ubuntu.com", "archive.ubuntu.com", "failed to solve",
-    "apt-get update", "Temporary failure resolving", "proxyconnect",
-    "TLS handshake timeout", "error getting credentials",
+    "apt-get update", "temporary failure resolving", "proxyconnect",
+    "tls handshake timeout", "error getting credentials",
+    "no space left on device", "cannot connect to the docker daemon",
+)
+
+_BUILD_REGISTRY_MARKERS = (
+    "load metadata for", "resolve source metadata", "registry-1.docker.io",
+    "docker.io/library/", "failed to fetch anonymous token",
+)
+_BUILD_NETWORK_MARKERS = (
+    "i/o timeout", "deadline exceeded", "timed out", "timeout",
+    "network is unreachable", "connection refused", "no such host",
+    "temporary failure resolving", "tls handshake timeout", "proxyconnect",
 )
 
 
 def _looks_like_build_flake(log_tail: str) -> bool:
-    return any(m in log_tail for m in _BUILD_FLAKE_MARKERS)
+    low = log_tail.lower()
+    return bool(
+        any(marker in low for marker in _BUILD_FLAKE_MARKERS)
+        or (
+            any(marker in low for marker in _BUILD_REGISTRY_MARKERS)
+            and any(marker in low for marker in _BUILD_NETWORK_MARKERS)
+        )
+    )
+
+
+def environment_build_failure_diagnostic(
+    diagnostic_text: str, *, exit_status: int | None,
+) -> dict[str, object]:
+    """Return a bounded, credential-free pre-model build diagnosis."""
+
+    low = diagnostic_text.lower()
+    if "load metadata for" in low or "resolve source metadata" in low:
+        stage = "base_image_metadata"
+    elif "apt-get update" in low:
+        stage = "package_install"
+    elif "docker daemon" in low:
+        stage = "builder_start"
+    else:
+        stage = "image_build"
+    if "network is unreachable" in low or "connection refused" in low:
+        failure_code = "registry_network_unreachable"
+    elif "i/o timeout" in low or "deadline exceeded" in low or "timed out" in low:
+        failure_code = "registry_timeout"
+    elif "no such host" in low or "temporary failure resolving" in low:
+        failure_code = "registry_dns_failed"
+    elif "x509" in low or "tls handshake" in low:
+        failure_code = "registry_tls_failed"
+    elif "no space left on device" in low:
+        failure_code = "disk_space_exhausted"
+    elif "docker daemon" in low:
+        failure_code = "docker_daemon_unavailable"
+    else:
+        failure_code = "container_build_failed"
+    excerpt = image_cache.redact_docker_diagnostic(
+        diagnostic_text,
+        limit=1000,
+    )
+    return {
+        "schema": "dradar-environment-build-failure-v1",
+        "stage": stage,
+        "failure_code": failure_code,
+        "exit_status": (
+            int(exit_status)
+            if isinstance(exit_status, int) and not isinstance(exit_status, bool)
+            else None
+        ),
+        "model_started": False,
+        "quota_consumed": False,
+        "stderr_excerpt": excerpt,
+    }
 
 
 def _result_exception_text(result_path: Path | None) -> str:
@@ -4200,7 +4265,11 @@ def run_trial(
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "
                 f"the agent never started and no quota was used.\n"
-                f"last lines of the log:\n{tail}")
+                f"last lines of the log:\n{tail}",
+                failure_diagnostic=environment_build_failure_diagnostic(
+                    tail, exit_status=proc.returncode,
+                ),
+            )
         raise
     patch, trajectory, result = trial_artifact_paths(trial_dir)
     if effective_agent == ZCODE_AGENT:
@@ -4245,7 +4314,11 @@ def run_trial(
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "
                 f"the agent never started and no quota was used.\n"
-                f"build diagnostic:\n{_diagnostic_tail(diagnostic)}")
+                f"build diagnostic:\n{_diagnostic_tail(diagnostic)}",
+                failure_diagnostic=environment_build_failure_diagnostic(
+                    diagnostic, exit_status=proc.returncode,
+                ),
+            )
         raise RunnerError(
             f"model.patch missing (agent likely failed; see {log_path} and {trial_dir})\n"
             f"last lines of the log:\n{tail}",
