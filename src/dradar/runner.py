@@ -3366,6 +3366,42 @@ def _artifact_tasks_overlay(
         yield overlay_root
 
 
+def _validate_task_base_commit_before_build(
+    assignment: dict,
+    tasks_root: Path,
+    effective_agent: str,
+) -> None:
+    """Reject unsafe artifact base refs before creating any BuildKit state."""
+
+    task_id = assignment.get("task_id")
+    if not isinstance(task_id, str) or not task_id or Path(task_id).name != task_id:
+        raise RunnerError(f"unsafe task id {task_id!r}")
+    task_toml = tasks_root / task_id / "task.toml"
+    if not task_toml.is_file():
+        return
+    try:
+        task_config = tomllib.loads(task_toml.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RunnerError(f"task.toml is unreadable: {exc}") from exc
+    metadata = task_config.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise RunnerError("task has an invalid metadata.base_commit_hash")
+    base_commit = metadata.get("base_commit_hash", "")
+    valid_commit = (
+        isinstance(base_commit, str)
+        and (not base_commit or re.fullmatch(r"[0-9a-f]{40}", base_commit) is not None)
+    )
+    valid_pompeii_tag = (
+        effective_agent == ANTIGRAVITY_AGENT
+        and base_commit == "pompeii-base"
+        and task_id.startswith(POMPEII_BENCHMARK_ID + "-")
+    )
+    if effective_agent == ANTIGRAVITY_AGENT and not base_commit:
+        valid_commit = False
+    if not (valid_commit or valid_pompeii_tag):
+        raise RunnerError("task has an invalid metadata.base_commit_hash")
+
+
 @contextmanager
 def _antigravity_tasks_overlay(
     assignment: dict,
@@ -3702,6 +3738,12 @@ def run_trial(
         environment_build_timeout_multiplier,
     )
     build_cache_mode = image_cache.normalize_build_cache_mode(build_cache_mode)
+    # The selected task pack is the authoritative source for artifact base
+    # metadata. Reject a bad ref before version discovery, provider preflight,
+    # credential materialization, or any BuildKit state is touched.
+    _validate_task_base_commit_before_build(
+        effective_assignment, tasks_root, effective_agent
+    )
     if effective_agent == "codex":
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER

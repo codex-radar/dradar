@@ -761,6 +761,31 @@ def test_artifact_task_overlay_rejects_untrusted_base_ref(tmp_path):
             pass
 
 
+def test_invalid_base_commit_is_rejected_before_builder_creation(
+    tmp_path, monkeypatch,
+):
+    task_id = "abs-module-cache-flags"
+    task = tmp_path / task_id
+    task.mkdir()
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "main; touch /tmp/pwned"\n'
+    )
+    builder_calls = []
+
+    def forbidden_builder(*_args, **_kwargs):
+        builder_calls.append(True)
+        raise AssertionError("builder must not start for invalid task metadata")
+
+    monkeypatch.setattr(
+        runner_mod.image_cache, "prepare_trial_builder", forbidden_builder
+    )
+
+    with pytest.raises(RunnerError, match="invalid metadata.base_commit_hash"):
+        run_trial(_assignment("codex"), tmp_path, tmp_path)
+
+    assert builder_calls == []
+
+
 def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
                trajectory_payload=None, runtime_diagnostic=None,
                zcode_outcome=None, provider_usage_sidecar=None,
