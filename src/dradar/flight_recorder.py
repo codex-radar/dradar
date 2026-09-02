@@ -67,6 +67,7 @@ REASON_CODES = frozenset({
     "update_download_failed", "update_verification_failed",
     "update_stage_failed", "update_safe_point_blocked",
     "update_self_test_failed", "update_crash_recovery", "candidate_failed",
+    "update_state_corrupt", "update_state_incompatible",
 })
 OUTCOMES = frozenset({
     "completed", "interrupted", "submitted", "artifact-staging-failed",

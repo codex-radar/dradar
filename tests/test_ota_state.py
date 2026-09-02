@@ -6,7 +6,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from dradar.flight_recorder import FlightRecorder
 from dradar.ota.manifest import verify_signed_manifest
+from dradar.ota.runtime import FlightRecorderEventSink
 from dradar.ota.state import (
     InvalidTransition,
     SafePointSnapshot,
@@ -280,3 +282,119 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
     _atomic_json(controller.last_known_good_path, lkg)
 
     assert controller.launch_pointer() == lkg
+
+
+@pytest.mark.parametrize(
+    "corrupt_state, message",
+    [
+        (
+            {
+                "schema_version": 2,
+                "state": "future_state",
+                "release": {
+                    "release_id": "future", "version": "9.0.0",
+                    "sequence": 900, "artifact": "releases/future/client.whl",
+                },
+            },
+            "unsupported schema",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "state": "unknown_state",
+                "release": {
+                    "release_id": "corrupt", "version": "9.0.0",
+                    "sequence": 900, "artifact": "releases/corrupt/client.whl",
+                },
+            },
+            "update state is unknown",
+        ),
+    ],
+)
+def test_unknown_persisted_state_fails_closed_and_preserves_rollback_baseline(
+    tmp_path, corrupt_state, message,
+):
+    recorder = FlightRecorder(tmp_path / "audit")
+    controller = UpdateController(
+        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+    )
+    artifact = controller.root / "releases" / "dradar-0.5.175" / "current.whl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"known-good")
+    known_good = {
+        "release_id": "dradar-0.5.175",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": str(artifact.relative_to(controller.root)),
+    }
+    _atomic_json(controller.current_path, known_good)
+    _atomic_json(controller.last_known_good_path, known_good)
+    _atomic_json(controller.state_path, corrupt_state)
+
+    with pytest.raises(InvalidTransition, match=message):
+        controller.state()
+    with controller.transaction(), pytest.raises(InvalidTransition, match=message):
+        controller.transition(UpdateState.FAILED, reason="candidate_failed")
+
+    assert json.loads(controller.current_path.read_text()) == known_good
+    assert json.loads(controller.last_known_good_path.read_text()) == known_good
+    assert controller.launch_pointer() == known_good
+    assert json.loads(controller.state_path.read_text()) == corrupt_state
+    assert recorder._load(recorder.events_path)[-1]["reason_code"] == (
+        "update_state_incompatible"
+    )
+
+
+def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
+    tmp_path,
+):
+    recorder = FlightRecorder(tmp_path / "audit")
+    controller = UpdateController(
+        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+    )
+    artifact = controller.root / "releases" / "dradar-0.5.175" / "current.whl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"known-good")
+    known_good = {
+        "release_id": "dradar-0.5.175", "version": "0.5.175",
+        "sequence": 599, "artifact": str(artifact.relative_to(controller.root)),
+    }
+    _atomic_json(controller.current_path, known_good)
+    _atomic_json(controller.last_known_good_path, known_good)
+    controller.state_path.write_text('{"schema_version":1,"state":', encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="persisted update state is unreadable"):
+        controller.state()
+    assert controller.launch_pointer() == known_good
+    assert json.loads(controller.current_path.read_text()) == known_good
+    assert json.loads(controller.last_known_good_path.read_text()) == known_good
+    assert recorder._load(recorder.events_path)[-1]["reason_code"] == (
+        "update_state_corrupt"
+    )
+
+
+def test_unknown_resume_state_is_audited_and_pause_remains_fail_closed(tmp_path):
+    recorder = FlightRecorder(tmp_path / "audit")
+    controller = UpdateController(
+        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+    )
+    paused = {
+        "schema_version": 1,
+        "state": "paused",
+        "release": {
+            "release_id": "dradar-0.6.0", "version": "0.6.0",
+            "sequence": 600, "artifact": "releases/dradar-0.6.0/client.whl",
+        },
+        "resume_state": "future_downloading",
+        "updated_at": "2026-09-02T00:00:00+00:00",
+    }
+    _atomic_json(controller.state_path, paused)
+
+    with controller.transaction(), pytest.raises(
+        InvalidTransition, match="no compatible resume state",
+    ):
+        controller.resume()
+    assert json.loads(controller.state_path.read_text()) == paused
+    event = recorder._load(recorder.events_path)[-1]
+    assert event["event_type"] == "update_failed"
+    assert event["reason_code"] == "update_state_incompatible"

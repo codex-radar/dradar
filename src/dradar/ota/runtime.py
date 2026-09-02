@@ -36,6 +36,8 @@ _AUDIT_REASONS = frozenset({
     "update_self_test_failed",
     "update_crash_recovery",
     "candidate_failed",
+    "update_state_corrupt",
+    "update_state_incompatible",
 })
 
 
@@ -91,6 +93,16 @@ class FlightRecorderEventSink:
                 "update_state": UpdateState.WAITING_SAFE_POINT.value,
                 "update_sequence": sequence,
             },
+        )
+
+    def fail_closed(self, reason_code: str) -> None:
+        if reason_code not in _AUDIT_REASONS:
+            reason_code = "candidate_failed"
+        self.recorder.try_record(
+            "update_failed",
+            component="ota",
+            reason_code=reason_code,
+            attributes={"update_state": UpdateState.FAILED.value},
         )
 
 

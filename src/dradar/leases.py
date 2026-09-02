@@ -13,8 +13,8 @@ from datetime import datetime
 
 from .api_client import ApiError
 from .assignment_state import assignment_state, state_summary
-from .identity import _client
 from .flight_recorder import FlightRecorder
+from .identity import _client
 from .local_config import HOME, _load_config
 
 

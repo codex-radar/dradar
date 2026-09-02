@@ -86,10 +86,15 @@ class EventSink(Protocol):
 
     def emit(self, event_type: str, attributes: Mapping[str, Any]) -> None: ...
 
+    def fail_closed(self, reason_code: str) -> None: ...
+
 
 class NullEventSink:
     def emit(self, event_type: str, attributes: Mapping[str, Any]) -> None:
         del event_type, attributes
+
+    def fail_closed(self, reason_code: str) -> None:
+        del reason_code
 
 
 @dataclass(frozen=True)
@@ -310,7 +315,62 @@ class UpdateController:
             )
 
     def state(self) -> dict[str, Any] | None:
-        return _load_json(self.state_path)
+        try:
+            record = _load_json(self.state_path)
+        except InvalidTransition as exc:
+            self.event_sink.fail_closed("update_state_corrupt")
+            raise InvalidTransition(
+                "OTA blocked: persisted update state is unreadable; current and "
+                "last-known-good remain unchanged",
+            ) from exc
+        if record is None:
+            return None
+        if record.get("schema_version") != 1:
+            self.event_sink.fail_closed("update_state_incompatible")
+            raise InvalidTransition(
+                "OTA blocked: persisted update state uses an unsupported schema; "
+                "current and last-known-good remain unchanged",
+            )
+        raw_state = record.get("state")
+        try:
+            UpdateState(raw_state)
+        except (TypeError, ValueError) as exc:
+            self.event_sink.fail_closed("update_state_incompatible")
+            raise InvalidTransition(
+                "OTA blocked: persisted update state is unknown; current and "
+                "last-known-good remain unchanged",
+            ) from exc
+        release = record.get("release")
+        if not isinstance(release, dict):
+            self.event_sink.fail_closed("update_state_corrupt")
+            raise InvalidTransition(
+                "OTA blocked: persisted release pointer is invalid; current and "
+                "last-known-good remain unchanged",
+            )
+        try:
+            pointer = ReleasePointer(**release)
+        except (TypeError, ValueError) as exc:
+            self.event_sink.fail_closed("update_state_corrupt")
+            raise InvalidTransition(
+                "OTA blocked: persisted release pointer is invalid; current and "
+                "last-known-good remain unchanged",
+            ) from exc
+        if (
+            not isinstance(pointer.release_id, str)
+            or not pointer.release_id
+            or not isinstance(pointer.version, str)
+            or not pointer.version
+            or type(pointer.sequence) is not int
+            or pointer.sequence < 1
+            or not isinstance(pointer.artifact, str)
+            or not pointer.artifact
+        ):
+            self.event_sink.fail_closed("update_state_corrupt")
+            raise InvalidTransition(
+                "OTA blocked: persisted release pointer is invalid; current and "
+                "last-known-good remain unchanged",
+            )
+        return record
 
     def _write_state(
         self,
@@ -398,10 +458,18 @@ class UpdateController:
             raise InvalidTransition("update is not paused")
         try:
             target = UpdateState(record["resume_state"])
-        except (KeyError, ValueError) as exc:
-            raise InvalidTransition("paused update has no safe resume state") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            self.event_sink.fail_closed("update_state_incompatible")
+            raise InvalidTransition(
+                "OTA blocked: paused update has no compatible resume state; "
+                "current and last-known-good remain unchanged",
+            ) from exc
         if target not in _PRE_ACTIVATION:
-            raise InvalidTransition("paused update resume state is unsafe")
+            self.event_sink.fail_closed("update_state_incompatible")
+            raise InvalidTransition(
+                "OTA blocked: paused update resume state is unsafe; current and "
+                "last-known-good remain unchanged",
+            )
         return self._write_state(target, release=ReleasePointer(**record["release"]))
 
     def stage(
