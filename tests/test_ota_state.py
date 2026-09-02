@@ -19,8 +19,17 @@ from dradar.ota.state import (
 )
 
 
-def _release(tmp_path, *, with_keys=False):
-    body = b"candidate"
+def _release(
+    tmp_path,
+    *,
+    with_keys=False,
+    release_id="dradar-0.6.0",
+    version="0.6.0",
+    sequence=600,
+    filename="candidate.whl",
+    key_id="root",
+):
+    body = f"candidate-{sequence}".encode()
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(
         serialization.Encoding.Raw,
@@ -28,9 +37,9 @@ def _release(tmp_path, *, with_keys=False):
     )
     document = {
         "schema_version": 1,
-        "release_id": "dradar-0.6.0",
-        "version": "0.6.0",
-        "sequence": 600,
+        "release_id": release_id,
+        "version": version,
+        "sequence": sequence,
         "channel": "stable",
         "published_at": "2026-09-02T05:00:00Z",
         "expires_at": "2099-09-02T05:00:00Z",
@@ -52,8 +61,8 @@ def _release(tmp_path, *, with_keys=False):
             {
                 "os": "linux",
                 "arch": "x86_64",
-                "filename": "candidate.whl",
-                "url": "https://releases.example.invalid/candidate.whl",
+                "filename": filename,
+                "url": f"https://releases.example.invalid/{filename}",
                 "size": len(body),
                 "sha256": hashlib.sha256(body).hexdigest(),
             }
@@ -62,15 +71,15 @@ def _release(tmp_path, *, with_keys=False):
     payload = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
     document["signature"] = {
         "algorithm": "ed25519",
-        "key_id": "root",
+        "key_id": key_id,
         "value": base64.b64encode(private.sign(payload)).decode(),
     }
-    manifest = verify_signed_manifest(document, {"root": public})
-    downloaded = tmp_path / "downloaded.whl"
+    manifest = verify_signed_manifest(document, {key_id: public})
+    downloaded = tmp_path / f"downloaded-{sequence}.whl"
     downloaded.write_bytes(body)
     result = (manifest, manifest.artifacts[0], downloaded)
     if with_keys:
-        return (*result, {"root": public})
+        return (*result, {key_id: public})
     return result
 
 
@@ -370,6 +379,114 @@ def test_launcher_never_accepts_an_arbitrary_regular_file_without_signed_record(
             "artifact": str(arbitrary.relative_to(controller.root)),
         },
     )
+
+    with pytest.raises(InvalidTransition, match="no current or last-known-good"):
+        controller.launch_pointer()
+
+
+def test_launcher_selects_highest_valid_sequence_across_current_and_lkg(tmp_path):
+    older_manifest, older_artifact, older_downloaded, older_keys = _release(
+        tmp_path,
+        with_keys=True,
+        release_id="dradar-0.6.0",
+        version="0.6.0",
+        sequence=600,
+        filename="older.whl",
+        key_id="older-root",
+    )
+    newer_manifest, newer_artifact, newer_downloaded, newer_keys = _release(
+        tmp_path,
+        with_keys=True,
+        release_id="dradar-0.7.0",
+        version="0.7.0",
+        sequence=601,
+        filename="newer.whl",
+        key_id="newer-root",
+    )
+    controller = UpdateController(
+        tmp_path / "ota",
+        trusted_keys={**older_keys, **newer_keys},
+    )
+    older = _install_signed_record(
+        controller,
+        older_manifest,
+        older_artifact,
+        older_downloaded.read_bytes(),
+    )
+    newest = _install_signed_record(
+        controller,
+        newer_manifest,
+        newer_artifact,
+        newer_downloaded.read_bytes(),
+    )
+    _atomic_json(controller.current_path, older)
+    _atomic_json(controller.last_known_good_path, newest)
+
+    assert controller.launch_pointer() == newest
+
+
+def test_committed_pointer_rejects_forged_unsigned_lkg_baseline(tmp_path):
+    _manifest, _artifact, _downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
+    forged = controller.root / "releases" / "forged" / "client.whl"
+    forged.parent.mkdir(parents=True)
+    forged.write_bytes(b"forged")
+    _atomic_json(
+        controller.last_known_good_path,
+        {
+            "release_id": "forged",
+            "version": "99.0.0",
+            "sequence": 999,
+            "artifact": str(forged.relative_to(controller.root)),
+        },
+    )
+
+    with pytest.raises(InvalidTransition, match="trusted committed OTA baseline"):
+        controller.committed_pointer()
+
+
+def test_stage_rejects_release_parent_symlink_and_never_writes_outside(tmp_path):
+    manifest, artifact, downloaded = _release(tmp_path)
+    controller = UpdateController(tmp_path / "ota")
+    previous = {
+        "release_id": "dradar-0.5.175",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": "releases/dradar-0.5.175/current.whl",
+    }
+    _atomic_json(controller.current_path, previous)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    controller.releases.mkdir(parents=True)
+    (controller.releases / manifest.release_id).symlink_to(
+        outside,
+        target_is_directory=True,
+    )
+    with controller.transaction():
+        controller.detect(manifest, artifact)
+        controller.transition(UpdateState.DOWNLOADED)
+        controller.transition(UpdateState.VERIFIED)
+        with pytest.raises(InvalidTransition, match="safe release directory"):
+            controller.stage(manifest, artifact, downloaded)
+
+    assert not (outside / artifact.filename).exists()
+
+
+def test_launcher_rejects_symlinked_release_record(tmp_path):
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
+    pointer = _install_signed_record(
+        controller,
+        manifest,
+        artifact,
+        downloaded.read_bytes(),
+    )
+    _atomic_json(controller.current_path, pointer)
+    record = controller.root / "releases" / manifest.release_id / "release-record.json"
+    outside = tmp_path / "outside-record.json"
+    outside.write_bytes(record.read_bytes())
+    record.unlink()
+    record.symlink_to(outside)
 
     with pytest.raises(InvalidTransition, match="no current or last-known-good"):
         controller.launch_pointer()

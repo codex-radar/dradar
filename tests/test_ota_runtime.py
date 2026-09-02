@@ -19,6 +19,22 @@ from dradar.ota import (
 from dradar.ota.state import UpdateController, _atomic_json
 
 BODY = b"signed-cross-platform-candidate"
+SIGNING_KEY = Ed25519PrivateKey.generate()
+PUBLIC_KEY = SIGNING_KEY.public_key().public_bytes(
+    serialization.Encoding.Raw,
+    serialization.PublicFormat.Raw,
+)
+TRUSTED_KEYS = {"runtime-root": PUBLIC_KEY}
+
+
+def sign_document(document):
+    payload = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+    document["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": "runtime-root",
+        "value": base64.b64encode(SIGNING_KEY.sign(payload)).decode(),
+    }
+    return document
 
 
 class Response:
@@ -52,11 +68,6 @@ class Client:
 
 
 def signed_release():
-    private = Ed25519PrivateKey.generate()
-    public = private.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
     artifacts = []
     for os_name in ("macos", "linux", "windows"):
         for arch in ("x86_64", "arm64"):
@@ -95,13 +106,7 @@ def signed_release():
         },
         "artifacts": artifacts,
     }
-    payload = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
-    document["signature"] = {
-        "algorithm": "ed25519",
-        "key_id": "runtime-root",
-        "value": base64.b64encode(private.sign(payload)).decode(),
-    }
-    return document, {"runtime-root": public}
+    return sign_document(document), TRUSTED_KEYS
 
 
 def compatibility():
@@ -116,15 +121,61 @@ def compatibility():
 
 
 def seed_lkg(root):
-    path = root / "releases" / "dradar-0.5.175" / "current.whl"
+    body = b"known-good"
+    release_id = "dradar-0.5.175"
+    path = root / "releases" / release_id / "current.whl"
     path.parent.mkdir(parents=True)
-    path.write_bytes(b"known-good")
+    path.write_bytes(body)
     pointer = {
-        "release_id": "dradar-0.5.175",
+        "release_id": release_id,
         "version": "0.5.175",
         "sequence": 599,
         "artifact": str(path.relative_to(root)),
     }
+    manifest = sign_document(
+        {
+            "schema_version": 1,
+            "release_id": release_id,
+            "version": "0.5.175",
+            "sequence": 599,
+            "channel": "stable",
+            "published_at": "2026-09-01T06:00:00Z",
+            "expires_at": "2099-09-01T06:00:00Z",
+            "rollout": {
+                "stage": "general",
+                "basis_points": 10_000,
+                "salt": "baseline-599",
+                "paused": False,
+            },
+            "compatibility": {
+                "launcher_min_version": "1.0.0",
+                "runner_protocol": {"min": 3, "max": 3},
+                "doctor_contract": 1,
+                "provider_contract": 1,
+                "ledger_schema": {"min": 1, "max": 1},
+                "checkpoint_schema": {"min": 0, "max": 0},
+            },
+            "artifacts": [
+                {
+                    "os": "linux",
+                    "arch": "x86_64",
+                    "filename": path.name,
+                    "url": "https://releases.example.invalid/baseline/current.whl",
+                    "size": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                }
+            ],
+        }
+    )
+    _atomic_json(
+        path.parent / "release-record.json",
+        {
+            "schema_version": 1,
+            "committed": True,
+            "pointer": pointer,
+            "manifest": manifest,
+        },
+    )
     _atomic_json(root / "current.json", pointer)
     _atomic_json(root / "last-known-good.json", pointer)
     return pointer

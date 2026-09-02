@@ -21,7 +21,7 @@ ota-root/
   update.lock               # 全主机唯一更新写锁
 ```
 
-launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。每个已提交版本还包含不可变 `release-record.json`，其中保存精确 pointer 与原始签名 Manifest；launcher 每次启动都用内置信任根重新验签，并核对 release/version/sequence、固定制品路径、size 与 SHA-256。仅有一个根内普通文件或伪造 pointer 不构成可启动版本。`current` 缺失、越界、符号链接、记录不匹配或制品被事后篡改时才尝试有效 LKG；两者都不可用则失败关闭，不从网络临时执行代码。首次安装必须由独立安装器建立带签名 release record 的 current/LKG，OTA 不承担无回滚基线的首次安装。
+launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。每个已提交版本还包含不可变且不得为 symlink 的 `release-record.json`，其中保存精确 pointer 与原始签名 Manifest；launcher 每次启动都用内置信任根重新验签，并核对 release/version/sequence、固定制品路径、size 与 SHA-256。`current` 与 LKG 都有效但不同步时选择最高有效 sequence；相同最高 sequence 却指向不同内容则失败关闭。仅有一个根内普通文件、伪造 pointer 或未签名 LKG 不构成可启动版本，也不能成为防回滚基线。`current` 缺失、越界、符号链接、记录不匹配或制品被事后篡改时才尝试有效 LKG；两者都不可用则失败关闭，不从网络临时执行代码。首次安装必须由独立安装器建立带签名 release record 的 current/LKG，OTA 不承担无回滚基线的首次安装。
 
 ## Manifest、供应链与防回滚
 
@@ -32,7 +32,7 @@ Manifest 使用 canonical JSON（移除 `signature` 后按 key 排序、无多�
 - launcher、runner protocol、doctor、Provider、ledger、checkpoint 兼容范围；
 - 每个 OS/架构唯一的 HTTPS URL、文件名、长度与 SHA-256。
 
-候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，调用方传入值必须与它一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向；POSIX 下载目录从文件系统根开始逐层通过 `dirfd + O_NOFOLLOW` 打开，临时文件和最终 hard-link 发布都锚定同一目录 fd。中断、断网、目录替换、目标 symlink 竞态或校验失败会清除 partial，且不会写出目标目录。已有同名制品只有在签名长度与摘要完全一致时才复用，否则失败关闭，绝不覆盖不可变候选。
+候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，但每个候选基线也必须通过同一套 signed release-record、信任根、路径和制品摘要验证；调用方传入值必须与最高有效 sequence 一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向；POSIX 下载目录从文件系统根开始逐层通过 `dirfd + O_NOFOLLOW` 打开，临时文件和最终 hard-link 发布都锚定同一目录 fd。发布时比较临时文件、最终名称与打开 fd 的 inode/link count，拒绝外部 hardlink；在返回前再次确认最终名称仍绑定同一普通文件。中断、断网、目录替换、目标 symlink/hardlink 竞态或校验失败会清除 partial，且不会写出目标目录。已有同名制品只有在签名长度与摘要完全一致且 link count 为 1 时才复用，否则失败关闭，绝不覆盖不可变候选。
 
 ## 分级灰度与旧客户端桥接
 
@@ -68,7 +68,7 @@ detected → downloaded → verified → staged → waiting_safe_point
                                                       rolled_back
 ```
 
-激活前任一步可 `failed`；pause 会保存精确 `resume_state`。activated 后不允许“暂停悬挂”，只能完成自检或回滚。自检至少包含：候选可导入/启动、`doctor` 只读合同、runner protocol、Provider capability snapshot、ledger/checkpoint schema 可读、当前 pending upload 可读。提交顺序是：候选自检通过 → LKG 推进到候选 → state committed → 清 pending。
+激活前任一步可 `failed`；pause 会保存精确 `resume_state`。activated 后不允许“暂停悬挂”，只能完成自检或回滚。自检至少包含：候选可导入/启动、`doctor` 只读合同、runner protocol、Provider capability snapshot、ledger/checkpoint schema 可读、当前 pending upload 可读。提交顺序是：候选自检通过 → 验签并原子写入不可变 release record → state committed → LKG 推进到候选 → 清 pending。若在 state committed 后、LKG 推进前崩溃，launcher 只在重新验证 pending 中的签名 Manifest、pointer 与制品后补写 release record/LKG。
 
 ## 集成冲突键与并行边界
 

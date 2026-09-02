@@ -59,9 +59,18 @@ def _open_safe_directory(path: Path) -> int:
         raise ManifestError("download destination is not a safe directory") from exc
 
 
-def _verify_open_artifact(fd: int, artifact: Artifact) -> None:
+def _verify_open_artifact(
+    fd: int,
+    artifact: Artifact,
+    *,
+    expected_links: int = 1,
+) -> None:
     details = os.fstat(fd)
-    if not stat.S_ISREG(details.st_mode) or details.st_size != artifact.size:
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_size != artifact.size
+        or details.st_nlink != expected_links
+    ):
         raise ManifestError("downloaded artifact size or file type is invalid")
     digest = hashlib.sha256()
     os.lseek(fd, 0, os.SEEK_SET)
@@ -92,6 +101,27 @@ def _directory_matches_path(dir_fd: int, path: Path) -> bool:
     return stat.S_ISDIR(current.st_mode) and (opened.st_dev, opened.st_ino) == (
         current.st_dev,
         current.st_ino,
+    )
+
+
+def _same_open_file(left_fd: int, right_fd: int) -> bool:
+    left = os.fstat(left_fd)
+    right = os.fstat(right_fd)
+    return stat.S_ISREG(left.st_mode) and (left.st_dev, left.st_ino) == (
+        right.st_dev,
+        right.st_ino,
+    )
+
+
+def _name_matches_open_file(dir_fd: int, filename: str, file_fd: int) -> bool:
+    try:
+        named = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+        opened = os.fstat(file_fd)
+    except OSError:
+        return False
+    return stat.S_ISREG(named.st_mode) and (named.st_dev, named.st_ino) == (
+        opened.st_dev,
+        opened.st_ino,
     )
 
 
@@ -152,6 +182,10 @@ def download_verified_artifact(
         if not hmac.compare_digest(digest.hexdigest(), artifact.sha256):
             raise ManifestError("downloaded artifact SHA-256 mismatch")
         published = False
+        temporary_fd = _open_existing(directory_fd, temporary_name)
+        if temporary_fd is None:
+            raise ManifestError("verified temporary artifact disappeared")
+        final_fd: int | None = None
         try:
             os.link(
                 temporary_name,
@@ -173,12 +207,37 @@ def download_verified_artifact(
                 ) from exc
             finally:
                 os.close(existing_fd)
-        if not _directory_matches_path(directory_fd, destination):
-            if published:
+        try:
+            final_fd = _open_existing(directory_fd, artifact.filename)
+            if final_fd is None or not _same_open_file(temporary_fd, final_fd):
+                raise ManifestError("artifact name changed during publication")
+            _verify_open_artifact(final_fd, artifact, expected_links=2)
+            if not _directory_matches_path(directory_fd, destination):
+                raise ManifestError("download destination changed during publication")
+            os.unlink(temporary_name, dir_fd=directory_fd)
+            if os.fstat(final_fd).st_nlink != 1 or not _name_matches_open_file(
+                directory_fd,
+                artifact.filename,
+                final_fd,
+            ):
+                raise ManifestError("artifact name changed during publication")
+            return final
+        except BaseException:
+            if (
+                published
+                and final_fd is not None
+                and _name_matches_open_file(
+                    directory_fd,
+                    artifact.filename,
+                    final_fd,
+                )
+            ):
                 os.unlink(artifact.filename, dir_fd=directory_fd)
-            raise ManifestError("download destination changed during publication")
-        os.unlink(temporary_name, dir_fd=directory_fd)
-        return final
+            raise
+        finally:
+            os.close(temporary_fd)
+            if final_fd is not None:
+                os.close(final_fd)
     except BaseException:
         try:
             os.unlink(temporary_name, dir_fd=directory_fd)

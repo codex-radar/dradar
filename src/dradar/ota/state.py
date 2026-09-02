@@ -325,6 +325,24 @@ def _resolve_regular_artifact(root: Path, artifact: str) -> Path | None:
     return candidate
 
 
+def _safe_directory_beneath(root: Path, directory: Path) -> bool:
+    try:
+        relative = directory.absolute().relative_to(root.absolute())
+    except ValueError:
+        return False
+    cursor = root.absolute()
+    try:
+        if cursor.is_symlink():
+            return False
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                return False
+        return cursor.is_dir() and cursor.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError):
+        return False
+
+
 class UpdateController:
     """Durable control plane used by a stable launcher, never by model code."""
 
@@ -553,7 +571,11 @@ class UpdateController:
             )
         verify_artifact(downloaded_path, artifact)
         release_dir = self.releases / manifest.release_id
+        if release_dir.is_symlink():
+            raise InvalidTransition("staging requires a safe release directory")
         release_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not _safe_directory_beneath(self.root, release_dir):
+            raise InvalidTransition("staging requires a safe release directory")
         destination = release_dir / artifact.filename
         if downloaded_path.resolve() != destination.resolve():
             if destination.exists() or destination.is_symlink():
@@ -730,12 +752,21 @@ class UpdateController:
 
         if not self.trusted_keys:
             raise InvalidTransition("trusted OTA signing keys are unavailable")
+        valid: list[tuple[ReleasePointer, dict[str, Any]]] = []
         for path in (self.current_path, self.last_known_good_path):
             pointer = _load_json(path)
             if not pointer:
                 continue
             if self._verify_committed_pointer(pointer):
-                return pointer
+                parsed = _release_pointer(pointer)
+                if parsed is not None:
+                    valid.append((parsed, pointer))
+        if valid:
+            highest = max(item[0].sequence for item in valid)
+            winners = [item for item in valid if item[0].sequence == highest]
+            if len({tuple(asdict(item[0]).items()) for item in winners}) != 1:
+                raise InvalidTransition("conflicting committed OTA pointers")
+            return winners[0][1]
         raise InvalidTransition("no current or last-known-good release is available")
 
     def _record_path(self, pointer: ReleasePointer) -> Path:
@@ -782,6 +813,15 @@ class UpdateController:
             "manifest": dict(signed_manifest),
         }
         record_path = self._record_path(pointer)
+        if record_path.is_symlink() or (
+            record_path.exists()
+            and _resolve_regular_artifact(
+                self.root,
+                str(record_path.relative_to(self.root)),
+            )
+            is None
+        ):
+            raise InvalidTransition("immutable release record path is unsafe")
         existing = _load_json(record_path)
         if existing is not None and existing != record:
             raise InvalidTransition("immutable release record already differs")
@@ -793,7 +833,14 @@ class UpdateController:
         if pointer is None:
             return False
         try:
-            record = _load_json(self._record_path(pointer))
+            record_path = self._record_path(pointer)
+            resolved_record = _resolve_regular_artifact(
+                self.root,
+                str(record_path.relative_to(self.root)),
+            )
+            if resolved_record is None or resolved_record != record_path.resolve():
+                return False
+            record = _load_json(resolved_record)
             if (
                 not record
                 or set(record) != {"schema_version", "committed", "pointer", "manifest"}
@@ -831,9 +878,14 @@ class UpdateController:
     def committed_pointer(self) -> ReleasePointer:
         """Read the authoritative anti-rollback baseline from durable pointers."""
 
+        if not self.trusted_keys:
+            raise InvalidTransition("trusted OTA signing keys are unavailable")
+        valid: list[ReleasePointer] = []
         for path in (self.last_known_good_path, self.current_path):
             value = _load_json(path)
             parsed = _release_pointer(value)
-            if parsed and _resolve_regular_artifact(self.root, parsed.artifact):
-                return parsed
+            if parsed and self._verify_committed_pointer(value):
+                valid.append(parsed)
+        if valid:
+            return max(valid, key=lambda item: item.sequence)
         raise InvalidTransition("no trusted committed OTA baseline is available")

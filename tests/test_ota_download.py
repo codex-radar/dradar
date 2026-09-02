@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+import dradar.ota.download as download_module
 from dradar.ota.download import download_verified_artifact
 from dradar.ota.manifest import Artifact, ManifestError, PlatformTarget
 
@@ -191,3 +192,57 @@ def test_racing_directory_replacement_cannot_publish_outside_anchor(tmp_path):
     assert not (outside / "candidate.whl").exists()
     assert not (tmp_path / "detached-downloads" / "candidate.whl").exists()
     assert not list((tmp_path / "detached-downloads").glob("*.partial"))
+
+
+def test_verified_external_hardlink_is_not_reused_as_ota_artifact(tmp_path):
+    body = b"candidate-body"
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(body)
+    destination = tmp_path / "downloads"
+    destination.mkdir()
+    (destination / "candidate.whl").hardlink_to(outside)
+
+    with pytest.raises(ManifestError, match="external hardlink|immutable artifact"):
+        download_verified_artifact(
+            FakeClient(FakeResponse([body])),
+            _artifact(body),
+            destination,
+        )
+
+    assert outside.read_bytes() == body
+
+
+def test_final_name_replacement_after_directory_check_is_detected(
+    tmp_path,
+    monkeypatch,
+):
+    body = b"candidate-body"
+    destination = tmp_path / "downloads"
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(b"outside-safe")
+    original = download_module._directory_matches_path
+    raced = False
+
+    def replace_after_check(dir_fd, path):
+        nonlocal raced
+        result = original(dir_fd, path)
+        if not raced:
+            raced = True
+            final = destination / "candidate.whl"
+            final.unlink()
+            final.symlink_to(outside)
+        return result
+
+    monkeypatch.setattr(
+        download_module,
+        "_directory_matches_path",
+        replace_after_check,
+    )
+    with pytest.raises(ManifestError, match="changed during publication"):
+        download_verified_artifact(
+            FakeClient(FakeResponse([body])),
+            _artifact(body),
+            destination,
+        )
+
+    assert outside.read_bytes() == b"outside-safe"

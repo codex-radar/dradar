@@ -173,7 +173,7 @@ class UpdateRuntime:
                 downloaded = download_verified_artifact(
                     self.download_client,
                     artifact,
-                    self.controller.root / "downloads" / manifest.release_id,
+                    self.controller.releases / manifest.release_id,
                 )
                 self.controller.transition(UpdateState.DOWNLOADED)
                 phase_reason = "update_verification_failed"
