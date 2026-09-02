@@ -3,7 +3,11 @@ name = "dradar"
 version = "0.5.175"
 description = "Crowd Radar client — run benchmark tasks locally and submit them for independent server-side grading"
 requires-python = ">=3.11"
-dependencies = ["certifi>=2024.2.2", "httpx[socks]>=0.27"]
+dependencies = [
+    "certifi>=2024.2.2",
+    "cryptography>=45",
+    "httpx[socks]>=0.27",
+]
 
 [project.optional-dependencies]
 dev = [

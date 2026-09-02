@@ -1,0 +1,45 @@
+"""Fail-closed building blocks for the DRadar launcher OTA protocol.
+
+This package intentionally has no runner or telemetry side effects.  The
+runtime integration is deferred until the versioned event envelope is stable.
+"""
+
+from .manifest import (
+    Artifact,
+    CompatibilitySnapshot,
+    ManifestError,
+    PlatformTarget,
+    PolicyDecision,
+    ReleaseManifest,
+    RolloutContext,
+    evaluate_manifest,
+    verify_artifact,
+    verify_signed_manifest,
+)
+from .state import (
+    InvalidTransition,
+    SafePointSnapshot,
+    UpdateController,
+    UpdateLock,
+    UpdateLockBusy,
+    UpdateState,
+)
+
+__all__ = [
+    "Artifact",
+    "CompatibilitySnapshot",
+    "InvalidTransition",
+    "ManifestError",
+    "PlatformTarget",
+    "PolicyDecision",
+    "ReleaseManifest",
+    "RolloutContext",
+    "SafePointSnapshot",
+    "UpdateController",
+    "UpdateLock",
+    "UpdateLockBusy",
+    "UpdateState",
+    "evaluate_manifest",
+    "verify_artifact",
+    "verify_signed_manifest",
+]
