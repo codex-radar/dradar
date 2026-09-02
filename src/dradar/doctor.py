@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, egress, runner
+from . import __version__, docker_runtime, egress, runner
 from .capacity import docker_resources, worker_resource_warnings
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -232,7 +232,9 @@ def _plan_issue(
     }
 
 
-def plan_environment_issue(plan: dict) -> dict | None:
+def plan_environment_issue(
+    plan: dict, *, allow_docker_install: bool = False,
+) -> dict | None:
     """Return one actionable issue for exactly this run plan, or ``None``.
 
     This preflight is intentionally narrow and runs before the device is
@@ -241,18 +243,43 @@ def plan_environment_issue(plan: dict) -> dict | None:
     """
     harness = str(plan.get("harness") or "").lower()
     harness = {"dsh": "dsh-minimal"}.get(harness, harness)
-    docker = shutil.which("docker")
+    existing_docker = shutil.which("docker")
+    recovery = (
+        docker_runtime.Recovery(
+            True, "docker_ready", "Docker 已经在运行。", False, "ready",
+            existing_docker,
+        )
+        if existing_docker and _probe([existing_docker, "info"])
+        else docker_runtime.ensure_docker(
+            allow_install=allow_docker_install,
+        )
+    )
+    if not recovery.ready:
+        issue = _plan_issue(
+            harness, recovery.code, recovery.message,
+            (
+                "install_docker" if recovery.install_required
+                else "start_docker" if recovery.attempted_start
+                else "select_docker_environment"
+            ),
+            requires_user_action=recovery.requires_user_action,
+        )
+        # Recovery is internal and bounded. Never hand an old Agent a raw
+        # installer/start command that it might loop or display to the user.
+        issue["agent"]["next_commands"] = []
+        issue["agent"].update({
+            "failure_stage": recovery.stage,
+            "automatic_start_attempted": recovery.attempted_start,
+            "automatic_install_attempted": recovery.attempted_install,
+        })
+        issue["install_required"] = recovery.install_required
+        return issue
+    docker = recovery.docker_path
     if not docker:
         return _plan_issue(
-            harness, "docker_not_installed",
-            "这次运行需要 Docker；请先安装并启动 Docker，再重试。",
-            "setup_docker", requires_user_action=True,
-        )
-    if not _probe([docker, "info"]):
-        return _plan_issue(
-            harness, "docker_not_running",
-            "Docker 还没有启动；请启动 Docker 后重试。",
-            "start_docker", requires_user_action=True,
+            harness, "docker_runtime_invalid",
+            "Docker 已恢复，但无法验证命令位置；为避免误运行，题目尚未开始。",
+            "repair_local_environment", requires_user_action=True,
         )
     if not _probe([docker, "compose", "version"]):
         return _plan_issue(

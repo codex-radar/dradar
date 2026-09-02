@@ -151,6 +151,22 @@ COMMAND_SCHEMAS = {
                 agent_only=True,
             ),
             _argument(
+                "--docker-install-token",
+                user_intent="执行用户刚刚明确选择的推荐 Docker 环境安装",
+                allowed_when="前一次响应要求确认安装，且用户选择安装推荐环境",
+                default=None,
+                state_change="消费一次性本机授权，只安装推荐环境并继续原运行计划一次",
+                decision_required=True,
+                conflicts_with=["未获得用户同意", "--upload-only", "--recheck-generation"],
+                idempotency="只能成功消费一次；计划或参数变化后失败关闭",
+                failure_codes=[
+                    "docker_install_decision_invalid",
+                    "docker_install_rejected",
+                    "docker_install_verification_failed",
+                ],
+                agent_only=True,
+            ),
+            _argument(
                 "--json",
                 user_intent="让 Agent 读取稳定结构，而不是解析自然语言输出",
                 allowed_when="任何状态",

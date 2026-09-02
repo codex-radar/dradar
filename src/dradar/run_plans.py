@@ -504,6 +504,7 @@ def _exchange(
         "limits": response.get("limits") if isinstance(response.get("limits"), dict) else {},
         "pending_decision": None,
         "pending_local_capacity": None,
+        "pending_docker_install": None,
         "intent_generation": 0,
         "pending_recheck_generation": None,
         "authorized_concurrency": None,
@@ -841,6 +842,107 @@ def _consume_local_capacity(
     return workers, bound_decision, bound_token
 
 
+def _docker_install_binding(args) -> dict[str, Any]:
+    """Bind an install approval to the exact replayable run arguments."""
+
+    decision_token = getattr(args, "decision_token", None)
+    return {
+        "concurrency": getattr(args, "concurrency", None),
+        "decision_token_hash": (
+            hashlib.sha256(decision_token.encode()).hexdigest()
+            if isinstance(decision_token, str) else None
+        ),
+    }
+
+
+def _docker_install_response(
+    path: Path,
+    state: dict[str, Any],
+    args,
+    *,
+    user_message: str,
+) -> dict[str, Any]:
+    """Ask once, without exposing an installer command or provider ID."""
+
+    token = "drdi_" + secrets.token_urlsafe(24)
+    state["pending_docker_install"] = {
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "intent_generation": _intent_generation(state),
+        "binding": _docker_install_binding(args),
+        "expires_at": time.time() + 10 * 60,
+    }
+    _atomic_json(path, state)
+    install_action = (
+        {
+            "mode": "replay_plan_command",
+            "command": "run",
+            "args": ["--docker-install-token", token, "--json"],
+            "inherit": ["--plan", "--server"],
+            "interactive": False,
+        }
+        if getattr(args, "recheck_generation", None) is not None
+        else {
+            "mode": "replay_current_command_with_args",
+            "args": ["--docker-install-token", token],
+        }
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "decision_required",
+        "interaction": "confirm",
+        "decision_required": True,
+        "decision": "install_recommended_docker",
+        "decision_token": token,
+        "user_message": user_message,
+        "agent_action": "ask_user",
+        "error_code": "docker_install_confirmation_required",
+        "retryable": False,
+        "choices": [
+            {"id": "install", "label": "安装推荐的 Docker 环境"},
+            {"id": "cancel", "label": "暂不安装"},
+        ],
+        "agent": {
+            "schema_version": SCHEMA_VERSION,
+            "requires_user_action": True,
+            "choice_actions": {
+                "install": install_action,
+                "cancel": {"mode": "no_command", "args": []},
+            },
+        },
+    }
+
+
+def _consume_docker_install(
+    path: Path,
+    state: dict[str, Any],
+    args,
+    token: object,
+) -> None:
+    """Consume exactly one user-approved install replay, failing closed."""
+
+    pending = state.get("pending_docker_install")
+    valid = bool(
+        isinstance(pending, dict)
+        and isinstance(token, str)
+        and token.startswith("drdi_")
+        and secrets.compare_digest(
+            str(pending.get("token_hash") or ""),
+            hashlib.sha256(token.encode()).hexdigest(),
+        )
+        and pending.get("intent_generation") == _intent_generation(state)
+        and pending.get("binding") == _docker_install_binding(args)
+        and float(pending.get("expires_at") or 0) > time.time()
+    )
+    state["pending_docker_install"] = None
+    _atomic_json(path, state)
+    if not valid:
+        raise RunPlanClientError(
+            "docker_install_decision_invalid",
+            "Docker 安装确认已经失效；为避免未经许可安装，我会重新检查后再询问。",
+            agent_action="notify_only",
+        )
+
+
 def _authorized_concurrency(
     state: dict[str, Any], selected: int, snapshot: dict[str, Any],
 ) -> bool:
@@ -998,6 +1100,7 @@ def _advance_intent_generation(
     generation = _intent_generation(state) + 1
     state["intent_generation"] = generation
     state["pending_recheck_generation"] = generation if pending_recheck else None
+    state["pending_docker_install"] = None
     _atomic_json(path, state)
     return generation
 
@@ -1526,11 +1629,13 @@ def _run_with_admission(operation: Callable[[], dict[str, Any]]) -> dict[str, An
 def cmd_run_plan(args) -> int:
     def operate(*, authoritative_recheck: bool = False) -> dict[str, Any]:
         recheck_generation = getattr(args, "recheck_generation", None)
+        docker_install_token = getattr(args, "docker_install_token", None)
         if getattr(args, "upload_only", False):
             if (
                 getattr(args, "concurrency", None) is not None
                 or getattr(args, "decision_token", None) is not None
                 or recheck_generation is not None
+                or docker_install_token is not None
             ):
                 raise RunPlanClientError(
                     "upload_only_argument_conflict",
@@ -1539,6 +1644,7 @@ def cmd_run_plan(args) -> int:
         if recheck_generation is not None and (
             getattr(args, "concurrency", None) is not None
             or getattr(args, "decision_token", None) is not None
+            or docker_install_token is not None
         ):
             raise RunPlanClientError(
                 "recheck_argument_conflict",
@@ -1553,7 +1659,12 @@ def cmd_run_plan(args) -> int:
                 # Any explicit run is a newer user/Agent intent and invalidates
                 # an older capacity recheck before server or Fleet state can
                 # change.  The admission lock linearizes this with stop.
-                _advance_intent_generation(path, state)
+                if docker_install_token is None:
+                    _advance_intent_generation(path, state)
+                else:
+                    _consume_docker_install(
+                        path, state, args, docker_install_token,
+                    )
             else:
                 _consume_recheck_generation(
                     path, state, recheck_generation,
@@ -1765,8 +1876,22 @@ def cmd_run_plan(args) -> int:
         # deliberately invisible here.
         from .doctor import plan_environment_issue
 
-        environment_issue = plan_environment_issue(plan)
+        environment_issue = (
+            plan_environment_issue(plan, allow_docker_install=True)
+            if docker_install_token is not None
+            else plan_environment_issue(plan)
+        )
         if environment_issue is not None:
+            if (
+                environment_issue.get("install_required")
+                and docker_install_token is None
+                and environment_issue.get("error_code")
+                == "docker_install_confirmation_required"
+            ):
+                return _docker_install_response(
+                    path, state, args,
+                    user_message=environment_issue["user_message"],
+                )
             raise RunPlanClientError(
                 environment_issue["error_code"],
                 environment_issue["user_message"],

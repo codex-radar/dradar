@@ -519,6 +519,110 @@ def test_pool_is_not_running_until_exact_parent_acknowledges_readiness(
     assert state["batches"][BATCH_A]["ready_at"]
 
 
+def test_startup_observation_budget_is_exactly_thirty_minutes():
+    assert fleet.STARTUP_OBSERVE_SECONDS == 1800.0
+    assert fleet.START_TIMEOUT_SECONDS == 20.0
+    assert fleet.REQUEST_TIMEOUT_SECONDS == 60.0
+    assert fleet.HEARTBEAT_SECONDS == 1.0
+    assert fleet.HEARTBEAT_STALE_SECONDS == 60.0
+
+
+def test_real_budget_accepts_worker_ready_immediately_before_1800(monkeypatch):
+    clock = {"seconds": 0.0}
+    stopped = []
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time, "sleep",
+        lambda _seconds: clock.__setitem__("seconds", 1799.0),
+    )
+
+    def status(_batch_id):
+        return {
+            "batch_id": BATCH_A,
+            "status": "running" if clock["seconds"] >= 1799.0 else "starting",
+            "startup_status": "ready" if clock["seconds"] >= 1799.0 else "pending",
+        }
+
+    monkeypatch.setattr(fleet, "batch_status", status)
+    monkeypatch.setattr(
+        fleet, "stop_batch", lambda *_args, **_kwargs: stopped.append(True),
+    )
+
+    response = fleet._observe_pool_startup({
+        "batch": {
+            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+        },
+    }, BATCH_A)
+
+    assert response["batch"]["startup_status"] == "ready"
+    assert clock["seconds"] == 1799.0
+    assert stopped == []
+
+
+def test_real_budget_stops_only_after_1800_seconds(monkeypatch):
+    clock = {"seconds": 0.0}
+    stopped_at = []
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time, "sleep",
+        lambda _seconds: clock.__setitem__("seconds", 1800.0),
+    )
+    monkeypatch.setattr(
+        fleet, "batch_status", lambda _batch_id: {
+            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        fleet, "stop_batch",
+        lambda batch_id, **kwargs: stopped_at.append(
+            (clock["seconds"], batch_id, kwargs),
+        ) or {
+            "ok": True, "stopping": [batch_id], "condition_changed": [], "warnings": [],
+        },
+    )
+
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({
+            "batch": {
+                "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+            },
+        }, BATCH_A)
+
+    assert raised.value.code == "local_start_timeout"
+    assert stopped_at == [(1800.0, BATCH_A, {"only_if_startup_pending": True})]
+
+
+def test_real_budget_preserves_unconfirmed_stop_failure_at_1800(monkeypatch):
+    clock = {"seconds": 0.0}
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock["seconds"])
+    monkeypatch.setattr(
+        fleet.time, "sleep",
+        lambda _seconds: clock.__setitem__("seconds", 1800.0),
+    )
+    monkeypatch.setattr(
+        fleet, "batch_status", lambda _batch_id: {
+            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        fleet, "stop_batch",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fleet.FleetError("coordinator unavailable")
+        ),
+    )
+
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({
+            "batch": {
+                "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+            },
+        }, BATCH_A)
+
+    assert clock["seconds"] == 1800.0
+    assert raised.value.code == "local_start_timeout_stop_unconfirmed"
+    assert raised.value.retryable is False
+
+
 def test_startup_observation_times_out_as_failure_instead_of_returning_starting(
     monkeypatch,
 ):

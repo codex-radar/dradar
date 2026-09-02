@@ -101,7 +101,7 @@ HEARTBEAT_STALE_SECONDS = 60.0
 IDLE_EXIT_SECONDS = 30.0
 ENVIRONMENT_BUILD_FAILED_EXIT_CODE = 78
 SETTLED_BATCH_STATUSES = {"completed", "failed", "interrupted", "stopped"}
-STARTUP_OBSERVE_SECONDS = 480.0
+STARTUP_OBSERVE_SECONDS = 1800.0
 
 _pool_lock_handles: dict[str, object] = {}
 

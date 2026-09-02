@@ -175,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
         "--recheck-generation", type=int, help=argparse.SUPPRESS,
     )
     p_run_plan.add_argument(
+        "--docker-install-token", help=argparse.SUPPRESS,
+    )
+    p_run_plan.add_argument(
         "--json", action="store_true", help="emit the versioned Agent response",
     )
     p_run_plan.set_defaults(func=cmd_run_plan)
