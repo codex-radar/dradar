@@ -2488,6 +2488,15 @@ def _mark_stopped_quietly(
     return False
 
 
+def _record_flight_event(
+    telemetry: RunnerTelemetry | None, event_type: str, *, component: str, **kwargs,
+) -> None:
+    """Keep legacy/test telemetry adapters compatible during protocol rollout."""
+    recorder = getattr(telemetry, "record_event", None)
+    if recorder is not None:
+        recorder(event_type, component=component, **kwargs)
+
+
 def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     args, local_commit: str | None,
                     telemetry: RunnerTelemetry | None = None,
@@ -2547,6 +2556,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         return "pending-upload"
     work_dir = HOME / "work"
     print("running trial (this can take a while)...")
+    if telemetry:
+        _record_flight_event(telemetry,
+            "build_started", component="build",
+            assignment_id=assignment["assignment_id"],
+        )
 
     ownership_state = "needs_bind"
 
@@ -2579,6 +2593,15 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             telemetry.set_phase(
                 "running", assignment["assignment_id"],
                 assignment.get("owner_epoch"),
+            )
+            _record_flight_event(telemetry,
+                "build_completed", component="build",
+                assignment_id=assignment["assignment_id"],
+            )
+            _record_flight_event(telemetry,
+                "provider_started", component="provider",
+                assignment_id=assignment["assignment_id"],
+                attributes={"provider": assignment.get("agent") or "codex"},
             )
             telemetry.flush()
 
@@ -2627,6 +2650,13 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     )
             break
         except BuildFlakeError as exc:
+            if telemetry:
+                _record_flight_event(telemetry,
+                    "build_failed", component="build",
+                    assignment_id=assignment["assignment_id"],
+                    reason_code="build_flake",
+                    attributes={"attempt": attempt},
+                )
             # The image build died before the agent ran — a free failure
             # (zero quota), and mirror flakes usually pass on the second
             # attempt, so retry once automatically instead of bouncing the
@@ -2854,6 +2884,19 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     terminal_outcome = _terminal_failure_outcome(failure_kind)
     outcome = "interrupted" if interrupted else "completed"
     if telemetry:
+        _record_flight_event(telemetry,
+            "provider_failed" if interrupted else "provider_completed",
+            component="provider", assignment_id=assignment["assignment_id"],
+            reason_code="provider_failed" if interrupted else "completed",
+            attributes={
+                "outcome": "interrupted" if interrupted else "completed",
+                "elapsed_ms": max(0, round(art.duration_sec * 1000)),
+            },
+        )
+        _record_flight_event(telemetry,
+            "upload_started", component="upload",
+            assignment_id=assignment["assignment_id"],
+        )
         telemetry.set_phase(
             "uploading", assignment["assignment_id"],
             assignment.get("owner_epoch"),
@@ -3070,6 +3113,23 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         and not getattr(args, "yes", False)
         and not getattr(args, "parallel", False)
     ))
+    if telemetry:
+        upload_succeeded = upload_outcome in {"submitted", "interrupted"}
+        _record_flight_event(telemetry,
+            "upload_completed" if upload_succeeded else "upload_failed",
+            component="upload", assignment_id=assignment["assignment_id"],
+            reason_code=upload_outcome,
+            attributes={"outcome": upload_outcome},
+        )
+        if upload_outcome in {
+            "artifact-staging-failed", "upload-blocked", "upload-failed",
+        }:
+            _record_flight_event(telemetry,
+                "checkpoint_saved", component="checkpoint",
+                assignment_id=assignment["assignment_id"],
+                reason_code="pending_upload",
+                attributes={"outcome": upload_outcome},
+            )
     circuit_opened = _observe_repeat_failure(
         assignment,
         repeat_failure,
@@ -3898,7 +3958,7 @@ def cmd_go(args) -> int:
         target_workers = 1
     if not 1 <= target_workers <= 40:
         target_workers = 1
-    telemetry = RunnerTelemetry(client, target_workers=target_workers)
+    telemetry = RunnerTelemetry(client, target_workers=target_workers, home=HOME)
     telemetry.bind_batch(args.batch_id)
     telemetry.start()
     close_reason = "error"
@@ -5331,6 +5391,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             # The server applies this exclusion before stamping started_at,
             # allowing the loop to keep draining other waiting cells.
             if telemetry:
+                _record_flight_event(telemetry,
+                    "claim_requested", component="claim",
+                    attributes={"attempt": 1},
+                )
                 if telemetry.flush_for_checkout():
                     print("this device was asked to stop before another checkout")
                     break
@@ -5379,6 +5443,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             # process starts leaves pre-model failures unable to call the
             # owner-fenced stopped endpoint, stranding a phantom running cell.
             assignment["_runner_session_id"] = telemetry.session_id
+            _record_flight_event(telemetry,
+                "claim_accepted", component="claim",
+                assignment_id=assignment["assignment_id"],
+            )
         if assignment["assignment_id"] in checkout_exclusions:
             # Compatibility with an older server that ignores the exclusion
             # field: checkout just stamped this cell started again. Undo that
@@ -5426,6 +5494,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             telemetry.set_phase(
                 "preparing", assignment["assignment_id"],
                 assignment.get("owner_epoch"),
+            )
+            _record_flight_event(telemetry,
+                "assignment_checked_out", component="claim",
+                assignment_id=assignment["assignment_id"],
             )
         print(f"\n=== checked out {assignment['task_id']} "
               f"{assignment['model']}@{assignment['effort']}"

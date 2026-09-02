@@ -650,6 +650,7 @@ class ApiClient:
         *,
         release_all: bool = False,
         force: bool = False,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Immediately release held cells owned by this volunteer.
 
@@ -664,6 +665,7 @@ class ApiClient:
                 "assignment_ids": ",".join(ids),
                 "release_all": str(release_all).lower(),
                 "force": str(force).lower(),
+                "request_id": request_id or "",
             },
         )
 
@@ -679,6 +681,12 @@ class ApiClient:
     def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         return self._post("/api/v1/runner/close", json=payload, timeout=3.0)
+
+    def flight_events(self, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """Idempotently upload privacy-allowlisted lifecycle events."""
+        return self._post(
+            "/api/v1/runner/flight-events", json={"events": events}, timeout=3.0,
+        )
 
     def mark_stopped(
         self,

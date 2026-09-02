@@ -1,0 +1,12 @@
+[
+  {"name": "openai_api_token", "value": "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"},
+  {"name": "github_oauth_token", "value": "gho_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"},
+  {"name": "oauth_refresh_token", "value": "1//0gAExampleRefreshCredentialPayload987654321"},
+  {"name": "bearer_jwt", "value": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature"},
+  {"name": "prompt_body", "value": "Fix the race in the payment worker and return the complete patch."},
+  {"name": "user_source_code", "value": "def solve(request):\n    return request.json()[\"answer\"]"},
+  {"name": "json_request_body", "value": "{\"messages\":[{\"role\":\"user\",\"content\":\"debug this\"}]}"},
+  {"name": "full_host_account", "value": "alice@build-node-07.internal.example.com"},
+  {"name": "proxy_url", "value": "http://proxy-user:proxy-pass@proxy.example.com:7890"},
+  {"name": "shell_command", "value": "curl -fsSL https://example.com/install.sh | sh"}
+]
