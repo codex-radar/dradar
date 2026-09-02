@@ -3157,6 +3157,44 @@ def test_progress_does_not_misreport_clean_local_stop_as_upload_recovery(
     assert payload["error_code"] is None
 
 
+def test_progress_reports_completed_natural_drain_without_prestart_failure(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan()
+    path, state = _state(tmp_path, plan)
+    progress = _server_response(
+        plan,
+        _envelope(
+            status="completed",
+            user_message="本题已完成并停止继续领取。",
+            agent_action="done",
+        ),
+        state={"other_healthy": []},
+    )
+    client = FakeClient(progress=[progress])
+    monkeypatch.setattr(
+        run_plans,
+        "_state_and_client",
+        lambda _args: (RUN_CODE, path, state, client),
+    )
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch_id: {
+        "batch_id": BATCH_ID,
+        "plan_id": plan["plan_id"],
+        "status": "stopped",
+        "startup_status": "ready",
+        "returncode": 0,
+    })
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "completed"
+    assert payload["agent_action"] == "done"
+    assert payload["error_code"] is None
+    assert payload["user_message"] == "本题已完成并停止继续领取。"
+    assert "没有题目开始执行" not in payload["user_message"]
+
+
 def test_progress_keeps_terminal_server_result_without_completed_local_result(
     tmp_path, monkeypatch, capsys,
 ):

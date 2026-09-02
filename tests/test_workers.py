@@ -182,6 +182,63 @@ def test_dynamic_target_requires_a_fixed_multi_worker_pool():
         runloop.cmd_go(_args(workers="auto", worker_target_file="target"))
 
 
+def test_direct_single_worker_fleet_checkout_publishes_ready(
+    tmp_path, monkeypatch,
+):
+    """A workers=1 Fleet has no pool parent to promote its checkout marker."""
+
+    fleet._prepare_dirs(tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    activity = tmp_path / "worker-activity"
+    activity.write_text("preparing", encoding="utf-8")
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch_id)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, batch_id)),
+    )
+    monkeypatch.setenv(runloop._POOL_WORKER_ACTIVITY_ENV, str(activity))
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+
+    assert runloop._record_supervised_worker_checkout(
+        _args(
+            workers=1, fleet_pool=True, worker_child=False,
+            batch_id=batch_id,
+        ),
+        "a" * 32,
+    ) is True
+
+    assert activity.read_text(encoding="utf-8") == "a" * 32
+    startup = fleet._read_json(fleet._pool_startup_path(tmp_path, batch_id))
+    assert startup["status"] == "ready"
+    assert startup["batch_id"] == batch_id
+    assert startup["pid"] == runloop.os.getpid()
+
+
+def test_direct_single_worker_fails_closed_when_ready_cannot_be_published(
+    tmp_path, monkeypatch,
+):
+    activity = tmp_path / "worker-activity"
+    activity.write_text("preparing", encoding="utf-8")
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(runloop._POOL_WORKER_ACTIVITY_ENV, str(activity))
+    monkeypatch.setattr(
+        fleet, "publish_pool_startup_ready",
+        lambda *_args: (_ for _ in ()).throw(
+            fleet.FleetError("coordinator unavailable")
+        ),
+    )
+
+    assert runloop._record_supervised_worker_checkout(
+        _args(
+            workers=1, fleet_pool=True, worker_child=False,
+            batch_id="550e8400e29b41d4a716446655440000",
+        ),
+        "a" * 32,
+    ) is False
+
+
 def test_internal_worker_child_accepts_parent_dynamic_target_env(
         tmp_path, monkeypatch):
     target = tmp_path / "workers"
