@@ -36,10 +36,15 @@ EVENT_TYPES = frozenset({
     "release_requested", "release_completed", "release_failed",
     "upload_started", "upload_completed", "upload_failed",
     "request_started", "request_completed", "request_failed",
+    "update_policy_rejected", "update_detected", "update_downloaded",
+    "update_verified", "update_staged", "update_waiting_safe_point",
+    "update_paused", "update_activated", "update_self_testing",
+    "update_committed", "update_rollback_pending", "update_rolled_back",
+    "update_failed",
 })
 COMPONENTS = frozenset({
     "cli", "claim", "build", "provider", "heartbeat", "checkpoint",
-    "release", "upload", "api",
+    "release", "upload", "api", "ota",
 })
 EVENT_KEYS = frozenset({
     "schema_version", "event_id", "client_id", "occurred_at", "seq",
@@ -50,6 +55,7 @@ ATTRIBUTE_KEYS = frozenset({
     "attempt", "elapsed_ms", "force", "http_status", "offline_replay",
     "outcome", "phase", "previous_phase", "provider", "release_count",
     "target_workers", "was_running", "worker_slot",
+    "update_eligible", "update_sequence", "update_state",
 })
 REASON_CODES = frozenset({
     "api_error", "transport_error", "completed", "paused", "interrupted",
@@ -57,6 +63,10 @@ REASON_CODES = frozenset({
     "build_flake", "provider_failed", "submitted", "artifact-staging-failed",
     "upload-blocked", "upload-failed", "pending_upload", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
+    "update_manifest_invalid", "update_policy_rejected",
+    "update_download_failed", "update_verification_failed",
+    "update_stage_failed", "update_safe_point_blocked",
+    "update_self_test_failed", "update_crash_recovery", "candidate_failed",
 })
 OUTCOMES = frozenset({
     "completed", "interrupted", "submitted", "artifact-staging-failed",
@@ -67,6 +77,11 @@ PHASES = frozenset({"preparing", "queued", "running", "uploading", "paused"})
 PROVIDERS = frozenset({
     "codex", "claude-code", "dsh-minimal", "grok-build", "kimi-code",
     "zcode", "antigravity", "codebuddy",
+})
+UPDATE_STATES = frozenset({
+    "detected", "downloaded", "verified", "staged", "waiting_safe_point",
+    "paused", "activated", "self_testing", "committed",
+    "rollback_pending", "rolled_back", "failed",
 })
 ATTRIBUTE_RULES = {
     "attempt": (int, 1, 100),
@@ -82,6 +97,9 @@ ATTRIBUTE_RULES = {
     "target_workers": (int, 1, 40),
     "was_running": (bool, None, None),
     "worker_slot": (int, 1, 40),
+    "update_eligible": (bool, None, None),
+    "update_sequence": (int, 1, 2_147_483_647),
+    "update_state": (str, UPDATE_STATES, None),
 }
 
 

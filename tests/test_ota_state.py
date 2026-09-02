@@ -229,10 +229,8 @@ def test_launcher_finishes_lkg_commit_after_crash(tmp_path):
 
 def test_host_update_lock_is_exclusive(tmp_path):
     controller = UpdateController(tmp_path / "ota")
-    with controller.lock():
-        with pytest.raises(UpdateLockBusy):
-            with controller.lock():
-                pass
+    with controller.lock(), pytest.raises(UpdateLockBusy), controller.lock():
+        pass
 
 
 def test_illegal_force_activation_is_rejected(tmp_path):

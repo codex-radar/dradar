@@ -16,6 +16,7 @@ from .manifest import (
     verify_artifact,
     verify_signed_manifest,
 )
+from .runtime import FlightRecorderEventSink, UpdateRuntime
 from .state import (
     InvalidTransition,
     SafePointSnapshot,
@@ -28,6 +29,7 @@ from .state import (
 __all__ = [
     "Artifact",
     "CompatibilitySnapshot",
+    "FlightRecorderEventSink",
     "InvalidTransition",
     "ManifestError",
     "PlatformTarget",
@@ -38,6 +40,7 @@ __all__ = [
     "UpdateController",
     "UpdateLock",
     "UpdateLockBusy",
+    "UpdateRuntime",
     "UpdateState",
     "evaluate_manifest",
     "verify_artifact",

@@ -6,13 +6,13 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol, Self
 
 from .manifest import Artifact, ReleaseManifest, verify_artifact
 
@@ -116,9 +116,9 @@ class SafePointSnapshot:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
         if not isinstance(self.refill_accepting_new, bool):
-            raise ValueError("refill_accepting_new must be boolean")
+            raise TypeError("refill_accepting_new must be boolean")
         if not isinstance(self.worker_supervisor_idle, bool):
-            raise ValueError("worker_supervisor_idle must be boolean")
+            raise TypeError("worker_supervisor_idle must be boolean")
 
     def blockers(self) -> tuple[str, ...]:
         blockers: list[str] = []
@@ -160,7 +160,7 @@ class UpdateLock(AbstractContextManager["UpdateLock"]):
         self._fd: int | None = None
         self._windows = False
 
-    def __enter__(self) -> "UpdateLock":
+    def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         if os.fstat(fd).st_size == 0:
@@ -225,7 +225,7 @@ class UpdateLock(AbstractContextManager["UpdateLock"]):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -285,7 +285,7 @@ class UpdateController:
     @contextmanager
     def transaction(
         self, *, timeout_seconds: float = 0.0
-    ) -> Iterator["UpdateController"]:
+    ) -> Iterator[UpdateController]:
         """Hold the host lock across one or more related state transitions."""
 
         depth = getattr(self._local, "transaction_depth", 0)
@@ -579,7 +579,7 @@ class UpdateController:
             self._write_state(
                 UpdateState.ROLLED_BACK,
                 release=ReleasePointer(**record["release"]),
-                reason="launcher_recovered_uncommitted_candidate",
+                reason="update_crash_recovery",
             )
             self.pending_path.unlink(missing_ok=True)
             return True

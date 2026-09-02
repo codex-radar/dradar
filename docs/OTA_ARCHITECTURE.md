@@ -4,7 +4,7 @@
 
 OTA 只能提升“下一次安全启动”的版本，不能中断当前 assignment、Pier、Provider 会话、上传、ledger 或历史 checkpoint 写入。不存在 `force release` 或“到点强切”路径。Manifest 不可读取、验签失败、摘要不符、协议不兼容、灰度暂停、未知平台、候选自检失败时都失败关闭；当前版本继续工作。
 
-本骨架不接生产服务、不修改 `runloop.py` / `telemetry.py` / `refill.py` / `doctor.py`，也不下载真实发布物。#0011 稳定统一 event envelope、`client_instance_id` / `session_id` / `request_id` 和事件落库后，再给 `EventSink` 增加适配器；OTA 不生成第二套身份或飞行记录格式。
+本候选不接生产服务、不修改 `refill.py` / `doctor.py`，也不下载真实发布物。它已把 #0011 的统一 event envelope、稳定 `client_id`、`request_id` 关联和离线事件落库接入 `UpdateRuntime`；OTA 不生成第二套身份或飞行记录格式。任意异常文本、版本号和 release 名都不会写入飞行记录，只保留白名单状态、单调 sequence 与 release 名的不可逆摘要关联 ID。
 
 ## 稳定 launcher 与磁盘布局
 
@@ -78,6 +78,6 @@ detected → downloaded → verified → staged → waiting_safe_point
 
 ## 测试与发布闸门
 
-当前单测覆盖验签/篡改、SHA/长度、断网 partial 清理、协议与 Provider/ledger/checkpoint 兼容、防回滚、灰度暂停/ring、主机锁、非法强切、safe-point blocker、候选提交、候选失败与 launcher crash recovery。
+当前单测覆盖验签/篡改、macOS/Linux/Windows × x64/ARM64 包选择、SHA/长度、断网 partial 清理、协议与 Provider/ledger/checkpoint 兼容、防回滚、灰度暂停/ring、主机锁、非法强切、40-worker safe-point blocker、候选提交、候选失败、launcher crash recovery，以及从发现更新到提交/回滚的飞行记录审计。测试同时固定了接入前 `NullEventSink` 无审计的缺口，避免仅证明接入后 happy path。
 
 后续平台矩阵必须包含 macOS/Linux/Windows × x64/ARM64（Windows ARM64 可先明确不支持并由 Manifest 缺包失败关闭），以及真实文件占用、杀进程、磁盘满、代理断流、并发 40 worker、旧客户端桥接和 LKG 端到端恢复。任何生产集成都需要独立 QA、签名密钥演练、分级灰度、暂停开关与回滚演练；本工单不授权发布或全量下发。

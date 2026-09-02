@@ -8,9 +8,10 @@ import hmac
 import json
 import platform
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from cryptography.exceptions import InvalidSignature
@@ -35,7 +36,7 @@ class PlatformTarget:
     arch: str
 
     @classmethod
-    def current(cls) -> "PlatformTarget":
+    def current(cls) -> PlatformTarget:
         system = platform.system().lower()
         os_name = {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(
             system,
