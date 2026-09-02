@@ -28,6 +28,7 @@ from .fleet import (
     cmd_fleet_add, cmd_fleet_serve, cmd_fleet_status, cmd_fleet_stop,
     cmd_fleet_watch,
 )
+from .flight_recorder import cmd_diagnostics
 from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
 from .image_cache import cmd_config_set, cmd_config_show
 from .leases import cmd_leases, cmd_release
@@ -124,6 +125,14 @@ def main(argv: list[str] | None = None) -> int:
         help="check only the dependencies required by this agent",
     )
     p_doc.set_defaults(func=cmd_doctor)
+
+    p_diagnostics = sub.add_parser(
+        "diagnostics", help="export a privacy-minimized lifecycle diagnostic bundle")
+    p_diagnostics.add_argument(
+        "--output", required=True, metavar="ZIP",
+        help="destination ZIP path (the bundle is never uploaded automatically)",
+    )
+    p_diagnostics.set_defaults(func=cmd_diagnostics)
 
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")

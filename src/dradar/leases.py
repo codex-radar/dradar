@@ -8,12 +8,14 @@ hatch for a genuinely stuck local process.
 
 import json
 import sys
+import uuid
 from datetime import datetime
 
 from .api_client import ApiError
 from .assignment_state import assignment_state, state_summary
 from .identity import _client
-from .local_config import _load_config
+from .flight_recorder import FlightRecorder
+from .local_config import HOME, _load_config
 
 
 def _inventory(client) -> tuple[list[dict], list[dict]]:
@@ -220,6 +222,8 @@ def cmd_release(args) -> int:
     """Release explicit IDs, all safe-to-release cells, or an interactive pick."""
     cfg = _load_config()
     client = _client(cfg)
+    recorder = FlightRecorder(HOME, client)
+    request_id = uuid.uuid4().hex
     explicit = list(dict.fromkeys(args.assignment_ids or ()))
     active: list[dict] = []
 
@@ -247,10 +251,41 @@ def cmd_release(args) -> int:
             print("cancelled")
             return 1
 
+    for assignment_id in explicit:
+        recorder.try_record(
+            "release_requested", component="release",
+            assignment_id=assignment_id, request_id=request_id,
+            reason_code="explicit_force" if args.force else "explicit_safe",
+            attributes={
+                "force": bool(args.force), "release_count": len(explicit),
+            },
+        )
     try:
-        data = client.release_assignments(
-            explicit or None, release_all=args.all, force=args.force)
+        try:
+            data = client.release_assignments(
+                explicit or None, release_all=args.all, force=args.force,
+                request_id=request_id,
+            )
+        except TypeError as exc:
+            # Preserve developer/test adapters and rolling clients that expose
+            # the pre-flight-recorder call signature. No network request can
+            # have started when Python rejects an unexpected keyword.
+            if "request_id" not in str(exc):
+                raise
+            data = client.release_assignments(
+                explicit or None, release_all=args.all, force=args.force,
+            )
     except ApiError as exc:
+        for assignment_id in explicit:
+            recorder.try_record(
+                "release_failed", component="release",
+                assignment_id=assignment_id, request_id=request_id,
+                reason_code="api_error",
+                attributes={
+                    "force": bool(args.force), "http_status": exc.status_code or 0,
+                },
+            )
+        recorder.flush()
         if exc.status_code == 404:
             sys.exit("release failed: assignment not found, or this server/CLI "
                      "release API is not deployed yet")
@@ -259,6 +294,18 @@ def cmd_release(args) -> int:
     released = data.get("released") or []
     skipped = data.get("skipped") or []
     already = data.get("already_released") or []
+    for item in released:
+        recorder.try_record(
+            "release_completed", component="release",
+            request_id=data.get("request_id") or request_id,
+            assignment_id=item.get("assignment_id"),
+            reason_code="user_force" if args.force else "user",
+            attributes={
+                "force": bool(args.force),
+                "was_running": bool(item.get("was_running")),
+            },
+        )
+    recorder.flush()
     if released:
         print(f"released {len(released)} lease(s):")
         for item in released:

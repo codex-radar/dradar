@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from .api_client import ApiClient, ApiError
+from .flight_recorder import FlightRecorder
 
 
 def platform_family() -> str:
@@ -49,6 +50,7 @@ class RunnerTelemetry:
         *,
         jitter: bool = True,
         target_workers: int = 1,
+        home: Path | None = None,
     ):
         if not 1 <= target_workers <= 40:
             raise ValueError("target_workers must be between 1 and 40")
@@ -76,6 +78,12 @@ class RunnerTelemetry:
         self._jitter = jitter
         self._shown_notice_ids: set[str] = set()
         self._stop_requested = False
+        self.flight_recorder = FlightRecorder(home, client) if home is not None else None
+        if self.flight_recorder is not None:
+            self.flight_recorder.try_record(
+                "session_started", component="cli", session_id=self.session_id,
+                attributes={"target_workers": target_workers},
+            )
 
     @property
     def stop_requested(self) -> bool:
@@ -141,6 +149,13 @@ class RunnerTelemetry:
         if changed:
             self._wake.set()
 
+    def record_event(self, event_type: str, *, component: str, **kwargs) -> None:
+        if self.flight_recorder is None:
+            return
+        kwargs.setdefault("batch_id", self._batch_id)
+        kwargs.setdefault("session_id", self.session_id)
+        self.flight_recorder.try_record(event_type, component=component, **kwargs)
+
     def set_phase(
         self,
         phase: str,
@@ -154,6 +169,7 @@ class RunnerTelemetry:
         if assignment_id is None:
             owner_epoch = None
         with self._lock:
+            previous_phase = self._phase
             changed = (
                 self._phase, self._active_assignment_id, self._owner_epoch,
             ) != (phase, assignment_id, owner_epoch)
@@ -163,6 +179,11 @@ class RunnerTelemetry:
             if changed:
                 self._progress_counter += 1
         if changed:
+            self.record_event(
+                "phase_changed", component="heartbeat",
+                assignment_id=assignment_id,
+                attributes={"previous_phase": previous_phase, "phase": phase},
+            )
             self._wake.set()
 
     def _payload(self) -> dict:
@@ -189,6 +210,7 @@ class RunnerTelemetry:
             if self._disabled:
                 return self._interval
             try:
+                self.record_event("heartbeat_sent", component="heartbeat")
                 response = self.client.runner_heartbeat(self._payload())
             except ApiError as exc:
                 # Older servers have no endpoint. Silence and disable rather than
@@ -197,6 +219,11 @@ class RunnerTelemetry:
                     self._disabled = True
                     return self._interval
                 self._failures += 1
+                self.record_event(
+                    "heartbeat_failed", component="heartbeat",
+                    reason_code="api_error",
+                    attributes={"http_status": exc.status_code or 0},
+                )
                 if self._failures >= 3 and not self._warned:
                     print("warning: the server cannot see this runner's heartbeat; "
                           "work continues and your leases are not auto-released",
@@ -207,6 +234,10 @@ class RunnerTelemetry:
                 return self._interval
             except Exception:
                 self._failures += 1
+                self.record_event(
+                    "heartbeat_failed", component="heartbeat",
+                    reason_code="transport_error",
+                )
                 if self._failures >= 3 and not self._warned:
                     print("warning: runner heartbeat is unavailable; work continues and "
                           "your leases are not auto-released", file=sys.stderr)
@@ -219,6 +250,9 @@ class RunnerTelemetry:
                 print("runner heartbeat recovered", file=sys.stderr)
             self._failures = 0
             self._warned = False
+            self.record_event("heartbeat_acknowledged", component="heartbeat")
+            if self.flight_recorder is not None:
+                self.flight_recorder.flush()
             self._show_notices(response)
             if response.get("stop_requested") is True:
                 self._stop_requested = True
@@ -272,18 +306,23 @@ class RunnerTelemetry:
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)
-        if self._disabled:
-            return
-        with self._lock:
-            self._seq += 1
-            payload = {
-                "session_id": self.session_id,
-                "batch_id": self._batch_id,
-                "seq": self._seq,
-                "reason": reason,
-            }
-        with self._send_lock:
-            try:
-                self.client.runner_close(payload)
-            except Exception:
-                pass
+        if not self._disabled:
+            with self._lock:
+                self._seq += 1
+                payload = {
+                    "session_id": self.session_id,
+                    "batch_id": self._batch_id,
+                    "seq": self._seq,
+                    "reason": reason,
+                }
+            with self._send_lock:
+                try:
+                    self.client.runner_close(payload)
+                except Exception:
+                    pass
+        self.record_event(
+            "session_closed", component="cli", reason_code=reason,
+            assignment_id=self._active_assignment_id,
+        )
+        if self.flight_recorder is not None:
+            self.flight_recorder.flush()
