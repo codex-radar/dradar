@@ -14,7 +14,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from .manifest import Artifact, ReleaseManifest, verify_artifact
+from .manifest import Artifact, ManifestError, ReleaseManifest, verify_artifact
+
+_MAX_STATE_BYTES = 64 * 1024
 
 
 class UpdateState(StrEnum):
@@ -260,6 +262,8 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
 
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
+        if path.stat().st_size > _MAX_STATE_BYTES:
+            raise InvalidTransition(f"trusted OTA state {path.name} is too large")
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
@@ -268,6 +272,51 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise InvalidTransition(f"trusted OTA state {path.name} is not an object")
     return value
+
+
+def _release_pointer(value: Any) -> ReleasePointer | None:
+    if not isinstance(value, dict) or set(value) != {
+        "release_id",
+        "version",
+        "sequence",
+        "artifact",
+    }:
+        return None
+    try:
+        pointer = ReleasePointer(**value)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not isinstance(pointer.release_id, str)
+        or not pointer.release_id
+        or not isinstance(pointer.version, str)
+        or not pointer.version
+        or type(pointer.sequence) is not int
+        or pointer.sequence < 1
+        or not isinstance(pointer.artifact, str)
+        or not pointer.artifact
+    ):
+        return None
+    return pointer
+
+
+def _resolve_regular_artifact(root: Path, artifact: str) -> Path | None:
+    relative = Path(artifact)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        return None
+    cursor = root
+    try:
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                return None
+        candidate = cursor.resolve()
+        resolved_root = root.resolve()
+        if not candidate.is_relative_to(resolved_root) or not candidate.is_file():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return candidate
 
 
 class UpdateController:
@@ -347,24 +396,8 @@ class UpdateController:
                 "OTA blocked: persisted release pointer is invalid; current and "
                 "last-known-good remain unchanged",
             )
-        try:
-            pointer = ReleasePointer(**release)
-        except (TypeError, ValueError) as exc:
-            self.event_sink.fail_closed("update_state_corrupt")
-            raise InvalidTransition(
-                "OTA blocked: persisted release pointer is invalid; current and "
-                "last-known-good remain unchanged",
-            ) from exc
-        if (
-            not isinstance(pointer.release_id, str)
-            or not pointer.release_id
-            or not isinstance(pointer.version, str)
-            or not pointer.version
-            or type(pointer.sequence) is not int
-            or pointer.sequence < 1
-            or not isinstance(pointer.artifact, str)
-            or not pointer.artifact
-        ):
+        pointer = _release_pointer(release)
+        if pointer is None:
             self.event_sink.fail_closed("update_state_corrupt")
             raise InvalidTransition(
                 "OTA blocked: persisted release pointer is invalid; current and "
@@ -504,20 +537,28 @@ class UpdateController:
         release_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination = release_dir / artifact.filename
         if downloaded_path.resolve() != destination.resolve():
-            temporary = release_dir / f".{artifact.filename}.{time.time_ns()}.tmp"
-            try:
-                with (
-                    downloaded_path.open("rb") as source,
-                    temporary.open("xb") as target,
-                ):
-                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                        target.write(chunk)
-                    target.flush()
-                    os.fsync(target.fileno())
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, destination)
-            finally:
-                temporary.unlink(missing_ok=True)
+            if destination.exists() or destination.is_symlink():
+                try:
+                    verify_artifact(destination, artifact)
+                except ManifestError as exc:
+                    raise InvalidTransition(
+                        "immutable staged artifact already exists with different content"
+                    ) from exc
+            else:
+                temporary = release_dir / f".{artifact.filename}.{time.time_ns()}.tmp"
+                try:
+                    with (
+                        downloaded_path.open("rb") as source,
+                        temporary.open("xb") as target,
+                    ):
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            target.write(chunk)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    os.chmod(temporary, 0o600)
+                    os.replace(temporary, destination)
+                finally:
+                    temporary.unlink(missing_ok=True)
         verify_artifact(destination, artifact)
         pointer = ReleasePointer(
             release_id=manifest.release_id,
@@ -660,16 +701,17 @@ class UpdateController:
             pointer = _load_json(path)
             if not pointer:
                 continue
-            artifact = pointer.get("artifact")
-            if not isinstance(artifact, str) or not artifact:
-                continue
-            candidate = (self.root / artifact).resolve()
-            try:
-                inside_root = candidate.is_relative_to(self.root.resolve())
-            except AttributeError:  # pragma: no cover - Python 3.11+ has it
-                inside_root = str(candidate).startswith(
-                    str(self.root.resolve()) + os.sep
-                )
-            if inside_root and candidate.is_file() and not candidate.is_symlink():
+            parsed = _release_pointer(pointer)
+            if parsed and _resolve_regular_artifact(self.root, parsed.artifact):
                 return pointer
         raise InvalidTransition("no current or last-known-good release is available")
+
+    def committed_pointer(self) -> ReleasePointer:
+        """Read the authoritative anti-rollback baseline from durable pointers."""
+
+        for path in (self.last_known_good_path, self.current_path):
+            value = _load_json(path)
+            parsed = _release_pointer(value)
+            if parsed and _resolve_regular_artifact(self.root, parsed.artifact):
+                return parsed
+        raise InvalidTransition("no trusted committed OTA baseline is available")

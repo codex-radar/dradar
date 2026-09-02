@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+from datetime import UTC, datetime
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -31,6 +32,7 @@ def _signed_document(**changes):
         "sequence": 600,
         "channel": "stable",
         "published_at": "2026-09-02T04:30:00Z",
+        "expires_at": "2099-09-02T04:30:00Z",
         "rollout": {
             "stage": "progressive",
             "basis_points": 10_000,
@@ -224,3 +226,20 @@ def test_zero_percent_progressive_rollout_is_deterministically_ineligible():
         for _ in range(3)
     ]
     assert decisions == ["outside_rollout_cohort"] * 3
+
+
+def test_expired_signed_manifest_is_rejected_before_download():
+    document, keys, _body = _signed_document(expires_at="2026-09-02T05:00:00Z")
+    manifest = verify_signed_manifest(document, keys)
+
+    decision = evaluate_manifest(
+        manifest,
+        current_version="0.5.175",
+        committed_sequence=599,
+        compatibility=_compatibility(),
+        rollout=RolloutContext(subject="stable-subject"),
+        target=PlatformTarget("linux", "x86_64"),
+        now=datetime(2026, 9, 2, 6, 0, tzinfo=UTC),
+    )
+
+    assert decision.reason == "manifest_expired"

@@ -61,14 +61,16 @@ def signed_release():
     for os_name in ("macos", "linux", "windows"):
         for arch in ("x86_64", "arm64"):
             suffix = {"macos": "pkg", "linux": "whl", "windows": "zip"}[os_name]
-            artifacts.append({
-                "os": os_name,
-                "arch": arch,
-                "filename": f"dradar-0.6.0-{os_name}-{arch}.{suffix}",
-                "url": f"https://releases.example.invalid/{os_name}/{arch}/candidate",
-                "size": len(BODY),
-                "sha256": hashlib.sha256(BODY).hexdigest(),
-            })
+            artifacts.append(
+                {
+                    "os": os_name,
+                    "arch": arch,
+                    "filename": f"dradar-0.6.0-{os_name}-{arch}.{suffix}",
+                    "url": f"https://releases.example.invalid/{os_name}/{arch}/candidate",
+                    "size": len(BODY),
+                    "sha256": hashlib.sha256(BODY).hexdigest(),
+                }
+            )
     document = {
         "schema_version": 1,
         "release_id": "dradar-cli-0.6.0-runtime",
@@ -76,9 +78,12 @@ def signed_release():
         "sequence": 600,
         "channel": "stable",
         "published_at": "2026-09-02T06:00:00Z",
+        "expires_at": "2099-09-02T06:00:00Z",
         "rollout": {
-            "stage": "general", "basis_points": 10_000,
-            "salt": "runtime-600", "paused": False,
+            "stage": "general",
+            "basis_points": 10_000,
+            "salt": "runtime-600",
+            "paused": False,
         },
         "compatibility": {
             "launcher_min_version": "1.0.0",
@@ -101,8 +106,12 @@ def signed_release():
 
 def compatibility():
     return CompatibilitySnapshot(
-        launcher_version="1.0.0", runner_protocol=3, doctor_contract=1,
-        provider_contract=1, ledger_schema=1, checkpoint_schema=0,
+        launcher_version="1.0.0",
+        runner_protocol=3,
+        doctor_contract=1,
+        provider_contract=1,
+        ledger_schema=1,
+        checkpoint_schema=0,
     )
 
 
@@ -111,8 +120,10 @@ def seed_lkg(root):
     path.parent.mkdir(parents=True)
     path.write_bytes(b"known-good")
     pointer = {
-        "release_id": "dradar-0.5.175", "version": "0.5.175",
-        "sequence": 599, "artifact": str(path.relative_to(root)),
+        "release_id": "dradar-0.5.175",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": str(path.relative_to(root)),
     }
     _atomic_json(root / "current.json", pointer)
     _atomic_json(root / "last-known-good.json", pointer)
@@ -148,18 +159,29 @@ def test_pre_adapter_gap_has_no_audit_but_runtime_records_complete_chain(tmp_pat
     seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "new-recorder")
     runtime = UpdateRuntime(
-        root, recorder=recorder, download_client=Client(Response([BODY[:8], BODY[8:]])),
+        root,
+        recorder=recorder,
+        download_client=Client(Response([BODY[:8], BODY[8:]])),
     )
     decision = prepare(runtime)
     assert decision.eligible is True
-    assert runtime.activate_and_self_test(
-        SafePointSnapshot(), lambda artifact: artifact.read_bytes() == BODY,
-    ) is UpdateState.COMMITTED
+    assert (
+        runtime.activate_and_self_test(
+            SafePointSnapshot(),
+            lambda artifact: artifact.read_bytes() == BODY,
+        )
+        is UpdateState.COMMITTED
+    )
 
     assert event_names(recorder) == [
-        "update_detected", "update_downloaded", "update_verified",
-        "update_staged", "update_waiting_safe_point", "update_activated",
-        "update_self_testing", "update_committed",
+        "update_detected",
+        "update_downloaded",
+        "update_verified",
+        "update_staged",
+        "update_waiting_safe_point",
+        "update_activated",
+        "update_self_testing",
+        "update_committed",
     ]
     raw = recorder.events_path.read_text()
     assert "dradar-cli-0.6.0-runtime" not in raw
@@ -182,7 +204,9 @@ def test_signed_cross_platform_packages_select_and_verify(target, suffix, tmp_pa
     root = tmp_path / f"{target.os}-{target.arch}"
     seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "audit" / f"{target.os}-{target.arch}")
-    runtime = UpdateRuntime(root, recorder=recorder, download_client=Client(Response([BODY])))
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
     decision = prepare(runtime, target)
     assert decision.artifact.filename.endswith(suffix)
     assert runtime.controller.state()["state"] == "waiting_safe_point"
@@ -192,11 +216,16 @@ def test_safe_point_block_is_audited_without_forcing_or_releasing_work(tmp_path)
     root = tmp_path / "ota"
     seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "audit")
-    runtime = UpdateRuntime(root, recorder=recorder, download_client=Client(Response([BODY])))
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
     prepare(runtime)
     blocked = SafePointSnapshot(
-        active_assignments=40, uploads_inflight=1, durable_uploads_pending=1,
-        refill_accepting_new=False, worker_supervisor_idle=False,
+        active_assignments=40,
+        uploads_inflight=1,
+        durable_uploads_pending=1,
+        refill_accepting_new=False,
+        worker_supervisor_idle=False,
     )
     with pytest.raises(InvalidTransition, match="active_assignments"):
         runtime.activate_and_self_test(blocked, lambda _artifact: True)
@@ -209,14 +238,26 @@ def test_failed_self_test_rolls_back_and_preserves_auditable_terminal_state(tmp_
     root = tmp_path / "ota"
     previous = seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "audit")
-    runtime = UpdateRuntime(root, recorder=recorder, download_client=Client(Response([BODY])))
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
     prepare(runtime)
-    assert runtime.activate_and_self_test(
-        SafePointSnapshot(), lambda _artifact: False,
-    ) is UpdateState.ROLLED_BACK
+    assert (
+        runtime.activate_and_self_test(
+            SafePointSnapshot(),
+            lambda _artifact: False,
+        )
+        is UpdateState.ROLLED_BACK
+    )
     assert json.loads((root / "current.json").read_text()) == previous
-    assert event_names(recorder)[-2:] == ["update_rollback_pending", "update_rolled_back"]
-    assert recorder._load(recorder.events_path)[-1]["reason_code"] == "update_self_test_failed"
+    assert event_names(recorder)[-2:] == [
+        "update_rollback_pending",
+        "update_rolled_back",
+    ]
+    assert (
+        recorder._load(recorder.events_path)[-1]["reason_code"]
+        == "update_self_test_failed"
+    )
 
 
 def test_interrupted_download_fails_closed_and_records_reason(tmp_path):
@@ -229,7 +270,9 @@ def test_interrupted_download_fails_closed_and_records_reason(tmp_path):
     root = tmp_path / "ota"
     seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "audit")
-    runtime = UpdateRuntime(root, recorder=recorder, download_client=Client(Offline([])))
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Offline([]))
+    )
     with pytest.raises(ConnectionError):
         prepare(runtime)
     assert runtime.controller.state()["state"] == "failed"
@@ -237,6 +280,63 @@ def test_interrupted_download_fails_closed_and_records_reason(tmp_path):
     assert event["reason_code"] == "update_download_failed"
     assert "private details" not in recorder.events_path.read_text()
     assert not list((root / "downloads").rglob("*.partial"))
+
+
+def test_keyboard_interrupt_during_prepare_is_durable_and_cleans_partial(tmp_path):
+    class Interrupted(Response):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            yield b"partial"
+            raise KeyboardInterrupt
+
+    root = tmp_path / "ota"
+    seed_lkg(root)
+    recorder = FlightRecorder(tmp_path / "audit")
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Interrupted([]))
+    )
+    with pytest.raises(KeyboardInterrupt):
+        prepare(runtime)
+    assert runtime.controller.state()["state"] == "failed"
+    assert not list((root / "downloads").rglob("*.partial"))
+
+
+def test_live_safe_point_is_sampled_inside_update_transaction(tmp_path):
+    root = tmp_path / "ota"
+    seed_lkg(root)
+    recorder = FlightRecorder(tmp_path / "audit")
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
+    prepare(runtime)
+    sampled = []
+
+    def live_snapshot():
+        sampled.append(runtime.controller._local.transaction_depth)
+        return SafePointSnapshot(active_assignments=1)
+
+    with pytest.raises(InvalidTransition, match="active_assignments"):
+        runtime.activate_and_self_test(live_snapshot, lambda _artifact: True)
+    assert sampled == [1]
+    assert runtime.controller.state()["state"] == "waiting_safe_point"
+
+
+def test_keyboard_interrupt_during_self_test_rolls_back_before_propagating(tmp_path):
+    root = tmp_path / "ota"
+    previous = seed_lkg(root)
+    recorder = FlightRecorder(tmp_path / "audit")
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
+    prepare(runtime)
+
+    def interrupted(_artifact):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        runtime.activate_and_self_test(SafePointSnapshot(), interrupted)
+    assert json.loads((root / "current.json").read_text()) == previous
+    assert runtime.controller.state()["state"] == "rolled_back"
 
 
 def test_old_runner_protocol_fails_closed_before_download_and_is_audited(tmp_path):
@@ -250,12 +350,19 @@ def test_old_runner_protocol_fails_closed_before_download_and_is_audited(tmp_pat
     runtime = UpdateRuntime(root, recorder=recorder, download_client=NoDownload(None))
     document, keys = signed_release()
     legacy = CompatibilitySnapshot(
-        launcher_version="1.0.0", runner_protocol=2, doctor_contract=1,
-        provider_contract=1, ledger_schema=1, checkpoint_schema=0,
+        launcher_version="1.0.0",
+        runner_protocol=2,
+        doctor_contract=1,
+        provider_contract=1,
+        ledger_schema=1,
+        checkpoint_schema=0,
     )
     decision = runtime.prepare(
-        document, trusted_keys=keys, current_version="0.5.175",
-        committed_sequence=599, compatibility=legacy,
+        document,
+        trusted_keys=keys,
+        current_version="0.5.175",
+        committed_sequence=599,
+        compatibility=legacy,
         rollout=RolloutContext(subject=recorder.client_id),
         target=PlatformTarget("linux", "x86_64"),
     )
@@ -264,15 +371,42 @@ def test_old_runner_protocol_fails_closed_before_download_and_is_audited(tmp_pat
     assert event_names(recorder) == ["update_policy_rejected"]
 
 
+def test_caller_cannot_spoof_the_durable_anti_rollback_baseline(tmp_path):
+    class NoDownload(Client):
+        def stream(self, method, url, **kwargs):
+            raise AssertionError("inconsistent baseline must fail before download")
+
+    root = tmp_path / "ota"
+    seed_lkg(root)
+    recorder = FlightRecorder(tmp_path / "audit")
+    runtime = UpdateRuntime(root, recorder=recorder, download_client=NoDownload(None))
+    document, keys = signed_release()
+    with pytest.raises(InvalidTransition, match="durable committed pointer"):
+        runtime.prepare(
+            document,
+            trusted_keys=keys,
+            current_version="0.1.0",
+            committed_sequence=1,
+            compatibility=compatibility(),
+            rollout=RolloutContext(subject=recorder.client_id),
+            target=PlatformTarget("linux", "x86_64"),
+        )
+    assert runtime.controller.state() is None
+
+
 def test_launcher_crash_recovery_restores_lkg_and_records_recovery(tmp_path):
     root = tmp_path / "ota"
     previous = seed_lkg(root)
     recorder = FlightRecorder(tmp_path / "audit")
-    runtime = UpdateRuntime(root, recorder=recorder, download_client=Client(Response([BODY])))
+    runtime = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([BODY]))
+    )
     prepare(runtime)
     with runtime.controller.transaction():
         runtime.controller.activate(SafePointSnapshot())
-    restarted = UpdateRuntime(root, recorder=recorder, download_client=Client(Response([])))
+    restarted = UpdateRuntime(
+        root, recorder=recorder, download_client=Client(Response([]))
+    )
     assert restarted.recover_on_launcher_start() is True
     assert json.loads((root / "current.json").read_text()) == previous
     event = recorder._load(recorder.events_path)[-1]

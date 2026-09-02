@@ -26,19 +26,21 @@ from .state import (
     UpdateState,
 )
 
-_AUDIT_REASONS = frozenset({
-    "update_manifest_invalid",
-    "update_policy_rejected",
-    "update_download_failed",
-    "update_verification_failed",
-    "update_stage_failed",
-    "update_safe_point_blocked",
-    "update_self_test_failed",
-    "update_crash_recovery",
-    "candidate_failed",
-    "update_state_corrupt",
-    "update_state_incompatible",
-})
+_AUDIT_REASONS = frozenset(
+    {
+        "update_manifest_invalid",
+        "update_policy_rejected",
+        "update_download_failed",
+        "update_verification_failed",
+        "update_stage_failed",
+        "update_safe_point_blocked",
+        "update_self_test_failed",
+        "update_crash_recovery",
+        "candidate_failed",
+        "update_state_corrupt",
+        "update_state_incompatible",
+    }
+)
 
 
 class FlightRecorderEventSink:
@@ -64,9 +66,7 @@ class FlightRecorderEventSink:
         if type(sequence) is not int or not isinstance(release_id, str):
             return
         raw_reason = attributes.get("reason")
-        reason_code = (
-            raw_reason if raw_reason in _AUDIT_REASONS else None
-        )
+        reason_code = raw_reason if raw_reason in _AUDIT_REASONS else None
         self.recorder.try_record(
             f"update_{state}",
             component="ota",
@@ -143,10 +143,19 @@ class UpdateRuntime:
         except ManifestError:
             self.audit.policy_rejected("update_manifest_invalid")
             raise
+        baseline = self.controller.committed_pointer()
+        if (
+            current_version != baseline.version
+            or committed_sequence != baseline.sequence
+        ):
+            self.audit.fail_closed("update_state_incompatible")
+            raise InvalidTransition(
+                "caller OTA baseline does not match the durable committed pointer"
+            )
         decision = evaluate_manifest(
             manifest,
-            current_version=current_version,
-            committed_sequence=committed_sequence,
+            current_version=baseline.version,
+            committed_sequence=baseline.sequence,
             compatibility=compatibility,
             rollout=rollout,
             target=target,
@@ -172,45 +181,59 @@ class UpdateRuntime:
                 phase_reason = "update_stage_failed"
                 self.controller.stage(manifest, artifact, downloaded)
                 self.controller.wait_for_safe_point()
-            except Exception:
-                record = self.controller.state()
-                if record and record.get("state") in {
-                    state.value for state in (
-                        UpdateState.DETECTED,
-                        UpdateState.DOWNLOADED,
-                        UpdateState.VERIFIED,
-                        UpdateState.STAGED,
-                        UpdateState.WAITING_SAFE_POINT,
-                    )
-                }:
-                    self.controller.transition(UpdateState.FAILED, reason=phase_reason)
+            except BaseException:
+                try:
+                    record = self.controller.state()
+                    if record and record.get("state") in {
+                        state.value
+                        for state in (
+                            UpdateState.DETECTED,
+                            UpdateState.DOWNLOADED,
+                            UpdateState.VERIFIED,
+                            UpdateState.STAGED,
+                            UpdateState.WAITING_SAFE_POINT,
+                        )
+                    }:
+                        self.controller.transition(
+                            UpdateState.FAILED, reason=phase_reason
+                        )
+                except Exception:  # noqa: BLE001 - preserve the original interrupt
+                    self.audit.fail_closed(phase_reason)
                 raise
         return decision
 
     def activate_and_self_test(
         self,
-        snapshot: SafePointSnapshot,
+        safe_point: SafePointSnapshot | Callable[[], SafePointSnapshot],
         self_test: Callable[[Path], bool],
     ) -> UpdateState:
         """Activate only at a natural safe point; commit or restore the LKG."""
 
-        record = self.controller.state()
-        if not record:
-            raise InvalidTransition("no prepared update is available")
-        release = record["release"]
-        if not snapshot.ready:
-            self.audit.safe_point_blocked(
-                release["release_id"], release["sequence"],
-            )
-            raise InvalidTransition(
-                "safe point is blocked by: " + ", ".join(snapshot.blockers()),
-            )
         with self.controller.transaction():
+            record = self.controller.state()
+            if not record:
+                raise InvalidTransition("no prepared update is available")
+            release = record["release"]
+            snapshot = safe_point() if callable(safe_point) else safe_point
+            if not isinstance(snapshot, SafePointSnapshot):
+                raise TypeError("safe point provider must return SafePointSnapshot")
+            if not snapshot.ready:
+                self.audit.safe_point_blocked(
+                    release["release_id"],
+                    release["sequence"],
+                )
+                raise InvalidTransition(
+                    "safe point is blocked by: " + ", ".join(snapshot.blockers()),
+                )
             self.controller.activate(snapshot)
             self.controller.begin_self_test()
             candidate = self.controller.root / release["artifact"]
             try:
                 passed = self_test(candidate) is True
+            except (KeyboardInterrupt, SystemExit):
+                self.controller.request_rollback("update_self_test_failed")
+                self.controller.rollback("update_self_test_failed")
+                raise
             except Exception:  # noqa: BLE001 - any candidate failure must roll back
                 passed = False
             if passed:

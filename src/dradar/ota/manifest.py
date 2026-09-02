@@ -10,6 +10,7 @@ import platform
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -24,6 +25,7 @@ _PLATFORMS = frozenset({"macos", "linux", "windows"})
 _ARCHITECTURES = frozenset({"x86_64", "arm64"})
 _ROLLOUT_STAGES = frozenset({"internal", "canary", "progressive", "general"})
 _RINGS = {"internal": 0, "canary": 1, "general": 2}
+_CLOCK_SKEW = timedelta(minutes=5)
 
 
 class ManifestError(ValueError):
@@ -89,6 +91,7 @@ class ReleaseManifest:
     sequence: int
     channel: str
     published_at: str
+    expires_at: str
     rollout_stage: str
     rollout_basis_points: int
     rollout_salt: str
@@ -157,6 +160,17 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
     if not match:
         raise ManifestError(f"unsafe semantic version: {value!r}")
     return tuple(int(part) for part in match.groups())
+
+
+def _timestamp(value: Any, name: str) -> tuple[str, datetime]:
+    result = _string(value, name, maximum=64)
+    try:
+        parsed = datetime.fromisoformat(result)
+    except ValueError as exc:
+        raise ManifestError(f"{name} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ManifestError(f"{name} must include a timezone")
+    return result, parsed.astimezone(UTC)
 
 
 def _canonical_payload(document: Mapping[str, Any]) -> bytes:
@@ -228,7 +242,12 @@ def verify_signed_manifest(
     version = _version(document.get("version"), "version")
     sequence = _integer(document.get("sequence"), "sequence", minimum=1)
     channel = _identifier(document.get("channel"), "channel")
-    published_at = _string(document.get("published_at"), "published_at", maximum=64)
+    published_at, published_time = _timestamp(
+        document.get("published_at"), "published_at"
+    )
+    expires_at, expires_time = _timestamp(document.get("expires_at"), "expires_at")
+    if expires_time <= published_time:
+        raise ManifestError("expires_at must be later than published_at")
 
     rollout = _mapping(document.get("rollout"), "rollout")
     rollout_stage = _string(rollout.get("stage"), "rollout.stage", maximum=32)
@@ -321,6 +340,7 @@ def verify_signed_manifest(
         sequence=sequence,
         channel=channel,
         published_at=published_at,
+        expires_at=expires_at,
         rollout_stage=rollout_stage,
         rollout_basis_points=rollout_basis_points,
         rollout_salt=rollout_salt,
@@ -361,9 +381,17 @@ def evaluate_manifest(
     compatibility: CompatibilitySnapshot,
     rollout: RolloutContext,
     target: PlatformTarget | None = None,
+    now: datetime | None = None,
 ) -> PolicyDecision:
     """Return a stable, explainable decision without downloading anything."""
 
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    _, published_at = _timestamp(manifest.published_at, "published_at")
+    _, expires_at = _timestamp(manifest.expires_at, "expires_at")
+    if published_at > now + _CLOCK_SKEW:
+        return PolicyDecision(False, "manifest_not_yet_valid")
+    if expires_at <= now:
+        return PolicyDecision(False, "manifest_expired")
     if manifest.rollout_paused:
         return PolicyDecision(False, "rollout_paused")
     if manifest.channel != rollout.channel:

@@ -33,6 +33,7 @@ def _release(tmp_path):
         "sequence": 600,
         "channel": "stable",
         "published_at": "2026-09-02T05:00:00Z",
+        "expires_at": "2099-09-02T05:00:00Z",
         "rollout": {
             "stage": "general",
             "basis_points": 10_000,
@@ -284,6 +285,35 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
     assert controller.launch_pointer() == lkg
 
 
+def test_launcher_rejects_symlink_current_even_when_target_stays_inside_root(tmp_path):
+    controller = UpdateController(tmp_path / "ota")
+    actual = controller.root / "releases" / "candidate" / "actual.whl"
+    actual.parent.mkdir(parents=True)
+    actual.write_bytes(b"candidate")
+    linked = actual.with_name("linked.whl")
+    linked.symlink_to(actual.name)
+    current = {
+        "release_id": "candidate",
+        "version": "0.6.0",
+        "sequence": 600,
+        "artifact": str(linked.relative_to(controller.root)),
+    }
+    _atomic_json(controller.current_path, current)
+
+    lkg_artifact = controller.root / "releases" / "lkg" / "client.whl"
+    lkg_artifact.parent.mkdir(parents=True)
+    lkg_artifact.write_bytes(b"known-good")
+    lkg = {
+        "release_id": "lkg",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": str(lkg_artifact.relative_to(controller.root)),
+    }
+    _atomic_json(controller.last_known_good_path, lkg)
+
+    assert controller.launch_pointer() == lkg
+
+
 @pytest.mark.parametrize(
     "corrupt_state, message",
     [
@@ -292,8 +322,10 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
                 "schema_version": 2,
                 "state": "future_state",
                 "release": {
-                    "release_id": "future", "version": "9.0.0",
-                    "sequence": 900, "artifact": "releases/future/client.whl",
+                    "release_id": "future",
+                    "version": "9.0.0",
+                    "sequence": 900,
+                    "artifact": "releases/future/client.whl",
                 },
             },
             "unsupported schema",
@@ -303,8 +335,10 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
                 "schema_version": 1,
                 "state": "unknown_state",
                 "release": {
-                    "release_id": "corrupt", "version": "9.0.0",
-                    "sequence": 900, "artifact": "releases/corrupt/client.whl",
+                    "release_id": "corrupt",
+                    "version": "9.0.0",
+                    "sequence": 900,
+                    "artifact": "releases/corrupt/client.whl",
                 },
             },
             "update state is unknown",
@@ -312,11 +346,14 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
     ],
 )
 def test_unknown_persisted_state_fails_closed_and_preserves_rollback_baseline(
-    tmp_path, corrupt_state, message,
+    tmp_path,
+    corrupt_state,
+    message,
 ):
     recorder = FlightRecorder(tmp_path / "audit")
     controller = UpdateController(
-        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+        tmp_path / "ota",
+        event_sink=FlightRecorderEventSink(recorder),
     )
     artifact = controller.root / "releases" / "dradar-0.5.175" / "current.whl"
     artifact.parent.mkdir(parents=True)
@@ -350,14 +387,17 @@ def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
 ):
     recorder = FlightRecorder(tmp_path / "audit")
     controller = UpdateController(
-        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+        tmp_path / "ota",
+        event_sink=FlightRecorderEventSink(recorder),
     )
     artifact = controller.root / "releases" / "dradar-0.5.175" / "current.whl"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"known-good")
     known_good = {
-        "release_id": "dradar-0.5.175", "version": "0.5.175",
-        "sequence": 599, "artifact": str(artifact.relative_to(controller.root)),
+        "release_id": "dradar-0.5.175",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": str(artifact.relative_to(controller.root)),
     }
     _atomic_json(controller.current_path, known_good)
     _atomic_json(controller.last_known_good_path, known_good)
@@ -376,22 +416,29 @@ def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
 def test_unknown_resume_state_is_audited_and_pause_remains_fail_closed(tmp_path):
     recorder = FlightRecorder(tmp_path / "audit")
     controller = UpdateController(
-        tmp_path / "ota", event_sink=FlightRecorderEventSink(recorder),
+        tmp_path / "ota",
+        event_sink=FlightRecorderEventSink(recorder),
     )
     paused = {
         "schema_version": 1,
         "state": "paused",
         "release": {
-            "release_id": "dradar-0.6.0", "version": "0.6.0",
-            "sequence": 600, "artifact": "releases/dradar-0.6.0/client.whl",
+            "release_id": "dradar-0.6.0",
+            "version": "0.6.0",
+            "sequence": 600,
+            "artifact": "releases/dradar-0.6.0/client.whl",
         },
         "resume_state": "future_downloading",
         "updated_at": "2026-09-02T00:00:00+00:00",
     }
     _atomic_json(controller.state_path, paused)
 
-    with controller.transaction(), pytest.raises(
-        InvalidTransition, match="no compatible resume state",
+    with (
+        controller.transaction(),
+        pytest.raises(
+            InvalidTransition,
+            match="no compatible resume state",
+        ),
     ):
         controller.resume()
     assert json.loads(controller.state_path.read_text()) == paused

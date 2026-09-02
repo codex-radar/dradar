@@ -30,6 +30,14 @@ def download_verified_artifact(
 
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     final = destination / artifact.filename
+    if final.exists() or final.is_symlink():
+        try:
+            verify_artifact(final, artifact)
+        except ManifestError as exc:
+            raise ManifestError(
+                "immutable artifact already exists with different content"
+            ) from exc
+        return final
     temporary = destination / f".{artifact.filename}.{uuid.uuid4().hex}.partial"
     fd: int | None = None
     try:
@@ -55,7 +63,7 @@ def download_verified_artifact(
         verify_artifact(temporary, artifact)
         os.replace(temporary, final)
         return final
-    except Exception:
+    except BaseException:
         temporary.unlink(missing_ok=True)
         raise
     finally:

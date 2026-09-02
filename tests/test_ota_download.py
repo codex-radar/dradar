@@ -58,23 +58,23 @@ def test_download_is_published_only_after_verification(tmp_path):
     assert not list(tmp_path.glob("*.partial"))
 
 
-def test_disconnect_cleans_partial_and_preserves_existing_candidate(tmp_path):
+def test_verified_existing_candidate_is_reused_without_network(tmp_path):
     body = b"candidate-body"
     existing = tmp_path / "candidate.whl"
     existing.write_bytes(body)
 
-    class DisconnectingResponse(FakeResponse):
-        def iter_bytes(self, chunk_size=65536):
-            del chunk_size
-            yield b"partial"
-            raise ConnectionError("offline")
+    class NoNetworkClient:
+        def stream(self, method, url, **kwargs):
+            raise AssertionError("verified immutable artifact must be reused")
 
-    with pytest.raises(ConnectionError, match="offline"):
+    assert (
         download_verified_artifact(
-            FakeClient(DisconnectingResponse([])),
+            NoNetworkClient(),
             _artifact(body),
             tmp_path,
         )
+        == existing
+    )
 
     assert existing.read_bytes() == body
     assert not list(tmp_path.glob("*.partial"))
@@ -89,3 +89,38 @@ def test_oversized_or_corrupt_download_never_replaces_final(tmp_path):
             tmp_path,
         )
     assert not (tmp_path / "candidate.whl").exists()
+
+
+def test_keyboard_interrupt_cleans_partial_download(tmp_path):
+    body = b"candidate-body"
+
+    class InterruptedResponse(FakeResponse):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            yield b"partial"
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        download_verified_artifact(
+            FakeClient(InterruptedResponse([])),
+            _artifact(body),
+            tmp_path,
+        )
+
+    assert not list(tmp_path.glob("*.partial"))
+    assert not (tmp_path / "candidate.whl").exists()
+
+
+def test_existing_immutable_artifact_is_never_overwritten(tmp_path):
+    body = b"candidate-body"
+    final = tmp_path / "candidate.whl"
+    final.write_bytes(b"different-body")
+
+    with pytest.raises(ManifestError, match="immutable artifact already exists"):
+        download_verified_artifact(
+            FakeClient(FakeResponse([body])),
+            _artifact(body),
+            tmp_path,
+        )
+
+    assert final.read_bytes() == b"different-body"

@@ -27,12 +27,12 @@ launcher 启动时先执行 crash recovery：只要 `pending.activation_attempte
 
 Manifest 使用 canonical JSON（移除 `signature` 后按 key 排序、无多余空格）和 Ed25519。受信公钥由 launcher 内置/受控轮换；未知 `key_id`、非 Ed25519、签名不符立即拒绝。签名内容包括：
 
-- `release_id`、严格 SemVer、单调 `sequence`、发布时间与 channel；
+- `release_id`、严格 SemVer、单调 `sequence`、带时区的发布时间、到期时间与 channel；
 - rollout stage、万分比、salt 与全局 pause；
 - launcher、runner protocol、doctor、Provider、ledger、checkpoint 兼容范围；
 - 每个 OS/架构唯一的 HTTPS URL、文件名、长度与 SHA-256。
 
-候选必须同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向，使用同目录临时文件，长度与摘要通过并 `fsync` 后才 `os.replace`；断网或校验失败会清除 partial，绝不覆盖已有候选。
+候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，调用方传入值必须与它一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向，使用同目录临时文件，长度与摘要通过并 `fsync` 后才 `os.replace`；中断、断网或校验失败会清除 partial。已有同名制品只有在签名长度与摘要完全一致时才复用，否则失败关闭，绝不覆盖不可变候选。
 
 ## 分级灰度与旧客户端桥接
 
@@ -52,7 +52,7 @@ rollout stage 为 `internal → canary → progressive → general`。稳定 `cl
 - refill 已停止接受新题；
 - worker supervisor 已确认空闲，且不会补位/respawn。
 
-父 supervisor 使用 `UpdateController.transaction()` 持有主机 update lock，并负责汇总 worker barrier；所有状态变更在未持锁时都会拒绝，子 worker 不自行切换。激活只是原子修改 `current.json`，随后由 launcher 启动候选。任何失败都回到 LKG，不重跑或释放已有 assignment。
+父 supervisor 使用 `UpdateController.transaction()` 持有主机 update lock，并负责汇总 worker barrier；实时安全点回调必须在该事务内重新采样，不能复用锁外旧快照。所有状态变更在未持锁时都会拒绝，子 worker 不自行切换。激活只是原子修改 `current.json`，随后由 launcher 启动候选。候选自检抛出普通异常、`KeyboardInterrupt` 或 `SystemExit` 时都先回到 LKG；中断随后继续向上抛出，不重跑或释放已有 assignment。
 
 ## 状态机与暂停/回滚
 
