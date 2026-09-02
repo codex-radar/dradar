@@ -86,7 +86,8 @@ from .providers import (
 )
 from .runner import (
     CODEX_TRAJECTORY_BUNDLE_SCHEMA, DIAG_ADVICE,
-    BuildFlakeError, RunnerError,
+    BuildDiskFullError, BuildFlakeError, BuildSnapshotterPermissionError,
+    RunnerError,
     RunnerCleanupUnconfirmedError, RunnerTaskRetryableError,
     POMPEII_BENCHMARK_ID,
     POMPEII_FINALIZATION_RESERVE_SEC, POMPEII_SOFT_BUDGET_SEC,
@@ -2537,6 +2538,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             telemetry.flush()
 
+    allow_isolated_builder = True
     for attempt in (1, 2):
         try:
             try:
@@ -2553,6 +2555,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         or getattr(args, "build_cache_mode", None)
                         or image_cache.DEFAULT_BUILD_CACHE_MODE
                     ),
+                    allow_isolated_builder=allow_isolated_builder,
                 )
             finally:
                 # Assignment-scoped builders own only this trial's BuildKit
@@ -2580,6 +2583,36 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         + (builder_note or "Docker 未返回具体原因")
                     )
             break
+        except BuildDiskFullError as exc:
+            print(
+                f"trial failed: {exc}\n"
+                "the build ran out of disk space — free space and re-run "
+                "`dradar resume` (still free: the agent never started), or "
+                "use `dradar release` if you do not want to keep the cell"
+            )
+            _mark_stopped_quietly(
+                client, assignment, failure_kind="environment_build_failed",
+            )
+            return "environment-build-failed"
+        except BuildSnapshotterPermissionError as exc:
+            if attempt == 1 and allow_isolated_builder:
+                print(
+                    f"environment build failed ({exc})\n"
+                    "isolated overlay is not permitted here — retrying with "
+                    "the host default builder (no quota was consumed)..."
+                )
+                allow_isolated_builder = False
+                continue
+            print(
+                f"trial failed: {exc}\n"
+                "the image build cannot write overlay whiteouts on this host; "
+                "run on a machine with a full Linux kernel, or `dradar release` "
+                "if you do not want to keep the cell"
+            )
+            _mark_stopped_quietly(
+                client, assignment, failure_kind="environment_build_failed",
+            )
+            return "environment-build-failed"
         except BuildFlakeError as exc:
             # The image build died before the agent ran — a free failure
             # (zero quota), and mirror flakes usually pass on the second
@@ -2723,6 +2756,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         builder_isolated=art.builder_isolated,
         builder_reusable=art.builder_reusable,
         builder_name=art.builder_name,
+        builder_expected=art.builder_expected,
         keep_images=bool(args.keep),
     )
     removed_objects = (

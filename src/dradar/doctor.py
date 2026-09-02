@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from . import __version__, egress, runner
-from .capacity import docker_resources, worker_resource_warnings
+from .capacity import docker_resources, docker_storage_driver, worker_resource_warnings
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CLI_VERSION,
@@ -635,6 +635,15 @@ def cmd_doctor(args) -> int:
                 egress_ready,
                 egress_hint,
             )
+            driver = docker_storage_driver()
+            if driver == "vfs":
+                _warn(
+                    "docker storage driver (vfs)",
+                    "vfs copies a full rootfs for every image layer and "
+                    "container; a single Pier compose build can use 80+ GiB. "
+                    "Run one worker and keep about 80 GiB free. overlay2 is "
+                    "the durable fix when the daemon can use it",
+                )
             cpus, memory_gib, probe_warnings = docker_resources()
             if cpus is not None and memory_gib is not None:
                 resource_label = (

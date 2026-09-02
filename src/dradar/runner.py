@@ -348,6 +348,7 @@ class TrialArtifacts:
     builder_note: str | None = None
     builder_reusable: bool = False
     builder_name: str | None = None
+    builder_expected: bool = True
 
 
 class RunnerError(RuntimeError):
@@ -447,6 +448,24 @@ class BuildFlakeError(RunnerError):
     blaming the agent for a mirror hiccup)."""
 
 
+class BuildDiskFullError(RunnerError):
+    """The trial died while BUILDING because the host disk was full.
+
+    Distinct from BuildFlakeError: retrying cannot create space, and BuildKit
+    ENOSPC lines almost always also contain ``failed to solve``, which would
+    otherwise be misread as a mirror/network flake.
+    """
+
+
+class BuildSnapshotterPermissionError(RunnerError):
+    """Isolated overlay/fuse-overlayfs cannot write whiteouts here.
+
+    Nested Docker often boots BuildKit, then fails on ``operation not
+    permitted`` while converting whiteouts. Distinct from BuildFlakeError
+    because retrying the same isolated builder cannot create that permission.
+    """
+
+
 # Signatures (in the pier log tail) of an image build / infra failure that
 # happened before any agent ran. Deliberately specific: a false positive here
 # would auto-retry a run that DID burn quota.
@@ -455,9 +474,32 @@ _BUILD_FLAKE_MARKERS = (
     "apt-get update", "Temporary failure resolving", "proxyconnect",
     "TLS handshake timeout", "error getting credentials",
 )
+_DISK_FULL_MARKERS = (
+    "no space left",
+    "enospc",
+    "disk quota exceeded",
+)
+_SNAPSHOTTER_PERM_MARKERS = (
+    "whiteout",
+    "fuse-overlayfs",
+)
+
+
+def _looks_like_disk_full(log_tail: str) -> bool:
+    lowered = log_tail.lower()
+    return any(marker in lowered for marker in _DISK_FULL_MARKERS)
+
+
+def _looks_like_snapshotter_permission(log_tail: str) -> bool:
+    lowered = log_tail.lower()
+    if "operation not permitted" not in lowered and "eperm" not in lowered:
+        return False
+    return any(marker in lowered for marker in _SNAPSHOTTER_PERM_MARKERS)
 
 
 def _looks_like_build_flake(log_tail: str) -> bool:
+    if _looks_like_disk_full(log_tail) or _looks_like_snapshotter_permission(log_tail):
+        return False
     return any(m in log_tail for m in _BUILD_FLAKE_MARKERS)
 
 
@@ -3687,6 +3729,7 @@ def run_trial(
     on_started: Callable[[], None] | None = None,
     environment_build_timeout_multiplier: float | None = None,
     build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
+    allow_isolated_builder: bool = True,
 ) -> TrialArtifacts:
     effective_assignment = assignment
     codex_cli_version = None
@@ -3840,12 +3883,15 @@ def run_trial(
         assignment_id=str(assignment["assignment_id"]),
         runtime=egress_environment,
         mode=build_cache_mode,
+        force_default=not allow_isolated_builder,
     )
     if builder_lease.isolated:
         if builder_lease.reusable:
             print("已为本题准备共享的 DRadar BuildKit 缓存")
         else:
             print("已为本题准备独立的临时运行环境")
+    elif not builder_lease.expected:
+        print(f"本题改用本机默认构建空间（{builder_lease.note}）")
     else:
         print(
             "提示：本题可以继续运行，但临时环境暂时无法安全隔离；"
@@ -4196,6 +4242,17 @@ def run_trial(
                     _zcode_runtime_diagnostic(jobs_dir, job_name)
                 )
             raise terminal_error
+        if _looks_like_disk_full(tail):
+            raise BuildDiskFullError(
+                "the task environment failed to BUILD because the disk is full "
+                "— the agent never started and no quota was used.\n"
+                f"last lines of the log:\n{tail}")
+        if _looks_like_snapshotter_permission(tail):
+            raise BuildSnapshotterPermissionError(
+                "the task environment failed to BUILD because overlay whiteouts "
+                "are not permitted here — the agent never started and no quota "
+                "was used.\n"
+                f"last lines of the log:\n{tail}")
         if _looks_like_build_flake(tail):
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "
@@ -4241,6 +4298,17 @@ def run_trial(
         # agent for a mirror hiccup.
         result_exception = _result_exception_text(result)
         diagnostic = "\n".join(x for x in (tail, result_exception) if x)
+        if _looks_like_disk_full(diagnostic):
+            raise BuildDiskFullError(
+                "the task environment failed to BUILD because the disk is full "
+                "— the agent never started and no quota was used.\n"
+                f"build diagnostic:\n{_diagnostic_tail(diagnostic)}")
+        if _looks_like_snapshotter_permission(diagnostic):
+            raise BuildSnapshotterPermissionError(
+                "the task environment failed to BUILD because overlay whiteouts "
+                "are not permitted here — the agent never started and no quota "
+                "was used.\n"
+                f"build diagnostic:\n{_diagnostic_tail(diagnostic)}")
         if _looks_like_build_flake(diagnostic):
             raise BuildFlakeError(
                 f"the task environment failed to BUILD (mirror/network flake) — "
@@ -4317,6 +4385,7 @@ def run_trial(
         builder_note=builder_lease.note,
         builder_reusable=builder_lease.reusable,
         builder_name=builder_lease.name,
+        builder_expected=builder_lease.expected,
     )
 
 

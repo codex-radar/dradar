@@ -10,6 +10,11 @@ import pytest
 from dradar import egress, pier_sitecustomize
 
 
+@pytest.fixture(autouse=True)
+def _host_prepare_is_not_nested(monkeypatch):
+    monkeypatch.setattr(egress, "_running_in_container", lambda: False)
+
+
 _REAL_ENSURE_IMAGE = egress.ensure_egress_proxy_image
 _REAL_PREPARE_RUNTIME = egress.prepare_egress_proxy_runtime
 _TEST_IMAGE = "sha256:" + "a" * 64
@@ -310,6 +315,7 @@ def test_compose_uses_pinned_image_and_never_dynamic_build(
     monkeypatch.setenv("DRADAR_EGRESS_PROXY_IMAGE", _TEST_IMAGE)
     monkeypatch.setenv("DRADAR_EGRESS_UPSTREAM_HOST", "host.docker.internal")
     monkeypatch.setenv("DRADAR_EGRESS_UPSTREAM_PORT", "39127")
+    monkeypatch.setattr(pier_sitecustomize, "_running_in_container", lambda: False)
     path = tmp_path / "docker-compose-egress-proxy.json"
     allowlist = SimpleNamespace(domains=["api.openai.com"])
 
@@ -327,8 +333,188 @@ def test_compose_uses_pinned_image_and_never_dynamic_build(
     assert "build" not in service
     assert service["environment"]["PROXY_TOKEN"] == "runtime-secret"
     assert service["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    assert compose["networks"]["pier-egress-internal"] == {"internal": True}
     assert not (tmp_path / "must-not-exist").exists()
     assert path.stat().st_mode & 0o077 == 0
+
+
+def test_compose_keeps_exam_off_internet_and_uses_unix_socket_inside_a_container(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setenv("DRADAR_EGRESS_PROXY_IMAGE", _TEST_IMAGE)
+    monkeypatch.setattr(pier_sitecustomize, "_running_in_container", lambda: True)
+    path = tmp_path / "docker-compose-egress-proxy.json"
+
+    pier_sitecustomize._write_docker_proxy_compose(
+        path=path,
+        proxy_dir=tmp_path / "must-not-exist",
+        allowlist=SimpleNamespace(domains=["cli-chat-proxy.grok.com"]),
+        token="runtime-secret",
+    )
+
+    compose = json.loads(path.read_text())
+    main = compose["services"]["main"]
+    proxy = compose["services"]["pier-egress-proxy"]
+    export = compose["services"]["pier-egress-sock-export"]
+    forward = compose["services"]["pier-egress-forward"]
+    squid_script = (tmp_path / "dradar-egress-loopback-squid.sh").read_text(
+        encoding="utf-8",
+    )
+    export_script = (tmp_path / "dradar-proxy-export.py").read_text(encoding="utf-8")
+    assert main["image"] == "${MAIN_IMAGE_NAME}"
+    assert main["networks"] == ["pier-egress-internal"]
+    assert "network_mode" not in main
+    assert export["image"] == "python:3.12-alpine"
+    assert forward["image"] == "python:3.12-alpine"
+    assert export.get("pull_policy") == "never"
+    assert forward.get("pull_policy") == "never"
+    assert export.get("user") == "0:0"
+    assert forward.get("user") == "0:0"
+    assert compose["networks"]["pier-egress-internal"] == {"internal": True}
+    assert proxy["networks"] == ["pier-egress-internal", "default"]
+    assert "http_port 127.0.0.1:8080" in squid_script
+    assert "http.sock" not in squid_script
+    assert "chmod 1777" not in squid_script
+    assert export["network_mode"] == "service:pier-egress-proxy"
+    assert forward["network_mode"] == "service:main"
+    assert "pier-egress-sock:/egress" in export["volumes"]
+    assert "pier-egress-sock:/egress" in forward["volumes"]
+    assert "/egress/http.sock" in export_script
+    assert compose["volumes"] == {"pier-egress-sock": {}}
+    assert (tmp_path / "dradar-proxy-forward.py").is_file()
+
+
+def test_compose_nested_sidecar_uses_resolved_small_image(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setenv("DRADAR_EGRESS_PROXY_IMAGE", _TEST_IMAGE)
+    monkeypatch.setenv(
+        pier_sitecustomize._NESTED_SIDECAR_IMAGE_ENV,
+        "dradar-nested-sidecar:py3",
+    )
+    monkeypatch.setattr(pier_sitecustomize, "_running_in_container", lambda: True)
+    path = tmp_path / "docker-compose-egress-proxy.json"
+
+    pier_sitecustomize._write_docker_proxy_compose(
+        path=path,
+        proxy_dir=tmp_path / "must-not-exist",
+        allowlist=SimpleNamespace(domains=["cli-chat-proxy.grok.com"]),
+        token="runtime-secret",
+    )
+
+    compose = json.loads(path.read_text())
+    assert compose["services"]["main"]["image"] == "${MAIN_IMAGE_NAME}"
+    assert compose["services"]["pier-egress-sock-export"]["image"] == (
+        "dradar-nested-sidecar:py3"
+    )
+    assert compose["services"]["pier-egress-forward"]["image"] == (
+        "dradar-nested-sidecar:py3"
+    )
+
+
+def test_nested_sidecar_uses_local_alpine(monkeypatch):
+    monkeypatch.setattr(
+        egress, "_docker_image_exists",
+        lambda _docker, image: image == egress.NESTED_SIDECAR_IMAGE,
+    )
+    monkeypatch.setattr(
+        egress, "_pull_docker_image",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not pull")),
+    )
+
+    assert egress.ensure_nested_sidecar_image("docker", _TEST_IMAGE) == (
+        egress.NESTED_SIDECAR_IMAGE
+    )
+
+
+def test_nested_sidecar_pulls_alpine_when_missing(monkeypatch):
+    present: set[str] = set()
+
+    def exists(_docker, image):
+        return image in present
+
+    def pull(_docker, image):
+        present.add(image)
+        return True
+
+    monkeypatch.setattr(egress, "_docker_image_exists", exists)
+    monkeypatch.setattr(egress, "_pull_docker_image", pull)
+    monkeypatch.setattr(
+        egress, "_build_python_sidecar_from_proxy", lambda *_a, **_k: False,
+    )
+
+    assert egress.ensure_nested_sidecar_image("docker", _TEST_IMAGE) == (
+        egress.NESTED_SIDECAR_IMAGE
+    )
+
+
+def test_nested_sidecar_derives_python_from_proxy_when_hub_is_blocked(monkeypatch):
+    present: set[str] = set()
+
+    def exists(_docker, image):
+        return image in present
+
+    def build(_docker, _proxy, tag):
+        present.add(tag)
+        return True
+
+    monkeypatch.setattr(egress, "_docker_image_exists", exists)
+    monkeypatch.setattr(egress, "_pull_docker_image", lambda *_a, **_k: False)
+    monkeypatch.setattr(egress, "_build_python_sidecar_from_proxy", build)
+
+    assert egress.ensure_nested_sidecar_image("docker", _TEST_IMAGE) == (
+        egress.NESTED_SIDECAR_LOCAL_TAG
+    )
+
+
+def test_nested_sidecar_fails_closed_when_no_python_image(monkeypatch):
+    monkeypatch.setattr(egress, "_docker_image_exists", lambda *_a, **_k: False)
+    monkeypatch.setattr(egress, "_pull_docker_image", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        egress, "_build_python_sidecar_from_proxy", lambda *_a, **_k: False,
+    )
+
+    with pytest.raises(egress.EgressProxyError, match="small python image"):
+        egress.ensure_nested_sidecar_image("docker", _TEST_IMAGE)
+
+
+def test_prepare_injects_nested_sidecar_image_inside_a_container(monkeypatch):
+    monkeypatch.setattr(egress, "_running_in_container", lambda: True)
+    monkeypatch.setattr(
+        egress, "ensure_egress_proxy_image",
+        lambda *_args, **_kwargs: _TEST_IMAGE,
+    )
+    monkeypatch.setattr(
+        egress, "_validate_build_proxy_compatibility", lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        egress, "ensure_nested_sidecar_image",
+        lambda *_a, **_k: "python:3.12-alpine",
+    )
+
+    runtime = _REAL_PREPARE_RUNTIME("docker")
+
+    assert runtime[egress.NESTED_SIDECAR_IMAGE_ENV] == "python:3.12-alpine"
+
+
+def test_unix_forwarder_points_http_proxy_at_loopback(tmp_path: Path):
+    path = tmp_path / "docker-compose-egress-proxy.json"
+    path.write_text(json.dumps({
+        "services": {
+            "main": {},
+            "pier-egress-forward": {"network_mode": "service:main"},
+        },
+    }))
+    runtime = {
+        "HTTP_PROXY": "http://agent:short-lived@pier-egress-proxy:8080",
+        "HTTPS_PROXY": "http://agent:short-lived@pier-egress-proxy:8080",
+    }
+
+    pier_sitecustomize._finalize_docker_proxy_compose(path, runtime, None)
+
+    environment = json.loads(path.read_text())["services"]["main"]["environment"]
+    assert environment["HTTP_PROXY"] == "http://agent:short-lived@127.0.0.1:8080"
+    assert environment["HTTPS_PROXY"] == "http://agent:short-lived@127.0.0.1:8080"
 
 
 def test_pier_bootstrap_accepts_only_local_image_id_or_official_digest():

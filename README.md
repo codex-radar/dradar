@@ -48,7 +48,7 @@ Pier + Docker 作为现阶段的任务执行方案；未来可以继续接入其
 - Python 3.11 或更高版本，以及 [`uv`](https://docs.astral.sh/uv/)
 - Docker，推荐 macOS 使用 [OrbStack](https://orbstack.dev/)
 - 本机已登录 `codex` 或 `claude` CLI，二者准备好一个即可
-- 至少约 20 GB 可用磁盘；多 worker 需要更多 CPU、内存和磁盘
+- 至少约 20 GB 可用磁盘；Docker 若只能用 vfs 存储驱动（常见于套娃 Docker），单题构建峰值可达 80 GB 以上，请只开 1 个 worker 并保留约 80 GB 空闲
 
 原生 Windows 为候选支持，需要 Docker Desktop 运行 Linux containers，并确保 Codex CLI
 能直接在 PowerShell 的 `PATH` 中调用。WSL2 也可使用，不限定 Ubuntu。
@@ -794,7 +794,18 @@ dradar cleanup --docker --shared-build-cache -y
 本地诊断文件和题目镜像，但仍会停止容器并删除临时构建空间。
 
 默认每道题使用独立、一次性的 Docker 构建空间，单 worker 题目结束时直接删除该构建空间，
-因此不会清理或占用用户其他项目的 BuildKit 缓存。多 worker 并发时，如果没有显式配置，CLI
+因此不会清理或占用用户其他项目的 BuildKit 缓存。该构建空间会先启动 overlayfs，不行再试
+fuse-overlayfs，避免 BuildKit auto 落到 native、在每条 Dockerfile `RUN` 上复制完整
+rootfs。两种叠加方式都不可用时，或当前进程已在容器内（套娃 Docker 无法写入 overlay
+whiteout）时，本题改用本机默认构建空间，而不会静默使用 native，也不会把
+`operation not permitted` 或磁盘耗尽当成镜像源/网络抽风自动重试同一套隔离构建器。
+
+隔离构建器改的是 BuildKit 快照层。若本机 Docker 守护进程本身是 vfs，compose 构建和
+每个容器仍会整份拷贝 rootfs。套娃 Docker 上的 unix-socket 旁路转发器因此使用小型
+python 镜像，而不是再复制一份考试镜像。vfs 主机请只跑 1 个 worker；能把守护进程改成
+overlay2 才是根治。
+
+多 worker 并发时，如果没有显式配置，CLI
 会自动启用同一操作系统用户范围内的共享 BuildKit 缓存，以便公共基础镜像和依赖层只下载/构建
 一次；也可以显式指定策略：
 
@@ -824,7 +835,7 @@ dradar config show
 恢复状态校验；旧版本写入默认 builder 的历史缓存无法证明只属于 DRadar，因此不会在
 升级时擅自删除。`--dry-run` 会先展示镜像列表和预计可回收空间。
 
-可用空间低于 25 GiB 时停止领取新题，但不打断已在运行的任务。在 WSL 中会同时检查
+可用空间低于 25 GiB（vfs 主机为 80 GiB）时停止领取新题，但不打断已在运行的任务。在 WSL 中会同时检查
 Ubuntu 内部空间，以及实际存放该发行版虚拟盘的 Windows 磁盘；任一空间不足或宿主盘
 无法确认，都会停止自动补题，避免 Linux 内部仍显示可用而 Windows 宿主盘已经耗尽。
 

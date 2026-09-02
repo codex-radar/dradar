@@ -86,6 +86,16 @@ def test_periodic_maintenance_claim_is_shared_and_throttled(tmp_path: Path):
     )
 
 
+def _snapshotter_from(command):
+    for index, part in enumerate(command):
+        if part == "--buildkitd-flags" and index + 1 < len(command):
+            value = command[index + 1]
+            prefix = "--oci-worker-snapshotter="
+            if value.startswith(prefix):
+                return value[len(prefix):]
+    return None
+
+
 def test_trial_builder_is_assignment_scoped_and_never_selected_globally(
     tmp_path: Path, monkeypatch,
 ):
@@ -93,21 +103,26 @@ def test_trial_builder_is_assignment_scoped_and_never_selected_globally(
 
     def run(command, **_kwargs):
         calls.append(command)
-        if command[:2] == ["buildx", "inspect"]:
+        if command[:2] == ["buildx", "inspect"] and "--bootstrap" not in command:
             return subprocess.CompletedProcess(command, 1, "", "not found")
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
+    monkeypatch.setattr(image_cache, "running_in_container", lambda: False)
     monkeypatch.setattr(image_cache, "_run_docker", run)
     lease = image_cache.prepare_trial_builder(
         tmp_path, assignment_id="a1", runtime={},
     )
 
-    assert lease.isolated and lease.name == image_cache.trial_builder_name(tmp_path, "a1")
-    assert calls[-1] == [
-        "buildx", "create", "--name", lease.name,
+    name = image_cache.trial_builder_name(tmp_path, "a1")
+    creates = [command for command in calls if command[:2] == ["buildx", "create"]]
+    assert lease.isolated and lease.name == name
+    assert creates == [[
+        "buildx", "create", "--name", name,
         "--driver", "docker-container",
-    ]
-    assert "--use" not in calls[-1]
+        "--buildkitd-flags", "--oci-worker-snapshotter=overlayfs",
+    ]]
+    assert "--use" not in creates[0]
+    assert image_cache.ISOLATED_SNAPSHOTTERS == ("overlayfs", "fuse-overlayfs")
 
 
 def test_shared_trial_builder_is_bootstrapped_and_reusable(
@@ -128,6 +143,7 @@ def test_shared_trial_builder_is_bootstrapped_and_reusable(
             builder_exists = True
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
+    monkeypatch.setattr(image_cache, "running_in_container", lambda: False)
     monkeypatch.setattr(image_cache, "_run_docker", run)
     lease = image_cache.prepare_trial_builder(
         tmp_path, assignment_id="a1", runtime={}, mode="shared",
@@ -150,6 +166,100 @@ def test_shared_trial_builder_is_bootstrapped_and_reusable(
     ) == (True, None)
     # Shared cleanup must not remove the persistent BuildKit cache.
     assert calls[-1] == ["buildx", "inspect", lease.name]
+
+
+def test_trial_builder_falls_back_to_fuse_overlayfs_when_overlayfs_cannot_boot(
+    tmp_path: Path, monkeypatch,
+):
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        if command[:2] == ["buildx", "inspect"] and "--bootstrap" not in command:
+            return subprocess.CompletedProcess(command, 1, "", "not found")
+        if _snapshotter_from(command) == "overlayfs":
+            return subprocess.CompletedProcess(command, 1, "", "overlayfs not supported")
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(image_cache, "running_in_container", lambda: False)
+    monkeypatch.setattr(image_cache, "_run_docker", run)
+    lease = image_cache.prepare_trial_builder(
+        tmp_path, assignment_id="a1", runtime={},
+    )
+
+    creates = [command for command in calls if command[:2] == ["buildx", "create"]]
+    assert lease.isolated and lease.name == image_cache.trial_builder_name(tmp_path, "a1")
+    assert [_snapshotter_from(command) for command in creates] == [
+        "overlayfs", "fuse-overlayfs",
+    ]
+
+
+def test_trial_builder_uses_host_default_instead_of_native_copies(
+    tmp_path: Path, monkeypatch,
+):
+    def run(command, **_kwargs):
+        if command[:2] == ["buildx", "create"]:
+            return subprocess.CompletedProcess(command, 1, "", "no copy-on-write snapshotter")
+        if command[:2] == ["buildx", "inspect"]:
+            return subprocess.CompletedProcess(command, 1, "", "not found")
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(image_cache, "running_in_container", lambda: False)
+    monkeypatch.setattr(image_cache, "_run_docker", run)
+    lease = image_cache.prepare_trial_builder(
+        tmp_path, assignment_id="a1", runtime={},
+    )
+
+    assert not lease.isolated and lease.name is None
+    assert not lease.expected
+    assert "叠加文件系统" in lease.note
+    assert "默认构建空间" in lease.note or "叠加文件系统" in lease.note
+
+
+def test_trial_builder_skips_isolated_volume_inside_a_container(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(image_cache, "running_in_container", lambda: True)
+    monkeypatch.setattr(
+        image_cache, "_run_docker",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not create builder")),
+    )
+    lease = image_cache.prepare_trial_builder(
+        tmp_path, assignment_id="a1", runtime={},
+    )
+
+    assert not lease.isolated and lease.name is None
+    assert not lease.expected
+    assert "容器内" in lease.note
+
+
+def test_task_cleanup_allows_intentional_default_builder(
+    tmp_path: Path, monkeypatch,
+):
+    assignment_id = "a1"
+    job_dir = tmp_path / "work" / "jobs" / "aa1"
+    (job_dir / PROJECT).mkdir(parents=True)
+    monkeypatch.setattr(
+        image_cache, "_remove_project_runtime", lambda *_a: (0, 0, 0),
+    )
+    monkeypatch.setattr(
+        image_cache, "remove_assignment_images",
+        lambda *_a, **_k: (0, 0, None),
+    )
+    monkeypatch.setattr(
+        image_cache, "remove_trial_builder", lambda *_a, **_k: (True, None),
+    )
+
+    result = image_cache.cleanup_trial_resources(
+        tmp_path,
+        assignment_id=assignment_id,
+        job_dir=job_dir,
+        trial_name=PROJECT,
+        builder_isolated=False,
+        builder_expected=False,
+    )
+
+    assert result.success
 
 
 def test_shared_build_cache_prune_targets_only_dradar_builder(
@@ -582,6 +692,10 @@ def test_server_state_failure_never_deletes_but_keeps_disk_claim_guard(
 
 def test_default_policy_is_adaptive_and_bounded(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
+        image_cache, "_policy_min_free_bytes",
+        lambda: int(image_cache.DEFAULT_MIN_FREE_GIB * image_cache.GIB),
+    )
+    monkeypatch.setattr(
         image_cache.shutil, "disk_usage",
         lambda _p: SimpleNamespace(total=2_000 * image_cache.GIB,
                                    used=0, free=2_000 * image_cache.GIB),
@@ -598,6 +712,20 @@ def test_default_policy_is_adaptive_and_bounded(tmp_path: Path, monkeypatch):
     )
     small = image_cache.effective_policy(tmp_path, {})
     assert small.limit_bytes == 20 * image_cache.GIB
+    assert small.min_free_bytes == 25 * image_cache.GIB
+
+
+def test_vfs_policy_raises_the_free_disk_floor(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("dradar.capacity.docker_storage_driver", lambda: "vfs")
+    monkeypatch.setattr(
+        image_cache.shutil, "disk_usage",
+        lambda _p: SimpleNamespace(total=128 * image_cache.GIB,
+                                   used=0, free=112 * image_cache.GIB),
+    )
+
+    policy = image_cache.effective_policy(tmp_path, {})
+
+    assert policy.min_free_bytes == 80 * image_cache.GIB
 
 
 def test_config_set_preserves_identity_token(tmp_path: Path, monkeypatch):

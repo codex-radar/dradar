@@ -44,6 +44,9 @@ EGRESS_PROXY_ASSETS = {
 EGRESS_PROXY_MODE_ENV = "DRADAR_EGRESS_PROXY_MODE"
 EGRESS_PROXY_IMAGE_OVERRIDE_ENV = "DRADAR_EGRESS_PROXY_IMAGE_OVERRIDE"
 EGRESS_PROXY_LEGACY_MODE = "legacy-build"
+NESTED_SIDECAR_IMAGE_ENV = "DRADAR_NESTED_SIDECAR_IMAGE"
+NESTED_SIDECAR_IMAGE = "python:3.12-alpine"
+NESTED_SIDECAR_LOCAL_TAG = "dradar-nested-sidecar:py3"
 DRADAR_HTTP_PROXY_ENV = "DRADAR_HTTP_PROXY"
 DRADAR_NO_PROXY_ENV = "DRADAR_NO_PROXY"
 DRADAR_CONTAINER_HTTP_PROXY_ENV = "DRADAR_CONTAINER_HTTP_PROXY"
@@ -650,6 +653,95 @@ def _validate_build_proxy_compatibility(
     )
 
 
+def _running_in_container() -> bool:
+    if os.environ.get("container"):
+        return True
+    if Path("/.dockerenv").is_file():
+        return True
+    try:
+        text = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in ("docker", "containerd", "kubepods", "lxc", "podman")
+    )
+
+
+def _docker_image_exists(docker: str, image: str) -> bool:
+    try:
+        proc = subprocess.run(
+            [docker, "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True,
+            text=True,
+            timeout=_IMAGE_INSPECT_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
+def _pull_docker_image(docker: str, image: str) -> bool:
+    try:
+        proc = subprocess.run(
+            [docker, "pull", image],
+            capture_output=True,
+            text=True,
+            timeout=_IMAGE_PULL_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def _build_python_sidecar_from_proxy(docker: str, proxy_image: str, tag: str) -> bool:
+    dockerfile = (
+        f"FROM {proxy_image}\n"
+        "USER root\n"
+        "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+        "--no-install-recommends python3 && rm -rf /var/lib/apt/lists/*\n"
+    )
+    try:
+        proc = subprocess.run(
+            [docker, "build", "--network=default", "-t", tag, "-"],
+            input=dockerfile,
+            capture_output=True,
+            text=True,
+            timeout=_IMAGE_PULL_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def ensure_nested_sidecar_image(docker: str, proxy_image: str) -> str:
+    """Small python image for DinD unix-socket forwarders.
+
+    vfs copies a full rootfs per container, so the exam image cannot be reused
+    for these processes. Prefer a local alpine image, then a Hub pull, then a
+    python3 derivative of the already-loaded Pier egress image.
+    """
+    if _docker_image_exists(docker, NESTED_SIDECAR_IMAGE):
+        return NESTED_SIDECAR_IMAGE
+    if _pull_docker_image(docker, NESTED_SIDECAR_IMAGE) and _docker_image_exists(
+        docker, NESTED_SIDECAR_IMAGE,
+    ):
+        return NESTED_SIDECAR_IMAGE
+    if _docker_image_exists(docker, NESTED_SIDECAR_LOCAL_TAG):
+        return NESTED_SIDECAR_LOCAL_TAG
+    if _build_python_sidecar_from_proxy(docker, proxy_image, NESTED_SIDECAR_LOCAL_TAG):
+        return NESTED_SIDECAR_LOCAL_TAG
+    raise EgressProxyError(
+        "nested Docker needs a small python image for the unix-socket sidecar; "
+        f"could not pull {NESTED_SIDECAR_IMAGE} and could not install python3 "
+        "on a copy of the Pier egress image"
+    )
+
+
 def prepare_egress_proxy_runtime(
     docker: str | None = None, *, announce: bool = False,
 ) -> dict[str, str]:
@@ -658,6 +750,10 @@ def prepare_egress_proxy_runtime(
     runtime = pier_egress_environment(image)
     if resolved_docker:
         _validate_build_proxy_compatibility(resolved_docker, runtime)
+        if image and _running_in_container():
+            runtime[NESTED_SIDECAR_IMAGE_ENV] = ensure_nested_sidecar_image(
+                resolved_docker, image,
+            )
     return runtime
 
 
@@ -848,6 +944,9 @@ __all__ = [
     "EgressProxyError", "egress_proxy_image",
     "egress_proxy_mode", "egress_proxy_preflight",
     "ensure_egress_proxy_image", "ensure_egress_runtime_ready",
+    "ensure_nested_sidecar_image",
+    "NESTED_SIDECAR_IMAGE", "NESTED_SIDECAR_IMAGE_ENV",
+    "NESTED_SIDECAR_LOCAL_TAG",
     "pier_egress_environment",
     "prepare_egress_proxy_runtime",
 ]

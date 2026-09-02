@@ -45,6 +45,10 @@ SHARED_BUILDER_READY_MAX_AGE_SEC = 6 * 60 * 60
 SHARED_BUILDER_STATE_DIR_ENV = "DRADAR_SHARED_BUILDER_STATE_DIR"
 BUILD_CACHE_MODES = frozenset({"isolated", "shared"})
 DEFAULT_BUILD_CACHE_MODE = "isolated"
+# docker-container BuildKit auto can select native, which copies a full
+# rootfs for every Dockerfile RUN. Never accept that fallback.
+ISOLATED_SNAPSHOTTERS = ("overlayfs", "fuse-overlayfs")
+_BUILDER_BOOTSTRAP_TIMEOUT = 300
 GIB = 1024 ** 3
 DEFAULT_MIN_FREE_GIB = 25.0
 _PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9-]*__[a-z0-9]{6,8}$")
@@ -112,6 +116,10 @@ class TrialBuilderLease:
     # survives one trial so BuildKit can reuse immutable layers for the next
     # task, even when Fleet gives each harness a separate DRADAR_HOME.
     reusable: bool = False
+    # False when isolation was skipped on purpose (nested Docker, or neither
+    # copy-on-write snapshotter could boot). Cleanup must not treat that as a
+    # failed builder and block the next task.
+    expected: bool = True
 
 
 @dataclass
@@ -203,6 +211,28 @@ def disk_allows_new_tasks(home: Path, *, min_free_bytes: int) -> tuple[bool, str
         if host < min_free_bytes:
             return False, "承载 Ubuntu 的 Windows 磁盘空间低于安全线"
     return True, None
+
+
+def running_in_container() -> bool:
+    """Whether this process is already inside a container/pod.
+
+    Nested Docker cannot create overlay whiteouts (character device 0/0), so
+    fuse-overlayfs fails with ``operation not permitted`` even when BuildKit
+    itself is privileged. Those hosts must use the daemon's default builder.
+    """
+    if os.environ.get("container"):
+        return True
+    if Path("/.dockerenv").is_file():
+        return True
+    try:
+        text = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in ("docker", "containerd", "kubepods", "lxc", "podman")
+    )
 
 
 def _sanitize_project(name: str) -> str:
@@ -369,8 +399,22 @@ def _shared_builder_lock() -> Iterator[None]:
             fh.close()
 
 
+def _trial_builder_create_command(name: str, snapshotter: str) -> list[str]:
+    return [
+        "buildx", "create", "--name", name,
+        "--driver", "docker-container",
+        "--buildkitd-flags",
+        f"--oci-worker-snapshotter={snapshotter}",
+    ]
+
+
+def _cow_snapshotter_failure(detail: str | None) -> str:
+    suffix = f"：{detail[:160]}" if detail else ""
+    return "隔离构建无法使用叠加文件系统" + suffix
+
+
 def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
-    """Create/refresh one builder and return a bounded failure reason."""
+    """Create/refresh one overlay/fuse builder; never fall back to native."""
 
     existing = _run_docker(
         ["buildx", "inspect", name], timeout=30, allow_fail=True,
@@ -386,14 +430,29 @@ def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
             return None
 
     if existing.returncode != 0:
-        created = _run_docker([
-            "buildx", "create", "--name", name,
-            "--driver", "docker-container",
-        ], timeout=120, allow_fail=True)
-        if created.returncode != 0:
-            # This is normally a harmless create race.  The shared lock makes
-            # it rare, but the bounded inspect proves whether Docker already
-            # has the named builder before reporting a real failure.
+        last_detail = None
+        created_ok = False
+        for snapshotter in ISOLATED_SNAPSHOTTERS:
+            _run_docker(["buildx", "rm", name], timeout=180, allow_fail=True)
+            created = _run_docker(
+                _trial_builder_create_command(name, snapshotter),
+                timeout=120, allow_fail=True,
+            )
+            if created.returncode != 0:
+                last_detail = (created.stderr or created.stdout or "").strip()
+                continue
+            bootstrapped = _run_docker(
+                ["buildx", "inspect", name, "--bootstrap"],
+                timeout=_BUILDER_BOOTSTRAP_TIMEOUT, allow_fail=True,
+            )
+            if bootstrapped.returncode == 0:
+                created_ok = True
+                existing = bootstrapped
+                break
+            last_detail = (bootstrapped.stderr or bootstrapped.stdout or "").strip()
+            _run_docker(["buildx", "rm", name], timeout=180, allow_fail=True)
+        if not created_ok:
+            # A shared create race is still possible; inspect before giving up.
             if reusable:
                 raced = None
                 for _ in range(8):
@@ -404,20 +463,13 @@ def _ensure_named_builder(name: str, *, reusable: bool) -> str | None:
                     )
                     if raced.returncode == 0:
                         existing = raced
+                        created_ok = True
                         break
                     time.sleep(0.5)
-                if raced is None or raced.returncode != 0:
-                    detail = (created.stderr or created.stdout or "").strip()
-                    return (
-                        "无法创建共享构建缓存空间"
-                        + (f"：{detail[:160]}" if detail else "")
-                    )
+                if not created_ok:
+                    return _cow_snapshotter_failure(last_detail)
             else:
-                detail = (created.stderr or created.stdout or "").strip()
-                return (
-                    "无法创建隔离的临时构建空间"
-                    + (f"：{detail[:160]}" if detail else "")
-                )
+                return _cow_snapshotter_failure(last_detail)
 
     if reusable:
         # Bootstrap only when the stamp is absent/stale or the builder was
@@ -478,6 +530,7 @@ def _builder_proxy_is_safe(runtime: dict[str, str]) -> tuple[bool, str | None]:
 def prepare_trial_builder(
     home: Path, *, assignment_id: str, runtime: dict[str, str] | None = None,
     mode: str = DEFAULT_BUILD_CACHE_MODE,
+    force_default: bool = False,
 ) -> TrialBuilderLease:
     """Create a BuildKit builder for one assignment or a scoped shared cache.
 
@@ -486,12 +539,26 @@ def prepare_trial_builder(
     assignment-scoped lifecycle; ``shared`` keeps one host-user-scoped
     BuildKit state volume so immutable base/install layers can be reused by
     concurrent tasks.  No credential or task worktree is placed in that cache.
+    The docker-container node must boot overlayfs or fuse-overlayfs; native
+    full-rootfs copies are not used as a silent fallback. Nested Docker and
+    hosts that cannot boot a copy-on-write snapshotter use the default builder
+    instead of failing isolation cleanup.
     """
     mode = normalize_build_cache_mode(mode)
     runtime = runtime or {}
+    if force_default:
+        return TrialBuilderLease(
+            None, False, "本题改用本机默认构建空间", expected=False,
+        )
     safe, note = _builder_proxy_is_safe(runtime)
     if not safe:
         return TrialBuilderLease(None, False, note)
+    if running_in_container():
+        return TrialBuilderLease(
+            None, False,
+            "当前运行在容器内，隔离构建无法写入 overlay whiteout，本题改用本机默认构建空间",
+            expected=False,
+        )
     reusable = mode == "shared"
     name = shared_builder_name(home) if reusable else trial_builder_name(
         home, assignment_id,
@@ -511,6 +578,8 @@ def prepare_trial_builder(
         else:
             failure = _ensure_named_builder(name, reusable=False)
         if failure is not None:
+            if failure.startswith("隔离构建无法使用叠加文件系统"):
+                return TrialBuilderLease(None, False, failure, expected=False)
             return TrialBuilderLease(None, False, failure)
     except DockerUnavailable as exc:
         label = "共享构建缓存空间" if reusable else "临时构建空间"
@@ -953,9 +1022,18 @@ def effective_policy(home: Path, cfg: dict) -> CachePolicy:
         mode=mode,
         limit_bytes=limit,
         target_bytes=target,
-        min_free_bytes=int(DEFAULT_MIN_FREE_GIB * GIB),
+        min_free_bytes=_policy_min_free_bytes(),
         automatic=mode != "metered",
     )
+
+
+def _policy_min_free_bytes() -> int:
+    """vfs needs a much higher floor than overlay2; 25 GiB is not enough."""
+    from .capacity import VFS_FIRST_WORKER_DISK_GIB, docker_storage_driver
+
+    if docker_storage_driver() == "vfs":
+        return int(VFS_FIRST_WORKER_DISK_GIB * GIB)
+    return int(DEFAULT_MIN_FREE_GIB * GIB)
 
 
 def _protected_projects(home: Path, protected_assignment_ids: set[str],
@@ -1316,6 +1394,7 @@ def cleanup_trial_resources(
     home: Path, *, assignment_id: str, job_dir: Path, trial_name: str,
     builder_isolated: bool, builder_reusable: bool = False,
     builder_name: str | None = None, keep_images: bool = False,
+    builder_expected: bool = True,
 ) -> TaskCleanupResult:
     """Delete one settled task's exact Docker resources before any refill.
 
@@ -1366,8 +1445,9 @@ def cleanup_trial_resources(
         builder_removed, builder_note = remove_trial_builder(home, assignment_id)
     result.builder_removed = builder_removed
     if not builder_isolated:
-        result.success = False
-        notes.append("本题未使用隔离的临时构建空间")
+        if builder_expected:
+            result.success = False
+            notes.append("本题未使用隔离的临时构建空间")
     elif not builder_removed:
         result.success = False
         notes.append(f"临时构建空间清理失败：{builder_note or 'unknown error'}")
@@ -1557,7 +1637,9 @@ __all__ = [
     "automatic_maintenance", "cleanup_trial_resources", "discover_pier_images",
     "claim_periodic_maintenance", "disk_allows_new_tasks", "disk_free_bytes",
     "effective_policy", "is_wsl", "load", "plan_cleanup",
+    "ISOLATED_SNAPSHOTTERS",
     "prepare_trial_builder", "proxy_detected", "record_trial_images",
+    "running_in_container",
     "remove_assignment_images", "remove_images", "remove_trial_builder",
     "prune_shared_build_cache",
     "trial_builder_name", "shared_builder_name", "normalize_build_cache_mode",
