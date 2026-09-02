@@ -58,7 +58,7 @@ SCHEMA_VERSION = 1
 # Version the machine-local controller contract independently from the public
 # state schema.  A controller with no value here predates per-request runtime
 # selection and would keep spawning pools from its own stale installation.
-CONTROLLER_PROTOCOL_VERSION = 5
+CONTROLLER_PROTOCOL_VERSION = 6
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -70,6 +70,7 @@ RESPONSE_DIR = "responses"
 LOG_DIR = "logs"
 ABORT_DIR = "aborts"
 STARTUP_DIR = "startup"
+STARTUP_LOCK_DIR = "startup-locks"
 CONTROLLER_LOG = "controller.log"
 
 _LAUNCH_ID_ENV = "DRADAR_FLEET_LAUNCH_ID"
@@ -100,7 +101,7 @@ HEARTBEAT_STALE_SECONDS = 60.0
 IDLE_EXIT_SECONDS = 30.0
 ENVIRONMENT_BUILD_FAILED_EXIT_CODE = 78
 SETTLED_BATCH_STATUSES = {"completed", "failed", "interrupted", "stopped"}
-STARTUP_OBSERVE_SECONDS = 3.0
+STARTUP_OBSERVE_SECONDS = 480.0
 
 _pool_lock_handles: dict[str, object] = {}
 
@@ -634,6 +635,10 @@ def _pool_startup_path(home: Path, batch_id: str) -> Path:
     return _root(home) / STARTUP_DIR / f"{batch_id}.json"
 
 
+def _pool_startup_lock_path(home: Path, batch_id: str) -> Path:
+    return _root(home) / STARTUP_LOCK_DIR / f"{batch_id}.lock"
+
+
 def _validated_pool_startup_target(home: Path, batch_id: str) -> Path:
     normalized = normalize_batch_id(batch_id)
     if normalized is None:
@@ -653,20 +658,21 @@ def _validated_pool_startup_target(home: Path, batch_id: str) -> Path:
 
 
 def publish_pool_startup_ready(home: Path, batch_id: str) -> None:
-    """Prove that shared preparation completed and initial workers were spawned."""
+    """Prove that a child registered and checked out its first assignment."""
 
     path = _validated_pool_startup_target(home, batch_id)
-    existing = _read_json(path)
-    if existing and existing.get("status") == "failed":
-        raise FleetError("Fleet startup was already marked failed")
-    _atomic_json(path, {
-        "schema_version": SCHEMA_VERSION,
-        "controller_id": os.environ[CONTROLLER_ID_ENV],
-        "batch_id": normalize_batch_id(batch_id),
-        "pid": os.getpid(),
-        "status": "ready",
-        "recorded_at": _now(),
-    })
+    with _locked(_pool_startup_lock_path(home, batch_id)):
+        existing = _read_json(path)
+        if existing and existing.get("status") == "failed":
+            raise FleetError("Fleet startup was already marked failed")
+        _atomic_json(path, {
+            "schema_version": SCHEMA_VERSION,
+            "controller_id": os.environ[CONTROLLER_ID_ENV],
+            "batch_id": normalize_batch_id(batch_id),
+            "pid": os.getpid(),
+            "status": "ready",
+            "recorded_at": _now(),
+        })
 
 
 def publish_pool_startup_failure(
@@ -680,23 +686,24 @@ def publish_pool_startup_failure(
     """Publish a bounded, credential-free failure before a pool becomes ready."""
 
     path = _validated_pool_startup_target(home, batch_id)
-    existing = _read_json(path)
-    if existing and existing.get("status") == "ready":
-        return False
-    safe_code = str(error_code)[:80]
-    safe_message = " ".join(str(user_message).split())[:500]
-    _atomic_json(path, {
-        "schema_version": SCHEMA_VERSION,
-        "controller_id": os.environ[CONTROLLER_ID_ENV],
-        "batch_id": normalize_batch_id(batch_id),
-        "pid": os.getpid(),
-        "status": "failed",
-        "error_code": safe_code,
-        "user_message": safe_message,
-        "retryable": bool(retryable),
-        "recorded_at": _now(),
-    })
-    return True
+    with _locked(_pool_startup_lock_path(home, batch_id)):
+        existing = _read_json(path)
+        if existing and existing.get("status") == "ready":
+            return False
+        safe_code = str(error_code)[:80]
+        safe_message = " ".join(str(user_message).split())[:500]
+        _atomic_json(path, {
+            "schema_version": SCHEMA_VERSION,
+            "controller_id": os.environ[CONTROLLER_ID_ENV],
+            "batch_id": normalize_batch_id(batch_id),
+            "pid": os.getpid(),
+            "status": "failed",
+            "error_code": safe_code,
+            "user_message": safe_message,
+            "retryable": bool(retryable),
+            "recorded_at": _now(),
+        })
+        return True
 
 
 def acquire_pool_lock(home: Path, batch_id: str, controller_id: str) -> None:
@@ -1160,13 +1167,51 @@ def _handle_request(
     if command == "stop":
         selected = request.get("batch_id")
         targets = list(processes) if request.get("all") else [selected]
+        only_if_startup_pending = bool(
+            request.get("only_if_startup_pending", False)
+        )
         stopped = []
+        condition_changed = []
         warnings = []
         for batch_id in targets:
             process = processes.get(batch_id)
             if process is None or process.poll() is not None:
                 continue
             item = state["batches"].get(batch_id) or {}
+            if only_if_startup_pending:
+                with _locked(_pool_startup_lock_path(home, batch_id)):
+                    event = _read_json(_pool_startup_path(home, batch_id))
+                    if event and event.get("status") == "ready":
+                        item["startup_status"] = "ready"
+                        item["status"] = "running"
+                        item["ready_at"] = event.get("recorded_at") or _now()
+                        item["updated_at"] = _now()
+                        condition_changed.append(batch_id)
+                        continue
+                    if (
+                        item.get("status") != "starting"
+                        or item.get("startup_status") != "pending"
+                        or (event and event.get("status") == "failed")
+                    ):
+                        condition_changed.append(batch_id)
+                        continue
+                    # Reserve the timeout outcome under the same lock used by
+                    # the parent ready writer. Once this lands, a child can no
+                    # longer win a late ready race after the destructive stop.
+                    _atomic_json(_pool_startup_path(home, batch_id), {
+                        "schema_version": SCHEMA_VERSION,
+                        "controller_id": state.get("controller_id"),
+                        "batch_id": batch_id,
+                        "pid": process.pid,
+                        "status": "failed",
+                        "error_code": "local_start_timeout",
+                        "user_message": (
+                            "这台设备在限定时间内没有任何 worker 完成注册并开始"
+                            "首个题目；本机协调器已确认停止请求，题目仍然保留。"
+                        ),
+                        "retryable": True,
+                        "recorded_at": _now(),
+                    })
             run_plan_item = _is_run_plan_item(item)
             if run_plan_item:
                 warning = _stop_run_plan_device(
@@ -1189,14 +1234,17 @@ def _handle_request(
                 if warning:
                     warnings.append(warning)
                     item.setdefault("warnings", []).append(warning)
-            if not run_plan_item:
+            if only_if_startup_pending or not run_plan_item:
                 _send_interrupt(process)
             item["status"] = "stopping"
             item["updated_at"] = _now()
             stopped.append(batch_id)
         _write_state(home, state)
         _response(home, request_id, {
-            "ok": True, "stopping": stopped, "warnings": warnings,
+            "ok": True,
+            "stopping": stopped,
+            "condition_changed": condition_changed,
+            "warnings": warnings,
         })
         return
     _response(home, request_id, {"ok": False, "error": "unknown Fleet command"})
@@ -1504,7 +1552,7 @@ def cmd_fleet_add(args) -> int:
 
 
 def _observe_pool_startup(response: dict, batch_id: str) -> dict:
-    """Briefly observe a new parent so immediate preparation failures are honest."""
+    """Wait for a bounded, truthful ready-or-failed startup result."""
 
     if response.get("already_settled"):
         return response
@@ -1523,10 +1571,61 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
             ):
                 break
         time.sleep(0.05)
-    updated = dict(response)
-    updated["batch"] = latest
+    # The loop's last value may predate a ready event written at the deadline.
+    # Re-read before any destructive action; the controller then performs the
+    # same pending-only condition under the startup transition lock.
+    refreshed = batch_status(batch_id)
+    if isinstance(refreshed, dict):
+        latest = refreshed
     status = latest.get("status")
     startup_status = latest.get("startup_status")
+    if status == "starting" and startup_status == "pending":
+        try:
+            stopped = stop_batch(
+                batch_id, only_if_startup_pending=True,
+            )
+        except FleetError as exc:
+            raise FleetStartupError(
+                "local_start_timeout_stop_unconfirmed",
+                "本地启动观察已超时，但无法确认本地监督器已经停止。"
+                "请先运行 `dradar fleet status` 检查这次运行；若仍在启动或运行，"
+                "请用 `dradar fleet stop` 安全停止后再重试。题目仍然保留。",
+                retryable=False,
+            ) from exc
+        if batch_id in (stopped.get("stopping") or []):
+            raise FleetStartupError(
+                "local_start_timeout",
+                "这台设备在限定时间内没有任何 worker 完成注册并开始首个题目；"
+                "本机协调器已确认停止请求，正在安全停止，题目仍然保留。",
+                retryable=True,
+            )
+        if batch_id in (stopped.get("condition_changed") or []):
+            final = batch_status(batch_id)
+            if isinstance(final, dict):
+                latest = final
+                status = latest.get("status")
+                startup_status = latest.get("startup_status")
+            if startup_status == "ready" or status == "running":
+                updated = dict(response)
+                updated["batch"] = latest
+                return updated
+            if startup_status != "failed":
+                raise FleetStartupError(
+                    "local_start_state_changed",
+                    "本地启动状态在超时停止前发生了变化，因此没有发送停止请求。"
+                    "请运行 `dradar fleet status` 确认当前状态后再决定是否重试。",
+                    retryable=False,
+                )
+        else:
+            raise FleetStartupError(
+                "local_start_timeout_stop_unconfirmed",
+                "本地启动观察已超时，但协调器没有确认停止任何进程。"
+                "请先运行 `dradar fleet status` 检查这次运行；若仍在启动或运行，"
+                "请用 `dradar fleet stop` 安全停止后再重试。题目仍然保留。",
+                retryable=False,
+            )
+    updated = dict(response)
+    updated["batch"] = latest
     failed_after_ready = (
         status in {"failed", "interrupted"} and startup_status == "ready"
     )
@@ -1760,7 +1859,10 @@ def cmd_fleet_stop(args) -> int:
 
 
 def stop_batch(
-    batch_id: str | None = None, *, all_batches: bool = False,
+    batch_id: str | None = None,
+    *,
+    all_batches: bool = False,
+    only_if_startup_pending: bool = False,
 ) -> dict:
     if not all_batches and not batch_id:
         raise FleetError("an exact batch is required")
@@ -1769,6 +1871,7 @@ def stop_batch(
     response = _request("stop", {
         "batch_id": batch_id,
         "all": all_batches,
+        "only_if_startup_pending": bool(only_if_startup_pending),
     })
     if not response.get("ok"):
         raise FleetError(str(response.get("error") or "local coordinator rejected the stop"))
