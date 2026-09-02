@@ -14,6 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, Self
 
+from .download import VerifiedArtifact, stage_verified_artifact
 from .manifest import (
     Artifact,
     ManifestError,
@@ -363,6 +364,7 @@ class UpdateController:
         self.event_sink = event_sink or NullEventSink()
         self.trusted_keys = dict(trusted_keys or {})
         self._local = threading.local()
+        self._staged_artifact: VerifiedArtifact | None = None
 
     def set_trusted_keys(self, trusted_keys: Mapping[str, bytes | str]) -> None:
         keys = dict(trusted_keys)
@@ -503,7 +505,10 @@ class UpdateController:
                 f"cannot transition {current.value} -> {target.value}"
             )
         pointer = ReleasePointer(**record["release"])
-        return self._write_state(target, release=pointer, reason=reason)
+        changed = self._write_state(target, release=pointer, reason=reason)
+        if target is UpdateState.FAILED:
+            self._close_staged_artifact()
+        return changed
 
     def pause(self, reason: str) -> dict[str, Any]:
         self._require_transaction()
@@ -546,7 +551,7 @@ class UpdateController:
         self,
         manifest: ReleaseManifest,
         artifact: Artifact,
-        downloaded_path: Path,
+        downloaded_path: Path | VerifiedArtifact,
     ) -> ReleasePointer:
         self._require_transaction()
         record = self.state()
@@ -569,38 +574,28 @@ class UpdateController:
             raise InvalidTransition(
                 "OTA requires an existing current or last-known-good release",
             )
-        verify_artifact(downloaded_path, artifact)
         release_dir = self.releases / manifest.release_id
         if release_dir.is_symlink():
             raise InvalidTransition("staging requires a safe release directory")
         release_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         if not _safe_directory_beneath(self.root, release_dir):
             raise InvalidTransition("staging requires a safe release directory")
-        destination = release_dir / artifact.filename
-        if downloaded_path.resolve() != destination.resolve():
-            if destination.exists() or destination.is_symlink():
-                try:
-                    verify_artifact(destination, artifact)
-                except ManifestError as exc:
-                    raise InvalidTransition(
-                        "immutable staged artifact already exists with different content"
-                    ) from exc
-            else:
-                temporary = release_dir / f".{artifact.filename}.{time.time_ns()}.tmp"
-                try:
-                    with (
-                        downloaded_path.open("rb") as source,
-                        temporary.open("xb") as target,
-                    ):
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            target.write(chunk)
-                        target.flush()
-                        os.fsync(target.fileno())
-                    os.chmod(temporary, 0o600)
-                    os.replace(temporary, destination)
-                finally:
-                    temporary.unlink(missing_ok=True)
-        verify_artifact(destination, artifact)
+        try:
+            verified = stage_verified_artifact(
+                downloaded_path,
+                artifact,
+                release_dir,
+            )
+        except ManifestError as exc:
+            raise InvalidTransition(
+                "staging requires a safe release directory"
+            ) from exc
+        if not verified.binding_is_current():
+            verified.close()
+            raise InvalidTransition("staged artifact name is no longer safely bound")
+        self._close_staged_artifact()
+        self._staged_artifact = verified
+        destination = verified.path
         pointer = ReleasePointer(
             release_id=manifest.release_id,
             version=manifest.version,
@@ -661,10 +656,15 @@ class UpdateController:
         pending = _load_json(self.pending_path)
         if not pending or not isinstance(pending.get("manifest"), dict):
             raise InvalidTransition("signed pending release record is unavailable")
-        self._write_committed_record(pointer, pending["manifest"])
+        staged = self.staged_artifact()
+        staged.verify()
+        if not staged.binding_is_current():
+            raise InvalidTransition("staged artifact name is no longer safely bound")
+        self._write_committed_record(pointer, pending["manifest"], staged=staged)
         committed = self._write_state(UpdateState.COMMITTED, release=pointer)
         _atomic_json(self.last_known_good_path, asdict(pointer))
         self.pending_path.unlink(missing_ok=True)
+        self._close_staged_artifact()
         return committed
 
     def request_rollback(self, reason: str) -> dict[str, Any]:
@@ -707,6 +707,7 @@ class UpdateController:
             reason=reason,
         )
         self.pending_path.unlink(missing_ok=True)
+        self._close_staged_artifact()
         return rolled_back
 
     def recover_on_launcher_start(self) -> bool:
@@ -780,6 +781,8 @@ class UpdateController:
         self,
         pointer: ReleasePointer,
         signed_manifest: Mapping[str, Any],
+        *,
+        staged: VerifiedArtifact | None = None,
     ) -> None:
         self._require_transaction()
         manifest = verify_signed_manifest(signed_manifest, self.trusted_keys)
@@ -802,10 +805,22 @@ class UpdateController:
             or pointer.artifact != expected_artifact
         ):
             raise InvalidTransition("signed release record does not match pointer")
-        candidate = _resolve_regular_artifact(self.root, pointer.artifact)
-        if candidate is None:
-            raise InvalidTransition("committed artifact is unavailable")
-        verify_artifact(candidate, artifact)
+        if staged is not None:
+            if (
+                staged.artifact != artifact
+                or staged.path != self.root / pointer.artifact
+            ):
+                raise InvalidTransition("opened staged artifact does not match pointer")
+            staged.verify()
+            if not staged.binding_is_current():
+                raise InvalidTransition(
+                    "staged artifact name is no longer safely bound"
+                )
+        else:
+            candidate = _resolve_regular_artifact(self.root, pointer.artifact)
+            if candidate is None:
+                raise InvalidTransition("committed artifact is unavailable")
+            verify_artifact(candidate, artifact)
         record = {
             "schema_version": 1,
             "committed": True,
@@ -887,5 +902,49 @@ class UpdateController:
             if parsed and self._verify_committed_pointer(value):
                 valid.append(parsed)
         if valid:
-            return max(valid, key=lambda item: item.sequence)
+            highest = max(item.sequence for item in valid)
+            winners = [item for item in valid if item.sequence == highest]
+            if len({tuple(asdict(item).items()) for item in winners}) != 1:
+                raise InvalidTransition("conflicting committed OTA pointers")
+            return winners[0]
         raise InvalidTransition("no trusted committed OTA baseline is available")
+
+    def staged_artifact(self) -> VerifiedArtifact:
+        record = self.state()
+        pending = _load_json(self.pending_path)
+        if not record or not pending or not isinstance(pending.get("manifest"), dict):
+            raise InvalidTransition("signed staged artifact is unavailable")
+        pointer = _release_pointer(record.get("release"))
+        if pointer is None or pending.get("candidate") != asdict(pointer):
+            raise InvalidTransition("staged artifact pointer is inconsistent")
+        if self._staged_artifact is not None:
+            return self._staged_artifact
+        manifest = verify_signed_manifest(pending["manifest"], self.trusted_keys)
+        artifact = next(
+            (
+                item
+                for item in manifest.artifacts
+                if item.filename == Path(pointer.artifact).name
+            ),
+            None,
+        )
+        if artifact is None:
+            raise InvalidTransition("signed staged artifact metadata is unavailable")
+        try:
+            verified = stage_verified_artifact(
+                self.root / pointer.artifact,
+                artifact,
+                (self.root / pointer.artifact).parent,
+            )
+        except ManifestError as exc:
+            raise InvalidTransition(
+                "staged artifact cannot be reopened safely"
+            ) from exc
+        self._staged_artifact = verified
+        return verified
+
+    def _close_staged_artifact(self) -> None:
+        if self._staged_artifact is None:
+            return
+        self._staged_artifact.close()
+        self._staged_artifact = None

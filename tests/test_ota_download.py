@@ -3,7 +3,11 @@ import hashlib
 import pytest
 
 import dradar.ota.download as download_module
-from dradar.ota.download import download_verified_artifact
+from dradar.ota.download import (
+    VerifiedArtifact,
+    download_verified_artifact,
+    stage_verified_artifact,
+)
 from dradar.ota.manifest import Artifact, ManifestError, PlatformTarget
 
 
@@ -212,12 +216,55 @@ def test_verified_external_hardlink_is_not_reused_as_ota_artifact(tmp_path):
     assert outside.read_bytes() == body
 
 
-def test_final_name_replacement_after_directory_check_is_detected(
+def test_final_name_replacement_after_last_check_returns_open_inode_capability(
     tmp_path,
     monkeypatch,
 ):
     body = b"candidate-body"
     destination = tmp_path / "downloads"
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(b"outside-safe")
+    original = download_module._name_matches_open_file
+    raced = False
+
+    def replace_after_check(dir_fd, filename, file_fd):
+        nonlocal raced
+        result = original(dir_fd, filename, file_fd)
+        if not raced:
+            raced = True
+            final = destination / "candidate.whl"
+            final.unlink()
+            final.symlink_to(outside)
+        return result
+
+    monkeypatch.setattr(
+        download_module,
+        "_name_matches_open_file",
+        replace_after_check,
+    )
+    verified = download_verified_artifact(
+        FakeClient(FakeResponse([body])),
+        _artifact(body),
+        destination,
+    )
+
+    assert isinstance(verified, VerifiedArtifact)
+    assert verified.read_bytes() == body
+    assert verified.binding_is_current() is False
+    with pytest.raises(ManifestError):
+        stage_verified_artifact(verified, _artifact(body), destination)
+    verified.close()
+    assert outside.read_bytes() == b"outside-safe"
+
+
+def test_existing_artifact_name_race_returns_open_inode_capability(
+    tmp_path, monkeypatch
+):
+    body = b"candidate-body"
+    destination = tmp_path / "downloads"
+    destination.mkdir()
+    final = destination / "candidate.whl"
+    final.write_bytes(body)
     outside = tmp_path / "outside.whl"
     outside.write_bytes(b"outside-safe")
     original = download_module._directory_matches_path
@@ -228,7 +275,6 @@ def test_final_name_replacement_after_directory_check_is_detected(
         result = original(dir_fd, path)
         if not raced:
             raced = True
-            final = destination / "candidate.whl"
             final.unlink()
             final.symlink_to(outside)
         return result
@@ -238,11 +284,14 @@ def test_final_name_replacement_after_directory_check_is_detected(
         "_directory_matches_path",
         replace_after_check,
     )
-    with pytest.raises(ManifestError, match="changed during publication"):
-        download_verified_artifact(
-            FakeClient(FakeResponse([body])),
-            _artifact(body),
-            destination,
-        )
+    verified = download_verified_artifact(
+        FakeClient(FakeResponse([body])),
+        _artifact(body),
+        destination,
+    )
 
+    assert isinstance(verified, VerifiedArtifact)
+    assert verified.read_bytes() == body
+    assert verified.binding_is_current() is False
+    verified.close()
     assert outside.read_bytes() == b"outside-safe"

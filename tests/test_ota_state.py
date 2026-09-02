@@ -6,6 +6,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import dradar.ota.state as state_module
 from dradar.flight_recorder import FlightRecorder
 from dradar.ota.manifest import verify_signed_manifest
 from dradar.ota.runtime import FlightRecorderEventSink
@@ -445,6 +446,42 @@ def test_committed_pointer_rejects_forged_unsigned_lkg_baseline(tmp_path):
         controller.committed_pointer()
 
 
+def test_committed_pointer_rejects_conflicting_highest_sequence(tmp_path):
+    left_manifest, left_artifact, left_downloaded, left_keys = _release(
+        tmp_path,
+        with_keys=True,
+        release_id="left-release",
+        version="0.6.0",
+        sequence=600,
+        filename="left.whl",
+        key_id="left-root",
+    )
+    right_manifest, right_artifact, right_downloaded, right_keys = _release(
+        tmp_path,
+        with_keys=True,
+        release_id="right-release",
+        version="0.6.1",
+        sequence=600,
+        filename="right.whl",
+        key_id="right-root",
+    )
+    controller = UpdateController(
+        tmp_path / "ota",
+        trusted_keys={**left_keys, **right_keys},
+    )
+    left = _install_signed_record(
+        controller, left_manifest, left_artifact, left_downloaded.read_bytes()
+    )
+    right = _install_signed_record(
+        controller, right_manifest, right_artifact, right_downloaded.read_bytes()
+    )
+    _atomic_json(controller.current_path, left)
+    _atomic_json(controller.last_known_good_path, right)
+
+    with pytest.raises(InvalidTransition, match="conflicting committed OTA pointers"):
+        controller.committed_pointer()
+
+
 def test_stage_rejects_release_parent_symlink_and_never_writes_outside(tmp_path):
     manifest, artifact, downloaded = _release(tmp_path)
     controller = UpdateController(tmp_path / "ota")
@@ -470,6 +507,73 @@ def test_stage_rejects_release_parent_symlink_and_never_writes_outside(tmp_path)
             controller.stage(manifest, artifact, downloaded)
 
     assert not (outside / artifact.filename).exists()
+
+
+def test_stage_rejects_release_directory_swap_after_initial_check(
+    tmp_path, monkeypatch
+):
+    manifest, artifact, downloaded = _release(tmp_path)
+    controller = UpdateController(tmp_path / "ota")
+    _atomic_json(
+        controller.current_path,
+        {
+            "release_id": "dradar-0.5.175",
+            "version": "0.5.175",
+            "sequence": 599,
+            "artifact": "releases/dradar-0.5.175/current.whl",
+        },
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = state_module._safe_directory_beneath
+    raced = False
+
+    def replace_after_check(root, release_dir):
+        nonlocal raced
+        result = original(root, release_dir)
+        if result and not raced:
+            raced = True
+            release_dir.rename(tmp_path / "detached-release")
+            release_dir.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(state_module, "_safe_directory_beneath", replace_after_check)
+    with controller.transaction():
+        controller.detect(manifest, artifact)
+        controller.transition(UpdateState.DOWNLOADED)
+        controller.transition(UpdateState.VERIFIED)
+        with pytest.raises(InvalidTransition, match="safe release directory"):
+            controller.stage(manifest, artifact, downloaded)
+
+    assert not (outside / artifact.filename).exists()
+
+
+def test_stage_rejects_preexisting_external_hardlink_candidate(tmp_path):
+    manifest, artifact, downloaded = _release(tmp_path)
+    controller = UpdateController(tmp_path / "ota")
+    _atomic_json(
+        controller.current_path,
+        {
+            "release_id": "dradar-0.5.175",
+            "version": "0.5.175",
+            "sequence": 599,
+            "artifact": "releases/dradar-0.5.175/current.whl",
+        },
+    )
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(downloaded.read_bytes())
+    release_dir = controller.releases / manifest.release_id
+    release_dir.mkdir(parents=True)
+    (release_dir / artifact.filename).hardlink_to(outside)
+
+    with controller.transaction():
+        controller.detect(manifest, artifact)
+        controller.transition(UpdateState.DOWNLOADED)
+        controller.transition(UpdateState.VERIFIED)
+        with pytest.raises(InvalidTransition, match="safe release directory"):
+            controller.stage(manifest, artifact, downloaded)
+
+    assert outside.read_bytes() == downloaded.read_bytes()
 
 
 def test_launcher_rejects_symlinked_release_record(tmp_path):

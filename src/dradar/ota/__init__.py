@@ -4,6 +4,7 @@ This package intentionally has no runner or telemetry side effects.  The
 runtime integration is deferred until the versioned event envelope is stable.
 """
 
+from .download import VerifiedArtifact
 from .manifest import (
     Artifact,
     CompatibilitySnapshot,
@@ -42,6 +43,7 @@ __all__ = [
     "UpdateLockBusy",
     "UpdateRuntime",
     "UpdateState",
+    "VerifiedArtifact",
     "evaluate_manifest",
     "verify_artifact",
     "verify_signed_manifest",

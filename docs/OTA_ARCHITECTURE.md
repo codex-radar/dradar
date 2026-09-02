@@ -32,7 +32,11 @@ Manifest 使用 canonical JSON（移除 `signature` 后按 key 排序、无多�
 - launcher、runner protocol、doctor、Provider、ledger、checkpoint 兼容范围；
 - 每个 OS/架构唯一的 HTTPS URL、文件名、长度与 SHA-256。
 
-候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，但每个候选基线也必须通过同一套 signed release-record、信任根、路径和制品摘要验证；调用方传入值必须与最高有效 sequence 一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向；POSIX 下载目录从文件系统根开始逐层通过 `dirfd + O_NOFOLLOW` 打开，临时文件和最终 hard-link 发布都锚定同一目录 fd。发布时比较临时文件、最终名称与打开 fd 的 inode/link count，拒绝外部 hardlink；在返回前再次确认最终名称仍绑定同一普通文件。中断、断网、目录替换、目标 symlink/hardlink 竞态或校验失败会清除 partial，且不会写出目标目录。已有同名制品只有在签名长度与摘要完全一致且 link count 为 1 时才复用，否则失败关闭，绝不覆盖不可变候选。
+候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，但每个候选基线也必须通过同一套 signed release-record、信任根、路径和制品摘要验证；调用方传入值必须与最高有效 sequence 一致，不能自行降级基线。两个有效基线具有相同最高 sequence 却指向不同签名内容时按冲突失败关闭。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。
+
+下载不跟随重定向；POSIX 下载目录从文件系统根开始逐层通过 `dirfd + O_NOFOLLOW` 打开，临时文件和最终 hard-link 发布都锚定同一目录 fd。发布时比较临时文件、最终名称与打开 fd 的 inode/link count，拒绝外部 hardlink。下载 API 不再把通过检查的普通 `Path` 当作安全凭据，而是返回同时持有 directory fd 与 file fd 的 `VerifiedArtifact`；即使攻击者在最后一次名称检查后替换目录项，后续 stage、自检和 commit 读取的仍是已打开、已验摘要的同一 inode。stage 使用同一能力句柄直接消费，或通过该 file fd 向新的安全 dirfd 复制；它不会重新按不可信路径打开源文件。提交前仍要求名称重新绑定该 inode，确保写入的 pointer 可由下次 launcher 重验。中断、断网、目录替换、目标 symlink/hardlink 竞态或校验失败会清除 partial，且不会写出目标目录。已有同名制品只有在签名长度与摘要完全一致且 link count 为 1 时才复用，否则失败关闭，绝不覆盖不可变候选。
+
+威胁模型覆盖 OTA 根目录或其父目录中的恶意 symlink/hardlink、同 UID 并发进程在检查与使用之间替换名称、损坏或伪造 pointer/release-record/Manifest，以及下载中断和进程崩溃。已打开 fd 保证本轮验证与消费的 inode 一致；持久化后的启动安全由内置信任根、签名 release record、固定路径、size/SHA-256 和最高 sequence 再验证保证。拥有内核/管理员权限、可读取或替换 launcher 内置信任根的攻击者不在本层防护边界内。
 
 ## 分级灰度与旧客户端桥接
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..flight_recorder import FlightRecorder
-from .download import StreamingClient, download_verified_artifact
+from .download import StreamingClient, VerifiedArtifact, download_verified_artifact
 from .manifest import (
     CompatibilitySnapshot,
     ManifestError,
@@ -16,7 +16,6 @@ from .manifest import (
     PolicyDecision,
     RolloutContext,
     evaluate_manifest,
-    verify_artifact,
     verify_signed_manifest,
 )
 from .state import (
@@ -167,6 +166,7 @@ class UpdateRuntime:
 
         artifact = decision.artifact
         phase_reason = "update_download_failed"
+        downloaded: VerifiedArtifact | None = None
         with self.controller.transaction():
             self.controller.detect(manifest, artifact)
             try:
@@ -177,10 +177,11 @@ class UpdateRuntime:
                 )
                 self.controller.transition(UpdateState.DOWNLOADED)
                 phase_reason = "update_verification_failed"
-                verify_artifact(downloaded, artifact)
+                downloaded.verify()
                 self.controller.transition(UpdateState.VERIFIED)
                 phase_reason = "update_stage_failed"
                 self.controller.stage(manifest, artifact, downloaded)
+                downloaded = None
                 self.controller.wait_for_safe_point()
             except BaseException:
                 try:
@@ -201,12 +202,15 @@ class UpdateRuntime:
                 except Exception:  # noqa: BLE001 - preserve the original interrupt
                     self.audit.fail_closed(phase_reason)
                 raise
+            finally:
+                if downloaded is not None:
+                    downloaded.close()
         return decision
 
     def activate_and_self_test(
         self,
         safe_point: SafePointSnapshot | Callable[[], SafePointSnapshot],
-        self_test: Callable[[Path], bool],
+        self_test: Callable[[VerifiedArtifact], bool],
     ) -> UpdateState:
         """Activate only at a natural safe point; commit or restore the LKG."""
 
@@ -228,7 +232,7 @@ class UpdateRuntime:
                 )
             self.controller.activate(snapshot)
             self.controller.begin_self_test()
-            candidate = self.controller.root / release["artifact"]
+            candidate = self.controller.staged_artifact()
             try:
                 passed = self_test(candidate) is True
             except (KeyboardInterrupt, SystemExit):
