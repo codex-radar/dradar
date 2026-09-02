@@ -117,6 +117,37 @@ def test_manifest_tampering_fails_before_policy_is_trusted():
 
 
 @pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ('"sequence":600', '"sequence":599,"sequence":600'),
+        (
+            '"basis_points":10000',
+            '"basis_points":1,"basis_points":10000',
+        ),
+    ],
+)
+def test_signed_manifest_rejects_duplicate_keys_at_every_depth(needle, replacement):
+    document, keys, _body = _signed_document()
+    raw = json.dumps(document, separators=(",", ":"), sort_keys=True)
+    ambiguous = raw.replace(needle, replacement, 1)
+    assert ambiguous != raw
+
+    with pytest.raises(ManifestError, match="duplicate key"):
+        verify_signed_manifest(ambiguous, keys)
+
+
+def test_manifest_rejects_unknown_schema_fields_and_oversized_json():
+    document, keys, _body = _signed_document()
+    document["future_unsafe_policy"] = True
+    with pytest.raises(ManifestError, match="unsupported or missing fields"):
+        verify_signed_manifest(document, keys)
+
+    oversized = '{"padding":"' + ("x" * (49 * 1024)) + '"}'
+    with pytest.raises(ManifestError, match="size limit"):
+        verify_signed_manifest(oversized, keys)
+
+
+@pytest.mark.parametrize(
     ("changes", "reason"),
     [
         ({"committed_sequence": 600}, "anti_rollback_sequence"),

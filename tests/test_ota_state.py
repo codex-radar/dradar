@@ -19,7 +19,7 @@ from dradar.ota.state import (
 )
 
 
-def _release(tmp_path):
+def _release(tmp_path, *, with_keys=False):
     body = b"candidate"
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(
@@ -68,7 +68,10 @@ def _release(tmp_path):
     manifest = verify_signed_manifest(document, {"root": public})
     downloaded = tmp_path / "downloaded.whl"
     downloaded.write_bytes(body)
-    return manifest, manifest.artifacts[0], downloaded
+    result = (manifest, manifest.artifacts[0], downloaded)
+    if with_keys:
+        return (*result, {"root": public})
+    return result
 
 
 def _prepare_waiting(controller, manifest, artifact, downloaded):
@@ -77,6 +80,28 @@ def _prepare_waiting(controller, manifest, artifact, downloaded):
     controller.transition(UpdateState.VERIFIED)
     controller.stage(manifest, artifact, downloaded)
     controller.wait_for_safe_point()
+
+
+def _install_signed_record(controller, manifest, artifact, body):
+    destination = controller.root / "releases" / manifest.release_id / artifact.filename
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(body)
+    pointer = {
+        "release_id": manifest.release_id,
+        "version": manifest.version,
+        "sequence": manifest.sequence,
+        "artifact": str(destination.relative_to(controller.root)),
+    }
+    _atomic_json(
+        destination.parent / "release-record.json",
+        {
+            "schema_version": 1,
+            "committed": True,
+            "pointer": pointer,
+            "manifest": json.loads(manifest.signed_document),
+        },
+    )
+    return pointer
 
 
 def test_safe_point_requires_natural_worker_and_upload_quiescence():
@@ -109,8 +134,8 @@ def test_pause_and_resume_preserve_exact_pre_activation_state(tmp_path):
 
 
 def test_activation_is_blocked_until_every_worker_reaches_safe_point(tmp_path):
-    manifest, artifact, downloaded = _release(tmp_path)
-    controller = UpdateController(tmp_path / "ota")
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
     _atomic_json(
         controller.current_path,
         {
@@ -203,8 +228,8 @@ def test_launcher_recovers_crash_before_current_pointer_switch(tmp_path):
 
 
 def test_launcher_finishes_lkg_commit_after_crash(tmp_path):
-    manifest, artifact, downloaded = _release(tmp_path)
-    controller = UpdateController(tmp_path / "ota")
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
     previous = {
         "release_id": "dradar-0.5.175",
         "version": "0.5.175",
@@ -221,7 +246,7 @@ def test_launcher_finishes_lkg_commit_after_crash(tmp_path):
         # advances LKG and clears pending.
         controller.transition(UpdateState.COMMITTED)
 
-    restarted_launcher = UpdateController(controller.root)
+    restarted_launcher = UpdateController(controller.root, trusted_keys=keys)
     with restarted_launcher.transaction():
         assert restarted_launcher.recover_on_launcher_start() is False
     assert json.loads(controller.current_path.read_text()) == json.loads(
@@ -261,10 +286,8 @@ def test_safe_point_rejects_negative_or_boolean_counters():
 
 
 def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
-    controller = UpdateController(tmp_path / "ota")
-    lkg_artifact = controller.root / "releases" / "dradar-0.5.175" / "current.whl"
-    lkg_artifact.parent.mkdir(parents=True)
-    lkg_artifact.write_bytes(b"known-good")
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
     _atomic_json(
         controller.current_path,
         {
@@ -274,19 +297,17 @@ def test_launcher_rejects_bad_current_pointer_and_uses_valid_lkg(tmp_path):
             "artifact": "../../outside.whl",
         },
     )
-    lkg = {
-        "release_id": "dradar-0.5.175",
-        "version": "0.5.175",
-        "sequence": 599,
-        "artifact": "releases/dradar-0.5.175/current.whl",
-    }
+    lkg = _install_signed_record(
+        controller, manifest, artifact, downloaded.read_bytes()
+    )
     _atomic_json(controller.last_known_good_path, lkg)
 
     assert controller.launch_pointer() == lkg
 
 
 def test_launcher_rejects_symlink_current_even_when_target_stays_inside_root(tmp_path):
-    controller = UpdateController(tmp_path / "ota")
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
     actual = controller.root / "releases" / "candidate" / "actual.whl"
     actual.parent.mkdir(parents=True)
     actual.write_bytes(b"candidate")
@@ -300,18 +321,58 @@ def test_launcher_rejects_symlink_current_even_when_target_stays_inside_root(tmp
     }
     _atomic_json(controller.current_path, current)
 
-    lkg_artifact = controller.root / "releases" / "lkg" / "client.whl"
-    lkg_artifact.parent.mkdir(parents=True)
-    lkg_artifact.write_bytes(b"known-good")
-    lkg = {
-        "release_id": "lkg",
-        "version": "0.5.175",
-        "sequence": 599,
-        "artifact": str(lkg_artifact.relative_to(controller.root)),
-    }
+    lkg = _install_signed_record(
+        controller, manifest, artifact, downloaded.read_bytes()
+    )
     _atomic_json(controller.last_known_good_path, lkg)
 
     assert controller.launch_pointer() == lkg
+
+
+def test_launcher_reverifies_committed_artifact_and_rejects_post_commit_tamper(
+    tmp_path,
+):
+    manifest, artifact, downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
+    previous = {
+        "release_id": "dradar-0.5.175",
+        "version": "0.5.175",
+        "sequence": 599,
+        "artifact": "releases/dradar-0.5.175/current.whl",
+    }
+    _atomic_json(controller.current_path, previous)
+    with controller.transaction():
+        _prepare_waiting(controller, manifest, artifact, downloaded)
+        controller.activate(SafePointSnapshot())
+        controller.begin_self_test()
+        controller.commit()
+
+    candidate = controller.root / controller.launch_pointer()["artifact"]
+    candidate.write_bytes(b"tampered!")
+    with pytest.raises(InvalidTransition, match="no current or last-known-good"):
+        controller.launch_pointer()
+
+
+def test_launcher_never_accepts_an_arbitrary_regular_file_without_signed_record(
+    tmp_path,
+):
+    _manifest, _artifact, _downloaded, keys = _release(tmp_path, with_keys=True)
+    controller = UpdateController(tmp_path / "ota", trusted_keys=keys)
+    arbitrary = controller.root / "releases" / "forged" / "client.whl"
+    arbitrary.parent.mkdir(parents=True)
+    arbitrary.write_bytes(b"arbitrary executable")
+    _atomic_json(
+        controller.current_path,
+        {
+            "release_id": "forged",
+            "version": "99.0.0",
+            "sequence": 999,
+            "artifact": str(arbitrary.relative_to(controller.root)),
+        },
+    )
+
+    with pytest.raises(InvalidTransition, match="no current or last-known-good"):
+        controller.launch_pointer()
 
 
 @pytest.mark.parametrize(
@@ -375,7 +436,6 @@ def test_unknown_persisted_state_fails_closed_and_preserves_rollback_baseline(
 
     assert json.loads(controller.current_path.read_text()) == known_good
     assert json.loads(controller.last_known_good_path.read_text()) == known_good
-    assert controller.launch_pointer() == known_good
     assert json.loads(controller.state_path.read_text()) == corrupt_state
     assert recorder._load(recorder.events_path)[-1]["reason_code"] == (
         "update_state_incompatible"
@@ -405,7 +465,6 @@ def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
 
     with pytest.raises(InvalidTransition, match="persisted update state is unreadable"):
         controller.state()
-    assert controller.launch_pointer() == known_good
     assert json.loads(controller.current_path.read_text()) == known_good
     assert json.loads(controller.last_known_good_path.read_text()) == known_good
     assert recorder._load(recorder.events_path)[-1]["reason_code"] == (

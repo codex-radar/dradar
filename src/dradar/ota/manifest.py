@@ -26,6 +26,7 @@ _ARCHITECTURES = frozenset({"x86_64", "arm64"})
 _ROLLOUT_STAGES = frozenset({"internal", "canary", "progressive", "general"})
 _RINGS = {"internal": 0, "canary": 1, "general": 2}
 _CLOCK_SKEW = timedelta(minutes=5)
+_MAX_MANIFEST_BYTES = 48 * 1024
 
 
 class ManifestError(ValueError):
@@ -108,6 +109,7 @@ class ReleaseManifest:
     artifacts: tuple[Artifact, ...]
     key_id: str
     signed_payload: bytes
+    signed_document: bytes
 
 
 @dataclass(frozen=True)
@@ -188,6 +190,36 @@ def _canonical_payload(document: Mapping[str, Any]) -> bytes:
         raise ManifestError("manifest cannot be canonically encoded") from exc
 
 
+def _canonical_document(document: Mapping[str, Any]) -> bytes:
+    try:
+        encoded = json.dumps(
+            document,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ManifestError("manifest cannot be canonically encoded") from exc
+    if len(encoded) > _MAX_MANIFEST_BYTES:
+        raise ManifestError("manifest exceeds the size limit")
+    return encoded
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ManifestError(f"manifest contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _exact_keys(value: Mapping[str, Any], expected: set[str], name: str) -> None:
+    if set(value) != expected:
+        raise ManifestError(f"{name} has unsupported or missing fields")
+
+
 def _decode_key(value: bytes | str, name: str) -> bytes:
     if isinstance(value, str):
         try:
@@ -205,15 +237,43 @@ def verify_signed_manifest(
 ) -> ReleaseManifest:
     """Verify the Ed25519 signature before trusting any release policy field."""
 
-    if isinstance(raw, (bytes, str)):
+    if isinstance(raw, bytes):
+        if len(raw) > _MAX_MANIFEST_BYTES:
+            raise ManifestError("manifest exceeds the size limit")
+        encoded = raw
+    elif isinstance(raw, str):
+        encoded = raw.encode("utf-8")
+        if len(encoded) > _MAX_MANIFEST_BYTES:
+            raise ManifestError("manifest exceeds the size limit")
+    else:
+        encoded = None
+    if encoded is not None:
         try:
-            document = json.loads(raw)
+            document = json.loads(encoded, object_pairs_hook=_reject_duplicate_keys)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ManifestError("manifest is not valid JSON") from exc
     else:
         document = raw
     document = _mapping(document, "manifest")
+    _exact_keys(
+        document,
+        {
+            "schema_version",
+            "release_id",
+            "version",
+            "sequence",
+            "channel",
+            "published_at",
+            "expires_at",
+            "rollout",
+            "compatibility",
+            "artifacts",
+            "signature",
+        },
+        "manifest",
+    )
     signature = _mapping(document.get("signature"), "signature")
+    _exact_keys(signature, {"algorithm", "key_id", "value"}, "signature")
     if signature.get("algorithm") != "ed25519":
         raise ManifestError("only Ed25519 release signatures are accepted")
     key_id = _identifier(signature.get("key_id"), "signature.key_id")
@@ -250,6 +310,11 @@ def verify_signed_manifest(
         raise ManifestError("expires_at must be later than published_at")
 
     rollout = _mapping(document.get("rollout"), "rollout")
+    _exact_keys(
+        rollout,
+        {"stage", "basis_points", "salt", "paused"},
+        "rollout",
+    )
     rollout_stage = _string(rollout.get("stage"), "rollout.stage", maximum=32)
     if rollout_stage not in _ROLLOUT_STAGES:
         raise ManifestError("unsupported rollout stage")
@@ -264,6 +329,18 @@ def verify_signed_manifest(
         raise ManifestError("rollout.paused must be boolean")
 
     compatibility = _mapping(document.get("compatibility"), "compatibility")
+    _exact_keys(
+        compatibility,
+        {
+            "launcher_min_version",
+            "runner_protocol",
+            "doctor_contract",
+            "provider_contract",
+            "ledger_schema",
+            "checkpoint_schema",
+        },
+        "compatibility",
+    )
     launcher_min_version = _version(
         compatibility.get("launcher_min_version"),
         "compatibility.launcher_min_version",
@@ -280,6 +357,12 @@ def verify_signed_manifest(
         compatibility.get("checkpoint_schema"),
         "compatibility.checkpoint_schema",
     )
+    for name, value in (
+        ("compatibility.runner_protocol", runner_protocol),
+        ("compatibility.ledger_schema", ledger_schema),
+        ("compatibility.checkpoint_schema", checkpoint_schema),
+    ):
+        _exact_keys(value, {"min", "max"}, name)
 
     raw_artifacts = document.get("artifacts")
     if not isinstance(raw_artifacts, list) or not 1 <= len(raw_artifacts) <= 12:
@@ -288,6 +371,11 @@ def verify_signed_manifest(
     seen_targets: set[PlatformTarget] = set()
     for index, item in enumerate(raw_artifacts):
         item = _mapping(item, f"artifacts[{index}]")
+        _exact_keys(
+            item,
+            {"os", "arch", "filename", "url", "size", "sha256"},
+            f"artifacts[{index}]",
+        )
         os_name = _string(item.get("os"), f"artifacts[{index}].os", maximum=16)
         arch = _string(item.get("arch"), f"artifacts[{index}].arch", maximum=16)
         if os_name not in _PLATFORMS or arch not in _ARCHITECTURES:
@@ -361,6 +449,7 @@ def verify_signed_manifest(
         artifacts=tuple(artifacts),
         key_id=key_id,
         signed_payload=payload,
+        signed_document=_canonical_document(document),
     )
 
 

@@ -14,7 +14,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from .manifest import Artifact, ManifestError, ReleaseManifest, verify_artifact
+from .manifest import (
+    Artifact,
+    ManifestError,
+    ReleaseManifest,
+    verify_artifact,
+    verify_signed_manifest,
+)
 
 _MAX_STATE_BYTES = 64 * 1024
 
@@ -322,7 +328,13 @@ def _resolve_regular_artifact(root: Path, artifact: str) -> Path | None:
 class UpdateController:
     """Durable control plane used by a stable launcher, never by model code."""
 
-    def __init__(self, root: Path, *, event_sink: EventSink | None = None):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        event_sink: EventSink | None = None,
+        trusted_keys: Mapping[str, bytes | str] | None = None,
+    ):
         self.root = root
         self.releases = root / "releases"
         self.current_path = root / "current.json"
@@ -331,7 +343,14 @@ class UpdateController:
         self.state_path = root / "update-state.json"
         self.lock_path = root / "update.lock"
         self.event_sink = event_sink or NullEventSink()
+        self.trusted_keys = dict(trusted_keys or {})
         self._local = threading.local()
+
+    def set_trusted_keys(self, trusted_keys: Mapping[str, bytes | str]) -> None:
+        keys = dict(trusted_keys)
+        if self.trusted_keys and keys != self.trusted_keys:
+            raise InvalidTransition("trusted OTA key set cannot change during runtime")
+        self.trusted_keys = keys
 
     def lock(self, *, timeout_seconds: float = 0.0) -> UpdateLock:
         return UpdateLock(self.lock_path, timeout_seconds=timeout_seconds)
@@ -570,6 +589,7 @@ class UpdateController:
             "schema_version": 1,
             "candidate": asdict(pointer),
             "previous": previous,
+            "manifest": json.loads(manifest.signed_document),
             "activation_attempted": False,
             "created_at": _now(),
         }
@@ -616,6 +636,10 @@ class UpdateController:
         current = _load_json(self.current_path)
         if current != asdict(pointer):
             raise InvalidTransition("current pointer no longer names the candidate")
+        pending = _load_json(self.pending_path)
+        if not pending or not isinstance(pending.get("manifest"), dict):
+            raise InvalidTransition("signed pending release record is unavailable")
+        self._write_committed_record(pointer, pending["manifest"])
         committed = self._write_state(UpdateState.COMMITTED, release=pointer)
         _atomic_json(self.last_known_good_path, asdict(pointer))
         self.pending_path.unlink(missing_ok=True)
@@ -677,6 +701,13 @@ class UpdateController:
             if _load_json(self.current_path) == candidate and isinstance(
                 candidate, dict
             ):
+                manifest = pending.get("manifest")
+                pointer = _release_pointer(candidate)
+                if pointer is None or not isinstance(manifest, dict):
+                    raise InvalidTransition(
+                        "committed release recovery lacks signed proof"
+                    )
+                self._write_committed_record(pointer, manifest)
                 _atomic_json(self.last_known_good_path, candidate)
             self.pending_path.unlink(missing_ok=True)
             return False
@@ -697,14 +728,105 @@ class UpdateController:
     def launch_pointer(self) -> dict[str, Any]:
         """Choose a valid current artifact, falling back to a valid LKG."""
 
+        if not self.trusted_keys:
+            raise InvalidTransition("trusted OTA signing keys are unavailable")
         for path in (self.current_path, self.last_known_good_path):
             pointer = _load_json(path)
             if not pointer:
                 continue
-            parsed = _release_pointer(pointer)
-            if parsed and _resolve_regular_artifact(self.root, parsed.artifact):
+            if self._verify_committed_pointer(pointer):
                 return pointer
         raise InvalidTransition("no current or last-known-good release is available")
+
+    def _record_path(self, pointer: ReleasePointer) -> Path:
+        if Path(
+            pointer.release_id
+        ).name != pointer.release_id or pointer.release_id in {".", ".."}:
+            raise InvalidTransition("release id is unsafe")
+        return self.releases / pointer.release_id / "release-record.json"
+
+    def _write_committed_record(
+        self,
+        pointer: ReleasePointer,
+        signed_manifest: Mapping[str, Any],
+    ) -> None:
+        self._require_transaction()
+        manifest = verify_signed_manifest(signed_manifest, self.trusted_keys)
+        artifact = next(
+            (
+                item
+                for item in manifest.artifacts
+                if item.filename == Path(pointer.artifact).name
+            ),
+            None,
+        )
+        expected_artifact = (
+            f"releases/{pointer.release_id}/{Path(pointer.artifact).name}"
+        )
+        if (
+            manifest.release_id != pointer.release_id
+            or manifest.version != pointer.version
+            or manifest.sequence != pointer.sequence
+            or artifact is None
+            or pointer.artifact != expected_artifact
+        ):
+            raise InvalidTransition("signed release record does not match pointer")
+        candidate = _resolve_regular_artifact(self.root, pointer.artifact)
+        if candidate is None:
+            raise InvalidTransition("committed artifact is unavailable")
+        verify_artifact(candidate, artifact)
+        record = {
+            "schema_version": 1,
+            "committed": True,
+            "pointer": asdict(pointer),
+            "manifest": dict(signed_manifest),
+        }
+        record_path = self._record_path(pointer)
+        existing = _load_json(record_path)
+        if existing is not None and existing != record:
+            raise InvalidTransition("immutable release record already differs")
+        if existing is None:
+            _atomic_json(record_path, record)
+
+    def _verify_committed_pointer(self, value: Mapping[str, Any]) -> bool:
+        pointer = _release_pointer(value)
+        if pointer is None:
+            return False
+        try:
+            record = _load_json(self._record_path(pointer))
+            if (
+                not record
+                or set(record) != {"schema_version", "committed", "pointer", "manifest"}
+                or record.get("schema_version") != 1
+                or record.get("committed") is not True
+                or record.get("pointer") != asdict(pointer)
+                or not isinstance(record.get("manifest"), dict)
+            ):
+                return False
+            manifest = verify_signed_manifest(record["manifest"], self.trusted_keys)
+            artifact = next(
+                (
+                    item
+                    for item in manifest.artifacts
+                    if item.filename == Path(pointer.artifact).name
+                ),
+                None,
+            )
+            expected = f"releases/{pointer.release_id}/{Path(pointer.artifact).name}"
+            candidate = _resolve_regular_artifact(self.root, pointer.artifact)
+            if (
+                manifest.release_id != pointer.release_id
+                or manifest.version != pointer.version
+                or manifest.sequence != pointer.sequence
+                or pointer.artifact != expected
+                or artifact is None
+                or candidate is None
+            ):
+                return False
+            verify_artifact(candidate, artifact)
+        except (InvalidTransition, ManifestError, OSError, ValueError):
+            return False
+        return True
 
     def committed_pointer(self) -> ReleasePointer:
         """Read the authoritative anti-rollback baseline from durable pointers."""

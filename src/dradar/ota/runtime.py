@@ -143,6 +143,7 @@ class UpdateRuntime:
         except ManifestError:
             self.audit.policy_rejected("update_manifest_invalid")
             raise
+        self.controller.set_trusted_keys(trusted_keys)
         baseline = self.controller.committed_pointer()
         if (
             current_version != baseline.version

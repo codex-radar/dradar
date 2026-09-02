@@ -21,18 +21,18 @@ ota-root/
   update.lock               # 全主机唯一更新写锁
 ```
 
-launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。`current` 缺失、越界、符号链接或目标文件无效时才使用有效 LKG；两者都不可用则失败关闭，不从网络临时执行代码。首次安装必须由独立安装器建立 current/LKG，OTA 不承担无回滚基线的首次安装。
+launcher 启动时先执行 crash recovery：只要 `pending.activation_attempted=true`、`current` 已指向候选而候选尚未 committed，就恢复 `previous`。每个已提交版本还包含不可变 `release-record.json`，其中保存精确 pointer 与原始签名 Manifest；launcher 每次启动都用内置信任根重新验签，并核对 release/version/sequence、固定制品路径、size 与 SHA-256。仅有一个根内普通文件或伪造 pointer 不构成可启动版本。`current` 缺失、越界、符号链接、记录不匹配或制品被事后篡改时才尝试有效 LKG；两者都不可用则失败关闭，不从网络临时执行代码。首次安装必须由独立安装器建立带签名 release record 的 current/LKG，OTA 不承担无回滚基线的首次安装。
 
 ## Manifest、供应链与防回滚
 
-Manifest 使用 canonical JSON（移除 `signature` 后按 key 排序、无多余空格）和 Ed25519。受信公钥由 launcher 内置/受控轮换；未知 `key_id`、非 Ed25519、签名不符立即拒绝。签名内容包括：
+Manifest 使用 canonical JSON（移除 `signature` 后按 key 排序、无多余空格）和 Ed25519。原始 JSON 限制为 48 KiB，所有层级拒绝重复键，顶层、签名、灰度、兼容范围和 artifact 都使用封闭 schema；不能利用 JSON last-wins 语义制造验签歧义。受信公钥由 launcher 内置/受控轮换；未知 `key_id`、非 Ed25519、签名不符立即拒绝。签名内容包括：
 
 - `release_id`、严格 SemVer、单调 `sequence`、带时区的发布时间、到期时间与 channel；
 - rollout stage、万分比、salt 与全局 pause；
 - launcher、runner protocol、doctor、Provider、ledger、checkpoint 兼容范围；
 - 每个 OS/架构唯一的 HTTPS URL、文件名、长度与 SHA-256。
 
-候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，调用方传入值必须与它一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向，使用同目录临时文件，长度与摘要通过并 `fsync` 后才 `os.replace`；中断、断网或校验失败会清除 partial。已有同名制品只有在签名长度与摘要完全一致时才复用，否则失败关闭，绝不覆盖不可变候选。
+候选必须仍在签名有效期内，并同时满足 `sequence > last_committed_sequence` 和 `version > current_version`。防回滚基线从本机 durable LKG/current 指针读取，调用方传入值必须与它一致，不能自行降级基线。签名防篡改，SHA-256 绑定下载内容，单调 sequence 防止合法旧包回滚。下载不跟随重定向；POSIX 下载目录从文件系统根开始逐层通过 `dirfd + O_NOFOLLOW` 打开，临时文件和最终 hard-link 发布都锚定同一目录 fd。中断、断网、目录替换、目标 symlink 竞态或校验失败会清除 partial，且不会写出目标目录。已有同名制品只有在签名长度与摘要完全一致时才复用，否则失败关闭，绝不覆盖不可变候选。
 
 ## 分级灰度与旧客户端桥接
 

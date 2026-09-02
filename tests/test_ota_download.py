@@ -124,3 +124,70 @@ def test_existing_immutable_artifact_is_never_overwritten(tmp_path):
         )
 
     assert final.read_bytes() == b"different-body"
+
+
+def test_destination_symlink_cannot_redirect_download_outside_ota_root(tmp_path):
+    body = b"candidate-body"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination = tmp_path / "ota" / "downloads"
+    destination.parent.mkdir()
+    destination.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ManifestError, match="symlink|safe directory"):
+        download_verified_artifact(
+            FakeClient(FakeResponse([body])),
+            _artifact(body),
+            destination,
+        )
+
+    assert not (outside / "candidate.whl").exists()
+    assert not list(outside.glob("*.partial"))
+
+
+def test_racing_final_symlink_never_overwrites_its_target(tmp_path):
+    body = b"candidate-body"
+    destination = tmp_path / "downloads"
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(b"outside-safe")
+
+    class RacingResponse(FakeResponse):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            (destination / "candidate.whl").symlink_to(outside)
+            yield body
+
+    with pytest.raises(ManifestError, match="immutable artifact"):
+        download_verified_artifact(
+            FakeClient(RacingResponse([])),
+            _artifact(body),
+            destination,
+        )
+
+    assert outside.read_bytes() == b"outside-safe"
+    assert not list(destination.glob("*.partial"))
+
+
+def test_racing_directory_replacement_cannot_publish_outside_anchor(tmp_path):
+    body = b"candidate-body"
+    destination = tmp_path / "downloads"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    class RacingResponse(FakeResponse):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            destination.rename(tmp_path / "detached-downloads")
+            destination.symlink_to(outside, target_is_directory=True)
+            yield body
+
+    with pytest.raises(ManifestError, match="changed during publication"):
+        download_verified_artifact(
+            FakeClient(RacingResponse([])),
+            _artifact(body),
+            destination,
+        )
+
+    assert not (outside / "candidate.whl").exists()
+    assert not (tmp_path / "detached-downloads" / "candidate.whl").exists()
+    assert not list((tmp_path / "detached-downloads").glob("*.partial"))
