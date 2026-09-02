@@ -501,8 +501,27 @@ def test_complete_codebuddy_turn_materializes_auditable_atif_trajectory() -> Non
             "billing_basis": "subscription",
             "cost_not_reported": True,
             "usage_complete": True,
+            "terminal_status": "success",
+            "terminal_evidence": "unique-provider-result-v1",
         },
     }
+
+    assert trajectory == _trajectory_function()(
+        events, "Implement the task.", "max", usage,
+    )
+
+
+def test_codebuddy_trajectory_fails_closed_without_provider_session_id() -> None:
+    events = [{
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": "Patch completed.",
+    }]
+    usage = {
+        "complete": True, "request_count": 1,
+        "n_input_tokens": 1, "n_cache_tokens": 0, "n_output_tokens": 1,
+    }
+
+    assert _trajectory_function()(events, "task", "max", usage) is None
 
 
 def test_incomplete_codebuddy_turn_never_fabricates_trajectory() -> None:

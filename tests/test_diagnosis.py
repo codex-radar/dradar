@@ -476,6 +476,75 @@ def test_ten_codebuddy_workers_share_one_false_success_circuit(
     assert abort_file.is_file()
 
 
+def test_codebuddy_open_circuit_blocks_resume_before_model_start(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    assignment = _codebuddy_assignment("cb-resume")
+    path = runloop._codebuddy_failure_state_path()
+    scope = runloop._repeat_failure_scope(assignment)
+    from dradar import failure_circuit
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    started = []
+    monkeypatch.setattr(
+        runloop, "run_trial", lambda *_args, **_kwargs: started.append(True),
+    )
+
+    outcome = runloop._run_and_submit(
+        InvalidAckClient({}), assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "repeat-agent-failure"
+    assert started == []
+
+
+def test_refill_stop_rearms_codebuddy_circuit_without_saved_plan(
+        monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    assignment = _codebuddy_assignment("cb-rearm")
+    path = runloop._codebuddy_failure_state_path()
+    scope = runloop._repeat_failure_scope(assignment)
+    from dradar import failure_circuit
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+
+    assert runloop.cmd_refill_stop(object()) == 0
+
+    assert failure_circuit.status(scope=scope, state_path=path) == (0, False)
+    assert "provider circuit rearmed" in capsys.readouterr().out
+
+
+def test_retry_upload_cannot_bypass_codebuddy_terminal_gate(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    trial = tmp_path / "trial"
+    agent = trial / "agent"
+    agent.mkdir(parents=True)
+    (trial / "model.patch").write_bytes(b"")
+    (agent / "provider-usage.json").write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy", "model": "hy4-preview",
+        "complete": False, "request_count": 0,
+        "request_usage_complete": False,
+        "request_usage_observed": False,
+        "n_input_tokens": 0, "n_cache_tokens": 0, "n_output_tokens": 0,
+        "token_usage_events": [],
+        "usage_incomplete_reason": "request_ledger_unavailable_or_invalid",
+    }))
+    client = InvalidAckClient({})
+
+    outcome = runloop._upload_trial(client, {
+        "assignment_id": "cb-upload", "nonce": "nonce", "task_id": "task",
+        "trial_dir": str(trial), "meta": {
+            "codebuddy_cli_version": "2.137.1",
+            "codebuddy_model": "hy4-preview", "reasoning_effort": "max",
+        },
+    })
+
+    assert outcome == "codebuddy-false-success"
+    assert client.submissions == []
+
+
 def test_codebuddy_success_observation_rearms_false_success_streak(
         monkeypatch, tmp_path: Path):
     monkeypatch.setenv(

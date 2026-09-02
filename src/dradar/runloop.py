@@ -94,6 +94,7 @@ from .runner import (
     build_codex_trajectory_bundle, build_kimi_trajectory_bundle,
     check_task_content_hash, classify_exception_message,
     codex_trajectory_bundle_usage,
+    _codebuddy_false_success_reasons,
     diagnose_exception, ensure_pier, ensure_tasks_root,
     local_deep_swe_commit,
     prepare_pinned_deep_swe_tasks,
@@ -578,6 +579,10 @@ def _repeat_failure_scope(assignment: dict, codex_cli_version=None) -> str:
         "model": assignment.get("model"),
         "agent_version": assignment.get("agent_version"),
         "codex_cli_version": codex_cli_version,
+        "failure_root": (
+            "codebuddy-rc0-terminal-evidence-v2"
+            if assignment.get("agent") == CODEBUDDY_AGENT else None
+        ),
     }, sort_keys=True, separators=(",", ":"))
 
 
@@ -628,6 +633,8 @@ def _observe_repeat_failure(
     assignment: dict, signature: tuple[str, str] | None, *, success: bool,
     codex_cli_version=None, invocation_id: str | None = None,
     failure_description: str = "zero-progress agent command failure",
+    state_path: Path | None = None,
+    clear_open_on_success: bool = True,
 ) -> bool:
     if signature is None and not success:
         return False
@@ -635,12 +642,16 @@ def _observe_repeat_failure(
         signature[0] if signature is not None
         else _repeat_failure_scope(assignment, codex_cli_version)
     )
-    if _repeat_failure_state_path() is None and invocation_id is not None:
+    selected_state_path = (
+        state_path if state_path is not None else _repeat_failure_state_path()
+    )
+    if selected_state_path is None and invocation_id is not None:
         scope = f"{invocation_id}:{scope}"
     count, opened = failure_circuit.observe(
         scope=scope,
         signature=signature[1] if signature is not None else None,
-        state_path=_repeat_failure_state_path(),
+        state_path=selected_state_path,
+        clear_open=clear_open_on_success,
     )
     if not opened:
         return False
@@ -654,6 +665,18 @@ def _observe_repeat_failure(
         "`dradar resume` after it is fixed."
     )
     return True
+
+
+def _codebuddy_failure_state_path() -> Path:
+    return HOME / "safety" / "codebuddy-provider-failure-circuit.json"
+
+
+def _codebuddy_circuit_open(assignment: dict) -> bool:
+    _count, opened = failure_circuit.status(
+        scope=_repeat_failure_scope(assignment),
+        state_path=_codebuddy_failure_state_path(),
+    )
+    return opened
 
 
 def _grok_preflight_failure(result_path: Path | None) -> str | None:
@@ -1658,6 +1681,29 @@ def _upload_trial(
             except ValueError:
                 pass
 
+    upload_meta = dict(entry.get("meta") or {})
+    if upload_meta.get("codebuddy_cli_version"):
+        raw_patch, raw_trajectory, _raw_result = trial_artifact_paths(trial_dir)
+        codebuddy_reasons = _codebuddy_false_success_reasons(
+            raw_patch,
+            raw_trajectory,
+            trial_dir / "agent" / "provider-usage.json",
+            expected_model=str(upload_meta.get("codebuddy_model") or ""),
+            expected_version=str(upload_meta.get("codebuddy_cli_version") or ""),
+            expected_effort=(
+                str(upload_meta["reasoning_effort"])
+                if upload_meta.get("reasoning_effort") is not None else None
+            ),
+        )
+        if codebuddy_reasons:
+            pending.remove(HOME, assignment_id)
+            print(
+                f"  {task_id}: CodeBuddy upload rejected locally "
+                f"({','.join(codebuddy_reasons)}); artifacts were preserved "
+                "and no server or refill state was changed"
+            )
+            return "codebuddy-false-success"
+
     # Persist intent before touching either artifact copy. If this process is
     # interrupted while making the durable source or atomic staged copy, the
     # next go/resume/retry-upload still knows exactly what must be recovered.
@@ -2524,6 +2570,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     # stops this worker before another checkout; a prior task must never poison
     # a later explicit invocation after the user has repaired Docker.
     args._docker_cleanup_blocked = None
+    if assignment.get("agent") == CODEBUDDY_AGENT and _codebuddy_circuit_open(
+        assignment,
+    ):
+        print(
+            "CodeBuddy provider circuit is already open for this exact "
+            "batch/provider/model/version root; no model process was started. "
+            "Fix the provider evidence fault, then run `dradar refill stop` "
+            "to explicitly rearm it."
+        )
+        return "repeat-agent-failure"
     hash_match = check_task_content_hash(assignment, tasks_root)
     if hash_match is False and not getattr(args, "allow_task_drift", False):
         print(
@@ -2683,6 +2739,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     args, "_repeat_failure_invocation_id", None,
                 ),
                 failure_description="CodeBuddy rc=0 terminal-evidence failure",
+                state_path=_codebuddy_failure_state_path(),
+                clear_open_on_success=False,
             )
             if opened:
                 # Scoped refill plans persist across child/session restarts.
@@ -2941,6 +2999,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "zcode_cli_sha256": art.zcode_cli_sha256,
         "dsh_version": art.dsh_version,
         "codebuddy_cli_version": art.codebuddy_cli_version,
+        "codebuddy_model": (
+            assignment.get("model") if art.codebuddy_cli_version else None
+        ),
+        "reasoning_effort": assignment.get("effort"),
         **stats,
     }
     if failure_kind:
@@ -3130,6 +3192,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     )
     if circuit_opened:
         return "repeat-agent-failure"
+    if assignment.get("agent") == CODEBUDDY_AGENT and upload_outcome in {
+        "submitted", "interrupted",
+    }:
+        # Healthy evidence clears only a not-yet-open streak. An open provider
+        # fault always requires the documented explicit operator rearm.
+        _observe_repeat_failure(
+            assignment, None, success=True,
+            state_path=_codebuddy_failure_state_path(),
+            clear_open_on_success=False,
+        )
     return terminal_outcome or upload_outcome
 
 
@@ -3452,8 +3524,11 @@ def cmd_refill_status(args) -> int:
 
 def cmd_refill_stop(args) -> int:
     plan = refill_plan.stop(HOME, "stopped by user", discard=True)
+    failure_circuit.clear(
+        scope=None, state_path=_codebuddy_failure_state_path(),
+    )
     if not plan:
-        print("no local refill plan")
+        print("no local refill plan; CodeBuddy provider circuit rearmed")
         return 0
     print("continuous refill stopped — no more tasks will be claimed; "
           "already held/running tasks were left untouched")

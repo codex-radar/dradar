@@ -84,6 +84,7 @@ def _save(path: Path, state: dict) -> None:
 
 def observe(
     *, scope: str, signature: str | None, state_path: Path | None,
+    clear_open: bool = True,
 ) -> tuple[int, bool]:
     """Record one result; success clears the matching scope's failure streak."""
     def update(state: dict) -> tuple[dict, int, bool]:
@@ -91,6 +92,14 @@ def observe(
         if not isinstance(scopes, dict):
             scopes = {}
         if signature is None:
+            current = scopes.get(scope)
+            if (
+                not clear_open and isinstance(current, dict)
+                and current.get("open") is True
+            ):
+                return {
+                    "schema_version": SCHEMA_VERSION, "scopes": scopes,
+                }, int(current.get("count") or THRESHOLD), True
             scopes.pop(scope, None)
             return {
                 "schema_version": SCHEMA_VERSION, "scopes": scopes,
@@ -119,6 +128,34 @@ def observe(
             else:
                 state_path.unlink(missing_ok=True)
             return count, opened
+
+
+def status(*, scope: str, state_path: Path | None) -> tuple[int, bool]:
+    """Read one circuit scope without mutating it."""
+    if state_path is None:
+        with _PROCESS_LOCK:
+            current = _LOCAL_STATE.get("scopes", {}).get(scope, {})
+            return int(current.get("count") or 0), current.get("open") is True
+    with _PROCESS_LOCK:
+        with _locked(state_path):
+            current = _load(state_path).get("scopes", {}).get(scope, {})
+            return int(current.get("count") or 0), current.get("open") is True
+
+
+def clear(*, scope: str | None, state_path: Path) -> None:
+    """Explicitly rearm one scope, or every scope in a dedicated file."""
+    with _PROCESS_LOCK:
+        with _locked(state_path):
+            if scope is None:
+                state_path.unlink(missing_ok=True)
+                return
+            state = _load(state_path)
+            scopes = state.get("scopes", {})
+            scopes.pop(scope, None)
+            if scopes:
+                _save(state_path, {"schema_version": SCHEMA_VERSION, "scopes": scopes})
+            else:
+                state_path.unlink(missing_ok=True)
 
 
 def reset_local_for_tests() -> None:

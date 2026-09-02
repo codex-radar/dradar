@@ -6,7 +6,6 @@ import json
 import os
 import shlex
 import stat
-import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -223,8 +222,9 @@ def _codebuddy_trajectory_payload(
     if not isinstance(response, str) or not response.strip():
         return None
     session_id = terminal.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        session_id = str(uuid.uuid4())
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    session_id = session_id.strip()
     return {
         "schema_version": "ATIF-v1.7",
         "session_id": session_id,
@@ -259,6 +259,8 @@ def _codebuddy_trajectory_payload(
                 "billing_basis": "subscription",
                 "cost_not_reported": True,
                 "usage_complete": True,
+                "terminal_status": "success",
+                "terminal_evidence": "unique-provider-result-v1",
             },
         },
     }

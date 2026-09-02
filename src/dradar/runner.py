@@ -3323,6 +3323,8 @@ def _codebuddy_false_success_reasons(
     usage_path: Path,
     *,
     expected_model: str = CODEBUDDY_MODEL,
+    expected_version: str = CODEBUDDY_CLI_VERSION,
+    expected_effort: str | None = None,
 ) -> tuple[str, ...]:
     """Return bounded reasons that make a CodeBuddy rc=0 result ungradeable.
 
@@ -3403,20 +3405,58 @@ def _codebuddy_false_success_reasons(
         trajectory_path, _CODEBUDDY_TERMINAL_ARTIFACT_MAX_BYTES,
     )
     metrics = trajectory.get("final_metrics")
+    agent = trajectory.get("agent")
+    steps = trajectory.get("steps")
+    session_id = trajectory.get("session_id")
     trajectory_valid = bool(
-        isinstance(trajectory.get("schema_version"), str)
-        and trajectory["schema_version"].startswith("ATIF-v")
-        and isinstance(trajectory.get("steps"), list)
-        and trajectory["steps"]
+        trajectory.get("schema_version") == "ATIF-v1.7"
+        and isinstance(session_id, str) and 0 < len(session_id.strip()) <= 256
+        and isinstance(agent, dict)
+        and agent.get("name") == "codebuddy"
+        and agent.get("version") == expected_version
+        and agent.get("model_name") == expected_model
+        and agent.get("extra") == {
+            "provider": "codebuddy-subscription",
+            "oauth": True,
+            "credential_mode": "isolated-run-copy",
+        }
+        and isinstance(steps, list) and len(steps) == 2
         and isinstance(metrics, dict)
     )
     if trajectory_valid and request_ledger_valid:
-        trajectory_valid = all(
-            metrics.get(metric_name) == usage[usage_name]
-            for metric_name, usage_name in (
-                ("total_prompt_tokens", "n_input_tokens"),
-                ("total_cached_tokens", "n_cache_tokens"),
-                ("total_completion_tokens", "n_output_tokens"),
+        user_step, agent_step = steps
+        metric_extra = metrics.get("extra")
+        trajectory_valid = bool(
+            isinstance(user_step, dict)
+            and user_step.get("step_id") == 1
+            and user_step.get("source") == "user"
+            and isinstance(user_step.get("message"), str)
+            and bool(user_step["message"].strip())
+            and isinstance(agent_step, dict)
+            and agent_step.get("step_id") == 2
+            and agent_step.get("source") == "agent"
+            and isinstance(agent_step.get("message"), str)
+            and bool(agent_step["message"].strip())
+            and agent_step.get("model_name") == expected_model
+            and agent_step.get("llm_call_count") == request_count
+            and (
+                expected_effort is None
+                or agent_step.get("reasoning_effort") == expected_effort
+            )
+            and metrics.get("total_steps") == 2
+            and metrics.get("total_cost_usd") is None
+            and isinstance(metric_extra, dict)
+            and metric_extra.get("usage_complete") is True
+            and metric_extra.get("terminal_status") == "success"
+            and metric_extra.get("terminal_evidence")
+            == "unique-provider-result-v1"
+            and all(
+                metrics.get(metric_name) == usage[usage_name]
+                for metric_name, usage_name in (
+                    ("total_prompt_tokens", "n_input_tokens"),
+                    ("total_cached_tokens", "n_cache_tokens"),
+                    ("total_completion_tokens", "n_output_tokens"),
+                )
             )
         )
     if not trajectory_valid:
@@ -4435,6 +4475,7 @@ def run_trial(
             trajectory,
             trial_dir / "agent" / "provider-usage.json",
             expected_model=effective_assignment["model"],
+            expected_effort=effective_assignment.get("effort"),
         )
         if false_success_reasons:
             raise CodeBuddyFalseSuccessError(false_success_reasons)

@@ -2036,13 +2036,40 @@ def _write_codebuddy_terminal_artifacts(
     if trajectory:
         trajectory_path.write_text(json.dumps({
             "schema_version": "ATIF-v1.7",
-            "steps": [{"source": "agent", "message": "completed"}],
+            "session_id": "codebuddy-session-1",
+            "agent": {
+                "name": "codebuddy",
+                "version": runner_mod.CODEBUDDY_CLI_VERSION,
+                "model_name": runner_mod.CODEBUDDY_MODEL,
+                "extra": {
+                    "provider": "codebuddy-subscription",
+                    "oauth": True,
+                    "credential_mode": "isolated-run-copy",
+                },
+            },
+            "steps": [
+                {"step_id": 1, "source": "user", "message": "task"},
+                {
+                    "step_id": 2, "source": "agent",
+                    "message": "completed",
+                    "model_name": runner_mod.CODEBUDDY_MODEL,
+                    "reasoning_effort": "max",
+                    "llm_call_count": request_count,
+                },
+            ],
             "final_metrics": {
                 "total_prompt_tokens": 10 if request_count else None,
                 "total_cached_tokens": 2 if request_count else None,
                 "total_completion_tokens": (
                     aggregate_output if request_count else None
                 ),
+                "total_cost_usd": None,
+                "total_steps": 2,
+                "extra": {
+                    "usage_complete": True,
+                    "terminal_status": "success",
+                    "terminal_evidence": "unique-provider-result-v1",
+                },
             },
         }))
     usage_path = root / "provider-usage.json"
@@ -2120,6 +2147,47 @@ def test_codebuddy_rc0_accepts_nonempty_patch_trajectory_and_positive_ledger(
     assert runner_mod._codebuddy_false_success_reasons(
         patch, trajectory, usage,
     ) == ()
+
+
+@pytest.mark.parametrize("mutation", ["empty_step", "wrong_model", "wrong_calls"])
+def test_codebuddy_rc0_rejects_forged_or_wrong_bound_trajectory(
+        tmp_path, mutation):
+    patch, trajectory, usage = _write_codebuddy_terminal_artifacts(tmp_path)
+    value = json.loads(trajectory.read_text())
+    if mutation == "empty_step":
+        value["steps"][1]["message"] = ""
+    elif mutation == "wrong_model":
+        value["agent"]["model_name"] = "other-model"
+    else:
+        value["steps"][1]["llm_call_count"] = 99
+    trajectory.write_text(json.dumps(value))
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, trajectory, usage,
+    ) == ("trajectory_missing_or_invalid",)
+
+
+def test_sanitized_round3_natural_sample_is_rejected(tmp_path):
+    fixture = json.loads((
+        Path(__file__).parent / "fixtures"
+        / "codebuddy_false_success_round3_sanitized.json"
+    ).read_text())
+    assert fixture["schema"] == "dradar-codebuddy-readonly-sample-v1"
+    patch, _trajectory, usage = _write_codebuddy_terminal_artifacts(
+        tmp_path, patch=b"", trajectory=False,
+        request_count=fixture["request_count"],
+    )
+    usage_value = json.loads(usage.read_text())
+    usage_value["usage_incomplete_reason"] = fixture["usage_incomplete_reason"]
+    usage.write_text(json.dumps(usage_value))
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, None, usage,
+    ) == (
+        "empty_patch",
+        "request_ledger_missing_or_inconsistent",
+        "trajectory_missing_or_invalid",
+    )
 
 
 def test_run_trial_classifies_build_failure_from_nested_result(tmp_path, monkeypatch):
