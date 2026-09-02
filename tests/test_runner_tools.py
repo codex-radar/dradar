@@ -2042,6 +2042,19 @@ def test_run_trial_classifies_build_failure_from_nested_result(tmp_path, monkeyp
     assert "failed to solve" in str(exc.value)
 
 
+def test_run_trial_disk_full_nested_result_is_not_a_mirror_flake(tmp_path, monkeypatch):
+    _fake_pier(
+        monkeypatch, tmp_path, patch=False,
+        result={"exception_info": {
+            "exception_type": "RuntimeError",
+            "exception_message": "failed to solve: no space left on device",
+        }},
+    )
+    with pytest.raises(runner_mod.BuildDiskFullError) as exc:
+        run_trial(_assignment("codex"), tmp_path, tmp_path)
+    assert "disk is full" in str(exc.value)
+
+
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
     captured = {}
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):

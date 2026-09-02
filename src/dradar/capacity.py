@@ -21,7 +21,17 @@ MEM_GIB_PER_WORKER = 6
 DOCKER_MEM_RESERVE_GIB = 2
 FIRST_WORKER_DISK_GIB = 20
 EXTRA_WORKER_DISK_GIB = 12
+# vfs copies a full rootfs per image layer and per container. Isolated
+# BuildKit overlay/fuse snapshotters do not change the daemon graph driver.
+VFS_FIRST_WORKER_DISK_GIB = 80
+VFS_EXTRA_WORKER_DISK_GIB = 60
 AUTO_WORKER_CAP = 4
+_VFS_WARNING = (
+    "Docker storage driver is vfs; each image layer and container copies a "
+    "full rootfs, so one Pier compose build can use 80+ GiB. Run one worker "
+    "and keep about 80 GiB free. overlay2 is the durable fix when the daemon "
+    "can use it"
+)
 
 
 @dataclass(frozen=True)
@@ -37,26 +47,57 @@ class CapacityReport:
     memory_limit: int
     disk_limit: int
     warnings: tuple[str, ...] = ()
+    docker_driver: str | None = None
+    first_worker_disk_gib: int = FIRST_WORKER_DISK_GIB
+    extra_worker_disk_gib: int = EXTRA_WORKER_DISK_GIB
 
 
-def _docker_resources() -> tuple[int | None, float | None, tuple[str, ...]]:
+def _docker_info() -> tuple[dict | None, tuple[str, ...]]:
     docker = shutil.which("docker")
     if not docker:
-        return None, None, ("docker CLI not found; falling back to 1 worker",)
+        return None, ("docker CLI not found; falling back to 1 worker",)
     try:
         proc = subprocess.run(
             [docker, "info", "--format", "{{json .}}"],
             capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None, None, ("cannot inspect Docker resources; falling back to 1 worker",)
+        return None, ("cannot inspect Docker resources; falling back to 1 worker",)
     if proc.returncode != 0:
-        return None, None, ("Docker daemon is unavailable; falling back to 1 worker",)
+        return None, ("Docker daemon is unavailable; falling back to 1 worker",)
     try:
         info = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None, ("Docker returned unreadable capacity data; falling back to 1 worker",)
+    if not isinstance(info, dict):
+        return None, ("Docker returned unreadable capacity data; falling back to 1 worker",)
+    return info, ()
+
+
+def _driver_from_info(info: dict | None) -> str | None:
+    if not info:
+        return None
+    driver = info.get("Driver")
+    if not isinstance(driver, str):
+        return None
+    value = driver.strip().lower()
+    return value or None
+
+
+def _disk_budget(driver: str | None) -> tuple[int, int]:
+    if driver == "vfs":
+        return VFS_FIRST_WORKER_DISK_GIB, VFS_EXTRA_WORKER_DISK_GIB
+    return FIRST_WORKER_DISK_GIB, EXTRA_WORKER_DISK_GIB
+
+
+def _docker_resources() -> tuple[int | None, float | None, tuple[str, ...]]:
+    info, warnings = _docker_info()
+    if info is None:
+        return None, None, warnings
+    try:
         cpus = int(info.get("NCPU") or 0)
         memory = int(info.get("MemTotal") or 0) / (1024 ** 3)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return None, None, ("Docker returned unreadable capacity data; falling back to 1 worker",)
     if cpus < 1 or memory <= 0:
         return None, None, ("Docker omitted CPU/memory capacity; falling back to 1 worker",)
@@ -67,6 +108,13 @@ def docker_resources() -> tuple[int | None, float | None, tuple[str, ...]]:
     """Read the capacity exposed by Docker, not the host headline specs."""
 
     return _docker_resources()
+
+
+def docker_storage_driver() -> str | None:
+    """Return the daemon graph driver (overlay2, vfs, ...) or None."""
+
+    info, _warnings = _docker_info()
+    return _driver_from_info(info)
 
 
 def worker_resource_warnings(
@@ -118,8 +166,26 @@ def inspect_capacity(client, requested_tasks: int | None = None) -> CapacityRepo
         me.get("concurrent_limit") or me.get("claim_limit") or 1))
     task_limit = max(1, int(requested_tasks or held or account_limit))
 
-    cpus, memory_gib, warnings = docker_resources()
+    info, warnings = _docker_info()
+    cpus = memory_gib = None
+    driver = _driver_from_info(info)
+    if info is not None:
+        try:
+            parsed_cpus = int(info.get("NCPU") or 0)
+            parsed_memory = int(info.get("MemTotal") or 0) / (1024 ** 3)
+        except (TypeError, ValueError):
+            warnings = ("Docker returned unreadable capacity data; falling back to 1 worker",)
+        else:
+            if parsed_cpus < 1 or parsed_memory <= 0:
+                warnings = ("Docker omitted CPU/memory capacity; falling back to 1 worker",)
+            else:
+                cpus, memory_gib = parsed_cpus, parsed_memory
+    elif not warnings:
+        warnings = ("cannot inspect Docker resources; falling back to 1 worker",)
+    if driver == "vfs":
+        warnings = warnings + (_VFS_WARNING,)
     disk_gib = shutil.disk_usage(Path.home()).free / (1024 ** 3)
+    first_disk, extra_disk = _disk_budget(driver)
     if cpus is None or memory_gib is None:
         cpu_limit = memory_limit = 1
     else:
@@ -128,8 +194,7 @@ def inspect_capacity(client, requested_tasks: int | None = None) -> CapacityRepo
             1, int((memory_gib - DOCKER_MEM_RESERVE_GIB) // MEM_GIB_PER_WORKER))
     disk_limit = max(
         1,
-        1 + int(max(0.0, disk_gib - FIRST_WORKER_DISK_GIB)
-                // EXTRA_WORKER_DISK_GIB),
+        1 + int(max(0.0, disk_gib - first_disk) // extra_disk),
     )
     recommended = max(1, min(
         cpu_limit, memory_limit, disk_limit, account_limit, task_limit,
@@ -147,6 +212,9 @@ def inspect_capacity(client, requested_tasks: int | None = None) -> CapacityRepo
         memory_limit=memory_limit,
         disk_limit=disk_limit,
         warnings=warnings,
+        docker_driver=driver,
+        first_worker_disk_gib=first_disk,
+        extra_worker_disk_gib=extra_disk,
     )
 
 
@@ -157,6 +225,7 @@ def print_report(report: CapacityReport) -> None:
                   f"{report.docker_memory_gib:.1f} GiB memory")
     print("local worker capacity:")
     print(f"  Docker: {docker}")
+    print(f"  Docker storage driver: {report.docker_driver or 'unknown'}")
     print(f"  disk free: {report.disk_free_gib:.0f} GiB")
     print(f"  account concurrency limit: {report.account_limit}")
     print(f"  currently held tasks: {report.held_tasks}")
@@ -167,8 +236,8 @@ def print_report(report: CapacityReport) -> None:
           f"({MEM_GIB_PER_WORKER} GiB per worker + "
           f"{DOCKER_MEM_RESERVE_GIB} GiB Docker reserve)")
     print(f"    disk: {report.disk_limit} worker(s) "
-          f"({FIRST_WORKER_DISK_GIB} GiB first-worker reserve, "
-          f"{EXTRA_WORKER_DISK_GIB} GiB each extra)")
+          f"({report.first_worker_disk_gib} GiB first-worker reserve, "
+          f"{report.extra_worker_disk_gib} GiB each extra)")
     print(f"    account: {report.account_limit} worker(s)")
     print(f"    requested task capacity: {report.task_limit} worker(s)")
     print(f"    automatic safety cap: {AUTO_WORKER_CAP} worker(s)")
@@ -211,6 +280,7 @@ def cmd_capacity(args) -> int:
 
 
 __all__ = [
-    "CapacityReport", "cmd_capacity", "docker_resources", "inspect_capacity",
-    "print_report", "worker_resource_warnings",
+    "CapacityReport", "cmd_capacity", "docker_resources",
+    "docker_storage_driver", "inspect_capacity", "print_report",
+    "worker_resource_warnings",
 ]

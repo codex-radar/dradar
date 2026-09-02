@@ -79,6 +79,26 @@ def test_worker_resource_warnings_accept_exact_published_budget():
     assert capacity.worker_resource_warnings(2, 4, 14) == ()
 
 
+def test_vfs_driver_reserves_one_worker_and_warns(monkeypatch):
+    payload = json.dumps({
+        "NCPU": 8, "MemTotal": 32 * 1024 ** 3, "Driver": "vfs",
+    })
+    monkeypatch.setattr(capacity.shutil, "which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        capacity.subprocess, "run",
+        lambda *_a, **_k: type("Proc", (), {"returncode": 0, "stdout": payload})(),
+    )
+    monkeypatch.setattr(capacity.shutil, "disk_usage", lambda _path: Disk(100))
+
+    report = capacity.inspect_capacity(Client())
+
+    assert report.docker_driver == "vfs"
+    assert report.first_worker_disk_gib == capacity.VFS_FIRST_WORKER_DISK_GIB
+    assert report.disk_limit == 1
+    assert report.recommended_workers == 1
+    assert any("vfs" in warning for warning in report.warnings)
+
+
 def test_low_disk_space_never_recommends_zero(monkeypatch):
     _docker(monkeypatch, cpus=64, memory_gib=128)
     monkeypatch.setattr(capacity.shutil, "disk_usage", lambda _path: Disk(5))
@@ -102,6 +122,7 @@ def test_capacity_command_prints_machine_and_account_summary(monkeypatch, capsys
     assert capacity.cmd_capacity(object()) == 0
     out = capsys.readouterr().out
     assert "8 CPU / 16.0 GiB" in out
+    assert "Docker storage driver: unknown" in out
     assert "CPU: 4 worker(s)" in out
     assert "memory: 2 worker(s)" in out
     assert "limiting constraint(s): memory" in out
