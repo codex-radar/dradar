@@ -180,7 +180,10 @@ def test_antigravity_task_overlay_accepts_reviewed_pompeii_base_tag(
 def _usage_helper():
     source = Path(providers.__file__).with_name("pier_antigravity.py").read_text()
     module = ast.parse(source)
-    names = {"_nonnegative_int", "_usage_values", "_antigravity_usage_facts"}
+    names = {
+        "_nonnegative_int", "_usage_values",
+        "_antigravity_terminal_error_category", "_antigravity_usage_facts",
+    }
     helpers = [
         node for node in module.body
         if isinstance(node, ast.FunctionDef) and node.name in names
@@ -688,6 +691,7 @@ def test_stream_interrupted_after_final_response_emits_bound_recovery_evidence()
 
     assert facts["complete"] is True
     assert facts["terminal_status"] == "ERROR"
+    assert facts["terminal_error_category"] == "stream-interrupted"
     assert facts["terminal_recovery"] == {
         "schema": "dradar-antigravity-terminal-recovery-v1",
         "reason": "stream_interrupted_after_final_response",
@@ -726,7 +730,36 @@ def test_other_antigravity_errors_never_emit_recovery_evidence(mutation: str) ->
     facts = helper(events, expected_runtime_model=runtime)
 
     assert facts["complete"] is True
+    assert facts["terminal_error_category"] == (
+        "provider-error" if mutation == "different-error" else "stream-interrupted"
+    )
     assert "terminal_recovery" not in facts
+
+
+def test_terminal_error_category_is_allowlisted_and_drops_sensitive_text() -> None:
+    helper = _usage_helper()
+    runtime = ANTIGRAVITY_RUNTIME_MODELS["high"]
+    usage = _usage(1, 1, 0, 0)
+    private_error = (
+        "Eligibility check failed: account secret@example.invalid is not "
+        "eligible for Antigravity, because it is not currently available in "
+        "your location. request=private-request-body"
+    )
+    facts = helper([
+        {"event": "init", "init": {
+            "model": runtime, "cwd": "/app", "permission_mode": "always-proceed",
+        }},
+        {"event": "result", "result": {
+            "status": "ERROR", "num_turns": 0, "usage": usage,
+            "response": "", "error": private_error,
+        }},
+    ], expected_runtime_model=runtime)
+
+    assert facts["terminal_error_category"] == "eligibility-location"
+    serialized = json.dumps(facts)
+    assert "secret@example.invalid" not in serialized
+    assert "private-request-body" not in serialized
+    assert "not currently available" not in serialized
 
 
 def test_official_cache_can_exceed_uncached_input_and_still_reconcile() -> None:

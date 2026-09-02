@@ -172,6 +172,39 @@ _POOL_SESSION_CAPACITY_RETRY_SECONDS = 10 * 60
 _POOL_IMAGE_CACHE_MAINTENANCE_SECONDS = 15 * 60
 _POOL_TARGET_CACHE: dict[Path, int] = {}
 _ZCODE_NETWORK_RETRY_DELAY_SECONDS = 2.0
+_ANTIGRAVITY_TERMINAL_RECOVERY_SCHEMA = (
+    "dradar-antigravity-terminal-recovery-v1"
+)
+_ANTIGRAVITY_TERMINAL_ERROR_CATEGORIES = {
+    "canceled",
+    "eligibility-location",
+    "interrupted",
+    "invalid",
+    "provider-error",
+    "quota-limit",
+    "stream-interrupted",
+}
+_ANTIGRAVITY_USAGE_SIDECAR_KEYS = {
+    "complete",
+    "model",
+    "n_cache_tokens",
+    "n_input_tokens",
+    "n_output_tokens",
+    "provider",
+    "provider_runtime_model",
+    "request_count",
+    "request_usage_complete",
+    "request_usage_observed",
+    "schema",
+    "terminal_error_category",
+    "terminal_recovery",
+    "terminal_status",
+    "thinking_tokens",
+    "timed_usage_complete",
+    "token_usage_events",
+    "usage_evidence_tier",
+    "usage_incomplete_reason",
+}
 
 
 def _retryable_zcode_network_failure(assignment: dict, exc: RunnerError) -> bool:
@@ -1147,6 +1180,50 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
     }
 
 
+def _antigravity_recovery_candidate(usage: dict) -> bool:
+    """Validate only the client-side shape; the server still binds artifacts."""
+
+    evidence = usage.get("terminal_recovery")
+    response_sha256 = (
+        evidence.get("response_sha256") if isinstance(evidence, dict) else None
+    )
+    return bool(
+        isinstance(evidence, dict)
+        and set(evidence) == {"schema", "reason", "response_sha256"}
+        and evidence.get("schema") == _ANTIGRAVITY_TERMINAL_RECOVERY_SCHEMA
+        and evidence.get("reason") == "stream_interrupted_after_final_response"
+        and isinstance(response_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", response_sha256)
+        and usage.get("terminal_status") == "ERROR"
+        and usage.get("complete") is True
+        and usage.get("request_usage_complete") is True
+        and usage.get("request_usage_observed") is True
+    )
+
+
+def _antigravity_terminal_observation(
+    trial_dir: Path, antigravity_cli_version: str | None,
+) -> tuple[bool, str | None]:
+    """Return (terminal failure, safe category) from a validated sidecar."""
+
+    if antigravity_cli_version is None:
+        return False, None
+    usage = _subscription_trial_usage(
+        trial_dir, {"antigravity_cli_version": antigravity_cli_version},
+    )
+    if usage is None:
+        # The pinned adapter always emits this sidecar. Missing or malformed
+        # evidence cannot turn an unknown official terminal into success.
+        return True, None
+    terminal_status = usage.get("terminal_status")
+    category = usage.get("terminal_error_category")
+    if terminal_status == "SUCCESS":
+        return False, None
+    if terminal_status == "ERROR" and _antigravity_recovery_candidate(usage):
+        return False, category if isinstance(category, str) else None
+    return True, category if isinstance(category, str) else None
+
+
 def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
     """Read normalized usage or a structurally checked observed ledger."""
 
@@ -1171,6 +1248,49 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         or value.get("provider") != expected_provider
     ):
         return None
+    if expected_provider == "antigravity":
+        if set(value) - _ANTIGRAVITY_USAGE_SIDECAR_KEYS:
+            # The Antigravity upload contract intentionally has no free-form
+            # terminal/provider text fields. Unknown additions fail closed so
+            # raw account, location, prompt, or request content cannot hitch a
+            # ride through the embedded provider-usage object.
+            return None
+        terminal_status = value.get("terminal_status")
+        terminal_error_category = value.get("terminal_error_category")
+        allowed_categories = {
+            "SUCCESS": set(),
+            "ERROR": {
+                "eligibility-location", "provider-error", "quota-limit",
+                "stream-interrupted",
+            },
+            "CANCELED": {"canceled"},
+            "INTERRUPTED": {"interrupted"},
+            "INVALID": {"invalid"},
+        }
+        # Sidecars produced before this diagnostic field was introduced remain
+        # upload-compatible. Once present, however, the value must be one of
+        # the fixed status-bound enums; arbitrary provider/user text is rejected.
+        if (
+            "terminal_error_category" in value
+            and (
+                not isinstance(terminal_status, str)
+                or not isinstance(terminal_error_category, str)
+                or terminal_status not in allowed_categories
+                or terminal_error_category
+                not in allowed_categories[terminal_status]
+                or terminal_error_category
+                not in _ANTIGRAVITY_TERMINAL_ERROR_CATEGORIES
+            )
+        ):
+            return None
+        recovery = value.get("terminal_recovery")
+        if recovery is not None and not _antigravity_recovery_candidate(value):
+            return None
+        if (
+            recovery is not None
+            and terminal_error_category not in {None, "stream-interrupted"}
+        ):
+            return None
     complete = value.get("complete") is True
     incomplete_reason = value.get("usage_incomplete_reason")
     allowed_incomplete_reasons = {
@@ -1809,7 +1929,7 @@ def _upload_trial(
             "cache_creation_tokens", "subscription_reported_cost_usd",
             "subscription_reported_cost_basis", "resume_attempts",
             "thinking_tokens", "provider_runtime_model", "terminal_status",
-            "terminal_recovery",
+            "terminal_error_category", "terminal_recovery",
         ):
             source_key = "sessions" if key == "agent_session_usage" else key
             if source_key in usage:
@@ -2802,6 +2922,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         print(f"  -> {args._docker_cleanup_blocked}")
 
     stats = summarize_result(art.result)
+    antigravity_terminal_failure, antigravity_terminal_category = (
+        _antigravity_terminal_observation(
+            art.trial_dir, art.antigravity_cli_version,
+        )
+    )
     # A recorded agent exception is always interrupted. A nonzero outer Pier
     # rc may happen after the agent completed and the task hook harvested its
     # patch. Accept that paid work only with independent DSH terminal evidence
@@ -2835,8 +2960,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             assignment, art.trial_dir, art.patch, art.result,
         )
     postrun_completion = dsh_completion or grok_completion or bundled_completion
-    interrupted = bool(stats.get("exception_info")) or (
-        art.returncode != 0 and postrun_completion is None
+    interrupted = (
+        bool(stats.get("exception_info"))
+        or (art.returncode != 0 and postrun_completion is None)
+        or antigravity_terminal_failure
     )
     diag = diagnose_exception(art.result) if interrupted else {}
     failure_kind = diag.get("kind")
@@ -2846,6 +2973,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         and _agent_exit_code(diag) is not None
     ):
         failure_kind = "agent-command-failed"
+    if failure_kind is None and antigravity_terminal_failure:
+        failure_kind = "agent-terminal-failure"
     repeat_failure = (
         _repeat_failure_signature(assignment, stats, diag, art)
         if interrupted and failure_kind == "agent-command-failed"
@@ -2878,6 +3007,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             advice = DIAG_ADVICE.get(diag.get("kind"))
             if advice:
                 print(f"  -> {advice}")
+        elif antigravity_terminal_category is not None:
+            print(
+                "the official Antigravity terminal did not complete "
+                f"({antigravity_terminal_category})"
+            )
         else:
             print(f"no exception recorded; see the pier log: {art.log_path}")
 
