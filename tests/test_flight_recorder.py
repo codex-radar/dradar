@@ -207,7 +207,16 @@ def test_acknowledged_event_ids_are_cumulative_across_interleaved_flushes(tmp_pa
     assert second["event_id"] in recorder.last_acknowledged_event_ids
 
 
-@pytest.mark.parametrize("response", [None, {"acknowledged_event_ids": 1}])
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        {"acknowledged_event_ids": 1},
+        {"acknowledged_event_ids": {"a" * 32: True}},
+        {"acknowledged_event_ids": "a" * 32},
+        {"acknowledged_event_ids": ["not-an-event-id"]},
+    ],
+)
 def test_malformed_flight_response_keeps_pending_event(tmp_path, response):
     class MalformedClient(FlightClient):
         def flight_events(self, events):
@@ -215,6 +224,29 @@ def test_malformed_flight_response_keeps_pending_event(tmp_path, response):
             return response
 
     recorder = FlightRecorder(tmp_path, MalformedClient())
+    event = recorder.record(
+        "worker_registered", component="provider",
+        batch_id=BATCH_ID, session_id=SESSION_ID,
+        assignment_id=ASSIGNMENT_ID, attributes={"provider": "codex"},
+    )
+    assert recorder.flush() == 0
+    assert event["event_id"] in {
+        item["event_id"] for item in recorder._load(recorder.pending_path)
+    }
+    assert not recorder.last_acknowledged_event_ids
+
+
+def test_generator_ack_response_keeps_pending_event(tmp_path):
+    class GeneratorClient(FlightClient):
+        def flight_events(self, events):
+            self.batches.append(events)
+            return {
+                "acknowledged_event_ids": (
+                    event["event_id"] for event in events
+                ),
+            }
+
+    recorder = FlightRecorder(tmp_path, GeneratorClient())
     event = recorder.record(
         "worker_registered", component="provider",
         batch_id=BATCH_ID, session_id=SESSION_ID,

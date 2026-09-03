@@ -507,10 +507,22 @@ class FlightRecorder:
                 return 0
             sent_ids = {event["event_id"] for event in batch}
             try:
-                raw_acknowledged = response.get("acknowledged_event_ids") or ()
+                raw_acknowledged = response.get("acknowledged_event_ids")
+                # The server contract is a JSON array.  Treat every other
+                # shape (including a dict whose keys happen to be event IDs,
+                # a string, or a custom iterable) as malformed evidence; a
+                # malformed response must never delete durable pending data or
+                # satisfy the strict worker-registration handshake.
+                if not isinstance(raw_acknowledged, list):
+                    return 0
+                if any(
+                    not self._valid_event_id(event_id)
+                    for event_id in raw_acknowledged
+                ):
+                    return 0
                 acknowledged = {
                     event_id for event_id in raw_acknowledged
-                    if self._valid_event_id(event_id) and event_id in sent_ids
+                    if event_id in sent_ids
                 }
             except (AttributeError, TypeError):
                 # A malformed response is not evidence of acceptance.  Keep
