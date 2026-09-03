@@ -8,13 +8,19 @@ import os
 import shutil
 import tarfile
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .api_client import ApiClient, ApiError
 
 MARKER = ".dradar-task-bundle.json"
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ENTRIES = 100_000
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$",
+    *(f"COM{suffix}" for suffix in (*range(1, 10), "¹", "²", "³")),
+    *(f"LPT{suffix}" for suffix in (*range(1, 10), "¹", "²", "³")),
+})
+_WINDOWS_FORBIDDEN_FILENAME_CHARS = frozenset('<>:"|?*')
 
 
 class TaskPackError(RuntimeError):
@@ -68,10 +74,36 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _unsafe_windows_component(component: str) -> bool:
+    """Reject names Windows rewrites or routes outside a normal file."""
+
+    if component.endswith((" ", ".")):
+        return True
+    if any(
+        ord(character) < 32
+        or ord(character) == 127
+        or character in _WINDOWS_FORBIDDEN_FILENAME_CHARS
+        for character in component
+    ):
+        return True
+    # Windows reserves device basenames case-insensitively, even when an
+    # extension is present or spaces precede it (for example ``NUL .txt``).
+    device_basename = component.split(".", 1)[0].rstrip(" ").upper()
+    return device_basename in _WINDOWS_RESERVED_DEVICE_NAMES
+
+
 def _safe_target(root: Path, member_name: str) -> Path:
     pure = PurePosixPath(member_name)
-    if pure.is_absolute() or not pure.parts or any(
-        part in {"", ".", ".."} for part in pure.parts
+    windows = PureWindowsPath(member_name)
+    if (
+        # Tar member names are POSIX paths. A backslash is ambiguous on
+        # Windows and can turn one apparently safe member into a traversal.
+        "\\" in member_name
+        or windows.anchor
+        or pure.is_absolute()
+        or not pure.parts
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or any(_unsafe_windows_component(part) for part in pure.parts)
     ):
         raise TaskPackError(f"unsafe path in task bundle: {member_name!r}")
     return root.joinpath(*pure.parts)
