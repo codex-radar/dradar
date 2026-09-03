@@ -46,8 +46,9 @@ from .providers import (
     ANTIGRAVITY_AGENT,
     ANTIGRAVITY_CLI_VERSION,
     ANTIGRAVITY_MODEL,
+    ANTIGRAVITY_MODELS,
     ANTIGRAVITY_PROVIDER,
-    ANTIGRAVITY_RUNTIME_MODELS,
+    ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL,
     ANTIGRAVITY_SUPPORTED_EFFORTS,
     CLAUDE_AGENT,
     CLAUDE_API_KEY_ENVS,
@@ -980,10 +981,11 @@ def _validate_antigravity_assignment(assignment: dict) -> None:
             "Antigravity assignments must explicitly use provider "
             f"{ANTIGRAVITY_PROVIDER!r}"
         )
-    if assignment.get("model") != ANTIGRAVITY_MODEL:
+    model = assignment.get("model")
+    if model not in ANTIGRAVITY_MODELS:
         raise RunnerError(
             f"unsupported Antigravity model {assignment.get('model')!r}; "
-            f"only {ANTIGRAVITY_MODEL!r} is enabled"
+            f"enabled models are {', '.join(sorted(ANTIGRAVITY_MODELS))}"
         )
     effort = assignment.get("effort")
     if effort not in ANTIGRAVITY_SUPPORTED_EFFORTS:
@@ -991,7 +993,7 @@ def _validate_antigravity_assignment(assignment: dict) -> None:
             "Antigravity effort must be low, medium, or high; "
             f"got {effort!r}"
         )
-    if ANTIGRAVITY_RUNTIME_MODELS.get(effort) != f"{ANTIGRAVITY_MODEL}-{effort}":
+    if ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.get((model, effort)) != f"{model}-{effort}":
         raise RunnerError("Antigravity runtime model mapping is inconsistent")
 
 

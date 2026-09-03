@@ -210,46 +210,52 @@ _KIMI_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 ANTIGRAVITY_PROVIDER = "google-antigravity-subscription"
 ANTIGRAVITY_AGENT = "antigravity"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
-ANTIGRAVITY_CLI_VERSION = "1.1.22"
-ANTIGRAVITY_LINUX_RELEASE = "1.1.22-5711547746615296"
+ANTIGRAVITY_FLASH_38_MODEL = "gemini-3.8-flash"
+ANTIGRAVITY_MODELS = frozenset({ANTIGRAVITY_MODEL, ANTIGRAVITY_FLASH_38_MODEL})
+ANTIGRAVITY_CLI_VERSION = "1.1.24"
+ANTIGRAVITY_LINUX_RELEASE = "1.1.24-6130423206641664"
 ANTIGRAVITY_LINUX_ARTIFACTS = {
     "x86_64": {
         "url": (
             "https://storage.googleapis.com/antigravity-public/"
-            "antigravity-cli/1.1.22-5711547746615296/linux-x64/"
+            "antigravity-cli/1.1.24-6130423206641664/linux-x64/"
             "cli_linux_x64.tar.gz"
         ),
         "sha512": (
-            "40225d4b1f009412e905f0a234ba3d51487038d1ad1b8fa19331c84be55610a0"
-            "1f5b0ad9916fb871151cc45456c6bc30cc0b1ea5dab6c0616bc8fb262bcdd7a9"
+            "ed4df91ea7ced986aa14507a0ab8225d92985190f7d551010eba0c46c569587e6"
+            "02cb36af81c9cde7af0d6b380e8dd3a82131361806cd96012d44a3e47fb369a"
         ),
     },
     "aarch64": {
         "url": (
             "https://storage.googleapis.com/antigravity-public/"
-            "antigravity-cli/1.1.22-5711547746615296/linux-arm/"
+            "antigravity-cli/1.1.24-6130423206641664/linux-arm/"
             "cli_linux_arm64.tar.gz"
         ),
         "sha512": (
-            "b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623"
-            "e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
+            "316ca00d50389a08b162c66066b4e2db201e4ffb85acea05029e3c4532c69d5b"
+            "8f7c741cf027325889f898ea8f747af8cd15c802e15fcf5d73b7137b6e2420a1"
         ),
     },
 }
 ANTIGRAVITY_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high"})
 ANTIGRAVITY_RUNTIME_MODELS = {
-    "low": "gemini-3.7-flash-low",
-    "medium": "gemini-3.7-flash-medium",
-    "high": "gemini-3.7-flash-high",
+    effort: f"{ANTIGRAVITY_MODEL}-{effort}"
+    for effort in ANTIGRAVITY_SUPPORTED_EFFORTS
+}
+ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL = {
+    (model, effort): f"{model}-{effort}"
+    for model in ANTIGRAVITY_MODELS
+    for effort in ANTIGRAVITY_SUPPORTED_EFFORTS
 }
 ANTIGRAVITY_CAPABILITY = (
-    "antigravity-gemini-3.7-flash-subscription-oauth-sandbox-v1"
+    "antigravity-gemini-3-flash-family-subscription-oauth-sandbox-v2"
 )
 ANTIGRAVITY_RUN_CONFIG_VERSION = (
-    "antigravity-gemini-3.7-flash-subscription-oauth-full-container-v2"
+    "antigravity-gemini-3-flash-family-subscription-oauth-full-container-v3"
 )
 ANTIGRAVITY_RUNTIME_PROFILE = (
-    "pier-antigravity-gemini-3.7-flash-shared-oauth-full-container-v2"
+    "pier-antigravity-gemini-3-flash-family-shared-oauth-full-container-v3"
 )
 ANTIGRAVITY_ARTIFACT_CAPTURE = "full-worktree-v1"
 ANTIGRAVITY_HOME_RELATIVE_PATH = Path("providers") / "antigravity"
@@ -327,7 +333,7 @@ REFILL_HARNESS_CONSTRAINTS = {
     KIMI_AGENT: (frozenset({KIMI_MODEL}), KIMI_SUPPORTED_EFFORTS),
     GROK_AGENT: (frozenset({GROK_MODEL}), GROK_SUPPORTED_EFFORTS),
     ANTIGRAVITY_AGENT: (
-        frozenset({ANTIGRAVITY_MODEL}), ANTIGRAVITY_SUPPORTED_EFFORTS,
+        ANTIGRAVITY_MODELS, ANTIGRAVITY_SUPPORTED_EFFORTS,
     ),
     CODEBUDDY_AGENT: (
         frozenset({CODEBUDDY_MODEL}), CODEBUDDY_SUPPORTED_EFFORTS,
@@ -1116,7 +1122,7 @@ def antigravity_auth_error(home: Path | None = None) -> str | None:
         ready_payload.get("schema") != "dradar-antigravity-ready-v1"
         or ready_payload.get("cli_version") != ANTIGRAVITY_CLI_VERSION
         or ready_payload.get("models")
-        != sorted(ANTIGRAVITY_RUNTIME_MODELS.values())
+        != sorted(ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.values())
     ):
         return "Antigravity readiness proof does not match this DRadar release"
     return None
@@ -1161,7 +1167,7 @@ def mark_antigravity_ready(home: Path | None = None) -> Path:
             json.dump({
                 "schema": "dradar-antigravity-ready-v1",
                 "cli_version": ANTIGRAVITY_CLI_VERSION,
-                "models": sorted(ANTIGRAVITY_RUNTIME_MODELS.values()),
+                "models": sorted(ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.values()),
             }, handle, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())

@@ -393,10 +393,11 @@ DRadar 服务端或轨迹。容器启动后 Key 会立即转入 ZCode 的内存�
 allowlist/denylist，保留完整编码和 `Agent` 子代理能力；网络仍只允许 ZCode 控制面与模型
 端点。任务中断不会恢复 ZCode session/rollout；运行完成后的精确产物只走待上传账本。
 
-### Google Antigravity Gemini 3.7 Flash 订阅 OAuth agent
+### Google Antigravity Gemini 3.8 / 3.7 Flash 订阅 OAuth agent
 
-Antigravity 只使用 DRadar 独立的 Google OAuth 状态和固定 Linux CLI `1.1.22`，模型固定为
-`gemini-3.7-flash` 的 `low`/`medium`/`high` 三档。每题在 Pier Docker 中使用
+Antigravity 只使用 DRadar 独立的 Google OAuth 状态和固定 Linux CLI `1.1.24`，支持
+`gemini-3.8-flash` 与原有 `gemini-3.7-flash` 的 `low`/`medium`/`high` 三档；每个领取格子
+都会绑定并核验精确的模型与档位，不会跨模型回退。每题在 Pier Docker 中使用
 `--dangerously-skip-permissions`，不再叠加 CLI terminal sandbox；文件、命令和原生子代理
 不会因 headless 审批被静默拒绝。容器只挂载独立 `.gemini` 树，网络只开放 Google OAuth、
 Antigravity 模型控制面和固定运行时下载的精确域名；日常 Gemini 配置、宿主 HOME 与其他

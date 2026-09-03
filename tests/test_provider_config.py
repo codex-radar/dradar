@@ -445,7 +445,7 @@ def test_antigravity_live_check_restores_the_fail_closed_settings(
         return SimpleNamespace(
             returncode=0,
             stdout="\n".join(
-                provider_config.ANTIGRAVITY_RUNTIME_MODELS.values()
+                    provider_config.ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.values()
             ),
             stderr="",
         )

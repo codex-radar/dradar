@@ -37,8 +37,7 @@ from .codebuddy_provider import (
 from .providers import (
     ANTIGRAVITY_CLI_VERSION,
     ANTIGRAVITY_LINUX_ARTIFACTS,
-    ANTIGRAVITY_MODEL,
-    ANTIGRAVITY_RUNTIME_MODELS,
+    ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL,
     CLAUDE_API_KEY_ENVS,
     CLAUDE_CLI_VERSION,
     CLAUDE_MODELS,
@@ -558,7 +557,7 @@ def _antigravity_models_live(docker: str, executable: Path) -> str | None:
         for line in proc.stdout.splitlines()
         if line.strip()
     }
-    missing = set(ANTIGRAVITY_RUNTIME_MODELS.values()) - available
+    missing = set(ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.values()) - available
     if missing:
         return "the account cannot access " + ", ".join(sorted(missing))
     return None
@@ -577,7 +576,7 @@ def _setup_antigravity_subscription() -> int:
         if issue is None:
             print(
                 f"Antigravity subscription provider is already ready (CLI "
-                f"{ANTIGRAVITY_CLI_VERSION}, {ANTIGRAVITY_MODEL} low/medium/high verified)."
+                f"{ANTIGRAVITY_CLI_VERSION}, Gemini 3.7/3.8 Flash low/medium/high verified)."
             )
             return 0
     if not sys.stdin.isatty():
@@ -641,8 +640,8 @@ def _setup_antigravity_subscription() -> int:
         return 1
     print(
         f"Antigravity subscription OAuth is ready at {antigravity_auth_path()} "
-        f"(tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, three Gemini 3.7 Flash "
-        "effort levels verified)."
+        f"(tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, Gemini 3.7/3.8 Flash "
+        "low/medium/high verified)."
     )
     return 0
 
@@ -667,7 +666,7 @@ def _status_antigravity_subscription(*, live: bool) -> int:
     print(
         f"Antigravity subscription provider ready via {antigravity_auth_path()} "
         f"(OAuth tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, "
-        f"{ANTIGRAVITY_MODEL} low/medium/high, API keys disabled)."
+        "Gemini 3.7/3.8 Flash low/medium/high, API keys disabled)."
     )
     return 0
 

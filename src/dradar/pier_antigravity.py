@@ -26,22 +26,29 @@ from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
 
 
-ANTIGRAVITY_CLI_VERSION = "1.1.22"
+ANTIGRAVITY_CLI_VERSION = "1.1.24"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
+ANTIGRAVITY_FLASH_38_MODEL = "gemini-3.8-flash"
+ANTIGRAVITY_MODELS = frozenset({ANTIGRAVITY_MODEL, ANTIGRAVITY_FLASH_38_MODEL})
 ANTIGRAVITY_RUNTIME_MODELS = {
     "low": "gemini-3.7-flash-low",
     "medium": "gemini-3.7-flash-medium",
     "high": "gemini-3.7-flash-high",
 }
-ANTIGRAVITY_LINUX_RELEASE = "1.1.22-5711547746615296"
+ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL = {
+    (model, effort): f"{model}-{effort}"
+    for model in ANTIGRAVITY_MODELS
+    for effort in ("low", "medium", "high")
+}
+ANTIGRAVITY_LINUX_RELEASE = "1.1.24-6130423206641664"
 ANTIGRAVITY_LINUX_SHA512 = {
     "x86_64": (
-        "40225d4b1f009412e905f0a234ba3d51487038d1ad1b8fa19331c84be55610a0"
-        "1f5b0ad9916fb871151cc45456c6bc30cc0b1ea5dab6c0616bc8fb262bcdd7a9"
+        "ed4df91ea7ced986aa14507a0ab8225d92985190f7d551010eba0c46c569587e6"
+        "02cb36af81c9cde7af0d6b380e8dd3a82131361806cd96012d44a3e47fb369a"
     ),
     "aarch64": (
-        "b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623"
-        "e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
+        "316ca00d50389a08b162c66066b4e2db201e4ffb85acea05029e3c4532c69d5b"
+        "8f7c741cf027325889f898ea8f747af8cd15c802e15fcf5d73b7137b6e2420a1"
     ),
 }
 ANTIGRAVITY_STREAM_INTERRUPTED_MESSAGE = (
@@ -200,7 +207,7 @@ def _antigravity_usage_facts(
     facts: dict[str, object] = {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "antigravity",
-        "model": ANTIGRAVITY_MODEL,
+        "model": expected_runtime_model.rsplit("-", 1)[0],
         "provider_runtime_model": expected_runtime_model,
         "complete": reconciled,
         "request_count": len(token_usage_events) if observed else 0,
@@ -282,7 +289,7 @@ def _install_command() -> str:
 
 
 class Antigravity(BaseInstalledAgent):
-    """Run Gemini 3.7 Flash through a DRadar-owned AGY subscription."""
+    """Run an approved Gemini Flash model through isolated AGY OAuth."""
 
     SUPPORTS_ATIF = True
     _REMOTE_USER_HOME = PurePosixPath("/tmp/dradar-antigravity-user")
@@ -301,22 +308,31 @@ class Antigravity(BaseInstalledAgent):
         *args: Any,
         auth_home_dir: str,
         reasoning_effort: str,
+        model_name: str | None = None,
+        version: str | None = ANTIGRAVITY_CLI_VERSION,
         shared_oauth: bool = False,
         **kwargs: Any,
     ):
         auth_home = Path(auth_home_dir)
         if not auth_home.is_dir():
             raise ValueError("Antigravity OAuth home is missing")
-        if reasoning_effort not in ANTIGRAVITY_RUNTIME_MODELS:
+        resolved_model = model_name or ANTIGRAVITY_MODEL
+        if resolved_model not in ANTIGRAVITY_MODELS:
+            raise ValueError("Antigravity model is unsupported")
+        if reasoning_effort not in {"low", "medium", "high"}:
             raise ValueError("Antigravity reasoning_effort must be low, medium, or high")
+        if version != ANTIGRAVITY_CLI_VERSION:
+            raise ValueError(f"Antigravity adapter requires CLI {ANTIGRAVITY_CLI_VERSION}")
         if not isinstance(shared_oauth, bool):
             raise ValueError("Antigravity shared_oauth must be a boolean")
         self._auth_home_dir = auth_home
         self._reasoning_effort = reasoning_effort
-        self._runtime_model = ANTIGRAVITY_RUNTIME_MODELS[reasoning_effort]
+        self._runtime_model = ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL[
+            (resolved_model, reasoning_effort)
+        ]
         self._shared_oauth = shared_oauth
         self._instruction = ""
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, model_name=resolved_model, version=version, **kwargs)
 
     def get_version_command(self) -> str:
         return f"{self._REMOTE_CLI.as_posix()} --version"
@@ -380,7 +396,7 @@ class Antigravity(BaseInstalledAgent):
                 f"grep -Eq {shlex.quote(_model_line_pattern(slug))} "
                 f"{shlex.quote(models_file)}"
             )
-            for slug in ANTIGRAVITY_RUNTIME_MODELS.values()
+            for slug in ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL.values()
         )
         await self.exec_as_agent(
             environment,

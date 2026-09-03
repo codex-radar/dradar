@@ -20,9 +20,11 @@ from dradar.providers import (
     ANTIGRAVITY_AGENT,
     ANTIGRAVITY_CAPABILITY,
     ANTIGRAVITY_CLI_VERSION,
+    ANTIGRAVITY_FLASH_38_MODEL,
     ANTIGRAVITY_MODEL,
     ANTIGRAVITY_PROVIDER,
     ANTIGRAVITY_RUNTIME_MODELS,
+    ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL,
     antigravity_auth_error,
     antigravity_auth_path,
     antigravity_settings_payload,
@@ -821,8 +823,24 @@ def test_provider_failure_is_additive_and_does_not_strip_other_credentials(
 
 
 def test_capability_name_is_additive_and_refill_alias_is_canonical() -> None:
-    assert ANTIGRAVITY_CAPABILITY.startswith("antigravity-gemini-3.7-flash-")
+    assert ANTIGRAVITY_CAPABILITY.startswith("antigravity-gemini-3-flash-family-")
     assert providers.normalize_refill_harness("agy") == ANTIGRAVITY_AGENT
     assert providers.validate_refill_scope(
         "antigravity", ANTIGRAVITY_MODEL, "high",
     ) == (ANTIGRAVITY_AGENT, ANTIGRAVITY_MODEL, "high")
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_gemini_38_assignment_uses_exact_official_runtime_slug(
+    effort: str,
+) -> None:
+    assignment = _assignment(model=ANTIGRAVITY_FLASH_38_MODEL, effort=effort)
+    runner._validate_antigravity_assignment(assignment)
+    assert ANTIGRAVITY_RUNTIME_MODELS_BY_MODEL[
+        (ANTIGRAVITY_FLASH_38_MODEL, effort)
+    ] == f"gemini-3.8-flash-{effort}"
+
+
+def test_unknown_antigravity_model_fails_closed() -> None:
+    with pytest.raises(RunnerError, match="unsupported Antigravity model"):
+        runner._validate_antigravity_assignment(_assignment(model="gemini-3.9-flash"))
