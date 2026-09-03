@@ -43,6 +43,7 @@ KEY_STATUSES = {"active", "next", "retired"}
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
+ETAG = re.compile(r'^(?:W/)?("[\x21\x23-\x7e\x80-\xff]*")$')
 ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -1108,6 +1109,24 @@ def _verify_response(response: httpx.Response, expected: bytes, name: str) -> No
         raise ReleaseError(f"{name} readback digest differs")
 
 
+def _strong_etag(value: str) -> str | None:
+    match = ETAG.fullmatch(value)
+    return match.group(1) if match else None
+
+
+def _etag_matches(left: str, right: str) -> bool:
+    """Compare the same opaque ETag across strong/weak R2 readback forms.
+
+    Exact response bytes are verified separately before this comparison, so a
+    weak marker can safely be ignored while every opaque tag byte remains
+    significant.
+    """
+
+    left_strong = _strong_etag(left)
+    right_strong = _strong_etag(right)
+    return left_strong is not None and left_strong == right_strong
+
+
 def _public_readback(base_url: str, key: str, expected: bytes) -> httpx.Response:
     response = httpx.get(
         f"{base_url.rstrip('/')}/{key}",
@@ -1236,7 +1255,10 @@ def publish_r2(args: argparse.Namespace) -> int:
             if previous_bytes is None:
                 raise ReleaseError("non-bootstrap publication requires previous manifest")
             _verify_response(current, previous_bytes, "current stable pointer")
-            previous_etag = current.headers.get("etag")
+            raw_previous_etag = current.headers.get("etag")
+            previous_etag = (
+                _strong_etag(raw_previous_etag) if raw_previous_etag else None
+            )
             if not previous_etag:
                 raise ReleaseError("current stable pointer has no ETag for CAS")
         for key, body, content_type in immutable:
@@ -1285,11 +1307,14 @@ def publish_r2(args: argparse.Namespace) -> int:
                 raise ReleaseError("successful pointer CAS response has no ETag")
             authenticated = client.get(current_key)
             _verify_response(authenticated, manifest_bytes, "stable pointer")
-            if authenticated.headers.get("etag") != pointer_etag:
+            authenticated_etag = authenticated.headers.get("etag")
+            if not authenticated_etag or not _etag_matches(
+                authenticated_etag, pointer_etag
+            ):
                 raise ReleaseError("authenticated stable pointer ETag differs from CAS")
             public = _public_readback(public_base, current_key, manifest_bytes)
             public_etag = public.headers.get("etag")
-            if public_etag is not None and public_etag != pointer_etag:
+            if public_etag is not None and not _etag_matches(public_etag, pointer_etag):
                 raise ReleaseError("public stable pointer ETag differs from CAS")
         except Exception as error:
             raise CommittedButUnverified(
