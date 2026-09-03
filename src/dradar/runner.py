@@ -4098,11 +4098,15 @@ def run_trial(
             # Select the assignment builder only for Pier. Never mutate the
             # user's global/default buildx selection.
             env["BUILDX_BUILDER"] = builder_lease.name
-        if on_started is not None:
-            # This is now the authoritative ownership bind. Never start a paid
-            # model when the server has not fenced this exact session/epoch.
-            on_started()
-        started = time.time()
+        # The command is assembled at this point, but Pier may still perform
+        # image construction and provider bootstrap inside the child. Start
+        # that child first, then let the caller perform a server-verifiable
+        # worker-registration handshake. Calling ``on_started`` before Popen
+        # charged the runtime lease while no worker existed yet (and made a
+        # failed Popen look like a started run). Keep the callback inside the
+        # guarded block below so a failed ownership bind tears down this exact
+        # process before returning.
+        started: float | None = None
         with log_path.open("w") as log:
             log.write("cmd=" + " ".join(cmd) + "\n")
             log.write(
@@ -4134,6 +4138,18 @@ def run_trial(
                 start_new_session=(os.name != "nt"),
             )
             try:
+                if on_started is not None:
+                    # Popen succeeded: this is the worker-launch boundary and
+                    # the first point at which the server may start charging
+                    # runtime. If binding fails, the exact launched process
+                    # is terminated before returning.
+                    on_started()
+                # Start the local watchdog only after the server ownership
+                # bind succeeds. This keeps client-side runtime accounting
+                # aligned with the server's started_at edge (Popen success is
+                # the strongest evidence available here; Pier's internal
+                # provider registration is not exposed to this process).
+                started = time.time()
                 next_beat = started + HEARTBEAT_SEC
                 while True:
                     try:
@@ -4244,6 +4260,11 @@ def run_trial(
             provider_stack.close()
         except (OSError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
+    if started is None:
+        # Defensive guard for future launch-path changes: artifact harvesting
+        # must never report a runtime duration when no launch boundary was
+        # reached.
+        raise RunnerError("worker launch boundary was not reached")
     duration = time.time() - started
     if isinstance(terminal_error, LiveAccountTerminalError):
         # Let the runloop classify this normalized failure and open the

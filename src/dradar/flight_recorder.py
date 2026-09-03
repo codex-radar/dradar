@@ -78,7 +78,9 @@ OUTCOMES = frozenset({
     "upload-blocked", "upload-failed", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
 })
-PHASES = frozenset({"preparing", "queued", "running", "uploading", "paused"})
+PHASES = frozenset({
+    "preparing", "building", "queued", "running", "uploading", "paused",
+})
 PROVIDERS = frozenset({
     "codex", "claude-code", "dsh-minimal", "grok-build", "kimi-code",
     "zcode", "antigravity", "codebuddy",

@@ -75,6 +75,21 @@ def test_server_can_slow_cadence_but_not_make_it_pathological():
     assert telemetry._send_once() == 600
 
 
+def test_worker_registration_requires_accepted_building_heartbeat():
+    client = FakeClient([
+        {"accepted": False, "action": "refresh", "next_heartbeat_sec": 30},
+        {"accepted": True, "action": "continue", "next_heartbeat_sec": 30},
+    ])
+    telemetry = RunnerTelemetry(client, jitter=False)
+    telemetry.set_phase("building", "assignment-1")
+    assert telemetry.flush_for_worker_registration() is False
+    assert telemetry.flush_for_worker_registration() is True
+    assert [item["phase"] for item in client.heartbeats] == ["building", "building"]
+    assert [item["active_assignment_id"] for item in client.heartbeats] == [
+        "assignment-1", "assignment-1",
+    ]
+
+
 def test_server_notices_are_bounded_validated_and_printed_once(capsys):
     notice = {
         "id": "dsh-usage-upgrade-20260814",

@@ -131,3 +131,18 @@ def test_runtime_try_record_drops_invalid_diagnostic_without_writing(tmp_path):
     ) is None
     assert not recorder.events_path.exists()
     assert not recorder.pending_path.exists()
+
+
+def test_building_phase_is_allowlisted_for_environment_preparation(tmp_path):
+    recorder = FlightRecorder(tmp_path)
+    event = recorder.record(
+        "phase_changed",
+        component="heartbeat",
+        batch_id=BATCH_ID,
+        session_id=SESSION_ID,
+        assignment_id=ASSIGNMENT_ID,
+        attributes={"previous_phase": "preparing", "phase": "building"},
+    )
+    assert event["attributes"] == {
+        "previous_phase": "preparing", "phase": "building",
+    }

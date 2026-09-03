@@ -67,6 +67,11 @@ class RunnerTelemetry:
         self._owner_epoch: int | None = None
         self._batch_id: str | None = None
         self._seq = 0
+        # A successful heartbeat is the only server-verifiable registration
+        # acknowledgement available to the local coordinator.  Keep this
+        # separate from the generic sequence counter: an offline/legacy
+        # server must never be mistaken for a registered worker.
+        self._last_heartbeat_accepted = False
         self._progress_counter = 0
         # The first heartbeat is sent immediately by ``start``.  Keep the
         # fallback short while cloning/building/queuing so a stalled setup is
@@ -217,6 +222,8 @@ class RunnerTelemetry:
                 # alarming users or producing a 404 every two minutes forever.
                 if exc.status_code == 404:
                     self._disabled = True
+                    with self._lock:
+                        self._last_heartbeat_accepted = False
                     return self._interval
                 self._failures += 1
                 self.record_event(
@@ -250,6 +257,8 @@ class RunnerTelemetry:
                 print("runner heartbeat recovered", file=sys.stderr)
             self._failures = 0
             self._warned = False
+            with self._lock:
+                self._last_heartbeat_accepted = response.get("accepted") is True
             self.record_event("heartbeat_acknowledged", component="heartbeat")
             if self.flight_recorder is not None:
                 self.flight_recorder.flush()
@@ -290,6 +299,23 @@ class RunnerTelemetry:
         """
         self._send_once(propagate_errors=True)
         return self._stop_requested
+
+    def flush_for_worker_registration(self) -> bool:
+        """Perform a strict worker-registration handshake.
+
+        ``subprocess.Popen`` only proves that the local Pier parent was
+        created; it says nothing about the server seeing this exact worker.
+        The caller sets ``active_assignment_id`` and ``phase=building`` first,
+        then uses this synchronous heartbeat.  A 200 response with
+        ``accepted=true`` is the protocol's registration acknowledgement.
+        Legacy/disabled heartbeat endpoints fail closed and return ``False``;
+        the caller must not charge the execution lease in that case.
+        """
+        if self._disabled:
+            return False
+        self._send_once(propagate_errors=True)
+        with self._lock:
+            return self._last_heartbeat_accepted
 
     def _loop(self) -> None:
         while not self._stop.is_set():

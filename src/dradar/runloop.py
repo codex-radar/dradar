@@ -2747,6 +2747,22 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "the assignment for another model attempt"
             )
         try:
+            if telemetry is not None:
+                # Popen only proves that the local Pier parent exists.  Bind
+                # the assignment only after this exact session is observed by
+                # the server with the assignment in the building phase.  The
+                # acknowledgement is the worker-registration boundary; a
+                # missing/legacy heartbeat endpoint fails closed.
+                if not telemetry.flush_for_worker_registration():
+                    raise RunnerError(
+                        "server did not acknowledge worker registration; "
+                        "environment remains in preparation and no runtime "
+                        "lease was started"
+                    )
+                if telemetry.stop_requested:
+                    raise RunnerError(
+                        "server requested this worker to stop before registration"
+                    )
             response = client.mark_started(
                 assignment["assignment_id"],
                 session_id=telemetry.session_id if telemetry else None,
@@ -2763,10 +2779,6 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             telemetry.set_phase(
                 "running", assignment["assignment_id"],
                 assignment.get("owner_epoch"),
-            )
-            _record_flight_event(telemetry,
-                "build_completed", component="build",
-                assignment_id=assignment["assignment_id"],
             )
             _record_flight_event(telemetry,
                 "provider_started", component="provider",
