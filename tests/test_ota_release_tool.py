@@ -590,6 +590,22 @@ def test_r2_client_botocore_signs_every_conditional_write_header():
     assert requests[1].headers["if-match"] == '"previous-etag"'
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ('"same"', '"same"', True),
+        ('W/"same"', '"same"', True),
+        ('"same"', 'W/"same"', True),
+        ('W/"same"', 'W/"same"', True),
+        ('"left"', '"right"', False),
+        ("unquoted", "unquoted", False),
+        ('W/W/"same"', '"same"', False),
+    ],
+)
+def test_etag_comparison_only_ignores_one_weak_marker(left, right, expected):
+    assert ota_release._etag_matches(left, right) is expected
+
+
 def test_r2_publication_uploads_immutable_inputs_before_bootstrap_pointer(
     tmp_path, monkeypatch,
 ):
@@ -611,6 +627,33 @@ def test_r2_publication_uploads_immutable_inputs_before_bootstrap_pointer(
     assert puts[-1] == ("PUT_NEW", pointer)
     assert puts[-2][1].endswith("/manifest.json")
     assert len([item for item in puts if item[1].endswith(".pyz")]) == 6
+
+
+def test_pointer_readback_accepts_matching_weak_etag_after_exact_body_check(
+    tmp_path, monkeypatch,
+):
+    class WeakPointerReadbackR2(_FakeR2):
+        def get(self, key):
+            response = super().get(key)
+            if key == "channels/stable/current.json" and response.status_code == 200:
+                return self._response(
+                    200,
+                    response.content,
+                    {"etag": "W/" + response.headers["etag"]},
+                )
+            return response
+
+    _FakeR2.state, _FakeR2.etags, _FakeR2.operations = {}, {}, []
+    monkeypatch.setattr(ota_release, "R2Client", WeakPointerReadbackR2)
+    _mock_public_readback(monkeypatch)
+    _private, private_path, registry = _key_material(tmp_path)
+    bundle = _build(tmp_path)
+    assert _sign(bundle, private_path, registry) == 0
+    assert _verify(bundle, registry) == 0
+    monkeypatch.setenv("DRADAR_OTA_R2_ACCESS_KEY_ID", "test-access")
+    monkeypatch.setenv("DRADAR_OTA_R2_SECRET_ACCESS_KEY", "test-secret")
+
+    assert ota_release.main(_publish_arguments(bundle, registry)) == 0
 
 
 def test_r2_nonbootstrap_pointer_uses_etag_cas(tmp_path, monkeypatch):
