@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -51,6 +52,10 @@ _JSON_STDOUT_LOCK = threading.RLock()
 _STALE_SERVER_DECISION_CODES = {
     "decision_already_used",
     "decision_invalid_or_state_changed",
+}
+_TRUSTED_GIT_INSTALL_PATHS = {
+    "/SecurityMind/dradar",
+    "/codex-radar/dradar",
 }
 
 
@@ -1456,11 +1461,89 @@ def _output(args, response: dict[str, Any]) -> int:
                 "schema_version_unsupported", "运行协议版本不兼容，请升级后重试。",
             )
         agent.setdefault("schema_version", SCHEMA_VERSION)
+        agent.pop("followup_launcher", None)
+        if response.get("agent_action") in {
+            "monitor", "recover_upload", "recheck_plan",
+        }:
+            launcher = _followup_launcher()
+            if launcher is not None:
+                agent["followup_launcher"] = launcher
     if getattr(args, "json", False):
         print(json.dumps(response, ensure_ascii=False, sort_keys=True))
     else:
         print(response["user_message"])
     return 0
+
+
+def _followup_launcher() -> dict[str, Any] | None:
+    """Describe the already-cached immutable launcher for follow-up commands.
+
+    A bare ``uvx --from git+...`` resolves the remote HEAD again before every
+    progress check.  That makes an otherwise healthy run depend on GitHub for
+    its terminal handoff.  The first successful invocation has already cached
+    both the exact source revision and its dependencies, so follow-up commands
+    can safely reuse that revision in offline mode.
+
+    Fail closed when package provenance is absent or not one of the public
+    DRadar repositories.  Never manufacture a revision from the package
+    version or the current working tree.
+    """
+
+    try:
+        raw = importlib.metadata.distribution("dradar").read_text(
+            "direct_url.json",
+        )
+        direct_url = json.loads(raw or "")
+    except (
+        importlib.metadata.PackageNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        TypeError,
+        UnicodeError,
+    ):
+        return None
+    if not isinstance(direct_url, dict):
+        return None
+    source = direct_url.get("url")
+    vcs_info = direct_url.get("vcs_info")
+    if not isinstance(source, str) or not isinstance(vcs_info, dict):
+        return None
+    try:
+        parsed = urlsplit(source)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or parsed.hostname != "github.com"
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") not in _TRUSTED_GIT_INSTALL_PATHS
+        or vcs_info.get("vcs") != "git"
+    ):
+        return None
+    commit = vcs_info.get("commit_id")
+    if (
+        not isinstance(commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+    ):
+        return None
+    normalized_source = urlunsplit((
+        "https", "github.com", parsed.path.rstrip("/"), "", "",
+    ))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": "uvx_offline_git_revision",
+        "argv_prefix": [
+            "uvx", "--offline", "--from",
+            f"git+{normalized_source}@{commit}", "dradar",
+        ],
+        "interactive": False,
+    }
 
 
 def _agent_response_from_server(response: dict[str, Any]) -> dict[str, Any]:
