@@ -235,10 +235,6 @@ def main(argv: list[str] | None = None) -> int:
         help="campaign total-task cap including the website-selected seed batch",
     )
     p_fleet_add.add_argument(
-        "--max-estimated-cost-usd", type=float, metavar="USD",
-        help="required estimated spend cap for paid-API continuation",
-    )
-    p_fleet_add.add_argument(
         "--refill-harness", metavar="HARNESS",
         help="exact Harness for post-seed refill",
     )
@@ -617,10 +613,6 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--max-estimated-quota-pct", type=float, metavar="PCT",
             help="estimated 7-day quota cap for the selected tier",
-        )
-        p.add_argument(
-            "--max-estimated-cost-usd", type=float, metavar="USD",
-            help="estimated paid-API spend cap (required for paid-API refill)",
         )
         p.add_argument(
             "--quota-tier", choices=("plus", "pro-5x", "pro-20x"), default="plus",

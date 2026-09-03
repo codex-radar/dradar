@@ -560,7 +560,6 @@ class ApiClient:
         effort: str,
         refill_to: int,
         max_tasks: int,
-        max_estimated_cost_usd: float | None = None,
     ) -> dict[str, Any]:
         """Idempotently create the server-authoritative multi-machine plan."""
         payload = {
@@ -572,8 +571,6 @@ class ApiClient:
             "refill_to": refill_to,
             "max_tasks": max_tasks,
         }
-        if max_estimated_cost_usd is not None:
-            payload["max_estimated_cost_usd"] = max_estimated_cost_usd
         return self._post(
             "/api/v1/refill-campaign/configure",
             json=payload,
