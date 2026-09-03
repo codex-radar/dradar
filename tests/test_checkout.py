@@ -67,6 +67,15 @@ class StubTelemetry:
         self.phases.append((phase, assignment_id, resume_generation))
 
 
+class RecordingTelemetry(StubTelemetry):
+    def __init__(self, checkout_error=None):
+        super().__init__(checkout_error=checkout_error)
+        self.events = []
+
+    def record_event(self, event_type, *, component, **kwargs):
+        self.events.append((event_type, component, kwargs))
+
+
 def test_persisted_empty_submission_blocks_new_batch_before_checkout(
         monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -320,9 +329,50 @@ def test_checkout_flushes_and_passes_session_id_before_server_stamps_cell(
     )
     assert runloop._go_menu(
         _args(), {}, client, tmp_path, telemetry=telemetry) == 0
-    assert client.checkout_sessions == ["session-test", "session-test"]
-    assert telemetry.flushes >= 2
+    assert client.checkout_sessions == ["session-test"]
+    assert telemetry.flushes >= 1
     assert ("preparing", "a1", None) in telemetry.phases
+
+
+def test_single_task_without_refill_does_not_request_after_upload(
+        monkeypatch, tmp_path):
+    """A final checkout response with no unstarted work is terminal.
+
+    The old loop made one more checkout after upload_completed, producing a
+    claim_requested event without a matching claim_accepted event.
+    """
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
+    assignment = _cell("only")
+    telemetry = RecordingTelemetry()
+
+    def run(_client, _assignment, *_args, telemetry=None, **_kwargs):
+        runloop._record_flight_event(
+            telemetry, "upload_completed", component="upload",
+            assignment_id=assignment["assignment_id"],
+            reason_code="submitted", attributes={"outcome": "submitted"},
+        )
+        return "submitted"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", run)
+    client = CheckoutClient(
+        {"active": [assignment], "free_pick": True},
+        [
+            {"assignment": assignment, "held": 1, "unstarted": 0},
+            # This response must remain unused: there is no refill and the
+            # first checkout already said no unstarted assignment remains.
+            {"assignment": None, "held": 0, "unstarted": 0},
+        ],
+    )
+
+    assert runloop._run_checkout_loop(
+        _args(), client, tmp_path, [assignment], telemetry=telemetry,
+    ) == 0
+    assert len(client.checkout_exclusions) == 1
+    assert [event[0] for event in telemetry.events] == [
+        "claim_requested", "claim_accepted", "assignment_checked_out",
+        "upload_completed",
+    ]
 
 
 def test_checkout_preserves_session_fence_before_provider_preparation(
@@ -405,7 +455,7 @@ def test_checkout_loop_never_retries_a_cell_that_failed_this_session(
          {"assignment": None, "held": 2, "unstarted": 0}])
     rc = runloop._go_menu(_args(), {}, client, tmp_path)
     assert attempts == ["bad", "ok"]
-    assert client.checkout_exclusions == [set(), {"bad"}, {"bad"}]
+    assert client.checkout_exclusions == [set(), {"bad"}]
     assert rc == 1                            # the failure still fails the run
 
 
@@ -461,7 +511,7 @@ def test_supervised_worker_continues_after_expired_old_batch_assignment(
 
     assert runloop._go_menu(args, {}, client, tmp_path) == 0
     assert attempts == ["old", "new"]
-    assert client.checkout_exclusions == [set(), set(), set()]
+    assert client.checkout_exclusions == [set(), set()]
     assert "stopping this automatic batch runner" not in capsys.readouterr().out
 
 
@@ -491,9 +541,7 @@ def test_supervised_worker_continues_after_assignment_local_rejection(
 
     assert runloop._go_menu(args, {}, client, tmp_path) == 0
     assert attempts == ["invalid-answer", "next"]
-    assert client.checkout_exclusions == [
-        set(), {"invalid-answer"}, {"invalid-answer"},
-    ]
+    assert client.checkout_exclusions == [set(), {"invalid-answer"}]
     assert "stopping this automatic batch runner" not in capsys.readouterr().out
 
 
@@ -523,9 +571,7 @@ def test_supervised_worker_continues_after_task_local_runtime_failure(
 
     assert runloop._go_menu(args, {}, client, tmp_path) == 0
     assert attempts == ["zcode-terminal-missing", "next"]
-    assert client.checkout_exclusions == [
-        set(), {"zcode-terminal-missing"}, {"zcode-terminal-missing"},
-    ]
+    assert client.checkout_exclusions == [set(), {"zcode-terminal-missing"}]
     assert "stopping this automatic batch runner" not in capsys.readouterr().out
 
 

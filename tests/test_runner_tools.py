@@ -853,6 +853,31 @@ def test_run_trial_on_started_exception_terminates_launched_worker(tmp_path, mon
     assert captured["process_terminated"] is True
 
 
+def test_run_trial_preserves_pre_registration_build_error(tmp_path, monkeypatch):
+    """A build/registration timeout must not be replaced by a generic guard."""
+    _fake_pier(monkeypatch, tmp_path)
+
+    def wait_for_registration(*_args, **_kwargs):
+        raise RunnerError(
+            "environment preparation exceeded its grace window without "
+            "worker_registered; runtime lease was not started (see build.log)"
+        )
+
+    monkeypatch.setattr(
+        runner_mod, "_wait_for_worker_registration", wait_for_registration,
+    )
+    with pytest.raises(RunnerError, match="environment preparation exceeded") as exc:
+        run_trial(
+            _assignment("codex"),
+            tmp_path,
+            tmp_path,
+            on_started=lambda: None,
+            on_worker_registered=lambda _event: None,
+        )
+    assert "worker launch boundary was not reached" not in str(exc.value)
+    assert "build.log" in str(exc.value)
+
+
 def test_run_trial_uses_artifact_overlay_for_verifier_collect_pack(
     tmp_path, monkeypatch,
 ):

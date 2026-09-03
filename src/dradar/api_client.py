@@ -647,6 +647,13 @@ class ApiClient:
         excluded = sorted(set(exclude_assignment_ids or ()))
         data = {"exclude_assignment_ids": ",".join(excluded),
                 "session_id": session_id or ""}
+        if session_id:
+            # Current servers can reserve a free-pick cell for this exact
+            # runner while its environment is still building.  Older servers
+            # ignore the extra form field and keep their historical
+            # checkout-starts-runtime behaviour, so this is rolling-upgrade
+            # compatible.
+            data["prepare_only"] = "true"
         if self.benchmark_id:
             data["benchmark_id"] = self.benchmark_id
         if self.batch_id:

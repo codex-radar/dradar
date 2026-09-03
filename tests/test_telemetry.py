@@ -3,6 +3,7 @@ import json
 import pytest
 
 from dradar.api_client import ApiError
+from dradar.flight_recorder import FlightRecorder
 from dradar.telemetry import RunnerTelemetry
 
 
@@ -25,6 +26,26 @@ class FakeClient:
     def runner_close(self, payload):
         self.closes.append(payload)
         return {"ok": True}
+
+
+class AtomicScopeClient(FakeClient):
+    """Reject a mixed flight batch like the server's atomic endpoint."""
+
+    def __init__(self, responses=None):
+        super().__init__(responses)
+        self.flight_batches = []
+        self.allowed_batch = None
+        self.allowed_session = None
+
+    def flight_events(self, events):
+        self.flight_batches.append(events)
+        if any(
+            event.get("batch_id") != self.allowed_batch
+            or event.get("session_id") != self.allowed_session
+            for event in events
+        ):
+            return {"acknowledged_event_ids": []}
+        return {"acknowledged_event_ids": [event["event_id"] for event in events]}
 
 
 def test_payload_is_one_session_not_one_per_assignment_and_stays_small():
@@ -107,6 +128,58 @@ def test_recorder_present_without_exact_event_id_fails_closed(tmp_path):
     telemetry = RunnerTelemetry(FakeClient([{"accepted": True}]), jitter=False, home=tmp_path)
     telemetry.set_phase("building", "assignment-1")
     assert telemetry.flush_for_worker_registration() is False
+
+
+def test_worker_registration_isolated_from_persisted_plan_and_session_pending(tmp_path):
+    """A stale null/old-plan prefix cannot block the current worker receipt."""
+    old_batch = "a" * 32
+    new_batch = "b" * 32
+    old_session = "c" * 32
+    assignment_id = "d" * 32
+    recorder = FlightRecorder(tmp_path)
+    old_null = recorder.record(
+        "session_started", component="cli", session_id=old_session,
+    )
+    old_plan = recorder.record(
+        "phase_changed",
+        component="heartbeat",
+        batch_id=old_batch,
+        session_id=old_session,
+        attributes={"previous_phase": "preparing", "phase": "building"},
+    )
+
+    client = AtomicScopeClient([{
+        "accepted": True,
+        "action": "continue",
+        "batch_id": new_batch,
+        "next_heartbeat_sec": 30,
+    }])
+    telemetry = RunnerTelemetry(client, jitter=False, home=tmp_path)
+    telemetry.bind_batch(new_batch)
+    client.allowed_batch = new_batch
+    client.allowed_session = telemetry.session_id
+    worker = telemetry.record_event(
+        "worker_registered",
+        component="provider",
+        assignment_id=assignment_id,
+        attributes={"provider": "codex"},
+    )
+
+    assert worker is not None
+    assert telemetry.flush_for_worker_registration(worker["event_id"]) is True
+    assert len(client.flight_batches) == 1
+    uploaded = client.flight_batches[0]
+    assert uploaded[0]["event_id"] == worker["event_id"]
+    assert all(
+        event["batch_id"] == new_batch
+        and event["session_id"] == telemetry.session_id
+        for event in uploaded
+    )
+
+    pending = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+    assert {event["event_id"] for event in pending} == {
+        old_null["event_id"], old_plan["event_id"],
+    }
 
 
 def test_server_notices_are_bounded_validated_and_printed_once(capsys):
@@ -218,3 +291,50 @@ def test_close_carries_only_session_batch_seq_and_reason():
         "seq": 2,
         "reason": "paused",
     }]
+
+
+def test_session_started_is_deferred_until_batch_bind(tmp_path):
+    telemetry = RunnerTelemetry(FakeClient(), jitter=False, home=tmp_path)
+    assert telemetry.flight_recorder is not None
+    # Constructor must not enqueue an event with a null batch identity.
+    assert telemetry.flight_recorder._load(
+        telemetry.flight_recorder.pending_path,
+    ) == []
+    telemetry.bind_batch("b" * 32)
+    telemetry.bind_batch("c" * 32)
+    events = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+    starts = [event for event in events if event["event_type"] == "session_started"]
+    assert len(starts) == 1
+    assert starts[0]["batch_id"] == "b" * 32
+
+
+def test_prebind_session_started_is_dropped_instead_of_persisted(tmp_path):
+    telemetry = RunnerTelemetry(FakeClient(), jitter=False, home=tmp_path)
+    assert telemetry.record_event("session_started", component="cli") is None
+    assert telemetry.flight_recorder._load(
+        telemetry.flight_recorder.pending_path,
+    ) == []
+    telemetry.bind_batch("b" * 32)
+    events = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+    assert [event["event_type"] for event in events].count("session_started") == 1
+
+
+def test_legacy_heartbeat_backfills_batch_before_flight_upload(tmp_path):
+    client = FakeClient([{
+        "accepted": True,
+        "batch_id": "b" * 32,
+        "next_heartbeat_sec": 60,
+    }])
+    uploaded = []
+
+    def flight_events(events):
+        uploaded.extend(events)
+        return {"acknowledged_event_ids": [event["event_id"] for event in events]}
+
+    client.flight_events = flight_events
+    telemetry = RunnerTelemetry(client, jitter=False, home=tmp_path)
+    telemetry._send_once()
+    events = uploaded
+    starts = [event for event in events if event["event_type"] == "session_started"]
+    assert len(starts) == 1
+    assert starts[0]["batch_id"] == "b" * 32
