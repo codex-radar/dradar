@@ -42,6 +42,11 @@ from .codebuddy_provider import (
     codebuddy_subscription_session,
 )
 from .manifest import task_content_hash
+from .worker_events import (
+    WORKER_EVENT_FILE_ENV,
+    read_worker_event,
+    parse_worker_event,
+)
 from .providers import (
     ANTIGRAVITY_AGENT,
     ANTIGRAVITY_CLI_VERSION,
@@ -194,6 +199,8 @@ DEEPSEEK_TOML = (
 )
 DEEPSEEK_AGENT_IMPORT_PATH = "_dradar_pier_deepseek:DeepSeekCodex"
 DEEPSEEK_AGENT_MODULE_FILENAME = "_dradar_pier_deepseek.py"
+CODEX_AGENT_IMPORT_PATH = "_dradar_pier_codex:CodexRegistered"
+CODEX_AGENT_MODULE_FILENAME = "_dradar_pier_codex.py"
 CLAUDE_AGENT_IMPORT_PATH = "_dradar_pier_claude:ClaudeCodeSubscription"
 CLAUDE_AGENT_MODULE_FILENAME = "_dradar_pier_claude.py"
 CLAUDE_USAGE_MODULE_FILENAME = "_dradar_claude_usage.py"
@@ -228,6 +235,7 @@ DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER = 3.0
 DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_SEC = 600.0
 PIER_ENVIRONMENT_START_ATTEMPTS = 2
 ENVIRONMENT_BUILD_WATCHDOG_SLACK_SEC = 120
+WORKER_REGISTRATION_GRACE_SEC = 30 * 60
 BETA_SUBSCRIPTION_AGENTS = frozenset({
     CLAUDE_AGENT, GROK_AGENT, KIMI_AGENT, ZCODE_AGENT, ANTIGRAVITY_AGENT,
     CODEBUDDY_AGENT,
@@ -663,8 +671,21 @@ def _ensure_deepseek_agent_module(home: Path) -> Path:
             "DeepSeek Pier adapter is missing; reinstall or upgrade dradar "
             "before running a paid task"
         )
+    _ensure_worker_event_module(home)
     target = home / DEEPSEEK_AGENT_MODULE_FILENAME
     return _materialize_shared_file(target, source.read_bytes())
+
+
+def _ensure_codex_agent_module(home: Path) -> Path:
+    source = Path(__file__).with_name("pier_codex.py")
+    if not source.is_file():
+        raise RunnerError(
+            "Codex Pier adapter is missing; reinstall or upgrade dradar"
+        )
+    _ensure_worker_event_module(home)
+    return _materialize_shared_file(
+        home / CODEX_AGENT_MODULE_FILENAME, source.read_bytes(),
+    )
 
 
 def _ensure_claude_agent_module(home: Path) -> Path:
@@ -674,6 +695,7 @@ def _ensure_claude_agent_module(home: Path) -> Path:
         raise RunnerError(
             "Claude Code Pier adapter is missing; reinstall or upgrade dradar"
         )
+    _ensure_worker_event_module(home)
     _materialize_shared_file(
         home / CLAUDE_USAGE_MODULE_FILENAME, usage_source.read_bytes()
     )
@@ -693,6 +715,18 @@ def _ensure_runtime_safety_module(home: Path) -> Path:
     )
 
 
+def _ensure_worker_event_module(home: Path) -> Path:
+    """Copy the tiny Pier->CLI lifecycle sidecar helper into the run dir."""
+    source = Path(__file__).with_name("worker_events.py")
+    if not source.is_file():
+        raise RunnerError(
+            "Pier worker lifecycle helper is missing; reinstall or upgrade dradar"
+        )
+    return _materialize_shared_file(
+        home / "_dradar_worker_events.py", source.read_bytes(),
+    )
+
+
 def _ensure_grok_agent_module(home: Path) -> Path:
     source = Path(__file__).with_name("pier_grok.py")
     recovery_source = Path(__file__).with_name("grok_recovery.py")
@@ -700,6 +734,7 @@ def _ensure_grok_agent_module(home: Path) -> Path:
         raise RunnerError(
             "Grok Build Pier adapter is missing; reinstall or upgrade dradar"
         )
+    _ensure_worker_event_module(home)
     _materialize_shared_file(
         home / GROK_RECOVERY_MODULE_FILENAME, recovery_source.read_bytes()
     )
@@ -716,6 +751,7 @@ def _ensure_kimi_agent_module(home: Path) -> Path:
             "Kimi Code Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_runtime_safety_module(home)
+    _ensure_worker_event_module(home)
     _materialize_shared_file(
         home / KIMI_RECOVERY_MODULE_FILENAME, recovery_source.read_bytes()
     )
@@ -730,6 +766,7 @@ def _ensure_antigravity_agent_module(home: Path) -> Path:
         raise RunnerError(
             "Antigravity Pier adapter is missing; reinstall or upgrade dradar"
         )
+    _ensure_worker_event_module(home)
     return _materialize_shared_file(
         home / ANTIGRAVITY_AGENT_MODULE_FILENAME, source.read_bytes()
     )
@@ -832,6 +869,7 @@ def _ensure_zcode_agent_module(home: Path) -> Path:
             "ZCode Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_runtime_safety_module(home)
+    _ensure_worker_event_module(home)
     return _materialize_shared_file(
         home / ZCODE_AGENT_MODULE_FILENAME, source.read_bytes()
     )
@@ -846,6 +884,7 @@ def _ensure_dsh_agent_module(home: Path) -> Path:
             "DSH Minimal Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_runtime_safety_module(home)
+    _ensure_worker_event_module(home)
     return _materialize_shared_file(
         home / DSH_AGENT_MODULE_FILENAME, source.read_bytes()
     )
@@ -857,6 +896,7 @@ def _ensure_codebuddy_agent_module(home: Path) -> Path:
         raise RunnerError(
             "CodeBuddy Pier adapter is missing; reinstall or upgrade dradar"
         )
+    _ensure_worker_event_module(home)
     return _materialize_shared_file(
         home / CODEBUDDY_AGENT_MODULE_FILENAME, source.read_bytes()
     )
@@ -1093,6 +1133,9 @@ def _pier_process_env(
         env["PYTHONPATH"] = os.pathsep.join(
             dict.fromkeys(str(path) for path in python_dirs)
         )
+    session_id = assignment.get("_runner_session_id")
+    if isinstance(session_id, str) and session_id:
+        env["DRADAR_RUNNER_SESSION_ID"] = session_id
     if assignment_codex_provider(assignment) == DEEPSEEK_PROVIDER:
         # The key has already been materialized in a private auth.json file.
         # Removing the ambient variable prevents accidental fallback to the
@@ -1310,7 +1353,8 @@ def build_pier_command(
         _ensure_deepseek_agent_module(home)
         agent_args = ["--agent-import-path", DEEPSEEK_AGENT_IMPORT_PATH]
     elif agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
-        agent_args = ["--agent", "codex"]
+        _ensure_codex_agent_module(home)
+        agent_args = ["--agent-import-path", CODEX_AGENT_IMPORT_PATH]
     elif agent == CLAUDE_AGENT:
         _validate_claude_assignment(assignment)
         _ensure_claude_agent_module(home)
@@ -3744,12 +3788,58 @@ def _cleanup_exited_pier_runtime(
     return process_residue, cleanup
 
 
+def _wait_for_worker_registration(
+    proc: subprocess.Popen,
+    event_path: Path,
+    *,
+    environment_build_timeout_multiplier: float,
+    worker_event_source: Callable[[], object | None] | None = None,
+    expected_session_id: str | None = None,
+) -> dict:
+    """Wait for a bounded, structured Pier lifecycle record (never logs)."""
+    event_offset = 0
+    # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
+    # this clock is separate from the post-registration runtime watchdog.
+    deadline = time.monotonic() + WORKER_REGISTRATION_GRACE_SEC
+    while True:
+        if worker_event_source is not None:
+            raw_event = worker_event_source()
+        else:
+            raw_event, event_offset = read_worker_event(event_path, offset=event_offset)
+        parsed = parse_worker_event(raw_event) if raw_event is not None else None
+        if parsed is not None and (
+            expected_session_id is None or parsed.session_id == expected_session_id
+        ):
+            return {
+                "event": "worker_registered",
+                "session_id": parsed.session_id,
+                "client_seq": parsed.client_seq,
+                "runtime": parsed.runtime,
+                "context": parsed.context,
+                "profile": parsed.profile,
+                "occurred_at_ms": parsed.occurred_at_ms,
+            }
+        if proc.poll() is not None:
+            raise RunnerError(
+                "Pier exited before the structured worker_registered signal; "
+                "runtime lease was not started"
+            )
+        if time.monotonic() >= deadline:
+            raise RunnerError(
+                "environment preparation exceeded its grace window without "
+                "worker_registered; runtime lease was not started"
+            )
+        time.sleep(0.25)
+
+
 def run_trial(
     assignment: dict,
     tasks_root: Path,
     work_dir: Path,
     dev_agent: str | None = None,
     on_started: Callable[[], None] | None = None,
+    on_worker_registered: Callable[[dict], None] | None = None,
+    worker_event_source: Callable[[], object | None] | None = None,
     environment_build_timeout_multiplier: float | None = None,
     build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
 ) -> TrialArtifacts:
@@ -4094,6 +4184,12 @@ def run_trial(
                 work_dir if effective_agent == CODEBUDDY_AGENT else None
             ),
         )
+        # Pier adapters publish a single JSON lifecycle record to this private
+        # sidecar after environment setup and immediately before provider work.
+        # It is intentionally separate from combined stdout/stderr.
+        worker_event_path = work_dir / f"{job_name}.worker-events.jsonl"
+        worker_event_path.unlink(missing_ok=True)
+        env[WORKER_EVENT_FILE_ENV] = str(worker_event_path)
         if builder_lease.name is not None:
             # Select the assignment builder only for Pier. Never mutate the
             # user's global/default buildx selection.
@@ -4138,17 +4234,27 @@ def run_trial(
                 start_new_session=(os.name != "nt"),
             )
             try:
-                if on_started is not None:
-                    # Popen succeeded: this is the worker-launch boundary and
-                    # the first point at which the server may start charging
-                    # runtime. If binding fails, the exact launched process
-                    # is terminated before returning.
-                    on_started()
-                # Start the local watchdog only after the server ownership
-                # bind succeeds. This keeps client-side runtime accounting
-                # aligned with the server's started_at edge (Popen success is
-                # the strongest evidence available here; Pier's internal
-                # provider registration is not exposed to this process).
+                if on_worker_registered is None and worker_event_source is None:
+                    # Legacy unit callers that do not request ownership binding
+                    # keep the old local-only behavior. Production always passes
+                    # on_worker_registered and therefore takes the strict path.
+                    if on_started is not None:
+                        on_started()
+                else:
+                    event = _wait_for_worker_registration(
+                        proc,
+                        worker_event_path,
+                        environment_build_timeout_multiplier=(
+                            environment_build_timeout_multiplier
+                        ),
+                        worker_event_source=worker_event_source,
+                        expected_session_id=assignment.get("_runner_session_id"),
+                    )
+                    if on_worker_registered is not None:
+                        on_worker_registered(event)
+                # Start the local watchdog only after server ownership bind and
+                # the structured worker event. No model runtime is charged to
+                # image build/provider bootstrap.
                 started = time.time()
                 next_beat = started + HEARTBEAT_SEC
                 while True:

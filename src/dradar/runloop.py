@@ -2657,7 +2657,8 @@ def _record_flight_event(
     """Keep legacy/test telemetry adapters compatible during protocol rollout."""
     recorder = getattr(telemetry, "record_event", None)
     if recorder is not None:
-        recorder(event_type, component=component, **kwargs)
+        return recorder(event_type, component=component, **kwargs)
+    return None
 
 
 def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
@@ -2734,7 +2735,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
 
     ownership_state = "needs_bind"
 
-    def bind_owner() -> None:
+    def bind_owner(_worker_event: dict | None = None) -> None:
         nonlocal ownership_state
         if ownership_state == "bound":
             # BuildFlake retry is still the same logical assignment attempt.
@@ -2753,9 +2754,29 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 # the server with the assignment in the building phase.  The
                 # acknowledgement is the worker-registration boundary; a
                 # missing/legacy heartbeat endpoint fails closed.
-                if not telemetry.flush_for_worker_registration():
+                worker_event = _record_flight_event(
+                    telemetry,
+                    "worker_registered",
+                    component="provider",
+                    assignment_id=assignment["assignment_id"],
+                    attributes={"provider": assignment.get("agent") or "codex"},
+                )
+                worker_event_id = (
+                    worker_event.get("event_id")
+                    if isinstance(worker_event, dict) else None
+                )
+                if (
+                    not isinstance(worker_event_id, str)
+                    or len(worker_event_id) != 32
+                    or any(char not in "0123456789abcdef" for char in worker_event_id)
+                ):
                     raise RunnerError(
-                        "server did not acknowledge worker registration; "
+                        "worker_registered event was not persisted locally; "
+                        "refusing to start a runtime lease"
+                    )
+                if not telemetry.flush_for_worker_registration(worker_event_id):
+                    raise RunnerError(
+                        "server did not acknowledge worker_registered event and "
                         "environment remains in preparation and no runtime "
                         "lease was started"
                     )
@@ -2766,6 +2787,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             response = client.mark_started(
                 assignment["assignment_id"],
                 session_id=telemetry.session_id if telemetry else None,
+                worker_event_id=worker_event_id if telemetry else None,
             )
         except ApiError as exc:
             raise RunnerError(
@@ -2790,9 +2812,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     for attempt in (1, 2):
         try:
             try:
+                if telemetry is not None:
+                    # Pier's adapter sidecar binds this exact runner session
+                    # into its structured worker_registered event.
+                    assignment["_runner_session_id"] = telemetry.session_id
                 art = run_trial(
                     assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
                     on_started=bind_owner,
+                    on_worker_registered=bind_owner,
                     environment_build_timeout_multiplier=(
                         getattr(
                             args, "_environment_build_timeout_multiplier", None,

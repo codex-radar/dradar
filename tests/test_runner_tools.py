@@ -44,8 +44,8 @@ def test_codex_disables_server_side_network_tools(tmp_path, monkeypatch):
     cmd = build_pier_command(
         _assignment("codex"), tmp_path, tmp_path / "jobs", "j", home,
     )
-    assert cmd[cmd.index("--agent") + 1] == "codex"
-    assert "--agent-import-path" not in cmd
+    assert cmd[cmd.index("--agent-import-path") + 1].endswith(":CodexRegistered")
+    assert (home / "_dradar_pier_codex.py").is_file()
     allowlist = (home / "codex-chatgpt-allowlist.toml").read_text()
     # web_search must be a top-level string key BEFORE any [table] header, or
     # TOML nests it and codex ignores it (verified: bool/nested = no effect).
@@ -160,8 +160,8 @@ def test_dev_agent_codex_uses_stock_openai_provider_default(tmp_path, monkeypatc
         dev_agent="codex",
     )
 
-    assert cmd[cmd.index("--agent") + 1] == "codex"
-    assert "--agent-import-path" not in cmd
+    assert cmd[cmd.index("--agent-import-path") + 1].endswith(":CodexRegistered")
+    assert (home / "_dradar_pier_codex.py").is_file()
 
 
 def test_codex_adapter_dir_is_the_only_added_python_path(tmp_path, monkeypatch):

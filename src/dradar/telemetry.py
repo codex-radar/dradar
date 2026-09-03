@@ -72,6 +72,7 @@ class RunnerTelemetry:
         # separate from the generic sequence counter: an offline/legacy
         # server must never be mistaken for a registered worker.
         self._last_heartbeat_accepted = False
+        self._last_flight_events_acked = 0
         self._progress_counter = 0
         # The first heartbeat is sent immediately by ``start``.  Keep the
         # fallback short while cloning/building/queuing so a stalled setup is
@@ -154,12 +155,12 @@ class RunnerTelemetry:
         if changed:
             self._wake.set()
 
-    def record_event(self, event_type: str, *, component: str, **kwargs) -> None:
+    def record_event(self, event_type: str, *, component: str, **kwargs) -> dict | None:
         if self.flight_recorder is None:
-            return
+            return None
         kwargs.setdefault("batch_id", self._batch_id)
         kwargs.setdefault("session_id", self.session_id)
-        self.flight_recorder.try_record(event_type, component=component, **kwargs)
+        return self.flight_recorder.try_record(event_type, component=component, **kwargs)
 
     def set_phase(
         self,
@@ -260,8 +261,9 @@ class RunnerTelemetry:
             with self._lock:
                 self._last_heartbeat_accepted = response.get("accepted") is True
             self.record_event("heartbeat_acknowledged", component="heartbeat")
-            if self.flight_recorder is not None:
-                self.flight_recorder.flush()
+            self._last_flight_events_acked = (
+                self.flight_recorder.flush() if self.flight_recorder is not None else 0
+            )
             self._show_notices(response)
             if response.get("stop_requested") is True:
                 self._stop_requested = True
@@ -274,7 +276,7 @@ class RunnerTelemetry:
                 requested_interval = min(600, max(30, int(requested)))
                 with self._lock:
                     phase = self._phase
-                if phase in {"preparing", "queued"}:
+                if phase in {"preparing", "building", "queued"}:
                     # Preparation has no model output to act as a liveness
                     # signal. Do not let an adaptive server interval stretch
                     # this phase beyond the operator-visible 30s cadence.
@@ -300,14 +302,15 @@ class RunnerTelemetry:
         self._send_once(propagate_errors=True)
         return self._stop_requested
 
-    def flush_for_worker_registration(self) -> bool:
+    def flush_for_worker_registration(self, required_event_id: str | None = None) -> bool:
         """Perform a strict worker-registration handshake.
 
         ``subprocess.Popen`` only proves that the local Pier parent was
         created; it says nothing about the server seeing this exact worker.
         The caller sets ``active_assignment_id`` and ``phase=building`` first,
         then uses this synchronous heartbeat.  A 200 response with
-        ``accepted=true`` is the protocol's registration acknowledgement.
+        ``accepted=true`` plus an acknowledged ``worker_registered`` flight
+        event is the protocol's registration acknowledgement.
         Legacy/disabled heartbeat endpoints fail closed and return ``False``;
         the caller must not charge the execution lease in that case.
         """
@@ -315,7 +318,15 @@ class RunnerTelemetry:
             return False
         self._send_once(propagate_errors=True)
         with self._lock:
-            return self._last_heartbeat_accepted
+            if not self._last_heartbeat_accepted:
+                return False
+            if self.flight_recorder is None:
+                return required_event_id is None
+            if required_event_id is not None:
+                return required_event_id in self.flight_recorder.last_acknowledged_event_ids
+            # A production recorder must always bind the exact lifecycle event;
+            # an unspecified ID would silently downgrade to heartbeat-only.
+            return False
 
     def _loop(self) -> None:
         while not self._stop.is_set():

@@ -20,6 +20,10 @@ from pier.agents.installed.codex import Codex
 from pier.environments.base import BaseEnvironment
 from pier.models.agent.context import AgentContext
 from pier.models.agent.network import NetworkAllowlist
+try:
+    from _dradar_worker_events import emit_worker_registered
+except ModuleNotFoundError:
+    from dradar.worker_events import emit_worker_registered
 
 _CATALOG_SHA256 = (
     "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
@@ -71,6 +75,7 @@ class DeepSeekCodex(Codex):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        emit_worker_registered(runtime="pier", context="agent", profile="deepseek")
         remote_home = self._REMOTE_CODEX_HOME.as_posix()
         env = self.build_process_env({
             "CODEX_HOME": remote_home,
