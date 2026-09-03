@@ -1848,7 +1848,10 @@ def _upload_trial(
             print(f"patch contains secret-shaped content ({', '.join(labels)}) "
                   "outside safely redactable added lines, or redaction made the diff "
                   f"invalid; not uploaded. Raw evidence kept at {patch}")
-            pending.remove(HOME, assignment_id)
+            pending.remove(
+                HOME, assignment_id,
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
             settle_terminal_local_failure()
             return "not-uploaded"
         print(f"patch contained secret-shaped content "
@@ -1877,7 +1880,10 @@ def _upload_trial(
                 "    assignment reopened for an independent ZCode re-solve; "
                 "no prior model answer is reused"
             )
-            pending.remove(HOME, assignment_id)
+            pending.remove(
+                HOME, assignment_id,
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
             settle_terminal_local_failure()
             # This guard is assignment-local: the model completed normally,
             # but did not produce the one allowed deliverable.  The server has
@@ -2279,7 +2285,10 @@ def _upload_trial(
                                     f"  {task_id}: lease expired before its saved "
                                     "upload could be reconciled; local evidence kept"
                                 )
-                                pending.remove(HOME, assignment_id)
+                                pending.remove(
+                                    HOME, assignment_id,
+                                    scope_fingerprint=entry.get("scope_fingerprint"),
+                                )
                                 cleanup_settled()
                                 return "expired"
                             print(
@@ -2359,7 +2368,10 @@ def _upload_trial(
                             "upload recovery could be registered — the cell "
                             "reopened, dropping it"
                         )
-                        pending.remove(HOME, assignment_id)
+                        pending.remove(
+                            HOME, assignment_id,
+                            scope_fingerprint=entry.get("scope_fingerprint"),
+                        )
                         cleanup_settled()
                         return "expired"
                     if exc.status_code == 409 and exc.code == "upload_owner_superseded":
@@ -2436,7 +2448,10 @@ def _upload_trial(
                         "releasing the incompatible assignment instead of "
                         "retrying forever"
                     )
-                    pending.remove(HOME, assignment_id)
+                    pending.remove(
+                        HOME, assignment_id,
+                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    )
                     settle_terminal_local_failure()
                     print(
                         "  rejected artifacts kept for diagnosis: "
@@ -2450,13 +2465,19 @@ def _upload_trial(
                     print(f"  {task_id}: already submitted (an earlier attempt landed) — clearing it")
                     if not ask_cleanup:
                         archive_after_submit(HOME, entry)
-                    pending.remove(HOME, assignment_id)
+                    pending.remove(
+                        HOME, assignment_id,
+                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    )
                     cleanup_settled()
                     return "submitted"
                 if exc.status_code == 410:
                     print(f"  {task_id}: lease expired, unsalvageable — the cell reopened "
                           "for someone else, dropping it")
-                    pending.remove(HOME, assignment_id)
+                    pending.remove(
+                        HOME, assignment_id,
+                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    )
                     cleanup_settled()
                     return "expired"
                 if (exc.status_code in (404, 413)
@@ -2469,7 +2490,10 @@ def _upload_trial(
                     print(f"  {task_id}: the server rejected this upload for good ({exc}) — "
                           "retrying can't fix it, dropping it from the retry queue "
                           f"(local artifact path: {patch.parent.parent})")
-                    pending.remove(HOME, assignment_id)
+                    pending.remove(
+                        HOME, assignment_id,
+                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    )
                     settle_terminal_local_failure()
                     print(f"  rejected artifacts kept for diagnosis: {patch.parent.parent}")
                     return "rejected"
@@ -2482,7 +2506,10 @@ def _upload_trial(
 
     if not ask_cleanup:
         archive_after_submit(HOME, entry)
-    pending.remove(HOME, assignment_id)
+    pending.remove(
+        HOME, assignment_id,
+        scope_fingerprint=entry.get("scope_fingerprint"),
+    )
     cleanup_settled()
     exact_empty_submission = (
         ack.get("terminal_outcome") == "empty-submission"
@@ -2712,7 +2739,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             ),
         )
         return "task-content-mismatch"
-    if assignment["assignment_id"] in pending.assignment_ids(HOME):
+    if assignment["assignment_id"] in _pending_assignment_ids_for_client(
+        client, batch_id=assignment.get("batch_id"),
+    ):
         print(
             "refusing to start: this assignment already has a durable completed "
             "result pending upload; run `dradar retry-upload`"
@@ -3309,6 +3338,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         # machine can retry the upload without re-running the model or touching
         # another concurrently active Honeypot.
         "batch_id": assignment.get("batch_id"),
+        "scope_fingerprint": pending.scope_fingerprint(
+            server=getattr(client, "server", None),
+            account_scope=getattr(client, "account_scope", None),
+            benchmark_id=getattr(client, "benchmark_id", None),
+            batch_id=assignment.get("batch_id"),
+        ),
         "meta": meta, "outcome": outcome,
         "job_dir": str(art.job_dir) if art.job_dir else None, "keep": args.keep,
         "archive_session": getattr(args, "archive_session", False),
@@ -3387,7 +3422,202 @@ def _pending_uploads_for_batch(batch_id: str) -> list[dict]:
         except ValueError:
             return False
 
-    return [entry for entry in pending.load(HOME) if belongs(entry)]
+    return [
+        entry for entry in pending.load(HOME)
+        if isinstance(entry, dict) and belongs(entry)
+    ]
+
+
+def _pending_uploads_for_client_batch(
+    client: ApiClient, batch_id: str,
+) -> list[dict]:
+    """Filter a batch ledger by the client's account/server identity too."""
+    entries = _pending_uploads_for_batch(batch_id)
+    if not _pending_scope_is_required(client):
+        return entries
+    expected = _pending_scope_fingerprint(client, batch_id=batch_id)
+    if expected is None:
+        return []
+    return [
+        entry for entry in entries
+        if entry.get("scope_fingerprint") == expected
+    ]
+
+
+def _pending_scope_fingerprint(
+    client: ApiClient, *, batch_id: str | None = None,
+) -> str | None:
+    """Build the non-secret queue identity for this client/plan context."""
+    effective_batch = (
+        batch_id if batch_id is not None else getattr(client, "batch_id", None)
+    )
+    if effective_batch is not None:
+        try:
+            # Persist and compare one canonical representation even when an
+            # assignment envelope used the UUID's hyphenated spelling.  An
+            # invalid batch is unknown, so callers must fail closed instead
+            # of hashing an unverifiable value into a replayable scope.
+            effective_batch = normalize_batch_id(effective_batch)
+        except (TypeError, ValueError):
+            return None
+    return pending.scope_fingerprint(
+        server=getattr(client, "server", None),
+        account_scope=getattr(client, "account_scope", None),
+        benchmark_id=getattr(client, "benchmark_id", None),
+        batch_id=effective_batch,
+    )
+
+
+def _mark_pending_scope_required(client: ApiClient) -> None:
+    """Opt a production retry scan into fail-closed scope filtering.
+
+    Keeping this as a client marker preserves compatibility with tiny test and
+    third-party adapters that monkeypatch ``_retry_pending_uploads`` with the
+    historical one-argument callable.  Real ``ApiClient`` instances always
+    carry ``server`` and ``account_scope`` and therefore opt in.
+    """
+    if getattr(client, "server", None) and getattr(client, "account_scope", None):
+        try:
+            setattr(client, "_pending_scope_required", True)
+        except Exception:  # pragma: no cover - unusual immutable adapter
+            pass
+
+
+def _pending_scope_is_required(client: ApiClient) -> bool:
+    """Whether this retry adapter can and must prove an account scope."""
+    return bool(
+        getattr(client, "_pending_scope_required", False)
+        or (
+            getattr(client, "server", None)
+            and getattr(client, "account_scope", None)
+        )
+    )
+
+
+def _pending_entry_matches_scope(
+    client: ApiClient,
+    entry: dict,
+    *,
+    batch_id: str | None = None,
+) -> bool:
+    """Whether a durable entry belongs to this exact client/plan context."""
+    if not isinstance(entry, dict):
+        return False
+    effective_batch = (
+        batch_id if batch_id is not None else getattr(client, "batch_id", None)
+    )
+    raw_entry_batch = entry.get("batch_id")
+    if effective_batch is None:
+        if raw_entry_batch is not None:
+            return False
+    else:
+        try:
+            if normalize_batch_id(raw_entry_batch) != normalize_batch_id(
+                effective_batch,
+            ):
+                return False
+        except (TypeError, ValueError):
+            return False
+    expected = _pending_scope_fingerprint(client, batch_id=effective_batch)
+    if expected is None or entry.get("scope_fingerprint") != expected:
+        return False
+    # ``runner_session_id`` remains in the entry and is sent through the
+    # server's owner-intent fence.  A standalone retry may therefore replay a
+    # durable session safely once its server/account/plan scope matches; the
+    # server, not a newly-created local process, decides whether that exact
+    # owner session is still valid.
+    return True
+
+
+def _pending_uploads_for_scope(
+    client: ApiClient, *, batch_id: str | None = None,
+) -> list[dict]:
+    """Load only entries proven to belong to this client/plan scope."""
+    effective_batch = (
+        batch_id if batch_id is not None else getattr(client, "batch_id", None)
+    )
+    if effective_batch is None:
+        candidates, ambiguous_ids = _personal_scope_candidates(client)
+        return [
+            entry for entry in candidates
+            if entry.get("assignment_id") not in ambiguous_ids
+        ]
+    return [
+        entry for entry in pending.load(HOME)
+        if _pending_entry_matches_scope(client, entry, batch_id=effective_batch)
+    ]
+
+
+def _pending_assignment_ids_for_client(
+    client: ApiClient, *, batch_id: str | None = None,
+) -> set[str]:
+    """Return durable assignments only from this account/plan queue.
+
+    Assignment fencing must still include session-bound rows: even when a
+    standalone command cannot immediately replay such a row, it must not rerun
+    the paid model work.  Unlike upload replay, this helper intentionally does
+    not require a live session ID.
+    """
+    if not _pending_scope_is_required(client):
+        return pending.assignment_ids(HOME)
+    effective_batch = (
+        batch_id if batch_id is not None else getattr(client, "batch_id", None)
+    )
+    if effective_batch is None:
+        entries, _ambiguous_ids = _personal_scope_candidates(client)
+    else:
+        entries = [
+            entry for entry in pending.load(HOME)
+            if _pending_entry_matches_scope(
+                client, entry, batch_id=effective_batch,
+            )
+        ]
+    return {
+        str(entry["assignment_id"])
+        for entry in entries
+        if entry.get("assignment_id")
+    }
+
+
+def _personal_scope_candidates(
+    client: ApiClient,
+) -> tuple[list[dict], set[str]]:
+    """Find all own personal-batch rows and flag assignment collisions.
+
+    A normal client can legitimately have more than one active personal
+    batch.  Each row is matched against its own normalized ``batch_id``;
+    only an invalid/unknown row or the same assignment appearing in multiple
+    batches is ambiguous and therefore withheld from automatic replay.
+    """
+    candidates: list[dict] = []
+    assignment_batches: dict[str, set[str | None]] = {}
+    for entry in pending.load(HOME):
+        if not isinstance(entry, dict):
+            continue
+        raw_batch = entry.get("batch_id")
+        if raw_batch is None:
+            normalized_batch = None
+        else:
+            try:
+                normalized_batch = normalize_batch_id(raw_batch)
+            except ValueError:
+                continue
+        expected = _pending_scope_fingerprint(
+            client, batch_id=normalized_batch,
+        )
+        if expected is None or entry.get("scope_fingerprint") != expected:
+            continue
+        candidates.append(entry)
+        assignment_id = entry.get("assignment_id")
+        if assignment_id:
+            assignment_batches.setdefault(str(assignment_id), set()).add(
+                normalized_batch,
+            )
+    ambiguous_ids = {
+        assignment_id for assignment_id, batches in assignment_batches.items()
+        if len(batches) > 1
+    }
+    return candidates, ambiguous_ids
 
 
 def _retry_pending_uploads(
@@ -3397,9 +3627,21 @@ def _retry_pending_uploads(
     previous run couldn't upload before doing anything else. Silent no-op
     when the ledger is empty — this must never surprise a volunteer who has
     nothing pending."""
-    entries = pending.load(HOME)
-    if batch_id is not None:
-        entries = _pending_uploads_for_batch(batch_id)
+    malformed_count = sum(
+        not isinstance(entry, dict) for entry in pending.load(HOME)
+    )
+    if malformed_count:
+        print(
+            f"warning: kept {malformed_count} malformed pending ledger row(s) "
+            "for manual recovery; no upload was attempted for those rows"
+        )
+    if _pending_scope_is_required(client):
+        entries = _pending_uploads_for_scope(client, batch_id=batch_id)
+    else:
+        entries = pending.load(HOME)
+        if batch_id is not None:
+            entries = _pending_uploads_for_batch(batch_id)
+        entries = [entry for entry in entries if isinstance(entry, dict)]
     if not entries:
         return []
     print(f"checking {len(entries)} pending upload(s) left over from a previous run...")
@@ -3425,7 +3667,8 @@ def cmd_retry_upload(args) -> int:
     if salvage_assignment_id:
         matches = [
             entry for entry in entries
-            if entry.get("assignment_id") == salvage_assignment_id
+            if isinstance(entry, dict)
+            and entry.get("assignment_id") == salvage_assignment_id
         ]
         if not matches:
             print(
@@ -3448,13 +3691,46 @@ def cmd_retry_upload(args) -> int:
             if answer not in {"y", "yes"}:
                 print("cancelled — no server or local state was changed")
                 return 1
+        if (
+            getattr(client, "server", None)
+            and getattr(client, "account_scope", None)
+            and not _pending_entry_matches_scope(
+                client, entry, batch_id=entry.get("batch_id")
+            )
+        ):
+            print(
+                "saved result belongs to a different or unknown server/account/plan "
+                "scope; local evidence was kept and no upload was attempted"
+            )
+            return 1
         outcome = _upload_trial(client, entry, request_salvage=True)
         return 0 if outcome in {"submitted", "interrupted"} else 1
+    _mark_pending_scope_required(client)
     _retry_pending_uploads(client)
     remaining = pending.load(HOME)
     if remaining:
-        blocked = [entry for entry in remaining if entry.get("upload_blocked")]
-        retryable = [entry for entry in remaining if not entry.get("upload_blocked")]
+        if _pending_scope_is_required(client):
+            eligible = _pending_uploads_for_scope(client)
+            eligible_ids = {
+                (entry.get("assignment_id"), entry.get("scope_fingerprint"))
+                for entry in eligible
+            }
+            skipped = [
+                entry for entry in remaining
+                if not isinstance(entry, dict)
+            ]
+            skipped.extend(
+                entry for entry in remaining
+                if isinstance(entry, dict)
+                if (
+                    entry.get("assignment_id"), entry.get("scope_fingerprint")
+                ) not in eligible_ids
+            )
+        else:
+            eligible = [entry for entry in remaining if isinstance(entry, dict)]
+            skipped = []
+        blocked = [entry for entry in eligible if entry.get("upload_blocked")]
+        retryable = [entry for entry in eligible if not entry.get("upload_blocked")]
         if blocked:
             reasons = ", ".join(
                 f"{entry.get('task_id', entry.get('assignment_id', '?'))}:"
@@ -3469,6 +3745,12 @@ def cmd_retry_upload(args) -> int:
             print(
                 f"{len(retryable)} still pending and retryable (will retry "
                 "again on the next `dradar go`/`retry-upload`)"
+            )
+        if skipped:
+            print(
+                f"{len(skipped)} saved upload(s) were kept because their "
+                "server/account/plan/session scope is unknown, malformed, or "
+                "does not match this login; review them explicitly before retrying"
             )
         return 1
     print("all clear")
@@ -3730,7 +4012,7 @@ def cmd_cleanup(args) -> int:
 
     pending_ids = {
         entry.get("assignment_id") for entry in pending.load(HOME)
-        if entry.get("assignment_id")
+        if isinstance(entry, dict) and entry.get("assignment_id")
     }
     candidates: list[local_jobs.LocalJob] = []
     protected_active = protected_pending = protected_kept = 0
@@ -4242,6 +4524,7 @@ def cmd_go(args) -> int:
         # children; letting every child replay the same entries creates a
         # duplicate-upload herd precisely when the server asks us to slow down.
         if not getattr(args, "worker_child", False) and not fleet_pool:
+            _mark_pending_scope_required(client)
             _retry_pending_uploads(client)
 
         boundary_path = _prepare_assignment_boundary(
@@ -4459,7 +4742,9 @@ def _pool_ready_work_count(
     if active is None:
         one = data.get("assignment")
         active = [one] if one else []
-    pending_ids = pending.assignment_ids(HOME)
+    pending_ids = _pending_assignment_ids_for_client(
+        client, batch_id=getattr(client, "batch_id", None),
+    )
     waiting = sum(
         _assignment_is_ready_for_checkout(
             assignment, claimed_after=claimed_after,
@@ -4852,8 +5137,10 @@ def _run_worker_pool(args) -> int:
     except RunnerError as exc:
         sys.exit(str(exc))
     if fleet_pool:
+        _mark_pending_scope_required(client)
         _retry_pending_uploads(client, batch_id=args.batch_id)
     else:
+        _mark_pending_scope_required(client)
         _retry_pending_uploads(client)
 
     maximum = args.workers
@@ -4887,7 +5174,7 @@ def _run_worker_pool(args) -> int:
         )
     active, _free_pick = _prepare_batch(args, client)
     if _scoped_fleet_refill(args):
-        pending_now = _pending_uploads_for_batch(args.batch_id)
+        pending_now = _pending_uploads_for_client_batch(client, args.batch_id)
         ready_now = (
             _pool_ready_work_count(client)
             if active else 0
@@ -5499,8 +5786,9 @@ def _run_worker_pool(args) -> int:
             # an interrupted (recoverable) local state instead of a false clean
             # stop; the Agent can later invoke run --upload-only without
             # re-enrolling this device or starting another model.
+            _mark_pending_scope_required(client)
             _retry_pending_uploads(client, batch_id=args.batch_id)
-            if _pending_uploads_for_batch(args.batch_id):
+            if _pending_uploads_for_client_batch(client, args.batch_id):
                 print(
                     "worker pool stopped with a completed result still waiting "
                     "to upload; no model work will be repeated"
@@ -5654,7 +5942,9 @@ def _acquire_batch(
         except ApiError as exc:
             _exit_for(exc)
         active = [one] if one else []
-    pending_ids = pending.assignment_ids(HOME)
+    pending_ids = _pending_assignment_ids_for_client(
+        client, batch_id=getattr(client, "batch_id", None),
+    )
     blocked = [a for a in active if a.get("assignment_id") in pending_ids]
     if blocked:
         print(
@@ -5669,7 +5959,9 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
     """Run a non-empty held batch serially: one version-pin check covers the
     whole batch (a single local checkout serves every cell; it sys.exit's on
     a mismatch unless --allow-task-drift), then per-cell confirm/skip/run."""
-    blocked_ids = pending.assignment_ids(HOME)
+    blocked_ids = _pending_assignment_ids_for_client(
+        client, batch_id=getattr(client, "batch_id", None),
+    )
     active = [a for a in active if a.get("assignment_id") not in blocked_ids]
     if not active:
         print("all held assignments already have durable pending results; refusing to rerun")
@@ -5813,7 +6105,12 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         checkout_exclusions = (
             failed_ids | degraded_exclusions
             | local_empty_blocked_ids
-            | (pending.assignment_ids(HOME) & batch_assignment_ids)
+            | (
+                _pending_assignment_ids_for_client(
+                    client, batch_id=getattr(client, "batch_id", None),
+                )
+                & batch_assignment_ids
+            )
         )
         try:
             # A failed local cell is marked stopped so it is retryable later,
@@ -6364,7 +6661,9 @@ def _wait_for_scoped_refill_work(
             if envelope.get("agent_action") in {"stop_runner", "done"}:
                 return []
 
-            scoped_pending = _pending_uploads_for_batch(args.batch_id)
+            scoped_pending = _pending_uploads_for_client_batch(
+                client, args.batch_id,
+            )
             blocked_pending = [
                 entry for entry in scoped_pending if entry.get("upload_blocked")
             ]
@@ -6374,8 +6673,11 @@ def _wait_for_scoped_refill_work(
                     "no new model work will start until it is resolved"
                 )
             if scoped_pending:
+                _mark_pending_scope_required(client)
                 _retry_pending_uploads(client, batch_id=args.batch_id)
-                pending_after_retry = _pending_uploads_for_batch(args.batch_id)
+                pending_after_retry = _pending_uploads_for_client_batch(
+                    client, args.batch_id,
+                )
                 blocked_after_retry = [
                     entry for entry in pending_after_retry
                     if entry.get("upload_blocked")

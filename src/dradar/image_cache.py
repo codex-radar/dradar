@@ -1273,7 +1273,12 @@ def _protected_projects(home: Path, protected_assignment_ids: set[str],
     from . import local_jobs, pending
 
     projects: set[str] = set()
-    pending_entries = pending.load(home)
+    # A hand-edited or partially migrated pending ledger may contain a
+    # non-object row.  Keep that raw evidence on disk, but never let cleanup
+    # crash while inspecting it or infer an assignment from it.
+    pending_entries = [
+        item for item in pending.load(home) if isinstance(item, dict)
+    ]
     pending_ids = {str(item.get("assignment_id")) for item in pending_entries
                    if item.get("assignment_id")}
     for entry in pending_entries:
@@ -1338,6 +1343,8 @@ def plan_cleanup(
     pending_ids = set()
     from . import pending
     for entry in pending.load(home):
+        if not isinstance(entry, dict):
+            continue
         if entry.get("assignment_id"):
             pending_ids.add(str(entry["assignment_id"]))
     protected_ids = protected_assignment_ids | pending_ids

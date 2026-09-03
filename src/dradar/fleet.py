@@ -1484,7 +1484,12 @@ def cmd_fleet_serve(args) -> int:
             # is simply unavailable until the unrelated config is repaired.
             cfg = {}
         if cfg.get("server") and cfg.get("token"):
-            _retry_pending_uploads(_client(cfg))
+            client = _client(cfg)
+            # Fleet startup has no authoritative batch yet; only replay
+            # entries fingerprinted for this exact account/server context.
+            from .runloop import _mark_pending_scope_required
+            _mark_pending_scope_required(client)
+            _retry_pending_uploads(client)
         return _controller_loop(HOME, state)
 
 
