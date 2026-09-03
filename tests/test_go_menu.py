@@ -12,6 +12,10 @@ import pytest
 from dradar import runloop
 from dradar.api_client import ApiError
 from dradar.providers import (
+    ANTIGRAVITY_AGENT,
+    ANTIGRAVITY_CLI_VERSION,
+    ANTIGRAVITY_MODEL,
+    ANTIGRAVITY_PROVIDER,
     DEEPSEEK_CATALOG_SHA256,
     DEEPSEEK_RUN_CONFIG_VERSION,
     DEEPSEEK_RUNTIME_PROFILE,
@@ -625,6 +629,41 @@ def _fake_art(base: Path, rc: int = 0, result_data: dict | None = None,
                           zcode_cli_sha256=zcode_cli_sha256)
 
 
+def _write_antigravity_sidecar(
+    art: TrialArtifacts, *, status: str, category: str | None,
+) -> None:
+    art.codex_cli_version = None
+    art.antigravity_cli_version = ANTIGRAVITY_CLI_VERSION
+    payload = {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "antigravity",
+        "model": ANTIGRAVITY_MODEL,
+        "complete": True,
+        "request_count": 1,
+        "n_input_tokens": 10,
+        "n_cache_tokens": 4,
+        "n_output_tokens": 2,
+        "thinking_tokens": 1,
+        "request_usage_complete": True,
+        "request_usage_observed": True,
+        "timed_usage_complete": False,
+        "usage_incomplete_reason": None,
+        "usage_evidence_tier": "complete_reconciled",
+        "token_usage_events": [{
+            "n_input_tokens": 10,
+            "n_cache_tokens": 4,
+            "n_output_tokens": 2,
+            "thinking_tokens": 1,
+        }],
+        "terminal_status": status,
+    }
+    if category is not None:
+        payload["terminal_error_category"] = category
+    agent = art.trial_dir / "agent"
+    agent.mkdir(exist_ok=True)
+    (agent / "provider-usage.json").write_text(json.dumps(payload))
+
+
 def test_clean_run_submits_outcome_completed(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     art = _fake_art(tmp_path, rc=0)
@@ -634,6 +673,40 @@ def test_clean_run_submits_outcome_completed(monkeypatch, tmp_path: Path):
     assert tag == "submitted"
     assert client.submissions[0]["outcome"] == "completed"
     assert client.submissions[0]["meta"]["codex_cli_version"] == "0.145.0"
+
+
+def test_antigravity_official_error_with_clean_pier_submits_interrupted(
+    monkeypatch, tmp_path: Path, capsys,
+) -> None:
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    art = _fake_art(tmp_path, rc=0)
+    _write_antigravity_sidecar(
+        art, status="ERROR", category="provider-error",
+    )
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": ANTIGRAVITY_AGENT,
+        "provider": ANTIGRAVITY_PROVIDER,
+        "model": ANTIGRAVITY_MODEL,
+        "effort": "low",
+        "agent_version": ANTIGRAVITY_CLI_VERSION,
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "interrupted"
+    submission = client.submissions[0]
+    assert submission["outcome"] == "interrupted"
+    assert submission["meta"]["terminal_status"] == "ERROR"
+    assert submission["meta"]["terminal_error_category"] == "provider-error"
+    assert submission["meta"]["failure_kind"] == "agent-terminal-failure"
+    output = capsys.readouterr().out
+    assert "outcome=invalid/not-graded" in output
+    assert "official Antigravity terminal did not complete (provider-error)" in output
 
 
 def test_submission_attests_observed_zcode_cli_sha256(monkeypatch, tmp_path: Path):

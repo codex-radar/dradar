@@ -97,6 +97,42 @@ def _usage_values(value: object) -> dict[str, int] | None:
     }
 
 
+def _antigravity_terminal_error_category(
+    terminal_status: object, terminal_error: object,
+) -> str | None:
+    """Reduce provider text to a credential-free, fixed diagnostic enum."""
+
+    if terminal_status == "SUCCESS":
+        return None
+    if terminal_status == "CANCELED":
+        return "canceled"
+    if terminal_status == "INTERRUPTED":
+        return "interrupted"
+    if terminal_status == "INVALID":
+        return "invalid"
+    if terminal_status != "ERROR":
+        return None
+    if terminal_error == ANTIGRAVITY_STREAM_INTERRUPTED_MESSAGE:
+        return "stream-interrupted"
+    low = terminal_error.casefold() if isinstance(terminal_error, str) else ""
+    if (
+        "eligibility check failed" in low
+        and "not eligible for antigravity" in low
+        and "not currently available in your location" in low
+    ):
+        return "eligibility-location"
+    if any(marker in low for marker in (
+        "individual quota reached",
+        "quota exhausted",
+        "quota exceeded",
+        "usage limit reached",
+        "you've hit your usage limit",
+        "you have hit your usage limit",
+    )):
+        return "quota-limit"
+    return "provider-error"
+
+
 def _antigravity_usage_facts(
     events: list[dict], *, expected_runtime_model: str,
 ) -> dict[str, object]:
@@ -226,6 +262,14 @@ def _antigravity_usage_facts(
     }
     terminal_response = terminal.get("response") if terminal is not None else None
     terminal_error = terminal.get("error") if terminal is not None else None
+    terminal_error_category = _antigravity_terminal_error_category(
+        terminal_status, terminal_error,
+    )
+    if terminal_error_category is not None:
+        # Never preserve the provider's raw error here. It may contain account,
+        # location, prompt, or request details; the fixed enum is sufficient for
+        # local outcome handling and authenticated operator diagnostics.
+        facts["terminal_error_category"] = terminal_error_category
     if (
         reconciled
         and terminal_status == "ERROR"
