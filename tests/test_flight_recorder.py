@@ -25,6 +25,28 @@ class FlightClient:
         return {"acknowledged_event_ids": [event["event_id"] for event in events]}
 
 
+def test_acknowledged_event_ids_are_cumulative_across_interleaved_flushes(tmp_path):
+    class OneAtATime(FlightClient):
+        def flight_events(self, events):
+            self.batches.append(events)
+            return {"acknowledged_event_ids": [events[0]["event_id"]]}
+
+    client = OneAtATime()
+    recorder = FlightRecorder(tmp_path, client)
+    first = recorder.record(
+        "worker_registered", component="provider", session_id=SESSION_ID,
+        assignment_id=ASSIGNMENT_ID, attributes={"provider": "codex"},
+    )
+    assert recorder.flush() == 1
+    second = recorder.record(
+        "heartbeat_sent", component="heartbeat", session_id=SESSION_ID,
+        batch_id=BATCH_ID,
+    )
+    assert recorder.flush() == 1
+    assert first["event_id"] in recorder.last_acknowledged_event_ids
+    assert second["event_id"] in recorder.last_acknowledged_event_ids
+
+
 def test_offline_jsonl_replays_idempotent_envelopes_and_keeps_history(tmp_path):
     offline = FlightRecorder(tmp_path)
     event = offline.record(
@@ -131,3 +153,18 @@ def test_runtime_try_record_drops_invalid_diagnostic_without_writing(tmp_path):
     ) is None
     assert not recorder.events_path.exists()
     assert not recorder.pending_path.exists()
+
+
+def test_building_phase_is_allowlisted_for_environment_preparation(tmp_path):
+    recorder = FlightRecorder(tmp_path)
+    event = recorder.record(
+        "phase_changed",
+        component="heartbeat",
+        batch_id=BATCH_ID,
+        session_id=SESSION_ID,
+        assignment_id=ASSIGNMENT_ID,
+        attributes={"previous_phase": "preparing", "phase": "building"},
+    )
+    assert event["attributes"] == {
+        "previous_phase": "preparing", "phase": "building",
+    }

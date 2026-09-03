@@ -22,6 +22,10 @@ from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.agent.network import NetworkAllowlist
 from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
+try:
+    from _dradar_worker_events import emit_worker_registered
+except ModuleNotFoundError:
+    from dradar.worker_events import emit_worker_registered
 
 from _dradar_grok_recovery import (
     grok_provider_stream_is_retryable,
@@ -360,6 +364,7 @@ class GrokBuild(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        emit_worker_registered(runtime="pier", context="agent", profile="grok")
         del context
         remote_user_home = self._REMOTE_USER_HOME.as_posix()
         remote_home = self._REMOTE_HOME.as_posix()

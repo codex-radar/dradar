@@ -15,6 +15,10 @@ from pier.environments.base import BaseEnvironment
 from pier.models.agent.context import AgentContext
 from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.agent.network import NetworkAllowlist
+try:
+    from _dradar_worker_events import emit_worker_registered
+except ModuleNotFoundError:
+    from dradar.worker_events import emit_worker_registered
 
 CODEBUDDY_CLI_VERSION = "2.137.1"
 SUPPORTED_MODEL = "hy4-preview"
@@ -322,6 +326,7 @@ class CodeBuddySubscription(ClaudeCode):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        emit_worker_registered(runtime="pier", context="agent", profile="codebuddy")
         del context
         remote_secret = self._REMOTE_SECRET_ROOT.as_posix()
         remote_storage = self._REMOTE_STORAGE.as_posix()

@@ -15,6 +15,12 @@ import json
 from pathlib import Path
 
 from pier.agents.installed.claude_code import ClaudeCode
+from pier.environments.base import BaseEnvironment
+from pier.models.agent.context import AgentContext
+try:
+    from _dradar_worker_events import emit_worker_registered
+except ModuleNotFoundError:
+    from dradar.worker_events import emit_worker_registered
 try:
     from _dradar_claude_usage import claude_usage_facts
 except ModuleNotFoundError as exc:
@@ -71,6 +77,15 @@ class ClaudeCodeSubscription(ClaudeCode):
         } or key.startswith("AWS_"):
             return None
         return super()._get_env(key)
+
+    async def run(
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
+    ) -> None:
+        emit_worker_registered(runtime="pier", context="agent", profile="claude")
+        await super().run(instruction, environment, context)
 
     def populate_context_post_run(self, context) -> None:
         """Keep upstream ATIF output and add a reconciled subscription ledger."""

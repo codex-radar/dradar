@@ -617,6 +617,7 @@ class ApiClient:
 
     def mark_started(
         self, assignment_id: str, session_id: str | None = None,
+        worker_event_id: str | None = None,
     ) -> dict[str, Any]:
         """Confirms the trial subprocess actually started (see runner.run_trial):
         extends a free-pick claim's short initial lease out to the normal
@@ -626,7 +627,8 @@ class ApiClient:
         that never had a short window to extend in the first place."""
         return self._post(
             "/api/v1/assignment/started",
-            data={"assignment_id": assignment_id, "session_id": session_id or ""},
+            data={"assignment_id": assignment_id, "session_id": session_id or "",
+                  "worker_event_id": worker_event_id or ""},
         )
 
     def checkout(

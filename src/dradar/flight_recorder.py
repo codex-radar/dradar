@@ -30,6 +30,7 @@ EVENT_TYPES = frozenset({
     "claim_requested", "claim_accepted", "claim_failed",
     "assignment_checked_out", "assignment_stopped",
     "build_started", "build_completed", "build_failed",
+    "worker_registered",
     "provider_started", "provider_completed", "provider_failed",
     "heartbeat_sent", "heartbeat_acknowledged", "heartbeat_failed",
     "checkpoint_saved", "checkpoint_replayed", "checkpoint_failed",
@@ -78,7 +79,9 @@ OUTCOMES = frozenset({
     "upload-blocked", "upload-failed", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
 })
-PHASES = frozenset({"preparing", "queued", "running", "uploading", "paused"})
+PHASES = frozenset({
+    "preparing", "building", "queued", "running", "uploading", "paused",
+})
 PROVIDERS = frozenset({
     "codex", "claude-code", "dsh-minimal", "grok-build", "kimi-code",
     "zcode", "antigravity", "codebuddy",
@@ -201,6 +204,7 @@ class FlightRecorder:
         self._lock = threading.Lock()
         self._seq = 0
         self._remote_disabled = False
+        self._last_acknowledged_event_ids: set[str] = set()
         self.client_id = self._load_client_id()
 
     def _load_client_id(self) -> str:
@@ -324,6 +328,10 @@ class FlightRecorder:
                     self._remote_disabled = True
                 return 0
             acknowledged = set(response.get("acknowledged_event_ids") or ())
+            # A concurrent heartbeat may flush another batch immediately
+            # after this one. Keep the worker event receipt for the lifetime
+            # of this recorder instead of replacing it with the newest batch.
+            self._last_acknowledged_event_ids.update(acknowledged)
             if not acknowledged:
                 return 0
             self._write(
@@ -331,6 +339,10 @@ class FlightRecorder:
                 [event for event in pending if event.get("event_id") not in acknowledged],
             )
             return len(acknowledged)
+
+    @property
+    def last_acknowledged_event_ids(self) -> frozenset[str]:
+        return frozenset(self._last_acknowledged_event_ids)
 
     def export_diagnostic_bundle(self, destination: Path) -> Path:
         """Create a local-only ZIP containing allowlisted events and a manifest."""

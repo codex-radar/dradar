@@ -44,8 +44,8 @@ def test_codex_disables_server_side_network_tools(tmp_path, monkeypatch):
     cmd = build_pier_command(
         _assignment("codex"), tmp_path, tmp_path / "jobs", "j", home,
     )
-    assert cmd[cmd.index("--agent") + 1] == "codex"
-    assert "--agent-import-path" not in cmd
+    assert cmd[cmd.index("--agent-import-path") + 1].endswith(":CodexRegistered")
+    assert (home / "_dradar_pier_codex.py").is_file()
     allowlist = (home / "codex-chatgpt-allowlist.toml").read_text()
     # web_search must be a top-level string key BEFORE any [table] header, or
     # TOML nests it and codex ignores it (verified: bool/nested = no effect).
@@ -160,8 +160,8 @@ def test_dev_agent_codex_uses_stock_openai_provider_default(tmp_path, monkeypatc
         dev_agent="codex",
     )
 
-    assert cmd[cmd.index("--agent") + 1] == "codex"
-    assert "--agent-import-path" not in cmd
+    assert cmd[cmd.index("--agent-import-path") + 1].endswith(":CodexRegistered")
+    assert (home / "_dradar_pier_codex.py").is_file()
 
 
 def test_codex_adapter_dir_is_the_only_added_python_path(tmp_path, monkeypatch):
@@ -783,6 +783,7 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
         # lays the artifacts down at construction ("process started and
         # finished") and reports done on the first wait().
         def __init__(self, cmd, **kw):
+            captured["process_started"] = True
             trial = work_dir / "jobs" / captured["job_name"] / "task__t0"
             (trial / "artifacts").mkdir(parents=True)
             (trial / "agent").mkdir()
@@ -816,6 +817,9 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
         def wait(self, timeout=None):
             return self.returncode
 
+        def terminate(self):
+            captured["process_terminated"] = True
+
         def kill(self):
             pass
 
@@ -834,16 +838,19 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
     return captured
 
 
-def test_run_trial_on_started_exception_prevents_model_start(tmp_path, monkeypatch):
-    _fake_pier(monkeypatch, tmp_path)
+def test_run_trial_on_started_exception_terminates_launched_worker(tmp_path, monkeypatch):
+    captured = _fake_pier(monkeypatch, tmp_path)
     calls = []
     def boom():
         calls.append(True)
         raise RuntimeError("network hiccup")
-    # A paid subprocess may start only after authoritative ownership binding.
+    # Ownership binding occurs at the worker-launch edge. If binding fails,
+    # the exact launched process must be terminated before returning.
     with pytest.raises(RuntimeError, match="network hiccup"):
         run_trial(_assignment("codex"), tmp_path, tmp_path, on_started=boom)
     assert calls == [True]
+    assert captured["process_started"] is True
+    assert captured["process_terminated"] is True
 
 
 def test_run_trial_uses_artifact_overlay_for_verifier_collect_pack(
