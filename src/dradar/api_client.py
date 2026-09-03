@@ -1,5 +1,6 @@
 """HTTP client for the dradar dispatch server."""
 
+import hashlib
 import json
 import os
 import random
@@ -91,6 +92,14 @@ class ApiClient:
                  benchmark_id: str | None = None,
                  batch_id: str | None = None):
         self.server = server.rstrip("/")
+        # Stable, non-secret account boundary for local safety latches. Never
+        # persist or expose the bearer token itself.
+        self.account_scope = (
+            hashlib.sha256(
+                f"{self.server}\0{token}".encode("utf-8"),
+            ).hexdigest()
+            if token else None
+        )
         self.plan_scoped = token.startswith("drp_")
         self.benchmark_id = benchmark_id
         self.batch_id = normalize_batch_id(batch_id)

@@ -32,6 +32,7 @@ RUNNING_STATES = {"active", "draining"}
 FAULTED_STATE = "faulted"
 REFILL_FAULT_FAMILIES = frozenset({
     "checkpoint_invalid", "checkpoint_incompatible", "provider_not_ready",
+    "empty_submission",
 })
 TIERS = ("plus", "pro-5x", "pro-20x")
 REFILL_ORDERS = ("cost", "least-run")
@@ -923,6 +924,10 @@ def refill_once(home: Path, client) -> dict:
                         cell["task_id"], cell["model"], cell["effort"],
                     )
             except ApiError as exc:
+                if exc.code == "empty_submission_circuit_open":
+                    plan["status"] = FAULTED_STATE
+                    plan["stop_reason"] = str(exc)
+                    break
                 if exc.code in {
                     "refill_limit_reached", "refill_campaign_not_active",
                     "refill_campaign_faulted",
