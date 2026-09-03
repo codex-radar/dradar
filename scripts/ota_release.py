@@ -1108,6 +1108,24 @@ def _verify_response(response: httpx.Response, expected: bytes, name: str) -> No
         raise ReleaseError(f"{name} readback digest differs")
 
 
+def _etag_matches(left: str, right: str) -> bool:
+    """Compare the same opaque ETag across strong/weak R2 readback forms.
+
+    Exact response bytes are verified separately before this comparison, so a
+    weak marker can safely be ignored while every opaque tag byte remains
+    significant.
+    """
+
+    pattern = re.compile(r'^(?:W/)?("[\x21\x23-\x7e\x80-\xff]*")$')
+    left_match = pattern.fullmatch(left)
+    right_match = pattern.fullmatch(right)
+    return bool(
+        left_match
+        and right_match
+        and left_match.group(1) == right_match.group(1)
+    )
+
+
 def _public_readback(base_url: str, key: str, expected: bytes) -> httpx.Response:
     response = httpx.get(
         f"{base_url.rstrip('/')}/{key}",
@@ -1285,11 +1303,14 @@ def publish_r2(args: argparse.Namespace) -> int:
                 raise ReleaseError("successful pointer CAS response has no ETag")
             authenticated = client.get(current_key)
             _verify_response(authenticated, manifest_bytes, "stable pointer")
-            if authenticated.headers.get("etag") != pointer_etag:
+            authenticated_etag = authenticated.headers.get("etag")
+            if not authenticated_etag or not _etag_matches(
+                authenticated_etag, pointer_etag
+            ):
                 raise ReleaseError("authenticated stable pointer ETag differs from CAS")
             public = _public_readback(public_base, current_key, manifest_bytes)
             public_etag = public.headers.get("etag")
-            if public_etag is not None and public_etag != pointer_etag:
+            if public_etag is not None and not _etag_matches(public_etag, pointer_etag):
                 raise ReleaseError("public stable pointer ETag differs from CAS")
         except Exception as error:
             raise CommittedButUnverified(
