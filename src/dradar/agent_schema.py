@@ -292,6 +292,11 @@ def command_schema(command: str) -> dict:
                 "环境错误可在 agent.next_commands 给出非秘密 argv 数组；"
                 "requires_user_action=true 时只能提示用户完成交互"
             ),
+            "followup_launcher": (
+                "agent.followup_launcher 仅在可核验的官方 Git 安装中提供；"
+                "argv_prefix 固定首次成功运行的精确 commit，并使用 offline 模式"
+                "复用本机缓存，后续动作不得重新解析远端 HEAD"
+            ),
             "plan_recovery": (
                 "agent.next_commands 中 mode=replay_plan_command 时，保留当前任务已知的"
                 "--plan/--server，仅替换为给定 command 并追加 args；不得把运行码回显给用户"

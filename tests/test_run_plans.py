@@ -2551,6 +2551,127 @@ def test_agent_details_always_carry_their_own_schema_version(capsys):
     assert payload["agent"]["schema_version"] == 1
 
 
+def test_monitor_response_reuses_exact_cached_git_revision_offline(
+    monkeypatch, capsys,
+):
+    class Distribution:
+        @staticmethod
+        def read_text(name):
+            assert name == "direct_url.json"
+            return json.dumps({
+                "url": "https://github.com/SecurityMind/dradar",
+                "vcs_info": {
+                    "vcs": "git",
+                    "commit_id": "a" * 40,
+                },
+            })
+
+    monkeypatch.setattr(
+        run_plans.importlib.metadata,
+        "distribution",
+        lambda name: Distribution() if name == "dradar" else None,
+    )
+    response = {
+        "schema_version": 1,
+        **_envelope(agent_action="monitor"),
+        "agent": {
+            "followup_launcher": {
+                "mode": "unexpected",
+                "argv_prefix": ["untrusted"],
+            },
+        },
+    }
+
+    assert run_plans._output(_args(), response) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["agent"]["followup_launcher"] == {
+        "schema_version": 1,
+        "mode": "uvx_offline_git_revision",
+        "argv_prefix": [
+            "uvx", "--offline", "--from",
+            "git+https://github.com/SecurityMind/dradar@" + "a" * 40,
+            "dradar",
+        ],
+        "interactive": False,
+    }
+    assert RUN_CODE not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    "direct_url",
+    [
+        None,
+        {"url": "https://example.com/dradar", "vcs_info": {
+            "vcs": "git", "commit_id": "a" * 40,
+        }},
+        {"url": "https://github.com:notaport/SecurityMind/dradar", "vcs_info": {
+            "vcs": "git", "commit_id": "a" * 40,
+        }},
+        {"url": "https://github.com:/SecurityMind/dradar", "vcs_info": {
+            "vcs": "git", "commit_id": "a" * 40,
+        }},
+        {"url": "https://[broken", "vcs_info": {
+            "vcs": "git", "commit_id": "a" * 40,
+        }},
+        {"url": "https://github.com/SecurityMind/dradar", "vcs_info": {
+            "vcs": "git", "commit_id": "not-a-commit",
+        }},
+    ],
+)
+def test_followup_launcher_fails_closed_without_trusted_immutable_provenance(
+    monkeypatch, direct_url,
+):
+    class Distribution:
+        @staticmethod
+        def read_text(name):
+            assert name == "direct_url.json"
+            return None if direct_url is None else json.dumps(direct_url)
+
+    monkeypatch.setattr(
+        run_plans.importlib.metadata,
+        "distribution", lambda _name: Distribution(),
+    )
+
+    assert run_plans._followup_launcher() is None
+
+
+def test_followup_launcher_fails_closed_on_invalid_metadata_encoding(monkeypatch):
+    class Distribution:
+        @staticmethod
+        def read_text(name):
+            assert name == "direct_url.json"
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+
+    monkeypatch.setattr(
+        run_plans.importlib.metadata,
+        "distribution", lambda _name: Distribution(),
+    )
+
+    assert run_plans._followup_launcher() is None
+
+
+def test_monitor_response_drops_untrusted_transmitted_followup_launcher(
+    monkeypatch, capsys,
+):
+    monkeypatch.setattr(run_plans, "_followup_launcher", lambda: None)
+    response = {
+        "schema_version": 1,
+        **_envelope(agent_action="monitor"),
+        "agent": {
+            "followup_launcher": {
+                "mode": "unexpected",
+                "argv_prefix": ["untrusted"],
+            },
+        },
+    }
+
+    assert run_plans._output(_args(), response) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "followup_launcher" not in payload["agent"]
+
+
 def test_zero_spare_capacity_asks_in_plain_language_without_internal_ids(tmp_path):
     plan = _plan(mode="fixed", concurrency=1)
     path, state = _state(tmp_path, plan)
