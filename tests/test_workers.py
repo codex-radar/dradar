@@ -1536,6 +1536,7 @@ def test_fleet_pool_fails_after_24_seconds_when_every_child_exits_precheckout(
         lambda seconds: clock.__setitem__("seconds", clock["seconds"] + seconds),
     )
     observed_events = []
+    observed_flushes = []
 
     class Recorder:
         def __init__(self, _home, _client):
@@ -1544,7 +1545,8 @@ def test_fleet_pool_fails_after_24_seconds_when_every_child_exits_precheckout(
         def try_record(self, event_type, **kwargs):
             observed_events.append((event_type, kwargs))
 
-        def flush(self):
+        def flush(self, **kwargs):
+            observed_flushes.append(kwargs)
             return 0
 
     monkeypatch.setattr(runloop, "FlightRecorder", Recorder)
@@ -1590,6 +1592,8 @@ def test_fleet_pool_fails_after_24_seconds_when_every_child_exits_precheckout(
         "precheckout_exit",
         "startup_failed",
     ]
+    assert observed_flushes
+    assert all(item == {"batch_id": batch_id} for item in observed_flushes)
 
 
 @pytest.mark.parametrize(
@@ -1636,6 +1640,7 @@ def test_fleet_precheckout_abort_is_never_completed(
         str(fleet._pool_startup_path(tmp_path, batch_id)),
     )
     monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+    observed_flushes = []
 
     class Recorder:
         def __init__(self, _home, _client):
@@ -1644,7 +1649,8 @@ def test_fleet_precheckout_abort_is_never_completed(
         def try_record(self, *_args, **_kwargs):
             return None
 
-        def flush(self):
+        def flush(self, **kwargs):
+            observed_flushes.append(kwargs)
             return 0
 
     monkeypatch.setattr(runloop, "FlightRecorder", Recorder)
@@ -1679,6 +1685,8 @@ def test_fleet_precheckout_abort_is_never_completed(
 
     startup = fleet._read_json(fleet._pool_startup_path(tmp_path, batch_id))
     assert result == 1
+    assert observed_flushes
+    assert all(item == {"batch_id": batch_id} for item in observed_flushes)
     assert startup["status"] == "failed"
     assert startup["error_code"] == error_code
     assert message_fragment in startup["user_message"]

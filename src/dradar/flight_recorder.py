@@ -427,8 +427,40 @@ class FlightRecorder:
         except (OSError, ValueError):
             return None
 
-    def flush(self) -> int:
+    def flush(
+        self,
+        *,
+        batch_id: str | None = None,
+        session_id: str | None = None,
+        required_event_id: str | None = None,
+    ) -> int:
+        """Upload pending events, optionally restricted to one lifecycle scope.
+
+        ``pending.jsonl`` is intentionally shared by the CLI's lightweight
+        recorder instances.  A run-plan token can therefore leave events from
+        another plan, account, or device session in the same file.  The
+        server's flight-event endpoint validates the whole request atomically;
+        sending that mixed prefix would make an otherwise valid
+        ``worker_registered`` event unacknowledgeable.  Callers that know the
+        active scope should provide its batch and session IDs.  ``None`` keeps
+        the historical unscoped replay behavior for diagnostics and legacy
+        integrations.
+
+        ``required_event_id`` is used by the synchronous worker-registration
+        handshake.  When present, the matching event is moved to the front of
+        the selected scope so an unrelated backlog cannot hide the receipt
+        behind the 100-event upload limit.  It is never selected when it falls
+        outside the requested scope.
+        """
         if self.client is None or self._remote_disabled:
+            return 0
+        # A session-only (or required-event-only) scope cannot prove the plan
+        # or account boundary.  In particular, never replay a legacy
+        # ``batch_id=null`` event under a newly authenticated session; retain
+        # it for explicit diagnostics or a future, manually selected replay.
+        if batch_id is None and (
+            session_id is not None or required_event_id is not None
+        ):
             return 0
         with self._lock:
             try:
@@ -436,7 +468,32 @@ class FlightRecorder:
                     pending = self._load(self.pending_path)
                     if not pending:
                         return 0
-                    batch = [validate_event(event) for event in pending[:UPLOAD_BATCH_SIZE]]
+                    scoped = [
+                        event for event in pending
+                        if (batch_id is None or event.get("batch_id") == batch_id)
+                        and (session_id is None or event.get("session_id") == session_id)
+                    ]
+                    if not scoped:
+                        return 0
+                    if required_event_id is not None:
+                        required = next(
+                            (
+                                event for event in scoped
+                                if event.get("event_id") == required_event_id
+                            ),
+                            None,
+                        )
+                        if required is not None:
+                            scoped = [
+                                required,
+                                *(
+                                    event for event in scoped
+                                    if event.get("event_id") != required_event_id
+                                ),
+                            ]
+                    batch = [
+                        validate_event(event) for event in scoped[:UPLOAD_BATCH_SIZE]
+                    ]
             except OSError:
                 # Flight evidence is best effort.  A locked/read-only home
                 # must never turn a heartbeat into a worker crash; strict

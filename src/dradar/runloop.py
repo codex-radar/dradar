@@ -4821,7 +4821,10 @@ def _run_worker_pool(args) -> int:
             batch_id=args.batch_id,
             attributes={"elapsed_ms": elapsed_ms, "phase": "preparing"},
         )
-        flight.flush()
+        # The supervisor has no runner session ID, but its preparation events
+        # are still bound to this exact batch.  Keep stale plans/accounts out
+        # of the server's atomic flight-event upload.
+        flight.flush(batch_id=args.batch_id)
 
     if fleet_pool:
         args.allow_new_claims = bool(getattr(args, "refill", False))
@@ -4989,7 +4992,9 @@ def _run_worker_pool(args) -> int:
             reason_code=reason_code,
             attributes=attributes,
         )
-        flight.flush()
+        # Supervisor events are batch-scoped (there is no child session to
+        # match); never replay a global pending prefix under this token.
+        flight.flush(batch_id=args.batch_id)
 
     def acknowledge_child_ready(slot: int, activity_state: str | None) -> None:
         nonlocal startup_ready

@@ -178,6 +178,29 @@ class RunnerTelemetry:
         kwargs.setdefault("session_id", self.session_id)
         return self.flight_recorder.try_record(event_type, component=component, **kwargs)
 
+    def _flush_flight_events(self, *, required_event_id: str | None = None) -> int:
+        """Flush only this runner's bound batch/session evidence.
+
+        The recorder queue is shared across plans and processes.  Do not let a
+        stale event from another token or device session enter this heartbeat's
+        atomic upload.  A runner without a server-assigned batch has no safe
+        flight-event scope yet, so its pending evidence remains local until a
+        later bind.
+        """
+        recorder = self.flight_recorder
+        if recorder is None:
+            return 0
+        with self._lock:
+            batch_id = self._batch_id
+            session_id = self.session_id
+        if not batch_id:
+            return 0
+        return recorder.flush(
+            batch_id=batch_id,
+            session_id=session_id,
+            required_event_id=required_event_id,
+        )
+
     def set_phase(
         self,
         phase: str,
@@ -226,7 +249,12 @@ class RunnerTelemetry:
                 "target_workers": self.target_workers,
             }
 
-    def _send_once(self, *, propagate_errors: bool = False) -> int:
+    def _send_once(
+        self,
+        *,
+        propagate_errors: bool = False,
+        required_event_id: str | None = None,
+    ) -> int:
         """Send once and return the server-selected next interval."""
         with self._send_lock:
             if self._disabled:
@@ -281,8 +309,8 @@ class RunnerTelemetry:
                 # server assigns a batch. Bind before flushing pending events.
                 self.bind_batch(response["batch_id"])
             self.record_event("heartbeat_acknowledged", component="heartbeat")
-            self._last_flight_events_acked = (
-                self.flight_recorder.flush() if self.flight_recorder is not None else 0
+            self._last_flight_events_acked = self._flush_flight_events(
+                required_event_id=required_event_id,
             )
             self._show_notices(response)
             if response.get("stop_requested") is True:
@@ -333,7 +361,10 @@ class RunnerTelemetry:
         """
         if self._disabled:
             return False
-        self._send_once(propagate_errors=True)
+        self._send_once(
+            propagate_errors=True,
+            required_event_id=required_event_id,
+        )
         with self._lock:
             if not self._last_heartbeat_accepted:
                 return False
@@ -378,5 +409,4 @@ class RunnerTelemetry:
             "session_closed", component="cli", reason_code=reason,
             assignment_id=self._active_assignment_id,
         )
-        if self.flight_recorder is not None:
-            self.flight_recorder.flush()
+        self._flush_flight_events()
