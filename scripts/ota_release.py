@@ -43,6 +43,7 @@ KEY_STATUSES = {"active", "next", "retired"}
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
+ETAG = re.compile(r'^(?:W/)?("[\x21\x23-\x7e\x80-\xff]*")$')
 ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -1108,6 +1109,11 @@ def _verify_response(response: httpx.Response, expected: bytes, name: str) -> No
         raise ReleaseError(f"{name} readback digest differs")
 
 
+def _strong_etag(value: str) -> str | None:
+    match = ETAG.fullmatch(value)
+    return match.group(1) if match else None
+
+
 def _etag_matches(left: str, right: str) -> bool:
     """Compare the same opaque ETag across strong/weak R2 readback forms.
 
@@ -1116,14 +1122,9 @@ def _etag_matches(left: str, right: str) -> bool:
     significant.
     """
 
-    pattern = re.compile(r'^(?:W/)?("[\x21\x23-\x7e\x80-\xff]*")$')
-    left_match = pattern.fullmatch(left)
-    right_match = pattern.fullmatch(right)
-    return bool(
-        left_match
-        and right_match
-        and left_match.group(1) == right_match.group(1)
-    )
+    left_strong = _strong_etag(left)
+    right_strong = _strong_etag(right)
+    return left_strong is not None and left_strong == right_strong
 
 
 def _public_readback(base_url: str, key: str, expected: bytes) -> httpx.Response:
@@ -1254,7 +1255,10 @@ def publish_r2(args: argparse.Namespace) -> int:
             if previous_bytes is None:
                 raise ReleaseError("non-bootstrap publication requires previous manifest")
             _verify_response(current, previous_bytes, "current stable pointer")
-            previous_etag = current.headers.get("etag")
+            raw_previous_etag = current.headers.get("etag")
+            previous_etag = (
+                _strong_etag(raw_previous_etag) if raw_previous_etag else None
+            )
             if not previous_etag:
                 raise ReleaseError("current stable pointer has no ETag for CAS")
         for key, body, content_type in immutable:
