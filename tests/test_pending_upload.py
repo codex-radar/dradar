@@ -37,6 +37,24 @@ def test_record_replaces_same_assignment(tmp_path: Path):
     assert len(entries) == 1 and entries[0]["attempt"] == 2
 
 
+def test_record_preserves_same_assignment_from_another_scope(tmp_path: Path):
+    scope_a = pending.scope_fingerprint(
+        server="https://a.example", account_scope="a", batch_id="plan-a",
+    )
+    scope_b = pending.scope_fingerprint(
+        server="https://b.example", account_scope="b", batch_id="plan-b",
+    )
+    pending.record(tmp_path, {
+        "assignment_id": "reused", "scope_fingerprint": scope_a,
+    })
+    pending.record(tmp_path, {
+        "assignment_id": "reused", "scope_fingerprint": scope_b,
+    })
+    assert {
+        entry["scope_fingerprint"] for entry in pending.load(tmp_path)
+    } == {scope_a, scope_b}
+
+
 def test_remove_is_idempotent(tmp_path: Path):
     pending.record(tmp_path, {"assignment_id": "a1"})
     pending.remove(tmp_path, "a1")
@@ -116,15 +134,35 @@ def _entry(trial_dir: Path, **overrides) -> dict:
     """A pending-ledger entry dict — the shape _upload_trial takes."""
     e = {"assignment_id": "a1", "nonce": "nonce1", "task_id": "t1",
          "trial_dir": str(trial_dir), "meta": {}, "outcome": "completed",
-         "job_dir": None, "keep": True}
+         "job_dir": None, "keep": True,
+         # Production retry scans now require a non-secret account/server
+         # scope. Keep this fixture representative of a newly recorded row;
+         # tests that exercise legacy rows omit the field explicitly.
+         "scope_fingerprint": pending.scope_fingerprint(
+             server="https://api.example.com",
+             account_scope=ApiClient(
+                 "https://api.example.com", "drt_test",
+                 capabilities=(),
+             ).account_scope,
+         )}
     e.update(overrides)
+    if "scope_fingerprint" not in overrides:
+        e["scope_fingerprint"] = pending.scope_fingerprint(
+            server="https://api.example.com",
+            account_scope=ApiClient(
+                "https://api.example.com", "drt_test",
+                capabilities=(),
+            ).account_scope,
+            benchmark_id=e.get("benchmark_id"),
+            batch_id=e.get("batch_id"),
+        )
     return e
 
 
 def test_upload_success_clears_ledger(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
     client = FakeClient(lambda aid: {"submission_id": "s1", "grade_status": "pending"})
     outcome = runloop._upload_trial(client, _entry(trial_dir, meta={"k": "v"}))
     assert outcome == "submitted"
@@ -136,7 +174,7 @@ def test_exact_empty_submission_ack_is_not_collapsed_to_submitted(
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
     client = FakeClient(lambda _aid: {
         "submission_id": "s-empty",
         "grade_status": "invalid",
@@ -337,6 +375,7 @@ def test_maintenance_total_budget_exhaustion_keeps_ledger_and_exits_nonzero(
         runner_session_id="session-1234",
         owner_epoch=7,
         ledger_version=3,
+        batch_id="550e8400e29b41d4a716446655440000",
     )
     pending.record(tmp_path, entry)
     paths = []
@@ -369,6 +408,7 @@ def test_maintenance_total_budget_exhaustion_keeps_ledger_and_exits_nonzero(
     client = ApiClient(
         "https://api.example.com", "drt_test",
         transport=httpx.MockTransport(handler), capabilities=(),
+        batch_id="550e8400e29b41d4a716446655440000",
     )
     now = [0.0]
     waits = []
@@ -502,6 +542,312 @@ def test_plan_pending_replay_is_exact_batch_scoped(tmp_path: Path, monkeypatch):
     assert {entry["assignment_id"] for entry in pending.load(tmp_path)} == {
         "b", "legacy-without-scope",
     }
+
+
+def test_pending_retry_isolated_by_server_account_and_plan_scope(
+    tmp_path: Path, monkeypatch,
+):
+    """A shared HOME must not replay plan A's paid result through plan B."""
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    batch_a = "550e8400e29b41d4a716446655440000"
+    batch_b = "6ba7b8109dad11d180b400c04fd430c8"
+    client_a = ApiClient(
+        "https://server-a.example", "token-a", capabilities=(),
+        benchmark_id="bench", batch_id=batch_a,
+    )
+    client_b = ApiClient(
+        "https://server-b.example", "token-b", capabilities=(),
+        benchmark_id="bench", batch_id=batch_b,
+    )
+    pending.record(tmp_path, {
+        "assignment_id": "shared-assignment", "batch_id": batch_a,
+        "scope_fingerprint": runloop._pending_scope_fingerprint(
+            client_a, batch_id=batch_a,
+        ),
+    })
+    pending.record(tmp_path, {
+        "assignment_id": "from-b", "batch_id": batch_b,
+        "scope_fingerprint": runloop._pending_scope_fingerprint(
+            client_b, batch_id=batch_b,
+        ),
+    })
+    touched = []
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda _client, entry: touched.append(entry["assignment_id"]) or (
+            pending.remove(
+                tmp_path, entry["assignment_id"],
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
+            or "submitted"
+        ),
+    )
+
+    runloop._mark_pending_scope_required(client_b)
+    assert runloop._retry_pending_uploads(client_b, batch_id=batch_b) == [
+        "submitted"
+    ]
+    assert touched == ["from-b"]
+    remaining = pending.load(tmp_path)
+    assert [entry["assignment_id"] for entry in remaining] == ["shared-assignment"]
+    # Scope-aware fencing must not let an old account/plan row block this
+    # account's worker registration or checkout path.
+    assert "shared-assignment" not in runloop._pending_assignment_ids_for_client(
+        client_b, batch_id=batch_b,
+    )
+
+
+def test_personal_client_derives_one_pending_batch_for_retry_and_fence(
+    tmp_path: Path, monkeypatch,
+):
+    """A normal client can recover one owned batch without guessing across plans."""
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    client = ApiClient(
+        "https://server.example", "token", capabilities=(),
+        benchmark_id="bench",
+    )
+    scope = runloop._pending_scope_fingerprint(client, batch_id=batch_id)
+    pending.record(tmp_path, {
+        "assignment_id": "owned", "batch_id": batch_id,
+        "scope_fingerprint": scope,
+    })
+    touched = []
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda _client, entry: touched.append(entry["assignment_id"]) or (
+            pending.remove(
+                tmp_path, entry["assignment_id"],
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
+            or "submitted"
+        ),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert "owned" in runloop._pending_assignment_ids_for_client(client)
+    assert runloop._retry_pending_uploads(client) == ["submitted"]
+    assert touched == ["owned"]
+    assert runloop._pending_assignment_ids_for_client(client) == set()
+
+
+def test_personal_client_fences_batch_pending_before_model_and_then_retries(
+    tmp_path: Path, monkeypatch,
+):
+    """A plain (batch-less) claim cannot rerun work saved by a prior batch."""
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    client = ApiClient(
+        "https://server.example", "token", capabilities=(),
+        benchmark_id="bench",
+    )
+    pending.record(tmp_path, {
+        "assignment_id": "owned", "batch_id": batch_id,
+        "scope_fingerprint": runloop._pending_scope_fingerprint(
+            client, batch_id=batch_id,
+        ),
+    })
+    monkeypatch.setattr(runloop, "check_task_content_hash", lambda *_a: True)
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_a, **_k: pytest.fail("durable pending work must fence the model"),
+    )
+    args = SimpleNamespace(allow_task_drift=False, dev_agent=False)
+    assignment = {
+        "assignment_id": "owned", "task_id": "task-owned", "nonce": "nonce",
+        "batch_id": None,
+    }
+    assert runloop._run_and_submit(
+        client, assignment, tmp_path, args, None,
+    ) == "pending-upload"
+
+    touched = []
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda _client, entry: touched.append(entry["assignment_id"]) or (
+            pending.remove(
+                tmp_path, entry["assignment_id"],
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
+            or "submitted"
+        ),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert runloop._retry_pending_uploads(client) == ["submitted"]
+    assert touched == ["owned"]
+
+
+def test_personal_client_replays_multiple_owned_batches(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = ApiClient(
+        "https://server.example", "token", capabilities=(),
+        benchmark_id="bench",
+    )
+    batches = [
+        "550e8400e29b41d4a716446655440000",
+        "6ba7b8109dad11d180b400c04fd430c8",
+    ]
+    for index, batch_id in enumerate(batches):
+        pending.record(tmp_path, {
+            "assignment_id": f"owned-{index}", "batch_id": batch_id,
+            "scope_fingerprint": runloop._pending_scope_fingerprint(
+                client, batch_id=batch_id,
+            ),
+        })
+    touched = []
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda _client, entry: touched.append(entry["assignment_id"]) or (
+            pending.remove(
+                tmp_path, entry["assignment_id"],
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
+            or "submitted"
+        ),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert runloop._retry_pending_uploads(client) == ["submitted", "submitted"]
+    assert touched == ["owned-0", "owned-1"]
+    assert pending.load(tmp_path) == []
+
+
+def test_personal_client_fails_closed_on_assignment_collision_across_batches(
+    tmp_path: Path, monkeypatch,
+):
+    """A reused assignment ID in two own batches is withheld, not guessed."""
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = ApiClient(
+        "https://server.example", "token", capabilities=(),
+        benchmark_id="bench",
+    )
+    batches = [
+        "550e8400e29b41d4a716446655440000",
+        "6ba7b8109dad11d180b400c04fd430c8",
+    ]
+    for batch_id in batches:
+        pending.record(tmp_path, {
+            "assignment_id": "reused", "batch_id": batch_id,
+            "scope_fingerprint": runloop._pending_scope_fingerprint(
+                client, batch_id=batch_id,
+            ),
+        })
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda *_args, **_kwargs: pytest.fail(
+            "assignment collision must stay local",
+        ),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert runloop._retry_pending_uploads(client) == []
+    assert len(pending.load(tmp_path)) == 2
+    # Fencing remains conservative even though replay is withheld.
+    assert runloop._pending_assignment_ids_for_client(client) == {"reused"}
+
+
+def test_personal_client_skips_invalid_batch_but_preserves_evidence(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = ApiClient(
+        "https://server.example", "token", capabilities=(),
+        benchmark_id="bench",
+    )
+    pending.record(tmp_path, {
+        "assignment_id": "malformed", "batch_id": "not-a-uuid",
+        "scope_fingerprint": "not-a-real-scope",
+    })
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda *_args, **_kwargs: pytest.fail("invalid batch must stay local"),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert runloop._retry_pending_uploads(client) == []
+    assert pending.load(tmp_path)[0]["assignment_id"] == "malformed"
+
+
+def test_retry_upload_keeps_malformed_ledger_rows_without_crashing(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    raw_rows = [1, None, "not-an-entry"]
+    (tmp_path / "pending_uploads.json").write_text(json.dumps(raw_rows))
+    client = ApiClient("https://server.example", "token", capabilities=())
+    monkeypatch.setattr(runloop, "_load_config", lambda: {})
+    monkeypatch.setattr(runloop, "_client", lambda _cfg: client)
+
+    assert runloop.cmd_retry_upload(None) == 1
+    assert json.loads((tmp_path / "pending_uploads.json").read_text()) == raw_rows
+    output = capsys.readouterr().out
+    assert "malformed pending ledger row" in output
+    assert "unknown, malformed" in output
+
+
+def test_batch_helper_rejects_same_uuid_from_foreign_account(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    local = ApiClient("https://server.example", "token", capabilities=())
+    foreign = ApiClient("https://other.example", "token", capabilities=())
+    pending.record(tmp_path, {
+        "assignment_id": "foreign", "batch_id": batch_id,
+        "scope_fingerprint": runloop._pending_scope_fingerprint(
+            foreign, batch_id=batch_id,
+        ),
+    })
+    assert runloop._pending_uploads_for_client_batch(local, batch_id) == []
+
+
+def test_standalone_retry_keeps_legacy_entry_without_scope_fingerprint(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = ApiClient("https://server.example", "token", capabilities=())
+    pending.record(tmp_path, {
+        "assignment_id": "session-bound", "runner_session_id": "old-session",
+    })
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda *_args, **_kwargs: pytest.fail("unknown scope must stay local"),
+    )
+    runloop._mark_pending_scope_required(client)
+    assert runloop._retry_pending_uploads(client) == []
+    assert pending.load(tmp_path)[0]["assignment_id"] == "session-bound"
+
+
+def test_cmd_retry_upload_does_not_send_another_account_queue(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client_a = ApiClient("https://server.example", "token-a", capabilities=())
+    client_b = ApiClient("https://server.example", "token-b", capabilities=())
+    pending.record(tmp_path, {
+        "assignment_id": "from-a",
+        "scope_fingerprint": runloop._pending_scope_fingerprint(client_a),
+    })
+    pending.record(tmp_path, {
+        "assignment_id": "from-b",
+        "scope_fingerprint": runloop._pending_scope_fingerprint(client_b),
+    })
+    touched = []
+    monkeypatch.setattr(runloop, "_load_config", lambda: {})
+    monkeypatch.setattr(runloop, "_client", lambda _cfg: client_b)
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda _client, entry: touched.append(entry["assignment_id"]) or (
+            pending.remove(
+                tmp_path, entry["assignment_id"],
+                scope_fingerprint=entry.get("scope_fingerprint"),
+            )
+            or "submitted"
+        ),
+    )
+
+    assert runloop.cmd_retry_upload(None) == 1
+    assert touched == ["from-b"]
+    assert [entry["assignment_id"] for entry in pending.load(tmp_path)] == ["from-a"]
+    assert "scope is unknown, malformed, or does not match" in capsys.readouterr().out
 
 
 def test_intent_registration_conflict_keeps_artifact_without_submit(
@@ -1711,7 +2057,7 @@ def test_upload_failure_records_ledger_entry(tmp_path: Path, monkeypatch):
 def test_upload_409_means_already_landed_clears_ledger(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
 
     def already(aid):
         raise ApiError("server returned 409: already submitted", status_code=409)
@@ -1743,7 +2089,7 @@ def test_stale_generation_409_is_not_misread_as_already_submitted(
 def test_upload_410_means_expired_clears_ledger(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
 
     def expired(aid):
         raise ApiError("server returned 410: lease expired", status_code=410)
@@ -1760,7 +2106,7 @@ def test_transient_failure_with_409_in_message_is_not_misread_as_conflict(tmp_pa
     # treated as "already submitted". Only a real 409 response may do that.
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
 
     def fail(aid):
         raise ApiError("cannot reach https://dradar.example.com:8409: connection refused")
@@ -1778,7 +2124,7 @@ def test_secret_in_added_patch_line_is_redacted_and_uploaded(tmp_path: Path, mon
         "diff --git a/app.py b/app.py\n"
         "--- a/app.py\n+++ b/app.py\n@@ -1 +1,2 @@\n old = True\n"
         "+api_key = \"ghp_ABCDEFghijkl0123456789ABCDEFghijkl0123\"\n")
-    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    pending.record(tmp_path, _entry(trial_dir))
     uploaded = {}
 
     class CaptureClient(FakeClient):

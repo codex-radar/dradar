@@ -16,6 +16,7 @@ the entry. A 409 recovery-generation conflict is not success and stays queued.
 Anything else keeps it for the next retry.
 """
 
+import hashlib
 import json
 import os
 import tempfile
@@ -27,6 +28,35 @@ from typing import Iterator
 _FILENAME = "pending_uploads.json"
 _LOCK_FILENAME = "pending_uploads.lock"
 _PROCESS_LOCK = threading.Lock()
+
+
+def scope_fingerprint(
+    *,
+    server: str | None,
+    account_scope: str | None,
+    benchmark_id: str | None = None,
+    batch_id: str | None = None,
+) -> str | None:
+    """Return a non-secret identity for a pending-upload queue.
+
+    The bearer token is already reduced to ``account_scope`` by ``ApiClient``;
+    neither it nor any other credential is persisted here.  Including the
+    server, account and plan/batch makes a ledger entry from one login or
+    private run plan ineligible for an unrelated context sharing the same
+    ``DRADAR_HOME``.  ``None`` means the caller cannot prove a safe scope and
+    must keep the entry for explicit review rather than guessing.
+    """
+    if not server or not account_scope:
+        return None
+    payload = {
+        "schema": "dradar-pending-scope-v1",
+        "server": str(server).rstrip("/"),
+        "account_scope": str(account_scope),
+        "benchmark_id": str(benchmark_id or ""),
+        "batch_id": str(batch_id or ""),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _path(home: Path) -> Path:
@@ -102,7 +132,7 @@ def assignment_ids(home: Path) -> set[str]:
     return {
         str(entry["assignment_id"])
         for entry in load(home)
-        if entry.get("assignment_id")
+        if isinstance(entry, dict) and entry.get("assignment_id")
     }
 
 
@@ -143,20 +173,51 @@ def _save_unlocked(home: Path, entries: list[dict]) -> None:
 
 
 def record(home: Path, entry: dict) -> None:
-    """Add or replace (by assignment_id) a pending-upload entry."""
+    """Add or replace a pending-upload entry.
+
+    Assignment IDs are normally globally unique, but old ledgers have no
+    scope metadata.  A scoped entry must not replace an old/foreign entry with
+    the same ID: preserving that evidence is safer than silently discarding
+    it during a login or plan switch.
+    """
     with _locked(home):
         entries = [
             e for e in _load_unlocked(home)
-            if e.get("assignment_id") != entry.get("assignment_id")
+            if (
+                not isinstance(e, dict)
+                or e.get("assignment_id") != entry.get("assignment_id")
+                or (
+                    e.get("scope_fingerprint") != entry.get("scope_fingerprint")
+                    and (
+                        e.get("scope_fingerprint") is not None
+                        or entry.get("scope_fingerprint") is not None
+                    )
+                )
+            )
         ]
         entries.append(entry)
         _save_unlocked(home, entries)
 
 
-def remove(home: Path, assignment_id: str) -> None:
+def remove(
+    home: Path,
+    assignment_id: str,
+    *,
+    scope_fingerprint: str | None = None,
+) -> None:
+    """Remove one assignment, optionally limited to its queue scope.
+
+    An omitted scope removes only legacy (unscoped) rows.  Scoped callers must
+    identify their exact row so settling one context cannot delete preserved
+    evidence from another context sharing the same assignment ID.
+    """
     with _locked(home):
         entries = [
             e for e in _load_unlocked(home)
-            if e.get("assignment_id") != assignment_id
+            if not (
+                isinstance(e, dict)
+                and e.get("assignment_id") == assignment_id
+                and e.get("scope_fingerprint") == scope_fingerprint
+            )
         ]
         _save_unlocked(home, entries)

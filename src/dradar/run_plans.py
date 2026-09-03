@@ -1048,7 +1048,9 @@ def _local_preparing_response(
     return result
 
 
-def _exact_pending_uploads(batch_id: str) -> list[dict[str, Any]]:
+def _exact_pending_uploads(
+    batch_id: str, client: ApiClient | None = None,
+) -> list[dict[str, Any]]:
     """Read only durable completed results belonging to one exact plan batch."""
 
     from . import pending
@@ -1057,13 +1059,30 @@ def _exact_pending_uploads(batch_id: str) -> list[dict[str, Any]]:
         expected = normalize_batch_id(batch_id)
     except ValueError:
         return []
+    expected_scope = None
+    if (
+        client is not None
+        and getattr(client, "server", None)
+        and getattr(client, "account_scope", None)
+    ):
+        expected_scope = pending.scope_fingerprint(
+            server=client.server,
+            account_scope=client.account_scope,
+            benchmark_id=getattr(client, "benchmark_id", None),
+            batch_id=expected,
+        )
     matches = []
     for entry in pending.load(HOME):
+        if not isinstance(entry, dict):
+            continue
         try:
             actual = normalize_batch_id(entry.get("batch_id"))
         except ValueError:
             continue
-        if actual == expected:
+        if actual == expected and (
+            expected_scope is None
+            or entry.get("scope_fingerprint") == expected_scope
+        ):
             matches.append(entry)
     return matches
 
@@ -1212,7 +1231,7 @@ def _recover_plan_uploads(
     """Replay this plan's completed local uploads without starting a runner."""
 
     batch_id = state["batch_id"]
-    before = _exact_pending_uploads(batch_id)
+    before = _exact_pending_uploads(batch_id, client)
     if not before:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -1227,8 +1246,9 @@ def _recover_plan_uploads(
         }
     from . import runloop
 
+    runloop._mark_pending_scope_required(client)
     runloop._retry_pending_uploads(client, batch_id=batch_id)
-    remaining = _exact_pending_uploads(batch_id)
+    remaining = _exact_pending_uploads(batch_id, client)
     if not remaining:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -2315,7 +2335,7 @@ def cmd_progress_plan(args) -> int:
         from . import fleet
 
         local_item = fleet.batch_status(state["batch_id"])
-        pending_uploads = _exact_pending_uploads(state["batch_id"])
+        pending_uploads = _exact_pending_uploads(state["batch_id"], client)
         same_local_plan = bool(
             isinstance(local_item, dict)
             and local_item.get("plan_id") == state["plan_id"]
