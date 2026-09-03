@@ -589,8 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--refill-harness", metavar="HARNESS",
             help="restrict every auto-refill claim to one harness (for example "
-                 "kimi-code, zcode, grok-build, codebuddy, or codex; paid-API "
-                 "DSH remains one-off)",
+                 "claude-code, dsh, kimi-code, zcode, grok-build, codebuddy, "
+                 "antigravity, or codex)",
         )
         p.add_argument(
             "--refill-model", metavar="MODEL",

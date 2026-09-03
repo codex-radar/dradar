@@ -571,17 +571,18 @@ class ApiClient:
         max_tasks: int,
     ) -> dict[str, Any]:
         """Idempotently create the server-authoritative multi-machine plan."""
+        payload = {
+            "batch_id": batch_id,
+            "benchmark_id": self.benchmark_id or "deep-swe",
+            "harness": harness,
+            "model": model,
+            "effort": effort,
+            "refill_to": refill_to,
+            "max_tasks": max_tasks,
+        }
         return self._post(
             "/api/v1/refill-campaign/configure",
-            json={
-                "batch_id": batch_id,
-                "benchmark_id": self.benchmark_id or "deep-swe",
-                "harness": harness,
-                "model": model,
-                "effort": effort,
-                "refill_to": refill_to,
-                "max_tasks": max_tasks,
-            },
+            json=payload,
         )
 
     def refill_campaign_status(self, batch_id: str) -> dict[str, Any]:
