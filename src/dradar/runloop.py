@@ -2720,6 +2720,13 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     work_dir = HOME / "work"
     print("running trial (this can take a while)...")
     if telemetry:
+        # Keep the server in the bounded preparation grace while Pier pulls or
+        # builds the image.  assignment/started transitions to running at the
+        # worker-registration edge and starts the runtime lease then.
+        telemetry.set_phase(
+            "building", assignment["assignment_id"],
+            assignment.get("owner_epoch"),
+        )
         _record_flight_event(telemetry,
             "build_started", component="build",
             assignment_id=assignment["assignment_id"],

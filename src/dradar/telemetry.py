@@ -162,7 +162,7 @@ class RunnerTelemetry:
         assignment_id: str | None = None,
         owner_epoch: int | None = None,
     ) -> None:
-        if phase not in {"preparing", "queued", "running", "uploading", "paused"}:
+        if phase not in {"preparing", "building", "queued", "running", "uploading", "paused"}:
             raise ValueError(f"unknown runner phase {phase!r}")
         if owner_epoch is not None and owner_epoch < 0:
             raise ValueError("owner_epoch must be non-negative")
