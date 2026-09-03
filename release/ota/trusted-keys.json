@@ -1,4 +1,11 @@
 {
   "schema_version": 1,
-  "keys": {}
+  "keys": {
+    "dradar-ota-prod-2026-09-03-01": {
+      "public_key_base64": "cNKyezPQwWVFv7rQua/e4mmQKho0OmgQvrLyR/R2otI=",
+      "status": "active",
+      "not_before": "2026-09-03T00:00:00Z",
+      "not_after": "2027-09-03T00:00:00Z"
+    }
+  }
 }
