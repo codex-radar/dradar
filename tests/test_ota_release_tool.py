@@ -590,6 +590,22 @@ def test_r2_client_botocore_signs_every_conditional_write_header():
     assert requests[1].headers["if-match"] == '"previous-etag"'
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ('"same"', '"same"', True),
+        ('W/"same"', '"same"', True),
+        ('"same"', 'W/"same"', True),
+        ('W/"same"', 'W/"same"', True),
+        ('"left"', '"right"', False),
+        ("unquoted", "unquoted", False),
+        ('W/W/"same"', '"same"', False),
+    ],
+)
+def test_etag_comparison_only_ignores_one_weak_marker(left, right, expected):
+    assert ota_release._etag_matches(left, right) is expected
+
+
 def test_r2_publication_uploads_immutable_inputs_before_bootstrap_pointer(
     tmp_path, monkeypatch,
 ):
