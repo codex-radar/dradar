@@ -27,7 +27,8 @@ import uuid
 
 from . import (
     __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
-    failure_circuit, image_cache, local_jobs, pending, refill as refill_plan,
+    empty_submission_circuit, failure_circuit, image_cache, local_jobs, pending,
+    refill as refill_plan,
 )
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .codebuddy_provider import (
@@ -156,6 +157,7 @@ _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
     "runtime-incompatible", "provider-preflight-failed",
     "repeat-agent-failure",
+    "empty-submission",
 }
 _POOL_ABORT_ENV = "DRADAR_POOL_ABORT_FILE"
 _POOL_TARGET_FILE_ENV = "DRADAR_POOL_TARGET_FILE"
@@ -561,6 +563,9 @@ def _announce_account_stop(outcome: str) -> None:
         "repeat-agent-failure": (
             "the same zero-progress agent command failure repeated"
         ),
+        "empty-submission": (
+            "the server verified a completed run produced an empty model patch"
+        ),
     }
     reason = messages.get(outcome, "an account-wide stop condition was detected")
     print(
@@ -570,6 +575,70 @@ def _announce_account_stop(outcome: str) -> None:
         "Unstarted leases remain untouched; fix or wait for "
         "the condition, then explicitly start `dradar resume` again."
     )
+
+
+def _empty_submission_blocked_ids(
+    active: list[dict], client: ApiClient | None = None,
+) -> set[str]:
+    return {
+        assignment["assignment_id"]
+        for assignment in active
+        if assignment.get("assignment_id")
+        and empty_submission_circuit.open_for(
+            HOME, assignment, __version__,
+            account_scope=getattr(client, "account_scope", None),
+        )
+    }
+
+
+def _allow_explicit_empty_submission_retry(
+    args, active: list[dict], client: ApiClient | None = None,
+) -> bool:
+    """Gate persisted blank-patch scopes before any new model/checkout work.
+
+    Automated, refill and multi-cell invocations fail closed. A human may
+    explicitly re-run exactly one held assignment after seeing the diagnosis;
+    a normal non-empty acknowledgement clears the durable latch.
+    """
+    blocked_ids = _empty_submission_blocked_ids(active, client)
+    blocked = [
+        assignment for assignment in active
+        if assignment.get("assignment_id") in blocked_ids
+    ]
+    if not blocked:
+        return True
+    if len(blocked) < len(active):
+        print(
+            f"leaving {len(blocked)} empty-patch-circuit assignment(s) "
+            "untouched while continuing unrelated runtime scopes"
+        )
+        return True
+    automatic = bool(
+        getattr(args, "worker_child", False)
+        or getattr(args, "refill", False)
+        or getattr(args, "auto", None) is not None
+        or getattr(args, "yes", False)
+        or len(active) != 1
+    )
+    if automatic:
+        print(
+            "server-verified empty-patch circuit is still open for this "
+            "runtime; no new checkout or refill was attempted. Existing "
+            "in-flight siblings are untouched. Run an interactive single-task "
+            "`dradar resume` when you are ready to diagnose and retry."
+        )
+        return False
+    assignment = blocked[0]
+    answer = input(
+        f"the previous completed {assignment.get('model')}@"
+        f"{assignment.get('effort')} run produced an empty model patch. "
+        "Explicitly retry this one held task now? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        print("retry cancelled; the assignment and circuit remain untouched")
+        return False
+    args._empty_submission_retry_confirmed = True
+    return True
 
 
 def _repeat_failure_state_path() -> Path | None:
@@ -819,6 +888,31 @@ def _choose_menu_entry(menu: list[dict], yes: bool) -> dict:
     return menu[0]
 
 
+def _allow_claim_after_empty_submission(
+    client: ApiClient, cell: dict, *, automatic: bool,
+    conservative_missing_runtime: bool = False,
+) -> bool:
+    if not empty_submission_circuit.open_for_claim(
+        HOME, cell, __version__,
+        account_scope=getattr(client, "account_scope", None),
+        conservative_missing_runtime=conservative_missing_runtime,
+    ):
+        return True
+    label = f"{cell.get('task_id')}/{cell.get('model')}@{cell.get('effort')}"
+    if automatic:
+        print(
+            f"  {label}: not claimed — a persisted server-verified empty-patch "
+            "circuit blocks automatic claims for this runtime"
+        )
+        return False
+    answer = input(
+        f"the previous completed {cell.get('model')}@{cell.get('effort')} "
+        "run produced an empty patch. Explicitly claim this one task for a "
+        "diagnostic retry? [y/N] "
+    ).strip().lower()
+    return answer in {"y", "yes"}
+
+
 def _claim_from_menu(client: ApiClient, menu: list[dict], yes: bool) -> dict | None:
     """Claim a menu entry, retrying once with a fresh menu if it went stale.
     Returns the claimed assignment (or an already-held one, when a 409 meant
@@ -826,6 +920,10 @@ def _claim_from_menu(client: ApiClient, menu: list[dict], yes: bool) -> dict | N
     None when no work is available."""
     for attempt in range(2):
         choice = _choose_menu_entry(menu, yes)
+        if not _allow_claim_after_empty_submission(
+            client, choice, automatic=yes,
+        ):
+            return None
         try:
             data = client.claim_assignment(choice["task_id"], choice["model"], choice["effort"])
             return data.get("assignment")
@@ -857,7 +955,10 @@ class _ConcurrentCapHit(Exception):
     line N times."""
 
 
-def _claim_cell(client: ApiClient, task_id: str, model: str, effort: str) -> dict | None:
+def _claim_cell(
+    client: ApiClient, task_id: str, model: str, effort: str, *,
+    automatic: bool = True, cell_metadata: dict | None = None,
+) -> dict | None:
     """Claim one cell, printing a clear per-cell success/failure line (the
     acceptance bar from volunteer issue #1: an Agent driving this headlessly
     needs to know exactly what landed, not just an aggregate count). A stale/
@@ -865,6 +966,17 @@ def _claim_cell(client: ApiClient, task_id: str, model: str, effort: str) -> dic
     rest of the batch. Everything else (401, the concurrent-hold cap, a
     validation error) propagates: _ConcurrentCapHit to the batch loop,
     anything else to _exit_for."""
+    if not _allow_claim_after_empty_submission(
+        client, cell_metadata or {
+            "task_id": task_id, "model": model, "effort": effort,
+        },
+        automatic=automatic,
+        # --pick carries no provider/runtime metadata. Automated exact picks
+        # must fail closed on a matching core scope; an interactive pick can
+        # still proceed only after the explicit diagnostic confirmation.
+        conservative_missing_runtime=cell_metadata is None,
+    ):
+        return None
     try:
         data = client.claim_assignment(task_id, model, effort)
     except ApiError as exc:
@@ -881,13 +993,17 @@ def _claim_cell(client: ApiClient, task_id: str, model: str, effort: str) -> dic
     return a
 
 
-def _claim_picks(client: ApiClient, specs: list[str]) -> list[dict]:
+def _claim_picks(
+    client: ApiClient, specs: list[str], *, automatic: bool = True,
+) -> list[dict]:
     """`dradar go --pick task:model:effort` (repeatable): claim exact cells by
     ID instead of picking from the web or auto-suggesting."""
     claimed = []
     try:
         for task_id, model, effort in (_parse_pick(s) for s in specs):
-            a = _claim_cell(client, task_id, model, effort)
+            a = _claim_cell(
+                client, task_id, model, effort, automatic=automatic,
+            )
             if a is not None:
                 claimed.append(a)
     except _ConcurrentCapHit as exc:
@@ -896,7 +1012,8 @@ def _claim_picks(client: ApiClient, specs: list[str]) -> list[dict]:
 
 
 def _top_up_picks(
-    client: ApiClient, active: list[dict], specs: list[str],
+    client: ApiClient, active: list[dict], specs: list[str], *,
+    automatic: bool = True,
 ) -> list[dict]:
     """Claim exact requested cells that are not already held.
 
@@ -917,7 +1034,7 @@ def _top_up_picks(
             continue
         seen.add(cell)
         missing.append(spec)
-    return active + _claim_picks(client, missing)
+    return active + _claim_picks(client, missing, automatic=automatic)
 
 
 def _claim_auto(client: ApiClient, n: int) -> list[dict]:
@@ -934,7 +1051,10 @@ def _claim_auto(client: ApiClient, n: int) -> list[dict]:
     claimed = []
     try:
         for c in cells:
-            a = _claim_cell(client, c["task_id"], c["model"], c["effort"])
+            a = _claim_cell(
+                client, c["task_id"], c["model"], c["effort"],
+                cell_metadata=c,
+            )
             if a is not None:
                 claimed.append(a)
     except _ConcurrentCapHit as exc:
@@ -2364,7 +2484,19 @@ def _upload_trial(
         archive_after_submit(HOME, entry)
     pending.remove(HOME, assignment_id)
     cleanup_settled()
-    if ack.get("grade_status") == "invalid":
+    exact_empty_submission = (
+        ack.get("terminal_outcome") == "empty-submission"
+        and ack.get("failure_kind") == "empty-submission"
+        and ack.get("failure_layer") == "artifact"
+        and ack.get("failure_code") == "empty-model-patch"
+    )
+    if exact_empty_submission:
+        print(
+            f"recorded completed empty patch: {ack['submission_id']} — the "
+            "server kept the audit artifacts but no new automatic work will "
+            "start for this runtime until an explicit single-task retry"
+        )
+    elif ack.get("grade_status") == "invalid":
         # Neutral by design: the cause (printed by _run_and_submit's
         # diagnosis) may be anything from a stale agent image to a real rate
         # limit — claiming "wait for your quota to reset" here misled a real
@@ -2401,6 +2533,8 @@ def _upload_trial(
                       "(`dradar cleanup --include-kept` removes them later)")
         else:
             shutil.rmtree(job_dir, ignore_errors=True)
+    if exact_empty_submission:
+        return "empty-submission"
     return "interrupted" if outcome == "interrupted" else "submitted"
 
 
@@ -3142,8 +3276,26 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         and not getattr(args, "yes", False)
         and not getattr(args, "parallel", False)
     ))
+    if upload_outcome == "empty-submission":
+        empty_submission_circuit.record_empty(
+            HOME, assignment, __version__,
+            account_scope=getattr(client, "account_scope", None),
+        )
+        if getattr(args, "refill", False):
+            refill_plan.open_circuit(HOME, assignment, "empty_submission")
+        _signal_pool_abort(
+            "server-verified completed empty model patch",
+            interrupt_siblings=False,
+        )
+    elif upload_outcome == "submitted":
+        empty_submission_circuit.record_success(
+            HOME, assignment, __version__,
+            account_scope=getattr(client, "account_scope", None),
+        )
     if telemetry:
-        upload_succeeded = upload_outcome in {"submitted", "interrupted"}
+        upload_succeeded = upload_outcome in {
+            "submitted", "interrupted", "empty-submission",
+        }
         _record_flight_event(telemetry,
             "upload_completed" if upload_succeeded else "upload_failed",
             component="upload", assignment_id=assignment["assignment_id"],
@@ -5470,6 +5622,14 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
     if not active:
         print("all held assignments already have durable pending results; refusing to rerun")
         return 1
+    empty_blocked_ids = _empty_submission_blocked_ids(active, client)
+    if empty_blocked_ids and len(empty_blocked_ids) < len(active):
+        active = [
+            assignment for assignment in active
+            if assignment.get("assignment_id") not in empty_blocked_ids
+        ]
+    if not _allow_explicit_empty_submission_retry(args, active, client):
+        return 1
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
@@ -5488,7 +5648,9 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             print("  it's your call whether you have room for this — dradar doesn't track "
                   "your subscription usage. If you don't finish before the lease expires, "
                   "the cell just reopens for someone else and nothing is counted.")
-        if not args.yes:
+        if not args.yes and not getattr(
+            args, "_empty_submission_retry_confirmed", False,
+        ):
             prompt = "run it now? [y/N]" + (" (or 's' to skip this one)" if n > 1 else "") + " "
             answer = input(prompt).strip().lower()
             if n > 1 and answer == "s":
@@ -5571,10 +5733,13 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
     batch instead of racing over a shared snapshot. Returns None when the
     server predates the checkout endpoint — the caller falls back to the
     legacy whole-batch flow."""
+    if not _allow_explicit_empty_submission_retry(args, active, client):
+        return 1
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
     results, failed_ids = [], set()
+    local_empty_blocked_ids = _empty_submission_blocked_ids(active, client)
     batch_assignment_ids = {
         item["assignment_id"] for item in active if item.get("assignment_id")
     }
@@ -5595,6 +5760,7 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             break
         checkout_exclusions = (
             failed_ids | degraded_exclusions
+            | local_empty_blocked_ids
             | (pending.assignment_ids(HOME) & batch_assignment_ids)
         )
         try:
@@ -6246,7 +6412,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
               "unchanged; use `dradar cleanup --docker --dry-run` to inspect cleanup.")
     elif free_pick and wants_pick:
         try:
-            active = _top_up_picks(client, active, wants_pick)
+            active = _top_up_picks(
+                client, active, wants_pick, automatic=args.yes,
+            )
         except ApiError as exc:
             _exit_for(exc)
     elif free_pick and auto_target is not None and not wants_refill:

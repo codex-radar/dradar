@@ -131,6 +131,38 @@ def test_upload_success_clears_ledger(tmp_path: Path, monkeypatch):
     assert pending.load(tmp_path) == []
 
 
+def test_exact_empty_submission_ack_is_not_collapsed_to_submitted(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    pending.record(tmp_path, {"assignment_id": "a1", "task_id": "t1"})
+    client = FakeClient(lambda _aid: {
+        "submission_id": "s-empty",
+        "grade_status": "invalid",
+        "terminal_outcome": "empty-submission",
+        "failure_kind": "empty-submission",
+        "failure_layer": "artifact",
+        "failure_code": "empty-model-patch",
+    })
+
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "empty-submission"
+    assert pending.load(tmp_path) == []
+
+
+def test_generic_progress_bearing_invalid_remains_non_circuit_submission(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    client = FakeClient(lambda _aid: {
+        "submission_id": "s-invalid", "grade_status": "invalid",
+        "failure_kind": "rate-limit",
+    })
+
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "submitted"
+
+
 def test_session_bound_upload_registers_intent_before_submit(
     tmp_path: Path, monkeypatch,
 ):

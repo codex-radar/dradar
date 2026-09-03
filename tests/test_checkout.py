@@ -6,6 +6,7 @@ import threading
 from types import SimpleNamespace
 
 import dradar.runloop as runloop
+from dradar import empty_submission_circuit
 import pytest
 from dradar.api_client import ApiError
 from dradar.runner import diagnose_exception
@@ -64,6 +65,233 @@ class StubTelemetry:
 
     def set_phase(self, phase, assignment_id=None, resume_generation=None):
         self.phases.append((phase, assignment_id, resume_generation))
+
+
+def test_persisted_empty_submission_blocks_new_batch_before_checkout(
+        monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    failed = _cell("prior-empty")
+    empty_submission_circuit.record_empty(
+        tmp_path, failed, runloop.__version__,
+    )
+    restarted = {**_cell("new-batch"), "batch_id": "batch-2"}
+    client = CheckoutClient(
+        {"active": [restarted], "free_pick": True},
+        [{"assignment": restarted, "held": 1, "unstarted": 0}],
+    )
+    args = _args()
+    args.yes = True
+
+    assert runloop._run_checkout_loop(args, client, tmp_path, [restarted]) == 1
+    assert client.checkout_exclusions == []
+    assert "no new checkout or refill" in capsys.readouterr().out
+
+
+def test_first_exact_empty_submission_stops_before_next_checkout(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
+    attempts = []
+
+    def run(_client, assignment, *_args, **_kwargs):
+        attempts.append(assignment["assignment_id"])
+        return "empty-submission"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", run)
+    cells = [_cell("empty"), _cell("must-not-start")]
+    client = CheckoutClient(
+        {"active": cells, "free_pick": True},
+        [
+            {"assignment": cells[0], "held": 2, "unstarted": 1},
+            {"assignment": cells[1], "held": 2, "unstarted": 0},
+        ],
+    )
+
+    assert runloop._run_checkout_loop(_args(), client, tmp_path, cells) == 1
+    assert attempts == ["empty"]
+    assert len(client.checkout_exclusions) == 1
+
+
+def test_interactive_single_task_can_explicitly_retry_and_success_rearms(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    assignment = _cell("retry")
+    empty_submission_circuit.record_empty(
+        tmp_path, assignment, runloop.__version__,
+    )
+    args = _args()
+    args.yes = False
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+
+    assert runloop._allow_explicit_empty_submission_retry(args, [assignment])
+    empty_submission_circuit.record_success(
+        tmp_path, assignment, runloop.__version__,
+    )
+    assert not empty_submission_circuit.open_for(
+        tmp_path, assignment, runloop.__version__,
+    )
+
+
+def test_persisted_empty_submission_blocks_auto_claim_before_request(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    assignment = _cell("prior")
+    empty_submission_circuit.record_empty(
+        tmp_path, assignment, runloop.__version__,
+    )
+
+    class Client:
+        def claim_assignment(self, *_args):
+            raise AssertionError("automatic claim must be blocked locally")
+
+    assert runloop._claim_cell(
+        Client(), assignment["task_id"], assignment["model"],
+        assignment["effort"], cell_metadata=assignment,
+    ) is None
+
+
+def test_persisted_empty_submission_does_not_block_new_runtime_claim(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    failed = {**_cell("prior"), "agent_version": "0.144.1"}
+    empty_submission_circuit.record_empty(
+        tmp_path, failed, runloop.__version__,
+    )
+    new_runtime = {**failed, "agent_version": "0.145.0"}
+
+    class Client:
+        def claim_assignment(self, *_args):
+            return {"assignment": new_runtime}
+
+    assert runloop._claim_cell(
+        Client(), new_runtime["task_id"], new_runtime["model"],
+        new_runtime["effort"], cell_metadata=new_runtime,
+    ) == new_runtime
+
+
+def test_persisted_empty_submission_does_not_block_other_provider_claim(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    failed = {**_cell("prior"), "provider": "openai"}
+    empty_submission_circuit.record_empty(
+        tmp_path, failed, runloop.__version__,
+    )
+    other_provider = {**failed, "provider": "azure-openai"}
+
+    class Client:
+        def claim_assignment(self, *_args):
+            return {"assignment": other_provider}
+
+    assert runloop._claim_cell(
+        Client(), other_provider["task_id"], other_provider["model"],
+        other_provider["effort"], cell_metadata=other_provider,
+    ) == other_provider
+
+
+def test_automatic_exact_pick_without_runtime_metadata_fails_closed(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    failed = {
+        **_cell("prior"), "provider": "openai", "agent_version": "0.144.1",
+    }
+    empty_submission_circuit.record_empty(
+        tmp_path, failed, runloop.__version__,
+    )
+
+    class Client:
+        def claim_assignment(self, *_args):
+            raise AssertionError("automatic exact pick must be blocked locally")
+
+    assert runloop._claim_cell(
+        Client(), failed["task_id"], failed["model"], failed["effort"],
+    ) is None
+
+
+def test_interactive_exact_pick_without_runtime_metadata_requires_confirmation(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    failed = {
+        **_cell("prior"), "provider": "openai", "agent_version": "0.144.1",
+    }
+    empty_submission_circuit.record_empty(
+        tmp_path, failed, runloop.__version__,
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+
+    class Client:
+        def claim_assignment(self, *_args):
+            return {"assignment": failed}
+
+    assert runloop._claim_cell(
+        Client(), failed["task_id"], failed["model"], failed["effort"],
+        automatic=False,
+    ) == failed
+
+
+def test_checkout_mixed_scopes_excludes_only_empty_submission_scope(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
+    blocked = {**_cell("blocked"), "agent_version": "0.144.1"}
+    safe = {**_cell("safe"), "agent_version": "0.145.0"}
+    empty_submission_circuit.record_empty(
+        tmp_path, blocked, runloop.__version__,
+    )
+    ran = []
+
+    def run(_client, assignment, *_args, **_kwargs):
+        ran.append(assignment["assignment_id"])
+        return "submitted"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", run)
+    client = CheckoutClient(
+        {"active": [blocked, safe], "free_pick": True},
+        [{"assignment": safe, "held": 2, "unstarted": 0},
+         {"assignment": None, "held": 2, "unstarted": 0}],
+    )
+
+    assert runloop._run_checkout_loop(_args(), client, tmp_path, [blocked, safe]) == 0
+    assert ran == ["safe"]
+    assert client.checkout_exclusions[0] == {"blocked"}
+
+
+def test_legacy_batch_mixed_scopes_runs_only_safe_assignments(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(
+        runloop, "_version_pinned_tasks_root",
+        lambda *_args, **_kwargs: (tmp_path, None),
+    )
+    blocked = {**_cell("blocked"), "agent_version": "0.144.1"}
+    safe = {**_cell("safe"), "agent_version": "0.145.0"}
+    empty_submission_circuit.record_empty(
+        tmp_path, blocked, runloop.__version__,
+    )
+    ran = []
+
+    def run(_client, assignment, *_args, **_kwargs):
+        ran.append(assignment["assignment_id"])
+        return "submitted"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", run)
+    args = _args()
+    args.yes = True
+
+    assert runloop._run_batch(args, object(), tmp_path, [blocked, safe]) == 0
+    assert ran == ["safe"]
+
+
+def test_local_empty_submission_scope_does_not_cross_accounts(tmp_path):
+    assignment = _cell("prior")
+    empty_submission_circuit.record_empty(
+        tmp_path, assignment, runloop.__version__, account_scope="account-a",
+    )
+
+    assert empty_submission_circuit.open_for(
+        tmp_path, assignment, runloop.__version__, account_scope="account-a",
+    )
+    assert not empty_submission_circuit.open_for(
+        tmp_path, assignment, runloop.__version__, account_scope="account-b",
+    )
 
 
 def test_checkout_loop_runs_dispensed_cells_until_drained(monkeypatch, capsys, tmp_path):
