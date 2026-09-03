@@ -14,6 +14,8 @@ from dradar.codebuddy_provider import (
     CODEBUDDY_PROVIDER,
 )
 from dradar.providers import (
+    DSH_AGENT,
+    DSH_PRO_MODEL,
     GROK_AGENT,
     KIMI_AGENT,
     KIMI_PROVIDER,
@@ -46,6 +48,10 @@ def _table(*cells):
         {"agent": KIMI_AGENT, "model": "k3", "effort": effort,
          "billing_mode": "subscription", "manual_only": True}
         for effort in ("low", "high", "max")
+    ] + [
+        {"agent": DSH_AGENT, "model": DSH_PRO_MODEL, "effort": effort,
+         "billing_mode": "api", "manual_only": True}
+        for effort in ("off", "high", "max")
     ] + [
         {"agent": ZCODE_AGENT, "model": model, "effort": effort,
          "billing_mode": "subscription", "manual_only": True}
@@ -100,6 +106,11 @@ class ScopedClient:
                 model=model, effort=effort,
             )
             assignment["task_id"] = task_id
+            assignment["billing_mode"] = cell.get(
+                "billing_mode", assignment["billing_mode"],
+            )
+            if assignment["billing_mode"] == "api":
+                assignment["cost_usd"] = cell.get("cost")
             self.active.append(assignment)
             self.claimed.append((task_id, model, effort))
             return {"assignment": assignment}
@@ -130,6 +141,46 @@ def test_kimi_low_scoped_refill_claims_only_kimi_low(tmp_path: Path):
     assert client.claimed == [
         ("k-low-1", "k3", "low"), ("k-low-2", "k3", "low")]
     assert client.suggest_calls == []
+
+
+def test_dsh_paid_api_refill_uses_exact_scope_and_task_budget(tmp_path: Path):
+    board = _table(
+        ("dsh-paid", DSH_AGENT, DSH_PRO_MODEL, "high", "open"),
+        ("kimi", KIMI_AGENT, "k3", "low", "open"),
+    )
+    board["cells"][f"dsh-paid|{DSH_PRO_MODEL}|high"].update(
+        billing_mode="api", cost=0.5,
+    )
+    client = ScopedClient(board)
+    _configure(
+        tmp_path, harness=DSH_AGENT, model=DSH_PRO_MODEL, effort="high",
+        refill_to=1, max_tasks=2,
+    )
+    result = refill.refill_once(tmp_path, client)
+    assert result["claimed"] == 1
+    assert client.claimed == [("dsh-paid", DSH_PRO_MODEL, "high")]
+
+
+@pytest.mark.parametrize(
+    "quote", [None, float("nan"), float("inf"), float("-inf"), 0, -0.01, True],
+)
+def test_dsh_refill_does_not_require_a_candidate_cost_quote(
+    tmp_path: Path, quote,
+):
+    board = _table(
+        ("dsh-invalid", DSH_AGENT, DSH_PRO_MODEL, "high", "open"),
+    )
+    board["cells"][f"dsh-invalid|{DSH_PRO_MODEL}|high"].update(
+        billing_mode="api", cost=quote,
+    )
+    client = ScopedClient(board)
+    _configure(
+        tmp_path, harness=DSH_AGENT, model=DSH_PRO_MODEL, effort="high",
+        refill_to=1, max_tasks=2,
+    )
+    result = refill.refill_once(tmp_path, client)
+    assert result["claimed"] == 1
+    assert client.claimed == [("dsh-invalid", DSH_PRO_MODEL, "high")]
 
 
 def test_scoped_refill_claims_cheapest_candidates_first(tmp_path: Path):
@@ -191,7 +242,7 @@ def test_no_kimi_inventory_never_falls_back_to_codex(tmp_path: Path):
     assert client.suggest_calls == []
 
 
-def test_codex_scoped_discovery_never_claims_paid_api_cells(tmp_path: Path):
+def test_exact_scoped_discovery_claims_paid_api_cells_under_task_cap(tmp_path: Path):
     board = _table(("paid", "codex", "gpt-5.6-sol", "low", "open"))
     board["cells"]["paid|gpt-5.6-sol|low"]["billing_mode"] = "api"
     client = ScopedClient(board)
@@ -202,8 +253,8 @@ def test_codex_scoped_discovery_never_claims_paid_api_cells(tmp_path: Path):
 
     result = refill.refill_once(tmp_path, client)
 
-    assert result["waiting_for_inventory"] is True
-    assert client.claimed == []
+    assert result["claimed"] == 1
+    assert client.claimed == [("paid", "gpt-5.6-sol", "low")]
 
 
 def test_scoped_refill_skips_409_and_claims_an_alternate(tmp_path: Path):
@@ -683,9 +734,9 @@ def test_codebuddy_scoped_refill_requires_explicit_total_task_limit():
         ))
 
 
-def test_paid_api_dsh_scoped_refill_is_rejected_before_claiming():
-    with pytest.raises(SystemExit, match="paid-API Harness"):
+def test_paid_api_dsh_scoped_refill_requires_explicit_total_task_limit():
+    with pytest.raises(SystemExit, match="explicit --max-tasks"):
         runloop.cmd_go(_run_args(
             refill_harness="dsh-minimal", refill_model=None,
-            refill_effort=None,
+            refill_effort=None, max_tasks=None,
         ))

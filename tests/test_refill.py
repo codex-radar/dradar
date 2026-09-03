@@ -406,18 +406,6 @@ def test_idle_worker_cannot_delete_plan_during_final_submission_window(
     assert result["claimed"] == 1
 
 
-def test_paid_api_assignment_cannot_enter_continuous_refill(tmp_path: Path):
-    assignment = {
-        **_assignment("deepseek"),
-        "provider": "deepseek",
-        "billing_mode": "api",
-        "est_quota_pct": None,
-        "tier_windows_usd": None,
-    }
-    with pytest.raises(refill.RefillError, match="one-off runs"):
-        _configure(tmp_path, [assignment])
-
-
 def test_paid_api_assignment_is_not_offered_interactive_refill(
     monkeypatch,
 ):

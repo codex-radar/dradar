@@ -4070,9 +4070,10 @@ def cmd_go(args) -> int:
                 )
             except ValueError as exc:
                 sys.exit(str(exc))
-        if getattr(args, "refill_harness", None) in PAID_API_REFILL_AGENTS:
-            sys.exit("paid-API Harness assignments remain one-off and cannot use "
-                     "continuous refill")
+        if (getattr(args, "refill_harness", None) in PAID_API_REFILL_AGENTS
+                and args.max_tasks is None):
+            sys.exit("paid-API Harness refill requires an explicit "
+                     "--max-tasks N total-task stop limit")
         if (getattr(args, "refill_harness", None) in SUBSCRIPTION_REFILL_AGENTS
                 and args.max_tasks is None):
             sys.exit("subscription Harness refill requires an explicit "
@@ -6056,12 +6057,10 @@ def _prompt_positive_int(prompt: str, default: int) -> int:
 def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) -> list[dict]:
     """Configure a plan that drains its initial selected batch before refill."""
     explicit = getattr(args, "refill", False)
-    if any(item.get("billing_mode") == "api" for item in active):
-        if explicit:
-            raise refill_plan.RefillError(
-                "continuous refill is unavailable for paid-API assignments; "
-                "run the DeepSeek task as an explicit one-off"
-            )
+    paid_api = any(item.get("billing_mode") == "api" for item in active)
+    if paid_api and not explicit:
+        # Paid providers must never be enabled by the conversational default;
+        # the user has to supply the hard task limit for this run explicitly.
         return active
     if not explicit and not args.yes and free_pick and active:
         answer = input(
@@ -6112,6 +6111,10 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         raise refill_plan.RefillError(f"unknown quota tier: {args.quota_tier}")
     if args.max_estimated_quota_pct is not None and args.max_estimated_quota_pct <= 0:
         raise refill_plan.RefillError("estimated quota cap must be greater than zero")
+    if paid_api and args.max_tasks is None:
+        raise refill_plan.RefillError(
+            "paid-API continuous refill requires an explicit --max-tasks limit"
+        )
 
     print("continuous refill plan:")
     print(f"  held queue target: {target} (server claim limit {me['claim_limit']})")
@@ -6162,14 +6165,19 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                     "private run-plan credentials lack an authorized points tier"
                 )
         try:
-            configured = client.configure_refill_campaign(
+            campaign_options = dict(
                 batch_id=args.batch_id,
-                harness=args.refill_harness,
+                harness=(
+                    "dsh"
+                    if args.refill_harness in PAID_API_REFILL_AGENTS
+                    else args.refill_harness
+                ),
                 model=args.refill_model,
                 effort=args.refill_effort,
                 refill_to=target,
                 max_tasks=args.max_tasks,
             )
+            configured = client.configure_refill_campaign(**campaign_options)
         except ApiError as exc:
             raise refill_plan.RefillError(
                 f"server refused the exact Fleet refill campaign: {exc}"

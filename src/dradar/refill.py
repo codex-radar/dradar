@@ -268,10 +268,6 @@ def _matches_scope(plan: dict, item: dict) -> bool:
 
 
 def _reserve(plan: dict, assignment: dict, *, enforce_scope: bool = False) -> bool:
-    if assignment.get("billing_mode") == "api":
-        raise RefillError(
-            "paid-API assignments are one-off runs; continuous refill stopped"
-        )
     assignment_id = assignment.get("assignment_id")
     if not assignment_id or assignment_id in plan["assignments"]:
         return False
@@ -561,12 +557,6 @@ def _scoped_candidates(table: dict, plan: dict) -> list[dict]:
         key = (model.lower(), effort.lower())
         if key not in matching_combos or raw_value.get("st") != "open":
             continue
-        # Preserve the existing invariant that paid-API work is one-off.  A
-        # Codex-scoped board may contain manual DeepSeek API cells alongside
-        # subscription cells; table discovery must never broaden refill into
-        # billable API claims that `/suggest` deliberately excluded.
-        if raw_value.get("billing_mode") == "api":
-            continue
         agent = raw_value.get("agent") or combo_agents.get(key) or "codex"
         if agent != harness:
             continue
@@ -593,7 +583,7 @@ def _scoped_candidates(table: dict, plan: dict) -> list[dict]:
 
         cost = candidate.get("cost")
         if (isinstance(cost, (int, float)) and not isinstance(cost, bool)
-                and math.isfinite(float(cost)) and float(cost) >= 0):
+                and math.isfinite(float(cost)) and float(cost) > 0):
             bucket, price = 0, float(cost)
         else:
             quota = candidate.get("est_quota_pct")
@@ -934,7 +924,9 @@ def refill_once(home: Path, client) -> dict:
                 }:
                     plan["status"] = (
                         "draining"
-                        if exc.code == "refill_limit_reached" else "stopped"
+                        if exc.code in {
+                            "refill_limit_reached",
+                        } else "stopped"
                     )
                     plan["stop_reason"] = str(exc)
                     break
