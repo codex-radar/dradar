@@ -624,6 +624,7 @@ def test_checkout_sends_failed_cell_exclusions():
         exclude_assignment_ids={"a2", "a1"}, session_id="session-123")
     assert b"exclude_assignment_ids=a1%2Ca2" in seen["body"]
     assert b"session_id=session-123" in seen["body"]
+    assert b"prepare_only=true" in seen["body"]
 
 
 def test_mark_started_sends_runner_session_id():

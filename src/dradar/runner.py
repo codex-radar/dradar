@@ -3795,8 +3795,24 @@ def _wait_for_worker_registration(
     environment_build_timeout_multiplier: float,
     worker_event_source: Callable[[], object | None] | None = None,
     expected_session_id: str | None = None,
+    log_path: Path | None = None,
 ) -> dict:
-    """Wait for a bounded, structured Pier lifecycle record (never logs)."""
+    """Wait for a bounded, structured Pier lifecycle record.
+
+    The sidecar remains the lifecycle source of truth; a bounded log tail is
+    included only when the caller supplies ``log_path`` so a pre-registration
+    build failure remains actionable.
+    """
+
+    def registration_error(message: str) -> RunnerError:
+        if log_path is None:
+            return RunnerError(message)
+        tail = _tail(log_path)
+        detail = f"{message} (see {log_path})"
+        if tail:
+            detail += f"\nlast lines of the log:\n{tail}"
+        return RunnerError(detail)
+
     event_offset = 0
     # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
     # this clock is separate from the post-registration runtime watchdog.
@@ -3820,12 +3836,12 @@ def _wait_for_worker_registration(
                 "occurred_at_ms": parsed.occurred_at_ms,
             }
         if proc.poll() is not None:
-            raise RunnerError(
+            raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
             )
         if time.monotonic() >= deadline:
-            raise RunnerError(
+            raise registration_error(
                 "environment preparation exceeded its grace window without "
                 "worker_registered; runtime lease was not started"
             )
@@ -4249,6 +4265,7 @@ def run_trial(
                         ),
                         worker_event_source=worker_event_source,
                         expected_session_id=assignment.get("_runner_session_id"),
+                        log_path=log_path,
                     )
                     if on_worker_registered is not None:
                         on_worker_registered(event)
@@ -4370,6 +4387,8 @@ def run_trial(
         # Defensive guard for future launch-path changes: artifact harvesting
         # must never report a runtime duration when no launch boundary was
         # reached.
+        if terminal_error is not None:
+            raise terminal_error
         raise RunnerError("worker launch boundary was not reached")
     duration = time.time() - started
     if isinstance(terminal_error, LiveAccountTerminalError):

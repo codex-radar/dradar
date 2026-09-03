@@ -4391,7 +4391,7 @@ def _assignment_is_ready_for_checkout(
         and assignment.get("runner_phase") is None
     )
     if (assignment.get("started_at")
-            or assignment.get("execution_state") == "paused"
+            or assignment.get("execution_state") not in (None, "waiting")
             or assignment.get("checkpoint_id")):
         return False
     if claimed_after is not None:

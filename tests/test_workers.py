@@ -2352,6 +2352,9 @@ def test_ready_assignment_filter_excludes_running_paused_and_bad_retry_time():
         {"started_at": None, "execution_state": "paused"}, now=now,
     )
     assert not runloop._assignment_is_ready_for_checkout(
+        {"started_at": None, "execution_state": "preparing"}, now=now,
+    )
+    assert not runloop._assignment_is_ready_for_checkout(
         {"started_at": None, "checkpoint_id": "checkpoint"}, now=now,
     )
     assert not runloop._assignment_is_ready_for_checkout(

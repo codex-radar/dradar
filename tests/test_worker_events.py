@@ -67,10 +67,15 @@ def test_registration_wait_uses_exact_thirty_minute_grace(monkeypatch, tmp_path)
     ticks = iter((0.0, 1799.0, 1800.1))
     monkeypatch.setattr(runner.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
-    with pytest.raises(runner.RunnerError, match="grace window"):
+    log_path = tmp_path / "build.log"
+    log_path.write_text("BuildKit stage package-install failed\n")
+    with pytest.raises(runner.RunnerError, match="grace window") as exc:
         runner._wait_for_worker_registration(
             LiveProcess(), tmp_path / "events.jsonl",
             environment_build_timeout_multiplier=8.0,
             worker_event_source=lambda: None,
+            log_path=log_path,
         )
+    assert str(log_path) in str(exc.value)
+    assert "BuildKit stage package-install failed" in str(exc.value)
     assert runner.WORKER_REGISTRATION_GRACE_SEC == 1800
