@@ -657,8 +657,19 @@ def test_pointer_readback_accepts_matching_weak_etag_after_exact_body_check(
 
 
 def test_r2_nonbootstrap_pointer_uses_etag_cas(tmp_path, monkeypatch):
+    class WeakCurrentPointerR2(_FakeR2):
+        def get(self, key):
+            response = super().get(key)
+            if key == "channels/stable/current.json" and response.status_code == 200:
+                return self._response(
+                    200,
+                    response.content,
+                    {"etag": "W/" + response.headers["etag"]},
+                )
+            return response
+
     _FakeR2.state, _FakeR2.etags, _FakeR2.operations = {}, {}, []
-    monkeypatch.setattr(ota_release, "R2Client", _FakeR2)
+    monkeypatch.setattr(ota_release, "R2Client", WeakCurrentPointerR2)
     _mock_public_readback(monkeypatch)
     private, private_path, registry = _key_material(tmp_path)
     previous = _signed_previous(private, tmp_path / "previous.json")
