@@ -218,3 +218,50 @@ def test_close_carries_only_session_batch_seq_and_reason():
         "seq": 2,
         "reason": "paused",
     }]
+
+
+def test_session_started_is_deferred_until_batch_bind(tmp_path):
+    telemetry = RunnerTelemetry(FakeClient(), jitter=False, home=tmp_path)
+    assert telemetry.flight_recorder is not None
+    # Constructor must not enqueue an event with a null batch identity.
+    assert telemetry.flight_recorder._load(
+        telemetry.flight_recorder.pending_path,
+    ) == []
+    telemetry.bind_batch("b" * 32)
+    telemetry.bind_batch("c" * 32)
+    events = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+    starts = [event for event in events if event["event_type"] == "session_started"]
+    assert len(starts) == 1
+    assert starts[0]["batch_id"] == "b" * 32
+
+
+def test_prebind_session_started_is_dropped_instead_of_persisted(tmp_path):
+    telemetry = RunnerTelemetry(FakeClient(), jitter=False, home=tmp_path)
+    assert telemetry.record_event("session_started", component="cli") is None
+    assert telemetry.flight_recorder._load(
+        telemetry.flight_recorder.pending_path,
+    ) == []
+    telemetry.bind_batch("b" * 32)
+    events = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+    assert [event["event_type"] for event in events].count("session_started") == 1
+
+
+def test_legacy_heartbeat_backfills_batch_before_flight_upload(tmp_path):
+    client = FakeClient([{
+        "accepted": True,
+        "batch_id": "b" * 32,
+        "next_heartbeat_sec": 60,
+    }])
+    uploaded = []
+
+    def flight_events(events):
+        uploaded.extend(events)
+        return {"acknowledged_event_ids": [event["event_id"] for event in events]}
+
+    client.flight_events = flight_events
+    telemetry = RunnerTelemetry(client, jitter=False, home=tmp_path)
+    telemetry._send_once()
+    events = uploaded
+    starts = [event for event in events if event["event_type"] == "session_started"]
+    assert len(starts) == 1
+    assert starts[0]["batch_id"] == "b" * 32

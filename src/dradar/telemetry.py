@@ -84,12 +84,8 @@ class RunnerTelemetry:
         self._jitter = jitter
         self._shown_notice_ids: set[str] = set()
         self._stop_requested = False
+        self._session_started_recorded = False
         self.flight_recorder = FlightRecorder(home, client) if home is not None else None
-        if self.flight_recorder is not None:
-            self.flight_recorder.try_record(
-                "session_started", component="cli", session_id=self.session_id,
-                attributes={"target_workers": target_workers},
-            )
 
     @property
     def stop_requested(self) -> bool:
@@ -150,15 +146,35 @@ class RunnerTelemetry:
         with self._lock:
             changed = self._batch_id != batch_id
             self._batch_id = batch_id
+            record_session_started = changed and not self._session_started_recorded
+            if record_session_started:
+                # Set the guard while holding the state lock so concurrent
+                # heartbeat responses cannot enqueue this lifecycle event twice.
+                self._session_started_recorded = True
             if changed:
                 self._progress_counter += 1
+        if record_session_started:
+            # Every server flight event must carry a batch identity. Defer
+            # session_started until this first bind so legacy heartbeats that
+            # receive the batch from the server cannot enqueue batch_id=null.
+            self.record_event(
+                "session_started", component="cli",
+                attributes={"target_workers": self.target_workers},
+            )
         if changed:
             self._wake.set()
 
     def record_event(self, event_type: str, *, component: str, **kwargs) -> dict | None:
         if self.flight_recorder is None:
             return None
-        kwargs.setdefault("batch_id", self._batch_id)
+        with self._lock:
+            batch_id = self._batch_id
+        # ``session_started`` is accepted by the server only after a batch is
+        # known. Drop accidental pre-bind calls instead of persisting a null
+        # identity that can never be uploaded or reconciled.
+        if event_type == "session_started" and not batch_id:
+            return None
+        kwargs.setdefault("batch_id", batch_id)
         kwargs.setdefault("session_id", self.session_id)
         return self.flight_recorder.try_record(event_type, component=component, **kwargs)
 
@@ -260,6 +276,10 @@ class RunnerTelemetry:
             self._warned = False
             with self._lock:
                 self._last_heartbeat_accepted = response.get("accepted") is True
+            if response.get("batch_id"):
+                # Legacy/super-account heartbeat may be the first place the
+                # server assigns a batch. Bind before flushing pending events.
+                self.bind_batch(response["batch_id"])
             self.record_event("heartbeat_acknowledged", component="heartbeat")
             self._last_flight_events_acked = (
                 self.flight_recorder.flush() if self.flight_recorder is not None else 0
@@ -268,9 +288,6 @@ class RunnerTelemetry:
             if response.get("stop_requested") is True:
                 self._stop_requested = True
                 self._publish_stop_marker()
-            if response.get("batch_id"):
-                with self._lock:
-                    self._batch_id = response["batch_id"]
             requested = response.get("next_heartbeat_sec", self._interval)
             try:
                 requested_interval = min(600, max(30, int(requested)))
