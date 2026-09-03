@@ -14,9 +14,18 @@ def test_run_schema_defines_every_state_changing_argument():
     assert arguments["--concurrency"]["state_change"]
     assert arguments["--upload-only"]["conflicts_with"] == [
         "--concurrency", "--decision-token", "--recheck-generation",
+        "--concurrency-reply", "--concurrency-decision-token",
     ]
     assert "不登记设备" in arguments["--upload-only"]["state_change"]
     assert arguments["--decision-token"]["decision_required"] is True
+    assert arguments["--concurrency-reply"]["agent_only"] is True
+    assert arguments["--concurrency-decision-token"]["idempotency"] == (
+        "single_use_value_bound_token"
+    )
+    assert payload["interaction_rules"]["custom_concurrency"] == (
+        "submit_exact_user_reply_then_apply_server_signed_value"
+    )
+    assert "用户原话" in payload["result_contract"]["custom_concurrency"]
     assert payload["interaction_rules"]["fixed_capacity_shortfall"] == (
         "confirm_before_server_start"
     )

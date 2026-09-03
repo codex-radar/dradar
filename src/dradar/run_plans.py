@@ -57,6 +57,10 @@ _TRUSTED_GIT_INSTALL_PATHS = {
     "/SecurityMind/dradar",
     "/codex-radar/dradar",
 }
+_STALE_CONCURRENCY_DECISION_CODES = {
+    "concurrency_decision_already_used",
+    "concurrency_decision_invalid_or_state_changed",
+}
 
 
 class RunPlanClientError(RuntimeError):
@@ -654,6 +658,7 @@ def _local_capacity_response(
     requested: int,
     recommended: int,
     snapshot: dict[str, Any],
+    legal_max: int | None = None,
     decision: str = "local_capacity",
     allow_keep: bool = True,
     user_message: str | None = None,
@@ -662,6 +667,10 @@ def _local_capacity_response(
     bound_server_decision: str | None = None,
     bound_server_decision_token: str | None = None,
 ) -> dict[str, Any]:
+    if legal_max is None:
+        legal_max = min(40, int(snapshot.get("available") or 0))
+    legal_max = max(0, min(40, int(legal_max)))
+    recommended = max(0, min(int(recommended), legal_max))
     token = "drlc_" + secrets.token_urlsafe(24)
     if bound_server_decision_token:
         encoded = base64.urlsafe_b64encode(
@@ -672,6 +681,7 @@ def _local_capacity_response(
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "requested": requested,
         "recommended": recommended,
+        "legal_max": legal_max,
         "capacity_digest": snapshot["digest"],
         "decision": decision,
         "allow_keep": allow_keep,
@@ -683,22 +693,41 @@ def _local_capacity_response(
         "expires_at": time.time() + 5 * 60,
     }
     _atomic_json(path, state)
-    choices = []
+    choices: list[dict[str, str]] = []
+    choice_values: dict[str, int] = {}
     if recommended >= 1:
         choices.append({
             "id": "use_recommended",
-            "label": f"按建议同时运行 {recommended} 道",
+            "label": f"同时运行 {recommended} 道（推荐）",
         })
-    if allow_keep:
+        choice_values["use_recommended"] = recommended
+    if allow_keep and requested <= legal_max and requested != recommended:
         choices.append({
             "id": "keep_requested",
-            "label": f"仍然同时启动 {requested} 道",
+            "label": f"按原计划同时运行 {requested} 道",
         })
+        choice_values["keep_requested"] = requested
+    used_values = set(choice_values.values())
+    for common in (1, 2, 5, 10):
+        if common > legal_max or common in used_values:
+            continue
+        choice_id = f"concurrency_{common}"
+        choices.append({
+            "id": choice_id,
+            "label": f"同时运行 {common} 道",
+        })
+        choice_values[choice_id] = common
+        used_values.add(common)
+    choices.append({
+        "id": "custom_concurrency",
+        "label": "自定义同时运行数量",
+    })
     choices.append({"id": "cancel", "label": "暂不启动"})
     agent = {
         "plan": state["plan"],
         "requested_concurrency": requested,
         "recommended_concurrency": recommended,
+        "maximum_concurrency": legal_max,
     }
     if server_status is not None:
         agent["server_status"] = server_status
@@ -710,12 +739,26 @@ def _local_capacity_response(
         if choice_id == "cancel":
             choice_actions[choice_id] = {"mode": "no_command", "args": []}
             continue
-        workers = recommended if choice_id == "use_recommended" else requested
+        if choice_id == "custom_concurrency":
+            choice_actions[choice_id] = {
+                "mode": "collect_concurrency_input",
+                "args": [],
+            }
+            continue
+        workers = choice_values[choice_id]
         choice_actions[choice_id] = {
-            "mode": "replay_current_command_with_args",
-            "args": ["--concurrency", str(workers), "--decision-token", token],
+            "mode": "submit_concurrency_reply",
+            "args": [
+                "--decision-token", token,
+                "--concurrency-reply", str(workers),
+            ],
         }
     agent["choice_actions"] = choice_actions
+    agent["input_action"] = {
+        "mode": "submit_user_reply",
+        "args": ["--decision-token", token, "--concurrency-reply"],
+        "input": "exact_user_reply_as_one_argument",
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "decision_required",
@@ -727,8 +770,8 @@ def _local_capacity_response(
             f"根据这台设备当前的负载，建议这次同时运行 {recommended} 道；"
             f"你原来选择了 {requested} 道。请选择如何运行。"
             if recommended >= 1 else
-            f"这台设备正在运行其他题目。继续同时启动这 {requested} 道可能会让"
-            "机器变慢，是否仍然启动？"
+            "这台设备当前没有空余运行位置。计划会保留；有可用位置后，"
+            "请输入一个明确整数。"
         ),
         "agent_action": "ask_user",
         "error_code": None,
@@ -845,6 +888,223 @@ def _consume_local_capacity(
         )
     _atomic_json(path, state)
     return workers, bound_decision, bound_token
+
+
+def _pending_capacity_for_reply(
+    state: dict[str, Any], *, token: str, snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    pending = state.get("pending_local_capacity")
+    valid = bool(
+        isinstance(pending, dict)
+        and isinstance(token, str)
+        and token.startswith("drlc_")
+        and secrets.compare_digest(
+            str(pending.get("token_hash") or ""),
+            hashlib.sha256(token.encode()).hexdigest(),
+        )
+        and float(pending.get("expires_at") or 0) > time.time()
+        and pending.get("capacity_digest") == snapshot.get("digest")
+    )
+    if not valid:
+        raise RunPlanClientError(
+            "decision_invalid_or_capacity_changed",
+            "可用数量已经变化，我会保留这次计划并重新请你选择。",
+            retryable=True,
+        )
+    return pending
+
+
+def _resolve_concurrency_reply(
+    path: Path,
+    state: dict[str, Any],
+    client: ApiClient,
+    *,
+    token: str,
+    user_reply: str,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    pending = _pending_capacity_for_reply(
+        state, token=token, snapshot=snapshot,
+    )
+    legal_max = max(0, min(
+        int(pending.get("legal_max") or 0),
+        int(snapshot.get("available") or 0),
+        40,
+    ))
+    response = client.request_run_plan_concurrency_decision(
+        plan_id=state["plan_id"],
+        logical_session_id=state["logical_session_id"],
+        user_reply=user_reply,
+        device_concurrency_limit=legal_max,
+        device_capacity_digest=str(snapshot["digest"]),
+    )
+    if not isinstance(response, dict) or response.get("schema_version") != SCHEMA_VERSION:
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        )
+    required = {
+        "status", "decision_required", "user_message", "agent_action",
+        "error_code", "retryable", "selected_concurrency",
+        "max_concurrency", "concurrency_decision_token",
+    }
+    if not required.issubset(response):
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        )
+    maximum = response.get("max_concurrency")
+    if (
+        not isinstance(response.get("decision_required"), bool)
+        or not isinstance(response.get("user_message"), str)
+        or not response["user_message"]
+        or not isinstance(response.get("retryable"), bool)
+        or not isinstance(maximum, int) or isinstance(maximum, bool)
+        or maximum < 0 or maximum > legal_max
+    ):
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        )
+    if response["decision_required"] is True:
+        if (
+            response.get("status") != "decision_required"
+            or response.get("agent_action") != "ask_concurrency_again"
+            or response.get("concurrency_decision_token") is not None
+        ):
+            raise RunPlanClientError(
+                "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+            )
+        bound_decision = pending.get("bound_server_decision")
+        bound_token = None
+        encoded = token.partition(".")[2]
+        if encoded:
+            try:
+                padded = encoded + "=" * (-len(encoded) % 4)
+                decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                decoded = None
+            expected_hash = pending.get("bound_server_token_hash")
+            if (
+                isinstance(decoded, str)
+                and isinstance(expected_hash, str)
+                and secrets.compare_digest(
+                    expected_hash, hashlib.sha256(decoded.encode()).hexdigest(),
+                )
+            ):
+                bound_token = decoded
+        return _local_capacity_response(
+            path,
+            state,
+            requested=int(pending["requested"]),
+            recommended=min(int(pending.get("recommended") or 0), maximum),
+            legal_max=maximum,
+            snapshot=snapshot,
+            decision=str(pending.get("decision") or "local_capacity"),
+            allow_keep=bool(pending.get("allow_keep")),
+            user_message=str(response["user_message"]),
+            bound_server_decision=(
+                str(bound_decision) if isinstance(bound_decision, str) else None
+            ),
+            bound_server_decision_token=bound_token,
+        )
+    selected = response.get("selected_concurrency")
+    signed = response.get("concurrency_decision_token")
+    if (
+        response.get("status") != "resolved"
+        or response.get("agent_action") != "apply_concurrency_decision"
+        or not isinstance(selected, int) or isinstance(selected, bool)
+        or not 1 <= selected <= maximum
+        or not isinstance(signed, str) or not signed.startswith("drc_")
+        or len(signed) > 200
+    ):
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        )
+    decision_expires_at = response.get("decision_expires_at")
+    if not isinstance(decision_expires_at, str):
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        )
+    try:
+        server_expiry = datetime.fromisoformat(
+            decision_expires_at.replace("Z", "+00:00"),
+        ).timestamp()
+    except ValueError:
+        raise RunPlanClientError(
+            "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
+        ) from None
+    if server_expiry <= time.time():
+        raise RunPlanClientError(
+            "concurrency_decision_invalid_or_capacity_changed",
+            "这个选择已经过期，我会保留这次计划并重新请你选择。",
+            retryable=True,
+        )
+    pending["resolved"] = {
+        "workers": selected,
+        "server_token_hash": hashlib.sha256(signed.encode()).hexdigest(),
+        "capacity_digest": snapshot["digest"],
+        "expires_at": min(server_expiry, time.time() + 5 * 60),
+    }
+    _atomic_json(path, state)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "resolved",
+        "interaction": "notify",
+        "decision_required": False,
+        "user_message": str(response["user_message"]),
+        "agent_action": "apply_concurrency_decision",
+        "error_code": None,
+        "retryable": False,
+        "choices": [],
+        "agent": {
+            "schema_version": SCHEMA_VERSION,
+            "next_commands": [{
+                "id": "apply_concurrency_decision",
+                "mode": "replay_plan_command",
+                "command": "run",
+                "inherit": ["--plan", "--server"],
+                "args": [
+                    "--concurrency", str(selected),
+                    "--concurrency-decision-token", signed,
+                    "--json",
+                ],
+                "interactive": False,
+            }],
+        },
+    }
+
+
+def _validate_signed_concurrency(
+    state: dict[str, Any],
+    *,
+    token: str,
+    selected: object,
+    snapshot: dict[str, Any],
+) -> int:
+    pending = state.get("pending_local_capacity")
+    resolved = pending.get("resolved") if isinstance(pending, dict) else None
+    try:
+        workers = int(selected)
+    except (TypeError, ValueError):
+        workers = 0
+    valid = bool(
+        isinstance(resolved, dict)
+        and isinstance(token, str) and token.startswith("drc_")
+        and secrets.compare_digest(
+            str(resolved.get("server_token_hash") or ""),
+            hashlib.sha256(token.encode()).hexdigest(),
+        )
+        and resolved.get("workers") == workers
+        and float(resolved.get("expires_at") or 0) > time.time()
+        and resolved.get("capacity_digest") == snapshot.get("digest")
+        and int(snapshot.get("available") or 0) >= workers
+        and workers >= 1
+    )
+    if not valid:
+        raise RunPlanClientError(
+            "concurrency_decision_invalid_or_capacity_changed",
+            "可用数量已经变化，我会保留这次计划并重新请你选择。",
+            retryable=True,
+        )
+    return workers
 
 
 def _docker_install_binding(args) -> dict[str, Any]:
@@ -1713,10 +1973,36 @@ def cmd_run_plan(args) -> int:
     def operate(*, authoritative_recheck: bool = False) -> dict[str, Any]:
         recheck_generation = getattr(args, "recheck_generation", None)
         docker_install_token = getattr(args, "docker_install_token", None)
+        concurrency_decision_token = (
+            None if authoritative_recheck else
+            getattr(args, "concurrency_decision_token", None)
+        )
+        raw_concurrency_reply = (
+            None if authoritative_recheck else
+            getattr(args, "concurrency_reply", None)
+        )
+        if isinstance(raw_concurrency_reply, list):
+            if len(raw_concurrency_reply) != 1:
+                raise RunPlanClientError(
+                    "concurrency_reply_invalid",
+                    "请只回复一次当前选择；我会保留这次计划并继续等你输入。",
+                )
+            concurrency_reply = raw_concurrency_reply[0]
+        elif isinstance(raw_concurrency_reply, str):
+            concurrency_reply = raw_concurrency_reply
+        elif raw_concurrency_reply is None:
+            concurrency_reply = None
+        else:
+            raise RunPlanClientError(
+                "concurrency_reply_invalid",
+                "请回复一个明确整数；我会保留这次计划并继续等你输入。",
+            )
         if getattr(args, "upload_only", False):
             if (
                 getattr(args, "concurrency", None) is not None
                 or getattr(args, "decision_token", None) is not None
+                or concurrency_reply is not None
+                or concurrency_decision_token is not None
                 or recheck_generation is not None
                 or docker_install_token is not None
             ):
@@ -1727,6 +2013,8 @@ def cmd_run_plan(args) -> int:
         if recheck_generation is not None and (
             getattr(args, "concurrency", None) is not None
             or getattr(args, "decision_token", None) is not None
+            or concurrency_reply is not None
+            or concurrency_decision_token is not None
             or docker_install_token is not None
         ):
             raise RunPlanClientError(
@@ -1855,6 +2143,7 @@ def cmd_run_plan(args) -> int:
             concurrency: int,
             decision: str | None,
             decision_token: str | None,
+            signed_concurrency_token: str | None = None,
         ) -> dict[str, Any]:
             """Consume a server decision once, then re-read without it once.
 
@@ -1872,6 +2161,7 @@ def cmd_run_plan(args) -> int:
                 "concurrency": concurrency,
                 "decision": decision,
                 "decision_token": decision_token,
+                "concurrency_decision_token": signed_concurrency_token,
             }
             try:
                 return _validate_response(client.start_run_plan(**request))
@@ -1909,14 +2199,31 @@ def cmd_run_plan(args) -> int:
                 state["pending_local_capacity"] = None
                 _atomic_json(path, state)
             decision = _decision_for(state, "run", server_decision_token)
-            response = start_with_authoritative_recheck(
-                concurrency_mode="fixed",
-                concurrency=current_workers,
-                decision=decision,
-                decision_token=server_decision_token,
-            )
+            try:
+                response = start_with_authoritative_recheck(
+                    concurrency_mode="fixed",
+                    concurrency=current_workers,
+                    decision=decision,
+                    decision_token=server_decision_token,
+                    signed_concurrency_token=concurrency_decision_token,
+                )
+            except ApiError as exc:
+                if (
+                    concurrency_decision_token is not None
+                    and exc.code in _STALE_CONCURRENCY_DECISION_CODES
+                    and not authoritative_recheck
+                ):
+                    state["pending_local_capacity"] = None
+                    _atomic_json(path, state)
+                    return operate(authoritative_recheck=True)
+                raise
             _remember_response(path, state, response, command="run")
             envelope = response["envelope"]
+            if concurrency_decision_token is not None and not envelope.get(
+                "decision_required"
+            ):
+                state["pending_local_capacity"] = None
+                _atomic_json(path, state)
             if envelope.get("decision_required") or envelope.get("status") == "no_remaining":
                 return response
             if envelope.get("agent_action") == "stop_runner":
@@ -2011,7 +2318,94 @@ def cmd_run_plan(args) -> int:
                 len(plan["assignments"]), int(snapshot["account_limit"]),
             )
 
-        if local_decision_token:
+        def fresh_concurrency_question() -> dict[str, Any]:
+            """Replace stale custom authority with a question, never a start."""
+            pending = state.get("pending_local_capacity")
+            pending = pending if isinstance(pending, dict) else {}
+            resolved = pending.get("resolved")
+            resolved = resolved if isinstance(resolved, dict) else {}
+            configured = plan.get("concurrency")
+            configured = configured if isinstance(configured, dict) else {}
+            original = pending.get("requested", configured.get("value"))
+            preferred = resolved.get(
+                "workers", pending.get("recommended", original),
+            )
+            if not isinstance(original, int) or isinstance(original, bool):
+                original = max(1, min(supply_limit, 40))
+            if not isinstance(preferred, int) or isinstance(preferred, bool):
+                preferred = original
+            maximum = max(0, min(
+                40, supply_limit, int(snapshot.get("available") or 0),
+            ))
+            return _local_capacity_response(
+                path,
+                state,
+                requested=max(1, min(original, 40)),
+                recommended=max(0, min(preferred, maximum)),
+                legal_max=maximum,
+                snapshot=snapshot,
+                decision="local_capacity",
+                allow_keep=True,
+                user_message=(
+                    "可用数量已经变化，我会保留这次计划；请按当前上限重新选择。"
+                ),
+            )
+
+        if concurrency_reply is not None:
+            if (
+                local_decision_token is None
+                or requested_arg is not None
+                or concurrency_decision_token is not None
+            ):
+                raise RunPlanClientError(
+                    "concurrency_reply_context_missing",
+                    "当前输入已失效，我会保留这次计划并重新请你选择。",
+                    retryable=True,
+                )
+            try:
+                return _resolve_concurrency_reply(
+                    path,
+                    state,
+                    client,
+                    token=local_decision_token,
+                    user_reply=concurrency_reply,
+                    snapshot=snapshot,
+                )
+            except RunPlanClientError as exc:
+                if (
+                    exc.code == "decision_invalid_or_capacity_changed"
+                    and not authoritative_recheck
+                ):
+                    return fresh_concurrency_question()
+                raise
+
+        if concurrency_decision_token is not None:
+            if local_decision_token is not None or requested_arg is None:
+                raise RunPlanClientError(
+                    "concurrency_decision_context_missing",
+                    "当前选择已失效，我会保留这次计划并重新请你选择。",
+                    retryable=True,
+                )
+            try:
+                selected_workers = _validate_signed_concurrency(
+                    state,
+                    token=concurrency_decision_token,
+                    selected=requested_arg,
+                    snapshot=snapshot,
+                )
+            except RunPlanClientError as exc:
+                if (
+                    exc.code == "concurrency_decision_invalid_or_capacity_changed"
+                    and not authoritative_recheck
+                ):
+                    return fresh_concurrency_question()
+                raise
+            bound_server_decision = None
+            mode, concurrency, fleet_workers = (
+                "fixed", selected_workers, selected_workers,
+            )
+            automatic_intent = False
+        elif local_decision_token:
             try:
                 (
                     selected_workers,
@@ -2102,9 +2496,16 @@ def cmd_run_plan(args) -> int:
                     concurrency=concurrency,
                     decision=decision,
                     decision_token=server_decision_token,
+                    signed_concurrency_token=concurrency_decision_token,
                 )
                 break
             except ApiError as exc:
+                if (
+                    concurrency_decision_token is not None
+                    and exc.code in _STALE_CONCURRENCY_DECISION_CODES
+                    and not authoritative_recheck
+                ):
+                    return fresh_concurrency_question()
                 reservation = _capacity_reservation(exc)
                 if reservation is None:
                     raise
@@ -2139,6 +2540,7 @@ def cmd_run_plan(args) -> int:
                         state,
                         requested=selected_workers,
                         recommended=available,
+                        legal_max=available,
                         snapshot=snapshot,
                         decision="server_capacity",
                         allow_keep=False,
@@ -2187,6 +2589,11 @@ def cmd_run_plan(args) -> int:
             )
         _remember_response(path, state, response, command="run")
         envelope = response["envelope"]
+        if concurrency_decision_token is not None and not envelope.get(
+            "decision_required"
+        ):
+            state["pending_local_capacity"] = None
+            _atomic_json(path, state)
         if envelope.get("decision_required") or envelope.get("status") == "no_remaining":
             return response
         if envelope.get("agent_action") == "stop_runner":

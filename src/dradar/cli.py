@@ -172,6 +172,12 @@ def main(argv: list[str] | None = None) -> int:
         "--decision-token", help="short-lived confirmation returned by the previous check",
     )
     p_run_plan.add_argument(
+        "--concurrency-decision-token", help=argparse.SUPPRESS,
+    )
+    p_run_plan.add_argument(
+        "--concurrency-reply", nargs=argparse.REMAINDER, help=argparse.SUPPRESS,
+    )
+    p_run_plan.add_argument(
         "--recheck-generation", type=int, help=argparse.SUPPRESS,
     )
     p_run_plan.add_argument(

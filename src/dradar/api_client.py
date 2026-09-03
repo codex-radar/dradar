@@ -412,6 +412,7 @@ class ApiClient:
         concurrency: int | None = None,
         decision: str | None = None,
         decision_token: str | None = None,
+        concurrency_decision_token: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": 1,
@@ -425,8 +426,32 @@ class ApiClient:
             payload["decision"] = decision
         if decision_token is not None:
             payload["decision_token"] = decision_token
+        if concurrency_decision_token is not None:
+            payload["concurrency_decision_token"] = concurrency_decision_token
         return self._post(
             "/api/v1/run-plans/start", json=payload,
+            retry_rate_limit=False,
+        )
+
+    def request_run_plan_concurrency_decision(
+        self,
+        *,
+        plan_id: str,
+        logical_session_id: str,
+        user_reply: str,
+        device_concurrency_limit: int,
+        device_capacity_digest: str,
+    ) -> dict[str, Any]:
+        return self._post(
+            "/api/v1/run-plans/concurrency-decisions",
+            json={
+                "schema_version": 1,
+                "plan_id": plan_id,
+                "logical_session_id": logical_session_id,
+                "user_reply": user_reply,
+                "device_concurrency_limit": device_concurrency_limit,
+                "device_capacity_digest": device_capacity_digest,
+            },
             retry_rate_limit=False,
         )
 

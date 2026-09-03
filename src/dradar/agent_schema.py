@@ -59,6 +59,7 @@ COMMAND_SCHEMAS = {
             "different_plan": "notify_and_start_independently",
             "auto_capacity_reduction": "warn_and_start_with_safe_count",
             "fixed_capacity_shortfall": "confirm_before_server_start",
+            "custom_concurrency": "submit_exact_user_reply_then_apply_server_signed_value",
             "capacity_changed_during_start_auto": "retry_lower_then_warn",
             "capacity_changed_during_start_fixed": "confirm_lower_or_cancel",
             "capacity_temporarily_zero": "poll_then_replay_base_run_without_old_choices",
@@ -102,6 +103,7 @@ COMMAND_SCHEMAS = {
                 decision_required=False,
                 conflicts_with=[
                     "--concurrency", "--decision-token", "--recheck-generation",
+                    "--concurrency-reply", "--concurrency-decision-token",
                 ],
                 idempotency="没有待补交结果时直接成功；已上传结果不会重复运行模型",
                 failure_codes=[
@@ -135,13 +137,50 @@ COMMAND_SCHEMAS = {
                 ],
             ),
             _argument(
+                "--concurrency-reply",
+                user_intent="把用户对当前并发问题的原话交给服务端解析与复核",
+                allowed_when="decision_required=true 且 agent.input_action 或快捷 choice 明确给出",
+                default=None,
+                state_change="不启动题目；只请求服务端签发绑定具体数值的一次性动作",
+                decision_required=True,
+                conflicts_with=["--concurrency", "--concurrency-decision-token", "--upload-only", "--recheck-generation"],
+                idempotency="歧义或非法输入保持同一计划待确认；合法输入只生成短期动作",
+                failure_codes=[
+                    "concurrency_reply_invalid",
+                    "concurrency_reply_context_missing",
+                    "concurrency_reply_ambiguous",
+                    "concurrency_limit_exceeded",
+                ],
+                agent_only=True,
+            ),
+            _argument(
+                "--concurrency-decision-token",
+                user_intent="执行服务端为一个确切并发值签发的一次性动作",
+                allowed_when="agent_action=apply_concurrency_decision 的 next_commands 精确给出",
+                default=None,
+                state_change="在本机再次核对容量后，消费绑定计划、设备、会话、数值与状态的凭证",
+                decision_required=True,
+                conflicts_with=["--concurrency-reply", "--upload-only", "--recheck-generation"],
+                idempotency="single_use_value_bound_token",
+                failure_codes=[
+                    "concurrency_decision_context_missing",
+                    "concurrency_decision_invalid_or_capacity_changed",
+                    "concurrency_decision_invalid_or_state_changed",
+                    "concurrency_decision_already_used",
+                ],
+                agent_only=True,
+            ),
+            _argument(
                 "--recheck-generation",
                 user_intent="按 CLI 刚返回的代际安全重查当前计划",
                 allowed_when="agent_action=recheck_plan 的 next_commands 精确给出该值",
                 default=None,
                 state_change="只在代际仍为当前值时继续；显式 run/stop 会使旧代际失效",
                 decision_required=False,
-                conflicts_with=["--concurrency", "--decision-token", "--upload-only"],
+                conflicts_with=[
+                    "--concurrency", "--decision-token", "--upload-only",
+                    "--concurrency-reply", "--concurrency-decision-token",
+                ],
                 idempotency="single_use_generation",
                 failure_codes=[
                     "recheck_argument_conflict",
@@ -287,6 +326,10 @@ def command_schema(command: str) -> dict:
                 "decision_required=true 时，agent.choice_actions 按 choice id 给出"
                 "机器可执行映射；replay_current_command_with_args 的 args 仅追加/替换"
                 "当前命令参数，no_command 表示不执行命令"
+            ),
+            "custom_concurrency": (
+                "submit_user_reply 只把用户原话作为单个数据参数交给服务端；"
+                "apply_concurrency_decision 只执行服务端返回的精确并发参数一次"
             ),
             "environment_recovery": (
                 "环境错误可在 agent.next_commands 给出非秘密 argv 数组；"
