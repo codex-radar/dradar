@@ -14,9 +14,10 @@ import threading
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 SCHEMA_VERSION = "dradar.flight_event.v1"
@@ -24,6 +25,62 @@ MAX_EVENT_BYTES = 4096
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_EVENTS = 5000
 UPLOAD_BATCH_SIZE = 100
+_LOCK_FILENAME = "recorder.lock"
+_ACKNOWLEDGED_FILENAME = "acknowledged.jsonl"
+
+# ``FlightRecorder`` is instantiated once by the fleet supervisor and once by
+# every worker child.  A Python lock only coordinates threads in one process;
+# keep a small in-process guard as well so Windows' byte-range locking does not
+# trip over two handles opened by sibling objects in the same process.
+_PROCESS_LOCK = threading.Lock()
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    """Serialize recorder read/modify/write cycles across processes.
+
+    The lock is deliberately a separate, never-replaced file.  The JSONL files
+    themselves are atomically replaced by :meth:`FlightRecorder._write`, so a
+    reader from an older CLI still sees a complete old or new snapshot.  Both
+    POSIX ``flock`` and Windows ``msvcrt`` are used without adding a runtime
+    dependency; a crashed process releases either kernel lock automatically.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    locked = False
+    windows_lock = False
+    with _PROCESS_LOCK:
+        try:
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except ImportError:  # pragma: no cover - Windows CI
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                windows_lock = True
+            locked = True
+            yield
+        finally:
+            if locked:
+                try:
+                    if windows_lock:  # pragma: no cover - Windows CI
+                        import msvcrt
+
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+            os.close(fd)
+
 
 EVENT_TYPES = frozenset({
     "session_started", "session_closed", "phase_changed",
@@ -201,6 +258,8 @@ class FlightRecorder:
         self.events_path = self.root / "events.jsonl"
         self.pending_path = self.root / "pending.jsonl"
         self.client_id_path = self.root / "client_id"
+        self.lock_path = self.root / _LOCK_FILENAME
+        self.acknowledged_path = self.root / _ACKNOWLEDGED_FILENAME
         self._lock = threading.Lock()
         self._seq = 0
         self._remote_disabled = False
@@ -208,6 +267,21 @@ class FlightRecorder:
         self.client_id = self._load_client_id()
 
     def _load_client_id(self) -> str:
+        # Re-read after taking the inter-process lock.  Without this, two
+        # freshly-started fleet children can each mint a client ID and the last
+        # atomic replace wins on disk while the other process keeps a different
+        # in-memory identity.
+        try:
+            with _exclusive_file_lock(self.lock_path):
+                return self._load_or_create_client_id()
+        except OSError:
+            # Diagnostics and best-effort telemetry must still work on a
+            # read-only/misconfigured home.  There is no durable cross-process
+            # guarantee in this fallback, but callers already treat the local
+            # recorder as optional in that environment.
+            return self._load_or_create_client_id()
+
+    def _load_or_create_client_id(self) -> str:
         try:
             value = self.client_id_path.read_text(encoding="ascii").strip()
             if len(value) == 32 and all(c in "0123456789abcdef" for c in value):
@@ -262,6 +336,46 @@ class FlightRecorder:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
 
+    @staticmethod
+    def _valid_event_id(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 32
+            and all(char in "0123456789abcdef" for char in value)
+        )
+
+    def _load_acknowledged_ids_unlocked(self) -> list[str]:
+        try:
+            lines = self.acknowledged_path.read_text(encoding="ascii").splitlines()
+        except OSError:
+            return []
+        values: list[str] = []
+        seen: set[str] = set()
+        for value in lines[-MAX_LOG_EVENTS:]:
+            if self._valid_event_id(value) and value not in seen:
+                values.append(value)
+                seen.add(value)
+        return values
+
+    def _write_acknowledged_ids_unlocked(self, event_ids: set[str]) -> None:
+        """Persist a bounded shared receipt set under the recorder lock."""
+        if not event_ids:
+            return
+        values = self._load_acknowledged_ids_unlocked()
+        seen = set(values)
+        for event_id in event_ids:
+            if self._valid_event_id(event_id) and event_id not in seen:
+                values.append(event_id)
+                seen.add(event_id)
+        values = values[-MAX_LOG_EVENTS:]
+        self.acknowledged_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = self.acknowledged_path.with_name(
+            f".{self.acknowledged_path.name}.{os.getpid()}.{time.time_ns()}"
+        )
+        temporary.write_text("".join(value + "\n" for value in values), encoding="ascii")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.acknowledged_path)
+
     def record(
         self,
         event_type: str,
@@ -275,29 +389,30 @@ class FlightRecorder:
         attributes: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
-            self._seq += 1
-            event = {
-                "schema_version": SCHEMA_VERSION,
-                "event_id": uuid.uuid4().hex,
-                "client_id": self.client_id,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "seq": self._seq,
-                "event_type": event_type,
-                "component": component,
-                "actor": "cli",
-                "batch_id": batch_id,
-                "session_id": session_id,
-                "assignment_id": assignment_id,
-                "request_id": request_id,
-                "reason_code": reason_code,
-                "attributes": attributes or {},
-            }
-            event = validate_event(event)
-            history = self._load(self.events_path)
-            pending = self._load(self.pending_path)
-            self._write(self.events_path, [*history, event])
-            self._write(self.pending_path, [*pending, event])
-            return event
+            with _exclusive_file_lock(self.lock_path):
+                self._seq += 1
+                event = {
+                    "schema_version": SCHEMA_VERSION,
+                    "event_id": uuid.uuid4().hex,
+                    "client_id": self.client_id,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "seq": self._seq,
+                    "event_type": event_type,
+                    "component": component,
+                    "actor": "cli",
+                    "batch_id": batch_id,
+                    "session_id": session_id,
+                    "assignment_id": assignment_id,
+                    "request_id": request_id,
+                    "reason_code": reason_code,
+                    "attributes": attributes or {},
+                }
+                event = validate_event(event)
+                history = self._load(self.events_path)
+                pending = self._load(self.pending_path)
+                self._write(self.events_path, [*history, event])
+                self._write(self.pending_path, [*pending, event])
+                return event
 
     def try_record(self, event_type: str, **kwargs) -> dict[str, Any] | None:
         """Record best-effort evidence without affecting the primary workflow.
@@ -316,43 +431,82 @@ class FlightRecorder:
         if self.client is None or self._remote_disabled:
             return 0
         with self._lock:
-            pending = self._load(self.pending_path)
-            if not pending:
+            try:
+                with _exclusive_file_lock(self.lock_path):
+                    pending = self._load(self.pending_path)
+                    if not pending:
+                        return 0
+                    batch = [validate_event(event) for event in pending[:UPLOAD_BATCH_SIZE]]
+            except OSError:
+                # Flight evidence is best effort.  A locked/read-only home
+                # must never turn a heartbeat into a worker crash; strict
+                # worker registration will fail closed when no receipt exists.
                 return 0
-            batch = pending[:UPLOAD_BATCH_SIZE]
-            batch = [validate_event(event) for event in batch]
             try:
                 response = self.client.flight_events(batch)
             except Exception as exc:
                 if getattr(exc, "status_code", None) == 404:
                     self._remote_disabled = True
                 return 0
-            acknowledged = set(response.get("acknowledged_event_ids") or ())
-            # A concurrent heartbeat may flush another batch immediately
-            # after this one. Keep the worker event receipt for the lifetime
-            # of this recorder instead of replacing it with the newest batch.
-            self._last_acknowledged_event_ids.update(acknowledged)
+            sent_ids = {event["event_id"] for event in batch}
+            try:
+                raw_acknowledged = response.get("acknowledged_event_ids") or ()
+                acknowledged = {
+                    event_id for event_id in raw_acknowledged
+                    if self._valid_event_id(event_id) and event_id in sent_ids
+                }
+            except (AttributeError, TypeError):
+                # A malformed response is not evidence of acceptance.  Keep
+                # the durable pending event and let a later retry reconcile it.
+                return 0
             if not acknowledged:
                 return 0
-            self._write(
-                self.pending_path,
-                [event for event in pending if event.get("event_id") not in acknowledged],
-            )
+            try:
+                with _exclusive_file_lock(self.lock_path):
+                    # Another process may have recorded or flushed events while
+                    # the request was in flight.  Re-read before removing only
+                    # the IDs this response actually acknowledged.
+                    current_pending = self._load(self.pending_path)
+                    self._write_acknowledged_ids_unlocked(acknowledged)
+                    self._write(
+                        self.pending_path,
+                        [
+                            event for event in current_pending
+                            if event.get("event_id") not in acknowledged
+                        ],
+                    )
+            except OSError:
+                return 0
+            # Keep the local cache for callers that inspect this recorder, and
+            # also persist receipts so a sibling process can prove that its
+            # exact worker_registered event was accepted.
+            self._last_acknowledged_event_ids.update(acknowledged)
             return len(acknowledged)
 
     @property
     def last_acknowledged_event_ids(self) -> frozenset[str]:
-        return frozenset(self._last_acknowledged_event_ids)
+        with self._lock:
+            try:
+                with _exclusive_file_lock(self.lock_path):
+                    shared = self._load_acknowledged_ids_unlocked()
+            except OSError:
+                shared = []
+            return frozenset((*self._last_acknowledged_event_ids, *shared))
 
     def export_diagnostic_bundle(self, destination: Path) -> Path:
         """Create a local-only ZIP containing allowlisted events and a manifest."""
         destination = Path(destination).expanduser().resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
-            events = self._load(self.events_path)
-            pending = self._load(self.pending_path)
-            events = [validate_event(event) for event in events]
-            pending = [validate_event(event) for event in pending]
+            try:
+                with _exclusive_file_lock(self.lock_path):
+                    events = self._load(self.events_path)
+                    pending = self._load(self.pending_path)
+                    events = [validate_event(event) for event in events]
+                    pending = [validate_event(event) for event in pending]
+            except OSError:
+                events = []
+                pending = []
         manifest = {
             "schema_version": "dradar.flight_diagnostics.v1",
             "created_at": datetime.now(timezone.utc).isoformat(),
