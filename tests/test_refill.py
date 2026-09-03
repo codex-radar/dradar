@@ -406,16 +406,62 @@ def test_idle_worker_cannot_delete_plan_during_final_submission_window(
     assert result["claimed"] == 1
 
 
-def test_paid_api_assignment_cannot_enter_continuous_refill(tmp_path: Path):
+def test_paid_api_assignment_requires_explicit_cost_budget(tmp_path: Path):
     assignment = {
         **_assignment("deepseek"),
         "provider": "deepseek",
         "billing_mode": "api",
         "est_quota_pct": None,
         "tier_windows_usd": None,
+        "cost_usd": 0.75,
     }
-    with pytest.raises(refill.RefillError, match="one-off runs"):
+    with pytest.raises(refill.RefillError, match="estimated USD limit"):
         _configure(tmp_path, [assignment])
+    plan = _configure(
+        tmp_path, [assignment], max_tasks=3,
+        max_estimated_cost_usd=2.0,
+    )
+    assert plan["max_estimated_cost_usd"] == 2.0
+    assert plan["assignments"]["deepseek"]["estimated_cost_usd"] == 0.75
+
+
+def test_paid_api_seed_cannot_cross_cost_budget(tmp_path: Path):
+    assignment = {
+        **_assignment("deepseek"),
+        "billing_mode": "api",
+        "cost_usd": 1.25,
+    }
+    with pytest.raises(refill.RefillError, match="exceed the estimated USD limit"):
+        _configure(
+            tmp_path, [assignment], max_tasks=3,
+            max_estimated_cost_usd=1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "quote", [None, float("nan"), float("inf"), float("-inf"), 0, -0.01, True],
+)
+def test_paid_api_seed_quote_must_be_positive_finite_numeric(
+    tmp_path: Path, quote,
+):
+    assignment = {
+        **_assignment("deepseek"),
+        "billing_mode": "api",
+        "cost_usd": quote,
+    }
+    with pytest.raises(refill.RefillError, match="valid server cost quote"):
+        _configure(
+            tmp_path, [assignment], max_tasks=3,
+            max_estimated_cost_usd=2.0,
+        )
+
+
+@pytest.mark.parametrize("limit", [0, -1, float("nan"), float("inf")])
+def test_paid_api_cost_budget_must_be_positive_and_finite(
+    tmp_path: Path, limit: float,
+):
+    with pytest.raises(refill.RefillError, match="finite and greater than zero"):
+        _configure(tmp_path, [], max_estimated_cost_usd=limit)
 
 
 def test_paid_api_assignment_is_not_offered_interactive_refill(

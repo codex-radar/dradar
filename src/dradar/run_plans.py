@@ -18,6 +18,7 @@ import base64
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import re
@@ -455,6 +456,7 @@ def _validate_plan(value: object) -> dict[str, Any]:
     enabled = refill.get("enabled")
     refill_to = refill.get("refill_to")
     max_tasks = refill.get("max_tasks")
+    max_estimated_cost_usd = refill.get("max_estimated_cost_usd")
     def valid_positive(item: object) -> bool:
         return isinstance(item, int) and not isinstance(item, bool) and item >= 1
     if not isinstance(enabled, bool):
@@ -465,9 +467,28 @@ def _validate_plan(value: object) -> dict[str, Any]:
             or max_tasks < len(assignments)
             or (refill_to is not None and not valid_positive(refill_to))
             or (refill_to is not None and refill_to > max_tasks)
+            or (
+                max_estimated_cost_usd is not None
+                and (
+                    not isinstance(max_estimated_cost_usd, (int, float))
+                    or isinstance(max_estimated_cost_usd, bool)
+                    or not math.isfinite(float(max_estimated_cost_usd))
+                    or float(max_estimated_cost_usd) <= 0
+                )
+            )
         ):
             raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
-    elif refill_to is not None or max_tasks is not None:
+        paid_api = value.get("harness") == "dsh" or any(
+            assignment.get("provider") == "deepseek"
+            for assignment in assignments
+        )
+        if paid_api and max_estimated_cost_usd is None:
+            raise RunPlanClientError(
+                "plan_response_invalid",
+                "付费 API 连续运行缺少费用上限，请回网页重新领取。",
+            )
+    elif (refill_to is not None or max_tasks is not None
+          or max_estimated_cost_usd is not None):
         raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
     _state_path(value["plan_id"])
     return value
@@ -1824,6 +1845,7 @@ def cmd_run_plan(args) -> int:
                     retry=True,
                     refill=bool(refill.get("enabled")),
                     max_tasks=refill.get("max_tasks"),
+                    max_estimated_cost_usd=refill.get("max_estimated_cost_usd"),
                     refill_harness=plan["harness"],
                     refill_model=first.get("model"),
                     refill_effort=first.get("effort"),

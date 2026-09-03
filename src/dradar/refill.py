@@ -267,10 +267,6 @@ def _matches_scope(plan: dict, item: dict) -> bool:
 
 
 def _reserve(plan: dict, assignment: dict, *, enforce_scope: bool = False) -> bool:
-    if assignment.get("billing_mode") == "api":
-        raise RefillError(
-            "paid-API assignments are one-off runs; continuous refill stopped"
-        )
     assignment_id = assignment.get("assignment_id")
     if not assignment_id or assignment_id in plan["assignments"]:
         return False
@@ -289,9 +285,31 @@ def _reserve(plan: dict, assignment: dict, *, enforce_scope: bool = False) -> bo
             f"no {plan['quota_tier']} quota estimate for {assignment.get('task_id', '?')}; "
             "continuous refill stopped before claiming more work"
         )
+    cost = assignment.get("cost_usd", assignment.get("cost"))
+    if assignment.get("billing_mode") == "api":
+        if plan.get("max_estimated_cost_usd") is None:
+            raise RefillError(
+                "paid-API continuous refill requires an estimated USD limit"
+            )
+        if (
+            not isinstance(cost, (int, float)) or isinstance(cost, bool)
+            or not math.isfinite(float(cost)) or float(cost) <= 0
+        ):
+            raise RefillError(
+                "paid-API assignment lacks a valid server cost quote; "
+                "continuous refill stopped"
+            )
+        if (
+            _reserved_cost_usd(plan) + float(cost)
+            > float(plan["max_estimated_cost_usd"]) + 1e-9
+        ):
+            raise RefillError(
+                "paid-API assignments exceed the estimated USD limit"
+            )
     plan["assignments"][assignment_id] = {
         "task_id": assignment.get("task_id"),
         "estimated_quota_pct": estimate,
+        "estimated_cost_usd": float(cost) if isinstance(cost, (int, float)) else None,
     }
     return True
 
@@ -301,6 +319,25 @@ def _reserved_quota(plan: dict) -> float:
         float(item.get("estimated_quota_pct") or 0)
         for item in plan.get("assignments", {}).values()
     )
+
+
+def _reserved_cost_usd(plan: dict) -> float:
+    total = 0.0
+    require_quotes = plan.get("max_estimated_cost_usd") is not None
+    for item in plan.get("assignments", {}).values():
+        value = item.get("estimated_cost_usd")
+        if value is None and not require_quotes:
+            continue
+        if (
+            not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(float(value)) or float(value) <= 0
+        ):
+            raise RefillError(
+                "paid-API reservation ledger contains an invalid cost quote; "
+                "continuous refill stopped"
+            )
+        total += float(value)
+    return total
 
 
 def _pending_seed_assignment_ids(plan: dict) -> list[str]:
@@ -326,6 +363,7 @@ def configure(
     max_tasks: int,
     quota_tier: str,
     max_estimated_quota_pct: float | None,
+    max_estimated_cost_usd: float | None = None,
     active: list[dict],
     refill_harness: str | None = None,
     refill_model: str | None = None,
@@ -337,6 +375,13 @@ def configure(
 ) -> dict:
     if refill_to < 1 or max_tasks < 1:
         raise RefillError("refill target and max tasks must be positive")
+    if max_estimated_cost_usd is not None and (
+        not isinstance(max_estimated_cost_usd, (int, float))
+        or isinstance(max_estimated_cost_usd, bool)
+        or not math.isfinite(float(max_estimated_cost_usd))
+        or float(max_estimated_cost_usd) <= 0
+    ):
+        raise RefillError("estimated USD limit must be finite and greater than zero")
     if quota_tier not in TIERS:
         raise RefillError(f"unknown quota tier: {quota_tier}")
     if refill_harness is None and (refill_model is not None or refill_effort is not None):
@@ -360,6 +405,7 @@ def configure(
         "max_tasks": max_tasks,
         "quota_tier": quota_tier,
         "max_estimated_quota_pct": max_estimated_quota_pct,
+        "max_estimated_cost_usd": max_estimated_cost_usd,
         "refill_harness": refill_harness,
         "refill_model": refill_model,
         "refill_effort": refill_effort,
@@ -407,6 +453,7 @@ def configure(
             legacy_keys = (
                 "volunteer_id", "refill_to", "max_tasks", "quota_tier",
                 "max_estimated_quota_pct",
+                "max_estimated_cost_usd",
             )
             if any(current.get(key) != desired[key] for key in legacy_keys):
                 raise RefillError(
@@ -560,11 +607,11 @@ def _scoped_candidates(table: dict, plan: dict) -> list[dict]:
         key = (model.lower(), effort.lower())
         if key not in matching_combos or raw_value.get("st") != "open":
             continue
-        # Preserve the existing invariant that paid-API work is one-off.  A
-        # Codex-scoped board may contain manual DeepSeek API cells alongside
-        # subscription cells; table discovery must never broaden refill into
-        # billable API claims that `/suggest` deliberately excluded.
-        if raw_value.get("billing_mode") == "api":
+        # Paid API cells are eligible only inside a campaign with an explicit
+        # USD budget. Native Codex refill therefore cannot accidentally widen
+        # into DeepSeek, while an exact paid-provider scope can proceed.
+        if (raw_value.get("billing_mode") == "api"
+                and plan.get("max_estimated_cost_usd") is None):
             continue
         agent = raw_value.get("agent") or combo_agents.get(key) or "codex"
         if agent != harness:
@@ -592,7 +639,7 @@ def _scoped_candidates(table: dict, plan: dict) -> list[dict]:
 
         cost = candidate.get("cost")
         if (isinstance(cost, (int, float)) and not isinstance(cost, bool)
-                and math.isfinite(float(cost)) and float(cost) >= 0):
+                and math.isfinite(float(cost)) and float(cost) > 0):
             bucket, price = 0, float(cost)
         else:
             quota = candidate.get("est_quota_pct")
@@ -726,6 +773,8 @@ def _authoritative_campaign_snapshot(plan: dict, client) -> dict | None:
         campaign_harness = None
     valid_statuses = {"active", "draining", "stopped", "completed"}
     integer_fields = ("refill_to", "max_tasks", "planned", "held", "seed_pending")
+    server_cost_cap = campaign.get("max_estimated_cost_usd") if isinstance(campaign, dict) else None
+    server_cost = campaign.get("estimated_cost_usd") if isinstance(campaign, dict) else None
     valid = bool(
         isinstance(campaign, dict)
         and campaign.get("batch_id") == campaign_id
@@ -743,6 +792,32 @@ def _authoritative_campaign_snapshot(plan: dict, client) -> dict | None:
         and campaign_harness == plan.get("refill_harness")
         and campaign.get("model") == plan.get("refill_model")
         and campaign.get("effort") == plan.get("refill_effort")
+        and server_cost_cap == plan.get("max_estimated_cost_usd")
+        and (
+            (
+                server_cost_cap is None
+                and (
+                    server_cost is None
+                    or (
+                        isinstance(server_cost, (int, float))
+                        and not isinstance(server_cost, bool)
+                        and math.isfinite(float(server_cost))
+                        and float(server_cost) >= 0
+                    )
+                )
+            )
+            or (
+                isinstance(server_cost_cap, (int, float))
+                and not isinstance(server_cost_cap, bool)
+                and math.isfinite(float(server_cost_cap))
+                and float(server_cost_cap) > 0
+                and isinstance(server_cost, (int, float))
+                and not isinstance(server_cost, bool)
+                and math.isfinite(float(server_cost))
+                and float(server_cost) > 0
+                and float(server_cost) <= float(server_cost_cap) + 1e-9
+            )
+        )
     )
     if not valid:
         raise RefillError("server returned an invalid exact refill campaign status")
@@ -895,6 +970,8 @@ def refill_once(home: Path, client) -> dict:
         else:
             suggestions = client.suggest(max(wanted, wanted * 3)).get("cells") or []
         quota_blocked = False
+        cost_blocked = False
+        missing_cost_estimate = False
         missing_quota_estimate = False
         server_target_satisfied = False
         server_seed_pending = 0
@@ -903,6 +980,22 @@ def refill_once(home: Path, client) -> dict:
                 break
             estimate = _estimate_pct(
                 cell, plan["quota_tier"], plan.get("tier_windows_usd"))
+            cost = cell.get("cost_usd", cell.get("cost"))
+            cost_cap = plan.get("max_estimated_cost_usd")
+            if cell.get("billing_mode") == "api" and cost_cap is not None:
+                if (
+                    not isinstance(cost, (int, float)) or isinstance(cost, bool)
+                    or not math.isfinite(float(cost)) or float(cost) <= 0
+                ):
+                    missing_cost_estimate = True
+                    continue
+                reserved_cost = (
+                    float(campaign.get("estimated_cost_usd") or 0)
+                    if campaign is not None else _reserved_cost_usd(plan)
+                )
+                if reserved_cost + float(cost) > float(cost_cap) + 1e-9:
+                    cost_blocked = True
+                    continue
             if quota_cap is not None:
                 if estimate is None:
                     missing_quota_estimate = True
@@ -925,11 +1018,14 @@ def refill_once(home: Path, client) -> dict:
             except ApiError as exc:
                 if exc.code in {
                     "refill_limit_reached", "refill_campaign_not_active",
-                    "refill_campaign_faulted",
+                    "refill_campaign_faulted", "refill_cost_limit_reached",
+                    "refill_cost_estimate_invalid",
                 }:
                     plan["status"] = (
                         "draining"
-                        if exc.code == "refill_limit_reached" else "stopped"
+                        if exc.code in {
+                            "refill_limit_reached", "refill_cost_limit_reached",
+                        } else "stopped"
                     )
                     plan["stop_reason"] = str(exc)
                     break
@@ -971,7 +1067,16 @@ def refill_once(home: Path, client) -> dict:
                     claimed += 1
                     _save_unlocked(home, plan)  # crash-safe after every accepted claim
 
-        if claimed == 0 and missing_quota_estimate:
+        if claimed == 0 and missing_cost_estimate:
+            plan["status"] = "stopped"
+            plan["stop_reason"] = (
+                "paid-API candidates lack a valid cost quote; refill stopped "
+                "before claiming work"
+            )
+        elif claimed == 0 and cost_blocked:
+            plan["status"] = "draining"
+            plan["stop_reason"] = "no matching task fits the estimated USD budget left"
+        elif claimed == 0 and missing_quota_estimate:
             # This is a server/client data-contract failure, not an exhausted
             # user quota.  Fail closed and say why instead of silently entering
             # a misleading draining state that can never recover by itself.
@@ -991,6 +1096,7 @@ def refill_once(home: Path, client) -> dict:
                     len(plan["assignments"])
                 ),
                 "reserved_quota_pct": _reserved_quota(plan),
+                "reserved_estimated_cost_usd": _reserved_cost_usd(plan),
                 "reason": plan.get("stop_reason")}
         if server_target_satisfied:
             result["target_satisfied"] = True

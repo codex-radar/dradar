@@ -14,6 +14,8 @@ from dradar.codebuddy_provider import (
     CODEBUDDY_PROVIDER,
 )
 from dradar.providers import (
+    DSH_AGENT,
+    DSH_PRO_MODEL,
     GROK_AGENT,
     KIMI_AGENT,
     KIMI_PROVIDER,
@@ -46,6 +48,10 @@ def _table(*cells):
         {"agent": KIMI_AGENT, "model": "k3", "effort": effort,
          "billing_mode": "subscription", "manual_only": True}
         for effort in ("low", "high", "max")
+    ] + [
+        {"agent": DSH_AGENT, "model": DSH_PRO_MODEL, "effort": effort,
+         "billing_mode": "api", "manual_only": True}
+        for effort in ("off", "high", "max")
     ] + [
         {"agent": ZCODE_AGENT, "model": model, "effort": effort,
          "billing_mode": "subscription", "manual_only": True}
@@ -100,16 +106,23 @@ class ScopedClient:
                 model=model, effort=effort,
             )
             assignment["task_id"] = task_id
+            assignment["billing_mode"] = cell.get(
+                "billing_mode", assignment["billing_mode"],
+            )
+            if assignment["billing_mode"] == "api":
+                assignment["cost_usd"] = cell.get("cost")
             self.active.append(assignment)
             self.claimed.append((task_id, model, effort))
             return {"assignment": assignment}
 
 
 def _configure(home: Path, *, harness=KIMI_AGENT, model="k3", effort="low",
-               refill_to=3, max_tasks=20, active=None, order="cost"):
+               refill_to=3, max_tasks=20, active=None, order="cost",
+               max_estimated_cost_usd=None):
     return refill.configure(
         home, volunteer_id="v1", refill_to=refill_to, max_tasks=max_tasks,
         quota_tier="plus", max_estimated_quota_pct=None,
+        max_estimated_cost_usd=max_estimated_cost_usd,
         active=list(active or []), refill_harness=harness,
         refill_model=model, refill_effort=effort, refill_order=order,
     )
@@ -130,6 +143,76 @@ def test_kimi_low_scoped_refill_claims_only_kimi_low(tmp_path: Path):
     assert client.claimed == [
         ("k-low-1", "k3", "low"), ("k-low-2", "k3", "low")]
     assert client.suggest_calls == []
+
+
+def test_dsh_paid_api_refill_uses_exact_scope_and_cost_budget(tmp_path: Path):
+    board = _table(
+        ("dsh-paid", DSH_AGENT, DSH_PRO_MODEL, "high", "open"),
+        ("kimi", KIMI_AGENT, "k3", "low", "open"),
+    )
+    board["cells"][f"dsh-paid|{DSH_PRO_MODEL}|high"].update(
+        billing_mode="api", cost=0.5,
+    )
+    client = ScopedClient(board)
+    _configure(
+        tmp_path, harness=DSH_AGENT, model=DSH_PRO_MODEL, effort="high",
+        refill_to=1, max_tasks=2, max_estimated_cost_usd=1.0,
+    )
+    result = refill.refill_once(tmp_path, client)
+    assert result["claimed"] == 1
+    assert client.claimed == [("dsh-paid", DSH_PRO_MODEL, "high")]
+    assert result["reserved_estimated_cost_usd"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "quote", [None, float("nan"), float("inf"), float("-inf"), 0, -0.01, True],
+)
+def test_dsh_refill_rejects_every_invalid_candidate_quote(
+    tmp_path: Path, quote,
+):
+    board = _table(
+        ("dsh-invalid", DSH_AGENT, DSH_PRO_MODEL, "high", "open"),
+    )
+    board["cells"][f"dsh-invalid|{DSH_PRO_MODEL}|high"].update(
+        billing_mode="api", cost=quote,
+    )
+    client = ScopedClient(board)
+    _configure(
+        tmp_path, harness=DSH_AGENT, model=DSH_PRO_MODEL, effort="high",
+        refill_to=1, max_tasks=2, max_estimated_cost_usd=1.0,
+    )
+    result = refill.refill_once(tmp_path, client)
+    assert result["status"] == "stopped"
+    assert result["claimed"] == 0
+    assert "valid cost quote" in result["reason"]
+    assert client.claimed == []
+
+
+@pytest.mark.parametrize(
+    "quote", [None, float("nan"), float("inf"), float("-inf"), 0, -0.01, True],
+)
+def test_paid_campaign_snapshot_rejects_every_invalid_cost_total(quote):
+    batch_id = "550e8400e29b41d4a716446655440099"
+    plan = {
+        "server_campaign_id": batch_id,
+        "refill_harness": DSH_AGENT,
+        "refill_model": DSH_PRO_MODEL,
+        "refill_effort": "high",
+        "max_estimated_cost_usd": 1.0,
+    }
+
+    class Client:
+        def refill_campaign_status(self, _batch_id):
+            return {"campaign": {
+                "batch_id": batch_id, "status": "active", "harness": "dsh",
+                "model": DSH_PRO_MODEL, "effort": "high", "refill_to": 1,
+                "max_tasks": 2, "planned": 1, "held": 1, "seed_pending": 0,
+                "max_estimated_cost_usd": 1.0,
+                "estimated_cost_usd": quote, "stop_reason": None,
+            }}
+
+    with pytest.raises(refill.RefillError, match="invalid exact refill campaign"):
+        refill._authoritative_campaign_snapshot(plan, Client())
 
 
 def test_scoped_refill_claims_cheapest_candidates_first(tmp_path: Path):
@@ -628,7 +711,7 @@ def test_resume_help_documents_stable_scope_flags(capsys):
     assert exc.value.code == 0
     output = capsys.readouterr().out
     for flag in ("--refill-harness", "--refill-model", "--refill-effort",
-                 "--refill-order", "--max-tasks"):
+                 "--refill-order", "--max-tasks", "--max-estimated-cost-usd"):
         assert flag in output
     assert "codebuddy" in output
 

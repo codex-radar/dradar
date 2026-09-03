@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import json
+import math
 import os
 import re
 import signal
@@ -3464,6 +3465,12 @@ def cmd_refill_status(args) -> int:
     print(f"refill plan {plan.get('plan_id', '?')}  status={plan.get('status', '?')}")
     print(f"  queue target: {plan.get('refill_to', '?')}")
     print(f"  task budget: {len(plan.get('assignments', {}))}/{plan.get('max_tasks', '?')}")
+    if plan.get("max_estimated_cost_usd") is not None:
+        reserved = refill_plan._reserved_cost_usd(plan)
+        print(
+            "  estimated paid-API budget: "
+            f"${reserved:g}/${float(plan['max_estimated_cost_usd']):g}"
+        )
     if plan.get("refill_harness"):
         scope = plan["refill_harness"]
         if plan.get("refill_model"):
@@ -3887,6 +3894,7 @@ def cmd_go(args) -> int:
     refill_options = (
         getattr(args, "max_tasks", None),
         getattr(args, "max_estimated_quota_pct", None),
+        getattr(args, "max_estimated_cost_usd", None),
         getattr(args, "refill_harness", None),
         getattr(args, "refill_model", None),
         getattr(args, "refill_effort", None),
@@ -3919,8 +3927,10 @@ def cmd_go(args) -> int:
             except ValueError as exc:
                 sys.exit(str(exc))
         if getattr(args, "refill_harness", None) in PAID_API_REFILL_AGENTS:
-            sys.exit("paid-API Harness assignments remain one-off and cannot use "
-                     "continuous refill")
+            if (args.max_tasks is None
+                    or getattr(args, "max_estimated_cost_usd", None) is None):
+                sys.exit("paid-API Harness refill requires both --max-tasks N "
+                         "and --max-estimated-cost-usd USD")
         if (getattr(args, "refill_harness", None) in SUBSCRIPTION_REFILL_AGENTS
                 and args.max_tasks is None):
             sys.exit("subscription Harness refill requires an explicit "
@@ -3937,6 +3947,12 @@ def cmd_go(args) -> int:
         if (args.max_estimated_quota_pct is not None
                 and args.max_estimated_quota_pct <= 0):
             sys.exit("--max-estimated-quota-pct must be greater than 0")
+        if (getattr(args, "max_estimated_cost_usd", None) is not None
+                and (
+                    not math.isfinite(args.max_estimated_cost_usd)
+                    or args.max_estimated_cost_usd <= 0
+                )):
+            sys.exit("--max-estimated-cost-usd must be greater than 0")
     if not auto_workers:
         _align_refill_target_with_workers(args)
     if (auto_workers or workers > 1) and not getattr(args, "worker_child", False):
@@ -4131,6 +4147,10 @@ def _worker_command(args) -> list[str]:
         if args.max_estimated_quota_pct is not None:
             command.extend((
                 "--max-estimated-quota-pct", str(args.max_estimated_quota_pct),
+            ))
+        if getattr(args, "max_estimated_cost_usd", None) is not None:
+            command.extend((
+                "--max-estimated-cost-usd", str(args.max_estimated_cost_usd),
             ))
         command.extend(("--quota-tier", args.quota_tier))
         if getattr(args, "refill_harness", None):
@@ -5890,12 +5910,10 @@ def _prompt_positive_int(prompt: str, default: int) -> int:
 def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) -> list[dict]:
     """Configure a plan that drains its initial selected batch before refill."""
     explicit = getattr(args, "refill", False)
-    if any(item.get("billing_mode") == "api" for item in active):
-        if explicit:
-            raise refill_plan.RefillError(
-                "continuous refill is unavailable for paid-API assignments; "
-                "run the DeepSeek task as an explicit one-off"
-            )
+    paid_api = any(item.get("billing_mode") == "api" for item in active)
+    if paid_api and not explicit:
+        # Paid providers must never be enabled by the conversational default;
+        # the user has to supply both hard limits for this run explicitly.
         return active
     if not explicit and not args.yes and free_pick and active:
         answer = input(
@@ -5946,6 +5964,22 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         raise refill_plan.RefillError(f"unknown quota tier: {args.quota_tier}")
     if args.max_estimated_quota_pct is not None and args.max_estimated_quota_pct <= 0:
         raise refill_plan.RefillError("estimated quota cap must be greater than zero")
+    if paid_api and (
+        args.max_tasks is None
+        or getattr(args, "max_estimated_cost_usd", None) is None
+    ):
+        raise refill_plan.RefillError(
+            "paid-API continuous refill requires explicit --max-tasks and "
+            "--max-estimated-cost-usd limits"
+        )
+    if (getattr(args, "max_estimated_cost_usd", None) is not None
+            and (
+                not math.isfinite(args.max_estimated_cost_usd)
+                or args.max_estimated_cost_usd <= 0
+            )):
+        raise refill_plan.RefillError(
+            "estimated USD cap must be greater than zero"
+        )
 
     print("continuous refill plan:")
     print(f"  held queue target: {target} (server claim limit {me['claim_limit']})")
@@ -5965,6 +5999,8 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         ))
     if args.max_estimated_quota_pct is not None:
         print(f"  estimated quota cap: {args.max_estimated_quota_pct}% {args.quota_tier}")
+    if getattr(args, "max_estimated_cost_usd", None) is not None:
+        print(f"  estimated paid-API cap: ${args.max_estimated_cost_usd:g}")
     print("  order: all initially selected tasks must submit before auto-refill starts")
     print("  safety: any non-submitted task stops refill; existing work is never released")
     if not args.yes:
@@ -5996,14 +6032,23 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                     "private run-plan credentials lack an authorized points tier"
                 )
         try:
-            configured = client.configure_refill_campaign(
+            campaign_options = dict(
                 batch_id=args.batch_id,
-                harness=args.refill_harness,
+                harness=(
+                    "dsh"
+                    if args.refill_harness in PAID_API_REFILL_AGENTS
+                    else args.refill_harness
+                ),
                 model=args.refill_model,
                 effort=args.refill_effort,
                 refill_to=target,
                 max_tasks=args.max_tasks,
             )
+            if getattr(args, "max_estimated_cost_usd", None) is not None:
+                campaign_options["max_estimated_cost_usd"] = (
+                    args.max_estimated_cost_usd
+                )
+            configured = client.configure_refill_campaign(**campaign_options)
         except ApiError as exc:
             raise refill_plan.RefillError(
                 f"server refused the exact Fleet refill campaign: {exc}"
@@ -6022,6 +6067,7 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         max_tasks=args.max_tasks,
         quota_tier=args.quota_tier,
         max_estimated_quota_pct=args.max_estimated_quota_pct,
+        max_estimated_cost_usd=getattr(args, "max_estimated_cost_usd", None),
         active=active,
         refill_harness=getattr(args, "refill_harness", None),
         refill_model=getattr(args, "refill_model", None),

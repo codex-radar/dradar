@@ -22,6 +22,7 @@ instead of the unrelated conversation that happened to start the coordinator.
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import subprocess
@@ -778,6 +779,7 @@ def _spawn_pool(
     *,
     refill: bool = False,
     max_tasks: int | None = None,
+    max_estimated_cost_usd: float | None = None,
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
@@ -805,6 +807,10 @@ def _spawn_pool(
             "--refill-model", str(refill_model),
             "--refill-effort", str(refill_effort),
         ))
+        if max_estimated_cost_usd is not None:
+            command.extend((
+                "--max-estimated-cost-usd", str(max_estimated_cost_usd),
+            ))
     env = os.environ.copy()
     for key in POOL_RUNTIME_ENV_KEYS:
         env.pop(key, None)
@@ -973,6 +979,7 @@ def _handle_request(
                     "credentials_file": request.get("credentials_file"),
                     "refill": bool(request.get("refill")),
                     "max_tasks": request.get("max_tasks"),
+                    "max_estimated_cost_usd": request.get("max_estimated_cost_usd"),
                     "refill_harness": request.get("refill_harness"),
                     "refill_model": request.get("refill_model"),
                     "refill_effort": request.get("refill_effort"),
@@ -1015,6 +1022,7 @@ def _handle_request(
                 return
             refill = bool(request.get("refill"))
             max_tasks = request.get("max_tasks")
+            max_estimated_cost_usd = request.get("max_estimated_cost_usd")
             refill_harness = request.get("refill_harness")
             refill_model = request.get("refill_model")
             refill_effort = request.get("refill_effort")
@@ -1071,6 +1079,21 @@ def _handle_request(
                         "Fleet refill requires exact --refill-harness, "
                         "--refill-model, and --refill-effort scope"
                     )
+                if max_estimated_cost_usd is not None and (
+                    not isinstance(max_estimated_cost_usd, (int, float))
+                    or isinstance(max_estimated_cost_usd, bool)
+                    or not math.isfinite(float(max_estimated_cost_usd))
+                    or max_estimated_cost_usd <= 0
+                ):
+                    raise FleetError(
+                        "Fleet paid-API refill cost cap must be greater than zero"
+                    )
+                if refill_harness in {"dsh", "dsh-minimal"} and (
+                    max_estimated_cost_usd is None
+                ):
+                    raise FleetError(
+                        "Fleet DSH refill requires --max-estimated-cost-usd"
+                    )
             workers, warnings, capacity = _resolve_workers(
                 request.get("workers", "auto"), batch_id, state,
                 credentials_file,
@@ -1117,6 +1140,7 @@ def _handle_request(
                 home, state, batch_id, workers,
                 refill=refill,
                 max_tasks=max_tasks,
+                max_estimated_cost_usd=max_estimated_cost_usd,
                 refill_harness=refill_harness,
                 refill_model=refill_model,
                 refill_effort=refill_effort,
@@ -1142,6 +1166,7 @@ def _handle_request(
                     "credentials_file": credentials_file,
                     "refill": refill,
                     "max_tasks": max_tasks,
+                    "max_estimated_cost_usd": max_estimated_cost_usd,
                     "refill_harness": refill_harness,
                     "refill_model": refill_model,
                     "refill_effort": refill_effort,
@@ -1517,6 +1542,11 @@ def _print_add_response(response: dict) -> int:
         )
     for warning in batch.get("warnings") or []:
         print(f"warning: {warning}")
+    if batch.get("max_estimated_cost_usd") is not None:
+        print(
+            "estimated paid-API cap: "
+            f"${float(batch['max_estimated_cost_usd']):g} (server-enforced)"
+        )
     print(f"Fleet total: {response.get('total_workers', 0)} worker(s)")
     print(f"watch: dradar fleet watch --batch-id {batch_id}")
     return 0
@@ -1535,11 +1565,18 @@ def cmd_fleet_add(args) -> int:
         )
     if not args.refill and any(
         value is not None for value in (
-            args.max_tasks, args.refill_harness, args.refill_model,
+            args.max_tasks, args.max_estimated_cost_usd,
+            args.refill_harness, args.refill_model,
             args.refill_effort,
         )
     ):
         raise SystemExit("Fleet refill limits and scope require --refill")
+    if args.refill_harness in {"dsh", "dsh-minimal"} and (
+        args.max_estimated_cost_usd is None
+    ):
+        raise SystemExit(
+            "Fleet DSH refill requires --max-estimated-cost-usd USD"
+        )
     try:
         response = add_batch(
             batch_id=args.batch_id,
@@ -1547,6 +1584,7 @@ def cmd_fleet_add(args) -> int:
             retry=bool(getattr(args, "retry", False)),
             refill=bool(args.refill),
             max_tasks=args.max_tasks,
+            max_estimated_cost_usd=args.max_estimated_cost_usd,
             refill_harness=args.refill_harness,
             refill_model=args.refill_model,
             refill_effort=args.refill_effort,
@@ -1665,6 +1703,7 @@ def add_batch(
     retry: bool = False,
     refill: bool = False,
     max_tasks: int | None = None,
+    max_estimated_cost_usd: float | None = None,
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
@@ -1685,6 +1724,7 @@ def add_batch(
         "retry": retry,
         "refill": refill,
         "max_tasks": max_tasks,
+        "max_estimated_cost_usd": max_estimated_cost_usd,
         "refill_harness": refill_harness,
         "refill_model": refill_model,
         "refill_effort": refill_effort,
