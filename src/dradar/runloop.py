@@ -6081,6 +6081,18 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         if outcome == "failed" or outcome in _TERMINAL_LOCAL_OUTCOMES:
             failed_ids.add(assignment["assignment_id"])
         results.append(outcome)
+        # The checkout response reports the authoritative number of remaining
+        # unstarted assignments.  Once the last held task has settled, a
+        # single-task/non-refill run must finish here; otherwise the next loop
+        # iteration emits claim_requested even though no claim can succeed.
+        if (
+            not getattr(args, "refill", False)
+            and outcome in {"submitted", "interrupted", "empty-submission"}
+            and isinstance(extra, int)
+            and not isinstance(extra, bool)
+            and extra == 0
+        ):
+            break
     if "environment-build-failed" in results:
         return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
     ok = all(o in _NON_FAULT_RUNNER_OUTCOMES for o in results)
