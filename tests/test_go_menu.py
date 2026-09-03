@@ -32,6 +32,7 @@ ASSIGNMENT = {
     "agent": "claude", "expires_at": "2099-01-01T00:00:00Z",
     "est_minutes": 42, "est_quota_pct": 17, "nonce": "n1",
     "deep_swe_commit": None,
+    "started_at": None, "execution_state": "waiting",
 }
 
 MENU = [
@@ -41,7 +42,7 @@ MENU = [
 
 
 class FakeClient:
-    def __init__(self, assignment_data, claims=None, suggested=None):
+    def __init__(self, assignment_data, claims=None, suggested=None, checkouts=None):
         # assignment_data: one payload (repeated), or a list served in order
         # (the last one repeats). claims: scripted claim_assignment results,
         # in order — a dict is returned, an exception instance is raised.
@@ -49,6 +50,7 @@ class FakeClient:
         self._payloads = assignment_data if isinstance(assignment_data, list) else [assignment_data]
         self._claims = list(claims or [])
         self._suggested = suggested or []
+        self._checkouts = list(checkouts) if checkouts is not None else None
         self.claim_calls = []
         self.suggest_calls = []
 
@@ -69,7 +71,10 @@ class FakeClient:
     def checkout(self, exclude_assignment_ids=None):
         # The default fake predates the per-cell dispenser, so callers take
         # the legacy whole-batch path these tests were written against.
-        raise ApiError("not found", status_code=404)
+        if self._checkouts is None:
+            raise ApiError("not found", status_code=404)
+        result = self._checkouts.pop(0)
+        return {"assignment": result, "held": len(self._checkouts), "unstarted": 0}
 
 
 def _args(yes=True, dev_agent=None, auto=None, pick=None):
@@ -135,17 +140,16 @@ def test_declining_the_prompt_never_blocks_or_errors(monkeypatch, capsys, tmp_pa
     assert rc == 1
 
 
-def test_runs_the_whole_held_batch_serially(monkeypatch, capsys, tmp_path: Path):
-    """Free-pick: `active` carries several claimed cells -> the loop runs each
-    one, in order, with a single get_assignment call (no re-claim per cell)."""
+def test_old_server_multi_cell_snapshot_fails_closed(monkeypatch, capsys, tmp_path: Path):
+    """A 404 cannot authorize whole-batch execution from a shared snapshot."""
     ran = []
     _patch_run(monkeypatch, ran=ran)
     batch = [{**ASSIGNMENT, "assignment_id": f"a{i}", "task_id": f"t{i}"} for i in range(1, 4)]
     client = FakeClient({"active": batch, "free_pick": True, "menu": None})
     rc = runloop._go_menu(_args(yes=True, dev_agent=None), {}, client, tmp_path)
-    assert ran == ["a1", "a2", "a3"]       # all three, claim order
-    assert "holding 3 cells" in capsys.readouterr().out
-    assert rc == 0
+    assert ran == []
+    assert "legacy_checkout_unsupported" in capsys.readouterr().out
+    assert rc == 1
 
 
 def test_free_pick_with_no_held_cells_points_to_the_web(monkeypatch, capsys, tmp_path: Path):
@@ -204,7 +208,8 @@ def test_auto_claims_suggested_cells_and_runs_them(monkeypatch, capsys, tmp_path
     claims = [{"assignment": {**ASSIGNMENT, "assignment_id": "a1", "task_id": "t1"}},
               {"assignment": {**ASSIGNMENT, "assignment_id": "a2", "task_id": "t2"}}]
     client = FakeClient({"active": [], "free_pick": True, "menu": None},
-                        claims=claims, suggested=suggested)
+                        claims=claims, suggested=suggested,
+                        checkouts=[claim["assignment"] for claim in claims] + [None])
     rc = runloop._go_menu(_args(yes=True, auto=2), {}, client, tmp_path)
     assert client.suggest_calls == [2]
     assert client.claim_calls == [("t1", "m", "e"), ("t2", "m", "e")]
@@ -284,6 +289,7 @@ def test_pick_tops_up_an_existing_batch(monkeypatch, tmp_path: Path):
     }}]
     client = FakeClient(
         {"active": batch, "free_pick": True, "menu": None}, claims=claims,
+        checkouts=[batch[0], claims[0]["assignment"], None],
     )
 
     rc = runloop._go_menu(
@@ -304,6 +310,7 @@ def test_pick_skips_held_and_duplicate_cells(monkeypatch, capsys, tmp_path: Path
     }}]
     client = FakeClient(
         {"active": batch, "free_pick": True, "menu": None}, claims=claims,
+        checkouts=[batch[0], claims[0]["assignment"], None],
     )
 
     rc = runloop._go_menu(
@@ -331,7 +338,8 @@ def test_auto_tops_up_an_existing_batch_to_the_requested_size(monkeypatch, capsy
     claims = [{"assignment": {**ASSIGNMENT, "assignment_id": f"a{i}",
                               "task_id": f"t{i}"}} for i in range(2, 6)]
     client = FakeClient({"active": batch, "free_pick": True, "menu": None},
-                        claims=claims, suggested=suggested)
+                        claims=claims, suggested=suggested,
+                        checkouts=[batch[0], *[claim["assignment"] for claim in claims], None])
     rc = runloop._go_menu(_args(yes=True, auto=5), {}, client, tmp_path)
     assert client.suggest_calls == [4]
     assert ran == ["a1", "a2", "a3", "a4", "a5"]
@@ -343,7 +351,10 @@ def test_auto_does_not_claim_when_existing_batch_meets_target(monkeypatch, capsy
     _patch_run(monkeypatch, ran=ran)
     batch = [{**ASSIGNMENT, "assignment_id": f"a{i}", "task_id": f"t{i}"}
              for i in range(1, 4)]
-    client = FakeClient({"active": batch, "free_pick": True, "menu": None})
+    client = FakeClient(
+        {"active": batch, "free_pick": True, "menu": None},
+        checkouts=[*batch, None],
+    )
     assert runloop._go_menu(_args(yes=True, auto=2), {}, client, tmp_path) == 0
     assert client.suggest_calls == []
     assert ran == ["a1", "a2", "a3"]
@@ -594,8 +605,8 @@ def test_choose_menu_entry_double_invalid_falls_back_announced(monkeypatch, caps
 # grading it 0, so mislabeling here corrupts grading fleet-wide.
 
 class SubmitClient(FakeClient):
-    def __init__(self, assignment_data, claims=None):
-        super().__init__(assignment_data, claims)
+    def __init__(self, assignment_data, claims=None, checkouts=None):
+        super().__init__(assignment_data, claims, checkouts=checkouts)
         self.submissions = []
 
     def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
@@ -1371,8 +1382,12 @@ def test_mixed_batch_one_failure_yields_rc_1(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(runloop, "run_trial", fake_run)
     batch = [{**ASSIGNMENT, "assignment_id": "a1"},
              {**ASSIGNMENT, "assignment_id": "a2", "nonce": "n2"}]
-    client = SubmitClient({"active": batch, "free_pick": True, "menu": None})
-    rc = runloop._go_menu(_args(yes=True, dev_agent=None), {}, client, tmp_path)
+    client = SubmitClient(
+        {"active": batch, "free_pick": True, "menu": None},
+    )
+    answers = iter(["n", "y", "y", "y"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(answers))
+    rc = runloop._go_menu(_args(yes=False, dev_agent=None), {}, client, tmp_path)
     assert [s["assignment_id"] for s in client.submissions] == ["a2"]  # a2 still landed
     assert rc == 1  # but the batch as a whole reports failure
 

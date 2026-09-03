@@ -2026,6 +2026,170 @@ def test_run_trial_keeps_zcode_patch_gradeable_when_only_usage_is_incomplete(
     assert artifact.patch.is_file()
 
 
+def _write_codebuddy_terminal_artifacts(
+    root, *, patch=b"diff --git a/file b/file\n", trajectory=True,
+    request_count=1, event_output=3, aggregate_output=3,
+):
+    patch_path = root / "model.patch"
+    patch_path.write_bytes(patch)
+    trajectory_path = root / "trajectory.json"
+    if trajectory:
+        trajectory_path.write_text(json.dumps({
+            "schema_version": "ATIF-v1.7",
+            "session_id": "codebuddy-session-1",
+            "agent": {
+                "name": "codebuddy",
+                "version": runner_mod.CODEBUDDY_CLI_VERSION,
+                "model_name": runner_mod.CODEBUDDY_MODEL,
+                "extra": {
+                    "provider": "codebuddy-subscription",
+                    "oauth": True,
+                    "credential_mode": "isolated-run-copy",
+                },
+            },
+            "steps": [
+                {"step_id": 1, "source": "user", "message": "task"},
+                {
+                    "step_id": 2, "source": "agent",
+                    "message": "completed",
+                    "model_name": runner_mod.CODEBUDDY_MODEL,
+                    "reasoning_effort": "max",
+                    "llm_call_count": request_count,
+                },
+            ],
+            "final_metrics": {
+                "total_prompt_tokens": 10 if request_count else None,
+                "total_cached_tokens": 2 if request_count else None,
+                "total_completion_tokens": (
+                    aggregate_output if request_count else None
+                ),
+                "total_cost_usd": None,
+                "total_steps": 2,
+                "extra": {
+                    "usage_complete": True,
+                    "terminal_status": "success",
+                    "terminal_evidence": "unique-provider-result-v1",
+                },
+            },
+        }))
+    usage_path = root / "provider-usage.json"
+    usage_path.write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy",
+        "model": runner_mod.CODEBUDDY_MODEL,
+        "complete": request_count > 0,
+        "request_count": request_count,
+        "request_usage_complete": request_count > 0,
+        "request_usage_observed": request_count > 0,
+        "n_input_tokens": 10 if request_count else 0,
+        "n_cache_tokens": 2 if request_count else 0,
+        "n_output_tokens": aggregate_output if request_count else 0,
+        "token_usage_events": ([{
+            "n_input_tokens": 10,
+            "n_cache_tokens": 2,
+            "n_output_tokens": event_output,
+        }] if request_count else []),
+        "usage_incomplete_reason": (
+            None if request_count else "request_ledger_unavailable_or_invalid"
+        ),
+    }))
+    return patch_path, trajectory_path if trajectory else None, usage_path
+
+
+@pytest.mark.parametrize(
+    ("case", "trajectory", "expected"),
+    [
+        (
+            "short-refill-empty",
+            False,
+            (
+                "empty_patch",
+                "request_ledger_missing_or_inconsistent",
+                "trajectory_missing_or_invalid",
+            ),
+        ),
+        (
+            "long-run-empty",
+            True,
+            (
+                "empty_patch",
+                "request_ledger_missing_or_inconsistent",
+            ),
+        ),
+    ],
+)
+def test_codebuddy_rc0_empty_result_is_never_gradeable(
+        tmp_path, case, trajectory, expected):
+    assert case in {"short-refill-empty", "long-run-empty"}
+    patch, trajectory, usage = _write_codebuddy_terminal_artifacts(
+        tmp_path, patch=b"", trajectory=trajectory, request_count=0,
+    )
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, trajectory, usage,
+    ) == expected
+
+
+def test_codebuddy_rc0_rejects_inconsistent_request_ledger(tmp_path):
+    patch, trajectory, usage = _write_codebuddy_terminal_artifacts(
+        tmp_path, event_output=3, aggregate_output=4,
+    )
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, trajectory, usage,
+    ) == ("request_ledger_missing_or_inconsistent",)
+
+
+def test_codebuddy_rc0_accepts_nonempty_patch_trajectory_and_positive_ledger(
+        tmp_path):
+    patch, trajectory, usage = _write_codebuddy_terminal_artifacts(tmp_path)
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, trajectory, usage,
+    ) == ()
+
+
+@pytest.mark.parametrize("mutation", ["empty_step", "wrong_model", "wrong_calls"])
+def test_codebuddy_rc0_rejects_forged_or_wrong_bound_trajectory(
+        tmp_path, mutation):
+    patch, trajectory, usage = _write_codebuddy_terminal_artifacts(tmp_path)
+    value = json.loads(trajectory.read_text())
+    if mutation == "empty_step":
+        value["steps"][1]["message"] = ""
+    elif mutation == "wrong_model":
+        value["agent"]["model_name"] = "other-model"
+    else:
+        value["steps"][1]["llm_call_count"] = 99
+    trajectory.write_text(json.dumps(value))
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, trajectory, usage,
+    ) == ("trajectory_missing_or_invalid",)
+
+
+def test_sanitized_round3_natural_sample_is_rejected(tmp_path):
+    fixture = json.loads((
+        Path(__file__).parent / "fixtures"
+        / "codebuddy_false_success_round3_sanitized.json"
+    ).read_text())
+    assert fixture["schema"] == "dradar-codebuddy-readonly-sample-v1"
+    patch, _trajectory, usage = _write_codebuddy_terminal_artifacts(
+        tmp_path, patch=b"", trajectory=False,
+        request_count=fixture["request_count"],
+    )
+    usage_value = json.loads(usage.read_text())
+    usage_value["usage_incomplete_reason"] = fixture["usage_incomplete_reason"]
+    usage.write_text(json.dumps(usage_value))
+
+    assert runner_mod._codebuddy_false_success_reasons(
+        patch, None, usage,
+    ) == (
+        "empty_patch",
+        "request_ledger_missing_or_inconsistent",
+        "trajectory_missing_or_invalid",
+    )
+
+
 def test_run_trial_classifies_build_failure_from_nested_result(tmp_path, monkeypatch):
     # Pier's console tail can contain only a generic teardown; the actual
     # Docker failure from the production case is preserved in result.json.

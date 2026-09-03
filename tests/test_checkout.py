@@ -20,6 +20,14 @@ def _cell(aid):
             "est_quota_pct": 0.5, "deep_swe_commit": None, "batch_id": "batch-1"}
 
 
+def _legacy_waiting_cell(aid):
+    return {
+        **_cell(aid),
+        "started_at": None,
+        "execution_state": "waiting",
+    }
+
+
 class CheckoutClient(FakeClient):
     def __init__(self, assignment_data, checkouts):
         super().__init__(assignment_data)
@@ -149,12 +157,180 @@ def test_checkout_surfaces_heartbeat_capacity_error_without_calling_checkout(
 def test_checkout_404_falls_back_to_legacy_batch(monkeypatch, tmp_path):
     ran = []
     _patch_run(monkeypatch, ran=ran)
+    waiting = _legacy_waiting_cell("a1")
     client = CheckoutClient(
-        {"active": [_cell("a1"), _cell("a2")], "free_pick": True},
+        [
+            {"active": [waiting], "free_pick": True},
+            {"active": [_legacy_waiting_cell("must-not-backfill")],
+             "free_pick": True},
+        ],
         [ApiError("not found", status_code=404)])
     rc = runloop._go_menu(_args(), {}, client, tmp_path)
     assert rc == 0
-    assert ran == ["a1", "a2"]   # legacy whole-batch flow took over
+    assert ran == ["a1"]
+
+
+@pytest.mark.parametrize(
+    "active, reason",
+    [
+        ([_legacy_waiting_cell("a1"), _legacy_waiting_cell("a2")],
+         "legacy_checkout_unsupported"),
+        ([_cell("missing-capability")], "legacy_checkout_unsupported"),
+        ([{**_legacy_waiting_cell("running"), "execution_state": "running"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("started"), "started_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("lost"), "heartbeat_running": True}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("phase"), "runner_phase": "running"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-state"), "runner_state": "running"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("checkpoint"), "checkpoint_id": "cp-1"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("stale"), "heartbeat_lost": True}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("last-heartbeat"),
+           "last_heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("heartbeat-at"),
+           "heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-heartbeat"),
+           "runner_last_heartbeat_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("owner-epoch"), "owner_epoch": 1}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("resume-generation"), "resume_generation": 1}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("runner-closed"),
+           "runner_closed_at": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("camel-heartbeat"),
+           "lastHeartbeatAt": "2026-09-02T00:00:00Z"}],
+         "stale_assignment_rejected"),
+        ([{**_legacy_waiting_cell("historical-heartbeat"),
+           "historical_heartbeat_v1": {"at": "2026-09-02T00:00:00Z"}}],
+         "stale_assignment_rejected"),
+    ],
+)
+def test_checkout_404_rejects_unproven_or_stale_legacy_inventory(
+        monkeypatch, capsys, tmp_path, active, reason):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    marker = tmp_path / "worker-activity"
+    monkeypatch.setenv("DRADAR_POOL_WORKER_ACTIVITY_FILE", str(marker))
+    client = CheckoutClient(
+        {"active": active, "free_pick": True},
+        [ApiError("not found", status_code=404)],
+    )
+
+    assert runloop._go_menu(_args(), {}, client, tmp_path) == 1
+    assert ran == []
+    assert reason in capsys.readouterr().out
+    assert marker.read_text() == f"blocked:{reason}"
+
+
+def test_checkout_404_allows_explicit_safe_zero_legacy_history(
+        monkeypatch, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    waiting = {
+        **_legacy_waiting_cell("safe-zero"),
+        "last_heartbeat_at": None,
+        "heartbeat_at": "",
+        "runner_closed_at": None,
+        "owner_epoch": 0,
+        "resume_generation": 0,
+        "session_id": "",
+        "recovery_epoch": 0,
+        "heartbeat_running": False,
+        "runner_state": "",
+        "checkpoint_id": "",
+        "runner_phase": "",
+    }
+    client = CheckoutClient(
+        {"active": [waiting], "free_pick": True},
+        [ApiError("not found", status_code=404)],
+    )
+
+    assert runloop._go_menu(_args(), {}, client, tmp_path) == 0
+    assert ran == ["safe-zero"]
+
+
+def test_modern_checkout_rejects_explicit_stale_assignment_before_model(
+        monkeypatch, capsys, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    stale = {
+        **_cell("stale"),
+        "runner_phase": "running",
+        "heartbeat_running": False,
+    }
+    marker = tmp_path / "worker-activity"
+    monkeypatch.setenv("DRADAR_POOL_WORKER_ACTIVITY_FILE", str(marker))
+    client = CheckoutClient(
+        {"active": [stale], "free_pick": True},
+        [{"assignment": stale, "held": 1, "unstarted": 0}],
+    )
+
+    assert runloop._go_menu(_args(), {}, client, tmp_path) == 1
+    assert ran == []
+    assert client.stopped == ["stale"]
+    assert "stale_assignment_rejected" in capsys.readouterr().out
+    assert marker.read_text() == "blocked:stale_assignment_rejected"
+
+
+def test_assignment_specific_404_never_downgrades_to_legacy_execution(
+        monkeypatch, capsys, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    waiting = _legacy_waiting_cell("a1")
+    client = CheckoutClient(
+        {"active": [waiting], "free_pick": True},
+        [ApiError(
+            "assignment not found", status_code=404,
+            code="assignment_not_found",
+        )],
+    )
+
+    assert runloop._go_menu(_args(), {}, client, tmp_path) == 1
+    assert ran == []
+    output = capsys.readouterr().out
+    assert "stale_assignment_rejected" in output
+    assert "assignment not found" not in output
+
+
+def test_legacy_rejection_survives_restart_and_never_refills(
+        monkeypatch, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    stopped = []
+    monkeypatch.setattr(
+        runloop.refill_plan, "stop", lambda _home, reason: stopped.append(reason),
+    )
+    monkeypatch.setattr(
+        runloop.refill_plan, "refill_once",
+        lambda *_args: pytest.fail("rejected legacy checkout must never refill"),
+    )
+    monkeypatch.setattr(runloop.refill_plan, "is_running", lambda _home: True)
+    monkeypatch.setattr(
+        runloop, "_setup_refill", lambda _args, _client, active, _free_pick: active,
+    )
+    stale = {**_legacy_waiting_cell("stale"), "heartbeat_running": True}
+    args = _args()
+    args.refill = True
+    args.worker_child = False
+
+    for _restart in range(2):
+        client = CheckoutClient(
+            {"active": [stale], "free_pick": True},
+            [ApiError("not found", status_code=404)],
+        )
+        assert runloop._go_menu(args, {}, client, tmp_path) == 1
+
+    assert ran == []
+    assert stopped == ["stale_assignment_rejected"] * 2
 
 
 def test_checkout_loop_never_retries_a_cell_that_failed_this_session(
@@ -613,6 +789,53 @@ def test_repeat_failure_stops_refill_before_second_replenishment(
     assert replenished == [True]
     assert stopped == ["account stop: repeat-agent-failure"]
     assert len(client._checkouts) == 1
+
+
+def test_codebuddy_false_success_stops_refill_without_upload_or_recheckout(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        runloop, "_run_and_submit",
+        lambda *_args, **_kwargs: "codebuddy-false-success",
+    )
+    monkeypatch.setattr(runloop.refill_plan, "is_running", lambda _home: True)
+    stopped = []
+    monkeypatch.setattr(
+        runloop.refill_plan, "stop",
+        lambda _home, reason: stopped.append(reason),
+    )
+    monkeypatch.setattr(
+        runloop.refill_plan,
+        "refill_once",
+        lambda *_args: pytest.fail("false success must stop before refill"),
+    )
+    first = {
+        **_cell("codebuddy-empty"),
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+    }
+    second = {
+        **_cell("must-not-checkout"),
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+    }
+    client = CheckoutClient(
+        {"active": [first, second], "free_pick": True},
+        [
+            {"assignment": first, "held": 2, "unstarted": 1},
+            {"assignment": second, "held": 2, "unstarted": 0},
+        ],
+    )
+    args = _args()
+    args.refill = True
+    args.worker_child = False
+
+    assert runloop._run_checkout_loop(args, client, tmp_path, [first, second]) == 1
+    assert stopped == ["account stop: codebuddy-false-success"]
+    assert len(client.checkout_exclusions) == 1
+    assert client.stopped == []
 
 
 def test_checkout_loop_fuses_after_environment_build_failure(

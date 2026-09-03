@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from dradar import failure_circuit, runloop
@@ -27,6 +31,49 @@ def test_success_resets_consecutive_failure_count(tmp_path):
     assert failure_circuit.observe(
         scope="batch/runtime", signature="exit=1", state_path=path,
     ) == (1, False)
+
+
+def test_open_provider_circuit_survives_success_and_explicit_clear(tmp_path):
+    path = tmp_path / "persistent.json"
+    scope = "batch/provider/model/version/root"
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    assert failure_circuit.observe(
+        scope=scope, signature="false-success", state_path=path,
+    ) == (2, True)
+    assert failure_circuit.observe(
+        scope=scope, signature=None, state_path=path, clear_open=False,
+    ) == (2, True)
+    assert failure_circuit.status(scope=scope, state_path=path) == (2, True)
+
+    failure_circuit.clear(scope=None, state_path=path)
+
+    assert failure_circuit.status(scope=scope, state_path=path) == (0, False)
+
+
+def test_open_provider_circuit_is_visible_to_a_new_process(tmp_path):
+    path = tmp_path / "persistent.json"
+    scope = "batch/provider/model/version/root"
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    env = dict(os.environ)
+    env["CIRCUIT_PATH"] = str(path)
+    env["CIRCUIT_SCOPE"] = scope
+    source_root = str(Path(__file__).parents[1] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        source_root, env.get("PYTHONPATH"),
+    )))
+
+    proc = subprocess.run(
+        [sys.executable, "-c", (
+            "import os; from pathlib import Path; "
+            "from dradar import failure_circuit; "
+            "print(failure_circuit.status(scope=os.environ['CIRCUIT_SCOPE'], "
+            "state_path=Path(os.environ['CIRCUIT_PATH'])))"
+        )],
+        env=env, check=True, capture_output=True, text=True,
+    )
+
+    assert proc.stdout.strip() == "(2, True)"
 
 
 def test_different_signatures_are_not_merged(tmp_path):

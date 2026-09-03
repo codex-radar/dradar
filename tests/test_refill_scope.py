@@ -519,6 +519,43 @@ def test_explicit_refill_stop_rearms_checkpoint_faulted_campaign(
     assert "circuit" not in rearmed
 
 
+def test_codebuddy_false_success_circuit_persists_until_explicit_rearm(
+        tmp_path: Path) -> None:
+    assignment = _assignment(
+        "codebuddy-empty",
+        agent=CODEBUDDY_AGENT,
+        model=CODEBUDDY_MODEL,
+        effort="max",
+    )
+    assignment["provider"] = CODEBUDDY_PROVIDER
+    configured = _configure(
+        tmp_path,
+        harness=CODEBUDDY_AGENT,
+        model=CODEBUDDY_MODEL,
+        effort="max",
+        active=[assignment],
+        refill_to=1,
+    )
+
+    faulted = refill.open_circuit(
+        tmp_path, assignment, "provider_false_success",
+    )
+
+    assert faulted is not None
+    assert faulted["plan_id"] == configured["plan_id"]
+    assert faulted["status"] == refill.FAULTED_STATE
+    assert faulted["circuit"]["failure_family"] == "provider_false_success"
+    assert faulted["circuit"]["harness"] == CODEBUDDY_AGENT
+    assert faulted["circuit"]["provider"] == CODEBUDDY_PROVIDER
+    assert refill.refill_once(tmp_path, object()) == {
+        "status": refill.FAULTED_STATE,
+        "claimed": 0,
+    }
+
+    refill.stop(tmp_path, "provider repaired", discard=True)
+    assert refill.load(tmp_path) is None
+
+
 def test_scoped_plan_cannot_reset_count_by_changing_cap(tmp_path: Path):
     active = [_assignment("seed")]
     first = _configure(tmp_path, active=active, max_tasks=3, refill_to=1)

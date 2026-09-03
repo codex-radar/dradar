@@ -1,0 +1,17 @@
+{
+  "schema": "dradar-codebuddy-readonly-sample-v1",
+  "source": "readonly-submission-artifact-metadata",
+  "observed_at": "2026-09-02T11:53:43+08:00",
+  "client_version": "0.5.175",
+  "provider": "codebuddy",
+  "model": "hy4-preview",
+  "pier_returncode": 0,
+  "patch_size_bytes": 0,
+  "trajectory_present": false,
+  "exception_present": false,
+  "request_count": 0,
+  "complete": false,
+  "request_usage_complete": false,
+  "request_usage_observed": false,
+  "usage_incomplete_reason": "request_ledger_unavailable_or_invalid"
+}

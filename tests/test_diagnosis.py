@@ -4,6 +4,7 @@ image caches that shipped Codex too old for gpt-5.6), print the actual
 in-container exception instead of a blanket "wait for your quota", and keep
 the failure artifacts instead of deleting the only evidence."""
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -385,6 +386,189 @@ def test_real_success_resets_zero_progress_failure_streak(monkeypatch, tmp_path:
     ]
 
     assert outcomes == ["interrupted", "submitted", "interrupted"]
+
+
+def _codebuddy_assignment(assignment_id: str) -> dict:
+    return {
+        **ASSIGNMENT,
+        "assignment_id": assignment_id,
+        "agent": "codebuddy",
+        "provider": "codebuddy-subscription",
+        "model": "hy4-preview",
+        "effort": "max",
+        "agent_version": "2.137.1",
+        "batch_id": "batch-codebuddy",
+    }
+
+
+def test_codebuddy_false_success_never_uploads_or_releases_and_opens_circuit(
+        monkeypatch, capsys, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    abort_file = tmp_path / "POOL_ABORT"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort_file))
+
+    def false_success(*_args, **_kwargs):
+        raise runner_mod.CodeBuddyFalseSuccessError((
+            "empty_patch",
+            "request_ledger_missing_or_inconsistent",
+            "trajectory_missing_or_invalid",
+        ))
+
+    monkeypatch.setattr(runloop, "run_trial", false_success)
+    client = InvalidAckClient({})
+    first = runloop._run_and_submit(
+        client, _codebuddy_assignment("cb-first"), tmp_path, _args(), "abc123",
+    )
+    second = runloop._run_and_submit(
+        client, _codebuddy_assignment("cb-second"), tmp_path, _args(), "abc123",
+    )
+
+    assert first == "codebuddy-false-success"
+    assert second == "repeat-agent-failure"
+    assert client.submissions == []
+    assert abort_file.read_text().startswith("drain:repeated CodeBuddy rc=0")
+    output = capsys.readouterr().out
+    assert "no submission, release, retry, refill or replacement checkout" in output
+    assert "safety circuit opened" in output
+
+
+def test_ten_codebuddy_workers_share_one_false_success_circuit(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    abort_file = tmp_path / "POOL_ABORT"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort_file))
+
+    def false_success(*_args, **_kwargs):
+        raise runner_mod.CodeBuddyFalseSuccessError(("empty_patch",))
+
+    monkeypatch.setattr(runloop, "run_trial", false_success)
+    client = InvalidAckClient({})
+    outcomes = []
+    lock = threading.Lock()
+
+    def worker(index: int) -> None:
+        outcome = runloop._run_and_submit(
+            client,
+            _codebuddy_assignment(f"cb-worker-{index}"),
+            tmp_path,
+            _args(),
+            "abc123",
+        )
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert outcomes.count("codebuddy-false-success") == 1
+    assert outcomes.count("repeat-agent-failure") == 9
+    assert client.submissions == []
+    assert abort_file.is_file()
+
+
+def test_codebuddy_open_circuit_blocks_resume_before_model_start(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    assignment = _codebuddy_assignment("cb-resume")
+    path = runloop._codebuddy_failure_state_path()
+    scope = runloop._repeat_failure_scope(assignment)
+    from dradar import failure_circuit
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    started = []
+    monkeypatch.setattr(
+        runloop, "run_trial", lambda *_args, **_kwargs: started.append(True),
+    )
+
+    outcome = runloop._run_and_submit(
+        InvalidAckClient({}), assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "repeat-agent-failure"
+    assert started == []
+
+
+def test_refill_stop_rearms_codebuddy_circuit_without_saved_plan(
+        monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    assignment = _codebuddy_assignment("cb-rearm")
+    path = runloop._codebuddy_failure_state_path()
+    scope = runloop._repeat_failure_scope(assignment)
+    from dradar import failure_circuit
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+    failure_circuit.observe(scope=scope, signature="false-success", state_path=path)
+
+    assert runloop.cmd_refill_stop(object()) == 0
+
+    assert failure_circuit.status(scope=scope, state_path=path) == (0, False)
+    assert "provider circuit rearmed" in capsys.readouterr().out
+
+
+def test_retry_upload_cannot_bypass_codebuddy_terminal_gate(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    trial = tmp_path / "trial"
+    agent = trial / "agent"
+    agent.mkdir(parents=True)
+    (trial / "model.patch").write_bytes(b"")
+    (agent / "provider-usage.json").write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy", "model": "hy4-preview",
+        "complete": False, "request_count": 0,
+        "request_usage_complete": False,
+        "request_usage_observed": False,
+        "n_input_tokens": 0, "n_cache_tokens": 0, "n_output_tokens": 0,
+        "token_usage_events": [],
+        "usage_incomplete_reason": "request_ledger_unavailable_or_invalid",
+    }))
+    client = InvalidAckClient({})
+
+    outcome = runloop._upload_trial(client, {
+        "assignment_id": "cb-upload", "nonce": "nonce", "task_id": "task",
+        "trial_dir": str(trial), "meta": {
+            "codebuddy_cli_version": "2.137.1",
+            "codebuddy_model": "hy4-preview", "reasoning_effort": "max",
+        },
+    })
+
+    assert outcome == "codebuddy-false-success"
+    assert client.submissions == []
+
+
+def test_codebuddy_success_observation_rearms_false_success_streak(
+        monkeypatch, tmp_path: Path):
+    monkeypatch.setenv(
+        runloop._REPEAT_FAILURE_STATE_ENV, str(tmp_path / "failure-state.json"),
+    )
+    assignment = _codebuddy_assignment("cb-recovery")
+    signature = (
+        runloop._repeat_failure_scope(assignment),
+        json.dumps({
+            "failure_kind": "codebuddy-false-success",
+            "provider": "codebuddy",
+            "protocol": "rc0-terminal-evidence-v1",
+        }, sort_keys=True, separators=(",", ":")),
+    )
+
+    assert runloop._observe_repeat_failure(
+        assignment, signature, success=False,
+    ) is False
+    assert runloop._observe_repeat_failure(
+        assignment, None, success=True,
+    ) is False
+    assert runloop._observe_repeat_failure(
+        assignment, signature, success=False,
+    ) is False
 
 
 def test_interrupted_prints_cause_keeps_artifacts_no_quota_claim(

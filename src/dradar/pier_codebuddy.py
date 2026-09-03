@@ -183,6 +183,89 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     }
 
 
+def _codebuddy_trajectory_payload(
+    events: list[dict],
+    instruction: str,
+    reasoning_effort: str,
+    usage: dict[str, object],
+) -> dict[str, object] | None:
+    """Build one deterministic ATIF artifact from a reconciled terminal turn.
+
+    CodeBuddy's stream resembles Claude's but its current terminal record is
+    not reliably materialized by Pier's stock Claude trajectory parser. The
+    provider ledger is already reconciled independently above; only a unique
+    successful terminal response with that positive ledger may produce this
+    display/audit artifact. Incomplete runs remain without a trajectory so the
+    host-side rc=0 gate can fail closed.
+    """
+
+    if usage.get("complete") is not True:
+        return None
+    request_count = usage.get("request_count")
+    if (
+        not isinstance(request_count, int)
+        or isinstance(request_count, bool)
+        or request_count < 1
+    ):
+        return None
+    terminals = [
+        event for event in events
+        if isinstance(event, dict)
+        and event.get("type") == "result"
+        and event.get("is_error") is not True
+        and event.get("subtype") in {"success", None}
+    ]
+    if len(terminals) != 1:
+        return None
+    terminal = terminals[0]
+    response = terminal.get("result")
+    if not isinstance(response, str) or not response.strip():
+        return None
+    session_id = terminal.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    session_id = session_id.strip()
+    return {
+        "schema_version": "ATIF-v1.7",
+        "session_id": session_id,
+        "agent": {
+            "name": "codebuddy",
+            "version": CODEBUDDY_CLI_VERSION,
+            "model_name": SUPPORTED_MODEL,
+            "extra": {
+                "provider": "codebuddy-subscription",
+                "oauth": True,
+                "credential_mode": "isolated-run-copy",
+            },
+        },
+        "steps": [
+            {"step_id": 1, "source": "user", "message": instruction},
+            {
+                "step_id": 2,
+                "source": "agent",
+                "message": response.strip(),
+                "model_name": SUPPORTED_MODEL,
+                "reasoning_effort": reasoning_effort,
+                "llm_call_count": request_count,
+            },
+        ],
+        "final_metrics": {
+            "total_prompt_tokens": usage["n_input_tokens"],
+            "total_cached_tokens": usage["n_cache_tokens"],
+            "total_completion_tokens": usage["n_output_tokens"],
+            "total_cost_usd": None,
+            "total_steps": 2,
+            "extra": {
+                "billing_basis": "subscription",
+                "cost_not_reported": True,
+                "usage_complete": True,
+                "terminal_status": "success",
+                "terminal_evidence": "unique-provider-result-v1",
+            },
+        },
+    }
+
+
 def _install_command() -> str:
     return (
         "set -euo pipefail; "
@@ -284,6 +367,7 @@ class CodeBuddySubscription(ClaudeCode):
         self._auth_files = tuple(auth_files)
         self._storage_files = tuple(storage_files)
         self._reasoning_effort = reasoning_effort
+        self._instruction = ""
         super().__init__(
             *args,
             model_name=resolved_model,
@@ -323,6 +407,7 @@ class CodeBuddySubscription(ClaudeCode):
         context: AgentContext,
     ) -> None:
         del context
+        self._instruction = instruction
         remote_secret = self._REMOTE_SECRET_ROOT.as_posix()
         remote_storage = self._REMOTE_STORAGE.as_posix()
         remote_config = self._REMOTE_CONFIG.as_posix()
@@ -480,6 +565,19 @@ class CodeBuddySubscription(ClaudeCode):
         context.n_output_tokens = int(usage["n_output_tokens"]) if complete else 0
 
         trajectory_path = self.logs_dir / "trajectory.json"
+        trajectory_payload = _codebuddy_trajectory_payload(
+            events, self._instruction, self._reasoning_effort, usage,
+        )
+        if trajectory_payload is not None:
+            try:
+                trajectory_path.write_text(
+                    json.dumps(
+                        trajectory_payload, indent=2, ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         try:
             trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -528,4 +626,7 @@ class CodeBuddySubscription(ClaudeCode):
             pass
 
 
-__all__ = ["CodeBuddySubscription", "_codebuddy_usage_facts", "_install_command"]
+__all__ = [
+    "CodeBuddySubscription", "_codebuddy_trajectory_payload",
+    "_codebuddy_usage_facts", "_install_command",
+]

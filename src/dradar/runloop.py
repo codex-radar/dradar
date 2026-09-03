@@ -87,7 +87,7 @@ from .providers import (
 )
 from .runner import (
     CODEX_TRAJECTORY_BUNDLE_SCHEMA, DIAG_ADVICE,
-    BuildFlakeError, RunnerError,
+    BuildFlakeError, CodeBuddyFalseSuccessError, RunnerError,
     RunnerCleanupUnconfirmedError, RunnerTaskRetryableError,
     POMPEII_BENCHMARK_ID,
     POMPEII_FINALIZATION_RESERVE_SEC, POMPEII_SOFT_BUDGET_SEC,
@@ -95,6 +95,7 @@ from .runner import (
     build_codex_trajectory_bundle, build_kimi_trajectory_bundle,
     check_task_content_hash, classify_exception_message,
     codex_trajectory_bundle_usage,
+    _codebuddy_false_success_reasons,
     diagnose_exception, ensure_pier, ensure_tasks_root,
     local_deep_swe_commit,
     prepare_pinned_deep_swe_tasks,
@@ -155,7 +156,7 @@ _NON_FAULT_RUNNER_OUTCOMES = {
 _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
     "runtime-incompatible", "provider-preflight-failed",
-    "repeat-agent-failure",
+    "repeat-agent-failure", "codebuddy-false-success",
 }
 _POOL_ABORT_ENV = "DRADAR_POOL_ABORT_FILE"
 _POOL_TARGET_FILE_ENV = "DRADAR_POOL_TARGET_FILE"
@@ -561,6 +562,9 @@ def _announce_account_stop(outcome: str) -> None:
         "repeat-agent-failure": (
             "the same zero-progress agent command failure repeated"
         ),
+        "codebuddy-false-success": (
+            "CodeBuddy returned no gradeable terminal evidence"
+        ),
     }
     reason = messages.get(outcome, "an account-wide stop condition was detected")
     print(
@@ -604,6 +608,10 @@ def _repeat_failure_scope(assignment: dict, codex_cli_version=None) -> str:
         "model": assignment.get("model"),
         "agent_version": assignment.get("agent_version"),
         "codex_cli_version": codex_cli_version,
+        "failure_root": (
+            "codebuddy-rc0-terminal-evidence-v2"
+            if assignment.get("agent") == CODEBUDDY_AGENT else None
+        ),
     }, sort_keys=True, separators=(",", ":"))
 
 
@@ -653,6 +661,9 @@ def _repeat_failure_signature(
 def _observe_repeat_failure(
     assignment: dict, signature: tuple[str, str] | None, *, success: bool,
     codex_cli_version=None, invocation_id: str | None = None,
+    failure_description: str = "zero-progress agent command failure",
+    state_path: Path | None = None,
+    clear_open_on_success: bool = True,
 ) -> bool:
     if signature is None and not success:
         return False
@@ -660,25 +671,41 @@ def _observe_repeat_failure(
         signature[0] if signature is not None
         else _repeat_failure_scope(assignment, codex_cli_version)
     )
-    if _repeat_failure_state_path() is None and invocation_id is not None:
+    selected_state_path = (
+        state_path if state_path is not None else _repeat_failure_state_path()
+    )
+    if selected_state_path is None and invocation_id is not None:
         scope = f"{invocation_id}:{scope}"
     count, opened = failure_circuit.observe(
         scope=scope,
         signature=signature[1] if signature is not None else None,
-        state_path=_repeat_failure_state_path(),
+        state_path=selected_state_path,
+        clear_open=clear_open_on_success,
     )
     if not opened:
         return False
-    reason = f"repeated zero-progress agent command failure ({count} consecutive)"
+    reason = f"repeated {failure_description} ({count} consecutive)"
     _signal_pool_abort(reason, interrupt_siblings=False)
     print(
         f"safety circuit opened after {count} consecutive identical "
-        "zero-progress agent command failures; no later waiting task or "
+        f"{failure_description}s; no later waiting task or "
         "automatic refill will start. Existing sibling runs are left alone. "
         "Inspect the local agent login/runtime, then explicitly run "
         "`dradar resume` after it is fixed."
     )
     return True
+
+
+def _codebuddy_failure_state_path() -> Path:
+    return HOME / "safety" / "codebuddy-provider-failure-circuit.json"
+
+
+def _codebuddy_circuit_open(assignment: dict) -> bool:
+    _count, opened = failure_circuit.status(
+        scope=_repeat_failure_scope(assignment),
+        state_path=_codebuddy_failure_state_path(),
+    )
+    return opened
 
 
 def _grok_preflight_failure(result_path: Path | None) -> str | None:
@@ -1683,6 +1710,29 @@ def _upload_trial(
             except ValueError:
                 pass
 
+    upload_meta = dict(entry.get("meta") or {})
+    if upload_meta.get("codebuddy_cli_version"):
+        raw_patch, raw_trajectory, _raw_result = trial_artifact_paths(trial_dir)
+        codebuddy_reasons = _codebuddy_false_success_reasons(
+            raw_patch,
+            raw_trajectory,
+            trial_dir / "agent" / "provider-usage.json",
+            expected_model=str(upload_meta.get("codebuddy_model") or ""),
+            expected_version=str(upload_meta.get("codebuddy_cli_version") or ""),
+            expected_effort=(
+                str(upload_meta["reasoning_effort"])
+                if upload_meta.get("reasoning_effort") is not None else None
+            ),
+        )
+        if codebuddy_reasons:
+            pending.remove(HOME, assignment_id)
+            print(
+                f"  {task_id}: CodeBuddy upload rejected locally "
+                f"({','.join(codebuddy_reasons)}); artifacts were preserved "
+                "and no server or refill state was changed"
+            )
+            return "codebuddy-false-success"
+
     # Persist intent before touching either artifact copy. If this process is
     # interrupted while making the durable source or atomic staged copy, the
     # next go/resume/retry-upload still knows exactly what must be recovered.
@@ -2558,6 +2608,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     # stops this worker before another checkout; a prior task must never poison
     # a later explicit invocation after the user has repaired Docker.
     args._docker_cleanup_blocked = None
+    if assignment.get("agent") == CODEBUDDY_AGENT and _codebuddy_circuit_open(
+        assignment,
+    ):
+        print(
+            "CodeBuddy provider circuit is already open for this exact "
+            "batch/provider/model/version root; no model process was started. "
+            "Fix the provider evidence fault, then run `dradar refill stop` "
+            "to explicitly rearm it."
+        )
+        return "repeat-agent-failure"
     hash_match = check_task_content_hash(assignment, tasks_root)
     if hash_match is False and not getattr(args, "allow_task_drift", False):
         print(
@@ -2717,6 +2777,49 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "this worker slot is quarantined to prevent a duplicate agent"
             )
             return "cleanup-unconfirmed"
+        except CodeBuddyFalseSuccessError as exc:
+            # A false success has no gradeable result and must never enter the
+            # submission or refill ledgers. Keep the current lease untouched:
+            # runner/session close is observational, while lease convergence
+            # belongs to the server's owner-fenced lifecycle policy.
+            signature = (
+                _repeat_failure_scope(assignment),
+                json.dumps({
+                    "failure_kind": "codebuddy-false-success",
+                    "provider": "codebuddy",
+                    "protocol": "rc0-terminal-evidence-v1",
+                }, sort_keys=True, separators=(",", ":")),
+            )
+            opened = _observe_repeat_failure(
+                assignment,
+                signature,
+                success=False,
+                invocation_id=getattr(
+                    args, "_repeat_failure_invocation_id", None,
+                ),
+                failure_description="CodeBuddy rc=0 terminal-evidence failure",
+                state_path=_codebuddy_failure_state_path(),
+                clear_open_on_success=False,
+            )
+            if opened:
+                # Scoped refill plans persist across child/session restarts.
+                # Latch the same provider fault locally so a fresh invocation
+                # cannot silently rearm the invalid-producing campaign. This
+                # changes no server lease; explicit ``dradar refill stop`` is
+                # still the sole recovery action after the provider is fixed.
+                refill_plan.open_circuit(
+                    HOME, assignment, "provider_false_success",
+                )
+            print(f"trial rejected locally: {exc}")
+            print(
+                "the local artifacts and existing lease were preserved; no "
+                "submission, release, retry, refill or replacement checkout "
+                "was triggered by this worker"
+            )
+            return (
+                "repeat-agent-failure" if opened
+                else "codebuddy-false-success"
+            )
         except RunnerTaskRetryableError as exc:
             stopped = _mark_stopped_quietly(
                 client,
@@ -2968,6 +3071,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "zcode_cli_sha256": art.zcode_cli_sha256,
         "dsh_version": art.dsh_version,
         "codebuddy_cli_version": art.codebuddy_cli_version,
+        "codebuddy_model": (
+            assignment.get("model") if art.codebuddy_cli_version else None
+        ),
+        "reasoning_effort": assignment.get("effort"),
         **stats,
     }
     if failure_kind:
@@ -3174,6 +3281,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     )
     if circuit_opened:
         return "repeat-agent-failure"
+    if assignment.get("agent") == CODEBUDDY_AGENT and upload_outcome in {
+        "submitted", "interrupted",
+    }:
+        # Healthy evidence clears only a not-yet-open streak. An open provider
+        # fault always requires the documented explicit operator rearm.
+        _observe_repeat_failure(
+            assignment, None, success=True,
+            state_path=_codebuddy_failure_state_path(),
+            clear_open_on_success=False,
+        )
     return terminal_outcome or upload_outcome
 
 
@@ -3496,8 +3613,11 @@ def cmd_refill_status(args) -> int:
 
 def cmd_refill_stop(args) -> int:
     plan = refill_plan.stop(HOME, "stopped by user", discard=True)
+    failure_circuit.clear(
+        scope=None, state_path=_codebuddy_failure_state_path(),
+    )
     if not plan:
-        print("no local refill plan")
+        print("no local refill plan; CodeBuddy provider circuit rearmed")
         return 0
     print("continuous refill stopped — no more tasks will be claimed; "
           "already held/running tasks were left untouched")
@@ -4230,6 +4350,114 @@ def _assignment_is_ready_for_checkout(
     return ready_at <= (now or datetime.now(timezone.utc))
 
 
+def _modern_checkout_rejection_reason(assignment: object) -> str | None:
+    """Reject only explicit stale/conflicting facts after atomic checkout."""
+    if not isinstance(assignment, dict) or not assignment.get("assignment_id"):
+        return "stale_assignment_rejected"
+    if (
+        assignment.get("stale") is True
+        or assignment.get("heartbeat_gap") is True
+        or assignment.get("heartbeat_lost") is True
+        or assignment.get("runner_state")
+        in {"paused", "resumable", "stale", "checkpoint_retired"}
+        or assignment.get("execution_state") in {"paused", "stale"}
+        or (
+            assignment.get("runner_phase") == "running"
+            and assignment.get("heartbeat_running") is False
+        )
+    ):
+        return "stale_assignment_rejected"
+    return None
+
+
+def _legacy_history_field_name(field: object) -> bool:
+    """Return whether a legacy field can carry prior-run ownership history."""
+    if not isinstance(field, str):
+        return True
+    normalized = field.lower()
+    if normalized == "started_at":
+        return False
+    return (
+        any(
+            token in normalized
+            for token in (
+                "heartbeat",
+                "session",
+                "runner",
+                "checkpoint",
+                "stale",
+                "recovery",
+                "ownership",
+            )
+        )
+        or normalized.startswith(("started_", "resume_", "owner_"))
+    )
+
+
+def _legacy_history_value_is_safe_zero(value: object) -> bool:
+    """Allow only explicit empty sentinels for unknown legacy history fields."""
+    return (
+        value is None
+        or value is False
+        or (type(value) is int and value == 0)
+        or value == ""
+    )
+
+
+def _legacy_checkout_fallback_reason(active: object) -> str | None:
+    """Allow one provably untouched pre-heartbeat assignment, or fail closed.
+
+    A 404 proves only that the atomic endpoint is absent. It does not prove a
+    whole batch is safe. Legacy fallback therefore requires the old server to
+    expose one explicit waiting row with no started/session/heartbeat facts.
+    ``None`` means this narrow fallback is allowed; otherwise the returned
+    value is a bounded audit reason.
+    """
+    if not isinstance(active, list) or len(active) != 1:
+        return "legacy_checkout_unsupported"
+    assignment = active[0]
+    if not isinstance(assignment, dict) or not assignment.get("assignment_id"):
+        return "legacy_checkout_unsupported"
+    if "started_at" not in assignment or "execution_state" not in assignment:
+        return "legacy_checkout_unsupported"
+    if assignment.get("execution_state") != "waiting":
+        return "stale_assignment_rejected"
+    has_unsafe_runtime_history = any(
+        _legacy_history_field_name(field)
+        and not _legacy_history_value_is_safe_zero(value)
+        for field, value in assignment.items()
+    )
+    if (
+        has_unsafe_runtime_history
+        or assignment.get("started_at") is not None
+        or assignment.get("stale") is True
+        or assignment.get("heartbeat_gap") is True
+        or assignment.get("heartbeat_lost") is True
+        or any(
+            not _legacy_history_value_is_safe_zero(assignment.get(field))
+            for field in (
+                "run_session", "run_session_id", "runner_session_id", "session_id",
+            )
+        )
+    ):
+        return "stale_assignment_rejected"
+    if not _assignment_is_ready_for_checkout(assignment):
+        return "stale_assignment_rejected"
+    return None
+
+
+def _checkout_404_is_legacy_capability_gap(exc: ApiError) -> bool:
+    """Distinguish a missing endpoint from an assignment-specific 404."""
+    if exc.status_code != 404:
+        return False
+    return exc.code in {
+        None,
+        "checkout_endpoint_not_found",
+        "checkout_unsupported",
+        "endpoint_not_found",
+    }
+
+
 def _pool_ready_work_count(
     client: ApiClient, *, claimed_after: datetime | None = None,
     desired_workers: int | None = None,
@@ -4344,6 +4572,15 @@ def _record_worker_precheckout_failure(code: str) -> bool:
     }:
         return False
     return _write_worker_activity_state(f"preparing:{code}")
+
+
+def _record_worker_checkout_gate_failure(code: str) -> bool:
+    """Persist a terminal pre-checkout fence that must not trigger backfill."""
+    if code not in {
+        "legacy_checkout_unsupported", "stale_assignment_rejected",
+    }:
+        return False
+    return _write_worker_activity_state(f"blocked:{code}")
 
 
 def _record_worker_returned_assignment(assignment_id: str) -> bool:
@@ -5569,8 +5806,8 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
     check out the next not-yet-started cell, run it, repeat until drained.
     N sessions (or machines) doing this concurrently partition the held
     batch instead of racing over a shared snapshot. Returns None when the
-    server predates the checkout endpoint — the caller falls back to the
-    legacy whole-batch flow."""
+    server predates the checkout endpoint — the caller then applies a narrow
+    single-assignment legacy safety proof instead of trusting a batch snapshot."""
     tasks_root, local_commit = _version_pinned_tasks_root(
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
@@ -5636,7 +5873,19 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 except ApiError as retry_exc:
                     _exit_for(retry_exc)
             elif exc.status_code == 404:
-                return None if not results else 0  # old server / endpoint gone
+                if _checkout_404_is_legacy_capability_gap(exc):
+                    return None if not results else 0
+                checkout_rejection = "stale_assignment_rejected"
+                _record_worker_checkout_gate_failure(checkout_rejection)
+                if getattr(args, "refill", False):
+                    refill_plan.stop(HOME, checkout_rejection)
+                print(
+                    f"checkout rejected: {checkout_rejection}; the server "
+                    "reported an assignment-specific 404, so legacy fallback "
+                    "was not attempted"
+                )
+                results.append(checkout_rejection)
+                break
             else:
                 _exit_for(exc)
         assignment = data.get("assignment")
@@ -5647,6 +5896,21 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 print("nothing left to start — every held cell is already "
                       "checked out (another session?) or submitted. "
                       "`dradar leases` shows exactly what is still held.")
+            break
+        checkout_rejection = _modern_checkout_rejection_reason(assignment)
+        if checkout_rejection is not None:
+            _mark_stopped_quietly(
+                client, assignment, defer_seconds=0,
+                failure_kind="runner_failed",
+            )
+            _record_worker_checkout_gate_failure(checkout_rejection)
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, checkout_rejection)
+            print(
+                f"checkout rejected: {checkout_rejection}; no model, refill or "
+                "replacement checkout was started"
+            )
+            results.append(checkout_rejection)
             break
         if telemetry:
             # Checkout has already bound this assignment to the exact runner
@@ -6349,10 +6613,22 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
         rc = _run_checkout_loop(args, client, tasks_root, active, telemetry=telemetry)
         if rc is not None:
             return rc
-        if getattr(args, "refill", False):
-            refill_plan.stop(HOME, "server has no atomic checkout endpoint")
-            print("continuous refill stopped: this server lacks atomic checkout support")
+        fallback_rejection = _legacy_checkout_fallback_reason(active)
+        if fallback_rejection is not None:
+            _record_worker_checkout_gate_failure(fallback_rejection)
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, fallback_rejection)
+            print(
+                f"legacy checkout rejected: {fallback_rejection}; the server "
+                "cannot prove one untouched waiting assignment, so no model, "
+                "refill or replacement checkout was started"
+            )
             return 1
+        print(
+            "atomic checkout is unavailable; running one explicitly waiting "
+            "legacy assignment without batch backfill"
+        )
+        return _run_batch(args, client, tasks_root, active, telemetry=telemetry)
     rc = _run_batch(args, client, tasks_root, active, telemetry=telemetry)
     # Free-pick: the batch was a snapshot taken at startup, but the classic
     # first-session flow is "paste the command, then go claim more on the
