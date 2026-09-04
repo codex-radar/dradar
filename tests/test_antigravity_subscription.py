@@ -124,8 +124,8 @@ def test_antigravity_task_overlay_captures_complete_worktree(
         logs = tmp_path / "logs"
         runnable = tmp_path / "collect.sh"
         runnable.write_text(
-            script.replace("cd /app", f"cd {repository}").replace(
-                "/logs/artifacts", str(logs / "artifacts")
+            script.replace("cd /app", f"cd '{repository.as_posix()}'").replace(
+                "/logs/artifacts", f"'{logs.as_posix()}/artifacts'"
             ),
             encoding="utf-8",
         )
@@ -153,6 +153,24 @@ def test_antigravity_task_overlay_rejects_unverifiable_base(
             _assignment(), tmp_path / "tasks", tmp_path / "work", "job",
         ):
             pass
+
+
+def test_antigravity_task_overlay_accepts_short_commit_hash(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "tasks" / "task-1"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "68dafce"\n', encoding="utf-8",
+    )
+
+    work = tmp_path / "work"
+    with runner._antigravity_tasks_overlay(
+        _assignment(), tmp_path / "tasks", work, "job",
+    ) as overlay:
+        hook = overlay / "task-1" / "pre_artifacts.sh"
+        assert "base_ref='68dafce'" in hook.read_text(encoding="utf-8")
+
 
 
 def test_antigravity_task_overlay_accepts_reviewed_pompeii_base_tag(

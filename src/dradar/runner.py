@@ -249,6 +249,8 @@ ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
 set -eu
 cd /app
 mkdir -p /logs/artifacts
+git config --global --add safe.directory /app 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 base_ref='__DRADAR_BASE_COMMIT__'
 base=$(git rev-parse --verify "${base_ref}^{commit}")
 git add -N -- .
@@ -3117,7 +3119,7 @@ def _dsh_tasks_overlay(
             )
             if not isinstance(base_commit, str) or (
                 base_commit
-                and re.fullmatch(r"[0-9a-f]{40}", base_commit) is None
+                and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is None
             ):
                 raise RunnerError(
                     "DSH task has an invalid metadata.base_commit_hash"
@@ -3128,6 +3130,7 @@ def _dsh_tasks_overlay(
                     "__DRADAR_BASE_COMMIT__", base_commit
                 ),
                 encoding="utf-8",
+                newline="\n",
             )
             hook.chmod(0o755)
         yield overlay_root
@@ -3172,7 +3175,7 @@ def _artifact_tasks_overlay(
     base_commit = task_config.get("metadata", {}).get("base_commit_hash", "")
     if not isinstance(base_commit, str) or (
         base_commit
-        and re.fullmatch(r"[0-9a-f]{40}", base_commit) is None
+        and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is None
     ):
         raise RunnerError("task has an invalid metadata.base_commit_hash")
 
@@ -3189,6 +3192,7 @@ def _artifact_tasks_overlay(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
             encoding="utf-8",
+            newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root
@@ -3227,7 +3231,7 @@ def _antigravity_tasks_overlay(
     base_commit = task_config.get("metadata", {}).get("base_commit_hash")
     valid_commit = (
         isinstance(base_commit, str)
-        and re.fullmatch(r"[0-9a-f]{40}", base_commit) is not None
+        and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is not None
     )
     # Pompeii's reviewed task pack creates a fixed local tag rather than a
     # portable 40-byte commit id.  Keep the shell substitution fail-closed:
@@ -3256,6 +3260,7 @@ def _antigravity_tasks_overlay(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
             encoding="utf-8",
+            newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root
