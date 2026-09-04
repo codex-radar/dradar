@@ -18,7 +18,7 @@ def test_run_schema_defines_every_state_changing_argument():
     assert "不登记设备" in arguments["--upload-only"]["state_change"]
     assert arguments["--decision-token"]["decision_required"] is True
     assert payload["interaction_rules"]["fixed_capacity_shortfall"] == (
-        "confirm_before_server_start"
+        "honor_explicit_count_without_local_estimates"
     )
     assert payload["interaction_rules"]["capacity_temporarily_zero"] == (
         "poll_then_replay_base_run_without_old_choices"

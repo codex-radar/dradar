@@ -4,7 +4,7 @@ The web can hand the same account's independent Honeypot batches to one or
 several coding-agent conversations.  Those conversations must not become
 independent process supervisors: they all submit idempotent requests to this
 single local coordinator.  The coordinator owns the historical machine lock,
-accounts for aggregate Docker resources, and starts one existing worker-pool
+estimates resources only for automatic concurrency, and starts one worker-pool
 parent per exact batch.  It deliberately leaves uncertain pre-Fleet containers
 untouched because older ``--parallel`` sessions did not hold the machine lock.
 
@@ -58,7 +58,8 @@ SCHEMA_VERSION = 1
 # Version the machine-local controller contract independently from the public
 # state schema.  A controller with no value here predates per-request runtime
 # selection and would keep spawning pools from its own stale installation.
-CONTROLLER_PROTOCOL_VERSION = 6
+# Version 7 also keeps explicit worker counts free of legacy capacity probes.
+CONTROLLER_PROTOCOL_VERSION = 7
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -580,33 +581,56 @@ def _resolve_workers(
     except (SystemExit, ValueError) as exc:
         raise FleetError(str(exc)) from exc
     client.set_batch_id(batch_id)
+    reserved = sum(
+        int(item.get("workers") or 0) for item in _active_batches(state).values()
+    )
+    if requested != "auto":
+        workers = int(requested)
+        if not 1 <= workers <= 40:
+            raise FleetError("--workers N requires 1 <= N <= 40")
+        try:
+            me = client.whoami()
+            assignments = client.get_assignment()
+        except ApiError as exc:
+            raise FleetError(f"cannot inspect exact batch {batch_id}: {exc}") from exc
+        account_limit = max(1, int(
+            me.get("concurrent_limit") or me.get("claim_limit") or 1,
+        ))
+        if workers > account_limit:
+            raise FleetError(
+                f"requested {workers} workers exceeds the account's server "
+                f"concurrency limit of {account_limit}"
+            )
+        active = assignments.get("active")
+        if active is None:
+            active = [assignments["assignment"]] if assignments.get("assignment") else []
+        return workers, [], {
+            "reserved_before": reserved,
+            "account_limit": account_limit,
+            "held_tasks": len(active),
+            "docker_cpus": None,
+            "docker_memory_gib": None,
+            "disk_free_gib": None,
+        }
     try:
         report = inspect_capacity(client)
     except ApiError as exc:
         raise FleetError(f"cannot inspect exact batch {batch_id}: {exc}") from exc
-    reserved = sum(
-        int(item.get("workers") or 0) for item in _active_batches(state).values()
+    total_auto_limit = min(
+        report.cpu_limit,
+        report.memory_limit,
+        report.disk_limit,
+        report.account_limit,
+        AUTO_WORKER_CAP,
     )
-    if requested == "auto":
-        total_auto_limit = min(
-            report.cpu_limit,
-            report.memory_limit,
-            report.disk_limit,
-            report.account_limit,
-            AUTO_WORKER_CAP,
+    available = max(0, total_auto_limit - reserved)
+    workers = min(report.held_tasks, available)
+    if workers < 1:
+        raise FleetError(
+            "no safe automatic worker slot remains after accounting for the "
+            f"{reserved} worker(s) already reserved by this machine's Fleet; "
+            "finish a batch or choose a manual worker count"
         )
-        available = max(0, total_auto_limit - reserved)
-        workers = min(report.held_tasks, available)
-        if workers < 1:
-            raise FleetError(
-                "no safe automatic worker slot remains after accounting for the "
-                f"{reserved} worker(s) already reserved by this machine's Fleet; "
-                "finish a batch or choose a reviewed manual worker count"
-            )
-    else:
-        workers = int(requested)
-        if not 1 <= workers <= 40:
-            raise FleetError("--workers N requires 1 <= N <= 40")
     cpus, memory_gib, probe_warnings = docker_resources()
     warnings = list(probe_warnings)
     warnings.extend(worker_resource_warnings(reserved + workers, cpus, memory_gib))
