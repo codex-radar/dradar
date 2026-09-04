@@ -3413,7 +3413,7 @@ def _dsh_tasks_overlay(
                 DSH_PRE_ARTIFACTS_SCRIPT.replace(
                     "__DRADAR_BASE_COMMIT__", base_commit
                 ),
-                encoding="utf-8",
+                encoding="utf-8", newline="\n",
             )
             hook.chmod(0o755)
         yield overlay_root
@@ -3474,7 +3474,7 @@ def _artifact_tasks_overlay(
             DSH_PRE_ARTIFACTS_SCRIPT.replace(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root
@@ -3541,7 +3541,7 @@ def _antigravity_tasks_overlay(
             ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT.replace(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root
