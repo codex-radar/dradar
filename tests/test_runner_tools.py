@@ -761,6 +761,76 @@ def test_artifact_task_overlay_rejects_untrusted_base_ref(tmp_path):
             pass
 
 
+def test_invalid_base_commit_is_rejected_before_builder_creation(
+    tmp_path, monkeypatch,
+):
+    task_id = "abs-module-cache-flags"
+    task = tmp_path / task_id
+    task.mkdir()
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "main; touch /tmp/pwned"\n'
+    )
+    builder_calls = []
+
+    def forbidden_builder(*_args, **_kwargs):
+        builder_calls.append(True)
+        raise AssertionError("builder must not start for invalid task metadata")
+
+    monkeypatch.setattr(
+        runner_mod.image_cache, "prepare_trial_builder", forbidden_builder
+    )
+
+    with pytest.raises(RunnerError, match="invalid metadata.base_commit_hash"):
+        run_trial(_assignment("codex"), tmp_path, tmp_path)
+
+    assert builder_calls == []
+
+
+@pytest.mark.parametrize(
+    ("base_commit", "hook_kind", "agent", "accepted"),
+    [
+        ("a" * 40, None, "codex", True),
+        ("legacy-reviewed-hook-ref", "regular", "codex", True),
+        ("main; touch /tmp/pwned", "regular", "codex", True),
+        ("legacy-reviewed-hook-ref", None, "codex", False),
+        ("main; touch /tmp/pwned", None, "codex", False),
+        ("legacy-reviewed-hook-ref", "symlink", "codex", False),
+        (
+            "legacy-reviewed-hook-ref",
+            "regular",
+            runner_mod.ANTIGRAVITY_AGENT,
+            False,
+        ),
+    ],
+)
+def test_prebuild_base_commit_contract_matches_task_hook_semantics(
+    tmp_path, base_commit, hook_kind, agent, accepted,
+):
+    task_id = "deep-task"
+    task = tmp_path / task_id
+    task.mkdir()
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "' + base_commit + '"\n'
+    )
+    if hook_kind == "regular":
+        (task / "pre_artifacts.sh").write_text("#!/bin/sh\nexit 0\n")
+    elif hook_kind == "symlink":
+        target = tmp_path / "reviewed-hook.sh"
+        target.write_text("#!/bin/sh\nexit 0\n")
+        (task / "pre_artifacts.sh").symlink_to(target)
+
+    def check():
+        return runner_mod._validate_task_base_commit_before_build(
+            {"task_id": task_id}, tmp_path, agent
+        )
+
+    if accepted:
+        check()
+    else:
+        with pytest.raises(RunnerError, match="invalid metadata.base_commit_hash"):
+            check()
+
+
 def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
                trajectory_payload=None, runtime_diagnostic=None,
                zcode_outcome=None, provider_usage_sidecar=None,
