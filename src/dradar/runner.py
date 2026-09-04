@@ -361,9 +361,14 @@ class TrialArtifacts:
 class RunnerError(RuntimeError):
     def __init__(
         self, *args: object, failure_diagnostic: dict[str, object] | None = None,
+        report_code: str | None = None,
     ) -> None:
         super().__init__(*args)
         self.failure_diagnostic = failure_diagnostic
+        # A low-cardinality, privacy-safe code for the failure-report channel.
+        # This is intentionally separate from failure_diagnostic, whose schema
+        # is consumed by the assignment stop endpoint.
+        self.report_code = report_code
 
 
 class RunnerCleanupUnconfirmedError(RunnerError):

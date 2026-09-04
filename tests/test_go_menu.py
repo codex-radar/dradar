@@ -1360,6 +1360,49 @@ def test_run_trial_error_is_failed_and_go_menu_rc_1(monkeypatch, capsys, tmp_pat
     assert rc == 1
 
 
+def test_runner_error_reports_safe_worker_registration_code(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RunnerError(
+            "private transport detail",
+            report_code="worker-registration-http-502",
+        )),
+    )
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
+    reports = []
+    monkeypatch.setattr(
+        runloop, "_report_failure_quietly",
+        lambda _client, _assignment, **kwargs: reports.append(kwargs),
+    )
+
+    outcome = runloop._run_and_submit(
+        SubmitClient({}), ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "failed"
+    assert reports == [{
+        "phase": "runner",
+        "failure_kind": "runner_failed",
+        "failure_code": "worker-registration-http-502",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (None, "worker-registration-transport"),
+        (502, "worker-registration-http-502"),
+        (418, "worker-registration-http-other"),
+    ],
+)
+def test_api_failure_report_code_is_low_cardinality(status, expected):
+    error = ApiError("private response text", status_code=status)
+    assert runloop._api_failure_report_code("worker-registration", error) == expected
+
+
 def test_mixed_batch_one_failure_yields_rc_1(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)

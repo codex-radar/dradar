@@ -1,7 +1,8 @@
 import json
+from importlib.metadata import PackageNotFoundError
 from types import SimpleNamespace
 
-from dradar import failure_reports, identity
+from dradar import __version__, failure_reports, identity
 
 
 class FailingClient:
@@ -38,6 +39,21 @@ def test_report_builder_drops_arbitrary_and_path_like_values():
     assert "alice" not in encoded
     assert "secret-token" not in encoded
     assert report["platform"].count("/") == 0
+
+
+def test_report_builder_uses_compiled_version_without_distribution_metadata(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        failure_reports, "version",
+        lambda _name: (_ for _ in ()).throw(PackageNotFoundError),
+    )
+
+    report = failure_reports.build_report(
+        source="cli", phase="runner", failure_kind="runner_failed",
+    )
+
+    assert report["client_version"] == __version__
 
 
 def test_failed_send_is_atomic_and_later_flushes_without_internal_fields(tmp_path):

@@ -19,6 +19,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from . import __version__
+
 
 SCHEMA = "dradar-failure-report-v1"
 _SAFE_ATOM = re.compile(r"^[A-Za-z0-9._:@+-]{1,128}$")
@@ -33,7 +35,9 @@ def _client_version() -> str:
     try:
         return version("dradar-cli")
     except PackageNotFoundError:
-        return "unknown"
+        # Zipapp/OTA builds do not necessarily carry installed distribution
+        # metadata, but the package version is still compiled into the client.
+        return __version__
 
 
 def _safe(value: Any, *, maximum: int = 128) -> str | None:
