@@ -27,6 +27,12 @@ MAX_LOG_EVENTS = 5000
 UPLOAD_BATCH_SIZE = 100
 _LOCK_FILENAME = "recorder.lock"
 _ACKNOWLEDGED_FILENAME = "acknowledged.jsonl"
+_FLUSH_STATUS_FILENAME = "flush-status.json"
+_FLUSH_STATUS_SCHEMA = "dradar.flight_flush_status.v1"
+_FLUSH_FAILURE_REASONS = frozenset({
+    "endpoint_unavailable", "http_error", "transport_error",
+    "invalid_response", "unacknowledged_response", "local_storage_error",
+})
 
 # ``FlightRecorder`` is instantiated once by the fleet supervisor and once by
 # every worker child.  A Python lock only coordinates threads in one process;
@@ -260,6 +266,7 @@ class FlightRecorder:
         self.client_id_path = self.root / "client_id"
         self.lock_path = self.root / _LOCK_FILENAME
         self.acknowledged_path = self.root / _ACKNOWLEDGED_FILENAME
+        self.flush_status_path = self.root / _FLUSH_STATUS_FILENAME
         self._lock = threading.Lock()
         self._seq = 0
         self._remote_disabled = False
@@ -375,6 +382,128 @@ class FlightRecorder:
         temporary.write_text("".join(value + "\n" for value in values), encoding="ascii")
         os.chmod(temporary, 0o600)
         os.replace(temporary, self.acknowledged_path)
+
+    def _load_flush_status_unlocked(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(self.flush_status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        total = value.get("total_failures") if isinstance(value, dict) else None
+        consecutive = (
+            value.get("consecutive_failures") if isinstance(value, dict) else None
+        )
+        pending_count = (
+            value.get("last_pending_count") if isinstance(value, dict) else None
+        )
+        http_status = value.get("last_http_status") if isinstance(value, dict) else None
+
+        def safe_timestamp(field: str, *, optional: bool = False) -> str | None:
+            candidate = value.get(field)
+            if optional and candidate is None:
+                return None
+            if not isinstance(candidate, str):
+                raise ValueError("invalid flight flush timestamp")
+            parsed = datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                raise ValueError("flight flush timestamp requires timezone")
+            return candidate
+
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != _FLUSH_STATUS_SCHEMA
+            or type(total) is not int or not 0 <= total <= 2_147_483_647
+            or type(consecutive) is not int or not 0 <= consecutive <= total
+            or type(pending_count) is not int
+            or not 0 <= pending_count <= MAX_LOG_EVENTS
+            or not (
+                http_status is None
+                or type(http_status) is int and 100 <= http_status <= 599
+            )
+            or value.get("last_reason") not in _FLUSH_FAILURE_REASONS
+        ):
+            return None
+        try:
+            last_failure_at = safe_timestamp("last_failure_at")
+            last_success_at = safe_timestamp("last_success_at", optional=True)
+        except ValueError:
+            return None
+        # Reconstruct the strict allowlist. A locally tampered status file
+        # must not smuggle arbitrary keys or strings into a diagnostic bundle.
+        return {
+            "schema_version": _FLUSH_STATUS_SCHEMA,
+            "total_failures": total,
+            "consecutive_failures": consecutive,
+            "last_failure_at": last_failure_at,
+            "last_reason": value["last_reason"],
+            "last_http_status": http_status,
+            "last_pending_count": pending_count,
+            "last_success_at": last_success_at,
+        }
+
+    def _write_flush_status_unlocked(self, value: dict[str, Any]) -> None:
+        self.flush_status_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = self.flush_status_path.with_name(
+            f".{self.flush_status_path.name}.{os.getpid()}.{time.time_ns()}"
+        )
+        temporary.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.flush_status_path)
+
+    def _record_flush_failure(
+        self, reason: str, pending_count: int, *, http_status: int | None = None,
+    ) -> None:
+        """Persist a bounded, content-free reason for an upload evidence gap."""
+        if reason not in _FLUSH_FAILURE_REASONS:
+            return
+        try:
+            # flush() already owns the per-instance lock; take only the
+            # cross-process lock here to avoid recursively acquiring a plain
+            # threading.Lock while still serializing sibling recorder objects.
+            with _exclusive_file_lock(self.lock_path):
+                previous = self._load_flush_status_unlocked() or {}
+                value = {
+                    "schema_version": _FLUSH_STATUS_SCHEMA,
+                    "total_failures": min(
+                        int(previous.get("total_failures") or 0) + 1,
+                        2_147_483_647,
+                    ),
+                    "consecutive_failures": min(
+                        int(previous.get("consecutive_failures") or 0) + 1,
+                        2_147_483_647,
+                    ),
+                    "last_failure_at": datetime.now(timezone.utc).isoformat(),
+                    "last_reason": reason,
+                    "last_http_status": (
+                        http_status
+                        if type(http_status) is int and 100 <= http_status <= 599
+                        else None
+                    ),
+                    "last_pending_count": max(
+                        0, min(int(pending_count), MAX_LOG_EVENTS),
+                    ),
+                    "last_success_at": previous.get("last_success_at"),
+                }
+                self._write_flush_status_unlocked(value)
+        except (OSError, TypeError, ValueError):
+            # The recorder remains best effort. A read-only home cannot safely
+            # host either the pending queue or its failure status.
+            pass
+
+    def _record_flush_success(self) -> None:
+        """Mark recovery only when a prior failure status already exists."""
+        try:
+            with _exclusive_file_lock(self.lock_path):
+                value = self._load_flush_status_unlocked()
+                if value is None:
+                    return
+                value["consecutive_failures"] = 0
+                value["last_success_at"] = datetime.now(timezone.utc).isoformat()
+                self._write_flush_status_unlocked(value)
+        except OSError:
+            pass
 
     def record(
         self,
@@ -498,11 +627,21 @@ class FlightRecorder:
                 # Flight evidence is best effort.  A locked/read-only home
                 # must never turn a heartbeat into a worker crash; strict
                 # worker registration will fail closed when no receipt exists.
+                self._record_flush_failure("local_storage_error", 0)
                 return 0
             try:
                 response = self.client.flight_events(batch)
             except Exception as exc:
-                if getattr(exc, "status_code", None) == 404:
+                status = getattr(exc, "status_code", None)
+                reason = (
+                    "endpoint_unavailable" if status == 404 else
+                    "http_error" if type(status) is int else
+                    "transport_error"
+                )
+                self._record_flush_failure(
+                    reason, len(pending), http_status=status,
+                )
+                if status == 404:
                     self._remote_disabled = True
                 return 0
             sent_ids = {event["event_id"] for event in batch}
@@ -514,11 +653,13 @@ class FlightRecorder:
                 # malformed response must never delete durable pending data or
                 # satisfy the strict worker-registration handshake.
                 if not isinstance(raw_acknowledged, list):
+                    self._record_flush_failure("invalid_response", len(pending))
                     return 0
                 if any(
                     not self._valid_event_id(event_id)
                     for event_id in raw_acknowledged
                 ):
+                    self._record_flush_failure("invalid_response", len(pending))
                     return 0
                 acknowledged = {
                     event_id for event_id in raw_acknowledged
@@ -527,8 +668,12 @@ class FlightRecorder:
             except (AttributeError, TypeError):
                 # A malformed response is not evidence of acceptance.  Keep
                 # the durable pending event and let a later retry reconcile it.
+                self._record_flush_failure("invalid_response", len(pending))
                 return 0
             if not acknowledged:
+                self._record_flush_failure(
+                    "unacknowledged_response", len(pending),
+                )
                 return 0
             try:
                 with _exclusive_file_lock(self.lock_path):
@@ -545,11 +690,15 @@ class FlightRecorder:
                         ],
                     )
             except OSError:
+                self._record_flush_failure(
+                    "local_storage_error", len(pending),
+                )
                 return 0
             # Keep the local cache for callers that inspect this recorder, and
             # also persist receipts so a sibling process can prove that its
             # exact worker_registered event was accepted.
             self._last_acknowledged_event_ids.update(acknowledged)
+            self._record_flush_success()
             return len(acknowledged)
 
     @property
@@ -571,16 +720,19 @@ class FlightRecorder:
                 with _exclusive_file_lock(self.lock_path):
                     events = self._load(self.events_path)
                     pending = self._load(self.pending_path)
+                    flush_status = self._load_flush_status_unlocked()
                     events = [validate_event(event) for event in events]
                     pending = [validate_event(event) for event in pending]
             except OSError:
                 events = []
                 pending = []
+                flush_status = None
         manifest = {
             "schema_version": "dradar.flight_diagnostics.v1",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "event_count": len(events),
             "pending_count": len(pending),
+            "flush_status": flush_status,
             "privacy_policy": "strict_allowlist_no_content_or_credentials",
         }
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
