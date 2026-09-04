@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -54,7 +53,7 @@ def codebuddy_artifacts(
 
 
 @pytest.mark.parametrize("python_name", ["python3.11", "python3.13"])
-def test_standard_wheel_prepares_first_codebuddy_image_without_pier(
+def test_standard_artifacts_prepare_and_materialize_codebuddy_without_pier(
     codebuddy_artifacts: tuple[Path, Path],
     python_name: str,
     tmp_path: Path,
@@ -87,8 +86,11 @@ def test_standard_wheel_prepares_first_codebuddy_image_without_pier(
     )
     smoke = r'''
 import importlib.metadata
+import importlib.resources
 import importlib.util
 import sys
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 artifact = sys.argv[1]
@@ -100,7 +102,7 @@ assert "datacurve-pier" not in {
     for distribution in importlib.metadata.distributions()
 }
 
-from dradar import codebuddy_provider
+from dradar import codebuddy_provider, runner
 
 issues = iter(["image missing", None])
 codebuddy_provider.codebuddy_runtime_image_error = lambda _docker: next(issues)
@@ -122,11 +124,22 @@ codebuddy_provider.subprocess.run = unexpected
 assert codebuddy_provider.ensure_codebuddy_runtime_image("docker") == (
     codebuddy_provider.CODEBUDDY_CONTAINER_IMAGE
 )
+
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    adapter = runner._ensure_codebuddy_agent_module(home)
+    runtime = home / runner.CODEBUDDY_RUNTIME_MODULE_FILENAME
+    worker_events = home / "_dradar_worker_events.py"
+    package = importlib.resources.files("dradar")
+    assert adapter.read_bytes() == package.joinpath("pier_codebuddy.py").read_bytes()
+    assert runtime.read_bytes() == package.joinpath("codebuddy_runtime.py").read_bytes()
+    assert worker_events.read_bytes() == package.joinpath("worker_events.py").read_bytes()
 '''
     for artifact in ("", str(zipapp)):
-        subprocess.run(
+        completed = subprocess.run(
             [str(environment_python), "-I", "-c", smoke, artifact],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        assert completed.returncode == 0, completed.stderr

@@ -7,6 +7,7 @@ pre_artifacts.sh, then downloaded by pier into the trial dir.
 
 import glob
 import hashlib
+import importlib.resources
 import json
 import math
 import os
@@ -723,13 +724,18 @@ def _ensure_runtime_safety_module(home: Path) -> Path:
 
 def _ensure_worker_event_module(home: Path) -> Path:
     """Copy the tiny Pier->CLI lifecycle sidecar helper into the run dir."""
-    source = Path(__file__).with_name("worker_events.py")
-    if not source.is_file():
+    try:
+        source = (
+            importlib.resources.files("dradar")
+            .joinpath("worker_events.py")
+            .read_bytes()
+        )
+    except (FileNotFoundError, OSError) as exc:
         raise RunnerError(
             "Pier worker lifecycle helper is missing; reinstall or upgrade dradar"
-        )
+        ) from exc
     return _materialize_shared_file(
-        home / "_dradar_worker_events.py", source.read_bytes(),
+        home / "_dradar_worker_events.py", source,
     )
 
 
@@ -897,22 +903,25 @@ def _ensure_dsh_agent_module(home: Path) -> Path:
 
 
 def _ensure_codebuddy_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_codebuddy.py")
-    if not source.is_file():
+    package = importlib.resources.files("dradar")
+    try:
+        adapter = package.joinpath("pier_codebuddy.py").read_bytes()
+    except (FileNotFoundError, OSError) as exc:
         raise RunnerError(
             "CodeBuddy Pier adapter is missing; reinstall or upgrade dradar"
-        )
-    runtime_source = Path(__file__).with_name("codebuddy_runtime.py")
-    if not runtime_source.is_file():
+        ) from exc
+    try:
+        runtime = package.joinpath("codebuddy_runtime.py").read_bytes()
+    except (FileNotFoundError, OSError) as exc:
         raise RunnerError(
             "CodeBuddy runtime definition is missing; reinstall or upgrade dradar"
-        )
+        ) from exc
     _materialize_shared_file(
-        home / CODEBUDDY_RUNTIME_MODULE_FILENAME, runtime_source.read_bytes()
+        home / CODEBUDDY_RUNTIME_MODULE_FILENAME, runtime
     )
     _ensure_worker_event_module(home)
     return _materialize_shared_file(
-        home / CODEBUDDY_AGENT_MODULE_FILENAME, source.read_bytes()
+        home / CODEBUDDY_AGENT_MODULE_FILENAME, adapter
     )
 
 
