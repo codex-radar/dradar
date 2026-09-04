@@ -401,6 +401,50 @@ def test_runtime_image_gate_executes_the_labeled_binary_once_per_image(
     assert sum(command[1] == "run" for command in calls) == 1
 
 
+def test_missing_runtime_image_builds_without_importing_pier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issues = iter(["image missing", None])
+    monkeypatch.setattr(
+        codebuddy_provider,
+        "codebuddy_runtime_image_error",
+        lambda _docker: next(issues),
+    )
+    seen: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        seen.update(command=command, **kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(codebuddy_provider.subprocess, "run", fake_run)
+
+    assert codebuddy_provider.ensure_codebuddy_runtime_image("docker") == (
+        f"dradar-codebuddy:{CODEBUDDY_CLI_VERSION}"
+    )
+    assert seen["command"][1:3] == ["build", "--progress=plain"]
+    dockerfile = seen["input"]
+    assert f"LABEL {codebuddy_provider.CODEBUDDY_IMAGE_LABEL}=" in dockerfile
+    assert CODEBUDDY_CLI_VERSION in dockerfile
+    assert "codebuddy-code_Linux_${asset}.tar.gz" in dockerfile
+
+
+def test_existing_runtime_image_skips_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        codebuddy_provider, "codebuddy_runtime_image_error", lambda _docker: None,
+    )
+    monkeypatch.setattr(
+        codebuddy_provider.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("existing image must skip build"),
+    )
+
+    assert codebuddy_provider.ensure_codebuddy_runtime_image("docker") == (
+        f"dradar-codebuddy:{CODEBUDDY_CLI_VERSION}"
+    )
+
+
 def test_usage_reconciles_request_ledger_and_terminal_aggregate() -> None:
     facts = _usage_function()([
         {
@@ -641,3 +685,16 @@ def test_adapter_and_pier_bootstrap_keep_credentials_and_tools_narrow() -> None:
     assert '"subscription_oauth_coordination": "host-monotonic-merge-v2"' in runloop
     assert '"codebuddy_credential_mode": "isolated-run-copy-concurrent-v2"' in runloop
     assert "CodeBuddy HY4 canary assignments require the serial runner" not in runloop
+
+
+def test_codebuddy_adapter_materializes_its_pier_free_runtime_module(
+    tmp_path: Path,
+) -> None:
+    from dradar import runner
+
+    adapter = runner._ensure_codebuddy_agent_module(tmp_path)
+    runtime = tmp_path / runner.CODEBUDDY_RUNTIME_MODULE_FILENAME
+
+    assert adapter == tmp_path / runner.CODEBUDDY_AGENT_MODULE_FILENAME
+    assert runtime.is_file()
+    assert "from pier" not in runtime.read_text(encoding="utf-8")

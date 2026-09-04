@@ -225,6 +225,7 @@ CODEBUDDY_AGENT_IMPORT_PATH = (
     "_dradar_pier_codebuddy:CodeBuddySubscription"
 )
 CODEBUDDY_AGENT_MODULE_FILENAME = "_dradar_pier_codebuddy.py"
+CODEBUDDY_RUNTIME_MODULE_FILENAME = "_dradar_codebuddy_runtime.py"
 BETA_SUBSCRIPTION_TRIAL_TIMEOUT_FLOOR_SEC = 120 * 60
 # A cold multi-worker BuildKit start can spend tens of minutes pulling base
 # images and package layers.  Three task windows (90 minutes for the common
@@ -901,6 +902,14 @@ def _ensure_codebuddy_agent_module(home: Path) -> Path:
         raise RunnerError(
             "CodeBuddy Pier adapter is missing; reinstall or upgrade dradar"
         )
+    runtime_source = Path(__file__).with_name("codebuddy_runtime.py")
+    if not runtime_source.is_file():
+        raise RunnerError(
+            "CodeBuddy runtime definition is missing; reinstall or upgrade dradar"
+        )
+    _materialize_shared_file(
+        home / CODEBUDDY_RUNTIME_MODULE_FILENAME, runtime_source.read_bytes()
+    )
     _ensure_worker_event_module(home)
     return _materialize_shared_file(
         home / CODEBUDDY_AGENT_MODULE_FILENAME, source.read_bytes()

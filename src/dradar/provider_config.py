@@ -913,6 +913,14 @@ def _setup_codebuddy_subscription() -> int:
         return 1
     try:
         image = ensure_codebuddy_runtime_image(docker)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or "an installed component"
+        print(
+            "CodeBuddy login was imported, but runtime preparation is missing "
+            f"{missing}. Reinstall or upgrade dradar, then run "
+            "`dradar provider setup codebuddy` again."
+        )
+        return 1
     except ValueError as exc:
         print(f"CodeBuddy login was imported, but runtime preparation failed: {exc}")
         return 1
