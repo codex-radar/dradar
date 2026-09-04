@@ -226,6 +226,32 @@ def cmd_status(args) -> int:
     if len(subs) > 20:
         print(f"  ... and {len(subs) - 20} more (showing the 20 most recent)")
 
+    try:
+        get_failure_reports = getattr(client, "runner_failure_reports", None)
+        report_data = get_failure_reports() if get_failure_reports else {}
+    except ApiError:
+        report_data = {}
+    remote_reports = report_data.get("failure_reports") or []
+    if remote_reports:
+        print("\nfailure feedback:")
+        for report in remote_reports[:20]:
+            code = report.get("failure_code") or report["failure_kind"]
+            repeated = (
+                f" x{report['occurrences']}" if report.get("occurrences", 1) > 1 else ""
+            )
+            print(f"  已反馈  {code}{repeated}  {_relative_time(report['occurred_at'])}")
+
+    from . import failure_reports
+
+    pending_reports = failure_reports.pending(HOME)
+    if pending_reports:
+        if not remote_reports:
+            print("\nfailure feedback:")
+        for report in pending_reports:
+            state = "发送失败，待重试" if report.get("_attempts", 0) else "待发送"
+            code = report.get("failure_code") or report.get("failure_kind", "unknown")
+            print(f"  {state}  {code}  {_relative_time(report['occurred_at'])}")
+
     local_pending = pending.load(HOME)
     if local_pending:
         print(f"\n{len(local_pending)} trial(s) ran but haven't uploaded yet "

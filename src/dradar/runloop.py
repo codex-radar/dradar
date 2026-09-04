@@ -784,6 +784,41 @@ def _terminal_failure_outcome(kind: str | None) -> str | None:
     return outcome
 
 
+def _report_failure_quietly(
+    client: ApiClient,
+    assignment: dict | None,
+    *,
+    phase: str,
+    failure_kind: str,
+    failure_code: str | None = None,
+    outcome: str | None = None,
+) -> None:
+    """Send only bounded incident facts and never disrupt task recovery."""
+    from . import failure_reports
+
+    assignment = assignment or {}
+    detail = {
+        key: assignment.get(key)
+        for key in ("task_id", "benchmark_id", "model", "effort", "agent")
+        if assignment.get(key) is not None
+    }
+    if outcome is not None:
+        detail["outcome"] = outcome
+    payload = failure_reports.build_report(
+        source="cli",
+        phase=phase,
+        failure_kind=failure_kind,
+        failure_code=failure_code,
+        assignment_id=assignment.get("assignment_id"),
+        detail=detail,
+    )
+    state = failure_reports.submit_or_queue(client, HOME, payload)
+    if state == "received":
+        print(f"failure report {payload['report_key'][:8]}: received")
+    else:
+        print(f"failure report {payload['report_key'][:8]}: send failed; queued for retry")
+
+
 def _fmt_pct(pct: float) -> str:
     """Adaptive precision, mirroring the radar page's price tags exactly so
     the CLI and the cell a volunteer just clicked always show the same
@@ -2918,8 +2953,18 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 client, assignment, failure_kind="environment_build_failed",
                 failure_diagnostic=exc.failure_diagnostic,
             )
+            _report_failure_quietly(
+                client, assignment, phase="environment-build",
+                failure_kind="environment_build_failed",
+                failure_code="environment_build_failed",
+            )
             return "environment-build-failed"
         except RunnerCleanupUnconfirmedError as exc:
+            _report_failure_quietly(
+                client, assignment, phase="cleanup",
+                failure_kind="cleanup-unconfirmed",
+                failure_code="cleanup-unconfirmed",
+            )
             print(
                 f"trial stopped: {exc}\n"
                 "the lease remains running because local cleanup was not proven; "
@@ -2940,6 +2985,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             print(
                 f"trial isolated: {exc}\n{retry_state}; other worker slots may continue"
+            )
+            _report_failure_quietly(
+                client, assignment, phase="runner",
+                failure_kind="runner_failed",
+                failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+                or "assignment-isolated",
             )
             return "assignment-isolated"
         except RunnerError as exc:
@@ -2967,6 +3018,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     "ZCode reported a transient network failure, but checkout "
                     "cleanup was not confirmed; refusing an unsafe retry"
                 )
+                _report_failure_quietly(
+                    client, assignment, phase="runner",
+                    failure_kind="provider-transport",
+                    failure_code="retry-cleanup-unconfirmed",
+                )
                 return "failed"
             print(f"trial failed: {exc}\n"
                   "use `dradar resume` to retry later, or `dradar release` to "
@@ -2980,6 +3036,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     if (failure_kind or "runner_failed") == "runner_failed"
                     else None
                 ),
+            )
+            diagnostic = exc.failure_diagnostic or {}
+            _report_failure_quietly(
+                client, assignment, phase="runner",
+                failure_kind=failure_kind or "runner_failed",
+                failure_code=diagnostic.get("failure_code") or failure_kind or "runner_failed",
             )
             return terminal_outcome or "failed"
         except (KeyboardInterrupt, EOFError):
@@ -3016,6 +3078,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     "  checkout cleanup was not confirmed; this worker is still "
                     "stopping and will not take another task."
                 )
+            _report_failure_quietly(
+                client, assignment, phase="provider-preflight",
+                failure_kind="auth" if preflight_kind == "auth" else "provider-preflight-failed",
+                failure_code=f"grok-preflight-{preflight_kind}",
+            )
             return "provider-preflight-failed"
 
     # Make the authoritative source copy immediately after Pier returns,
@@ -3330,6 +3397,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             # jobs root. Never widen cleanup authority to accommodate it.
             pass
 
+    if outcome == "interrupted":
+        _report_failure_quietly(
+            client, assignment, phase="agent",
+            failure_kind=meta.get("failure_kind") or "runner_failed",
+            failure_code=meta.get("failure_code") or "agent-interrupted",
+            outcome=outcome,
+        )
+
     upload_outcome = _upload_trial(client, {
         "assignment_id": assignment["assignment_id"], "nonce": assignment["nonce"],
         "task_id": assignment["task_id"], "trial_dir": str(art.trial_dir),
@@ -3407,6 +3482,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     )
     if circuit_opened:
         return "repeat-agent-failure"
+    if upload_outcome in {
+        "artifact-staging-failed", "upload-blocked", "upload-failed",
+        "rejected", "not-uploaded",
+    }:
+        _report_failure_quietly(
+            client, assignment, phase="upload",
+            failure_kind="upload-failed",
+            failure_code=upload_outcome,
+            outcome=outcome,
+        )
     return terminal_outcome or upload_outcome
 
 
@@ -3627,6 +3712,13 @@ def _retry_pending_uploads(
     previous run couldn't upload before doing anything else. Silent no-op
     when the ledger is empty — this must never surprise a volunteer who has
     nothing pending."""
+    from . import failure_reports
+
+    report_result = failure_reports.flush_pending(client, HOME)
+    if report_result["received"]:
+        print(f"sent {report_result['received']} queued failure report(s)")
+    if report_result["send_failed"]:
+        print(f"{report_result['send_failed']} failure report(s) still waiting to send")
     malformed_count = sum(
         not isinstance(entry, dict) for entry in pending.load(HOME)
     )
@@ -4515,6 +4607,12 @@ def cmd_go(args) -> int:
                 )
         except RunnerError as exc:
             _publish_fleet_startup_failure(args, exc)
+            _report_failure_quietly(
+                client, None, phase="startup",
+                failure_kind=classify_exception_message(str(exc)) or "runner_failed",
+                failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+                or "startup-failed",
+            )
             sys.exit(str(exc))
 
         telemetry.set_phase("queued")
@@ -5135,6 +5233,12 @@ def _run_worker_pool(args) -> int:
                 event_sink=record_probe_event if fleet_pool else None,
             )
     except RunnerError as exc:
+        _report_failure_quietly(
+            client, None, phase="startup",
+            failure_kind=classify_exception_message(str(exc)) or "runner_failed",
+            failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+            or "startup-failed",
+        )
         sys.exit(str(exc))
     if fleet_pool:
         _mark_pending_scope_required(client)
