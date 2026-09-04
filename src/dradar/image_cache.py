@@ -234,6 +234,8 @@ def prepare_trial_builder(
     to Pier's child environment, and deleting the builder removes its dedicated
     BuildKit state volume without touching the user's default builder cache.
     """
+    if os.environ.get("DRADAR_ISOLATE_BUILDER", "").strip().lower() in {"0", "false", "no", "off"}:
+        return TrialBuilderLease(None, True, "已配置使用本地 Docker 守护进程共享构建空间")
     runtime = runtime or {}
     safe, note = _builder_proxy_is_safe(runtime)
     if not safe:

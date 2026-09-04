@@ -522,6 +522,8 @@ def _container_proxy_value(env: dict[str, str]) -> str | None:
     """Return the explicit Docker/Pier override, or the host-side default."""
 
     if value := env.get(DRADAR_CONTAINER_HTTP_PROXY_ENV, "").strip():
+        if value.lower() in {"direct", "none", "off"}:
+            return None
         return value
     return _proxy_value(env)
 
