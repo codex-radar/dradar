@@ -2593,6 +2593,15 @@ def _upload_trial(
         # volunteer whose quota was fine.
         print(f"recorded as invalid (not graded): {ack['submission_id']} — "
               "no points lost, the cell reopens for a fresh attempt")
+    elif (
+        ack.get("accounting_status") == "pending"
+        and ack.get("cost_status") == "pending"
+        and ack.get("points_status") == "pending"
+    ):
+        print(
+            f"submitted: {ack['submission_id']} (grading happens server-side; "
+            "cost and points are pending provider-usage verification)"
+        )
     else:
         print(f"submitted: {ack['submission_id']} (grading happens server-side)")
     if job_dir and entry.get("keep", False):

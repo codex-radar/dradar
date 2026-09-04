@@ -169,6 +169,26 @@ def test_upload_success_clears_ledger(tmp_path: Path, monkeypatch):
     assert pending.load(tmp_path) == []
 
 
+def test_upload_reports_gradeable_result_with_pending_accounting(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    client = FakeClient(lambda _aid: {
+        "submission_id": "s-pending-usage",
+        "grade_status": "pending",
+        "accounting_status": "pending",
+        "cost_status": "pending",
+        "points_status": "pending",
+    })
+
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "submitted"
+    output = capsys.readouterr().out
+    assert "grading happens server-side" in output
+    assert "cost and points are pending provider-usage verification" in output
+    assert "invalid" not in output
+
+
 def test_exact_empty_submission_ack_is_not_collapsed_to_submitted(
     tmp_path: Path, monkeypatch,
 ):
