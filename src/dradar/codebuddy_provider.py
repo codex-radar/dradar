@@ -19,12 +19,18 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+from .codebuddy_runtime import (
+    CODEBUDDY_BASE_IMAGE,
+    CODEBUDDY_CLI_VERSION,
+    CODEBUDDY_CONTAINER_IMAGE,
+    CODEBUDDY_IMAGE_LABEL,
+    codebuddy_install_command,
+)
 from .local_config import HOME
 
 CODEBUDDY_AGENT = "codebuddy"
 CODEBUDDY_PROVIDER = "codebuddy-subscription"
 CODEBUDDY_MODEL = "hy4-preview"
-CODEBUDDY_CLI_VERSION = "2.137.1"
 CODEBUDDY_NATIVE_EFFORTS = (
     "minimal", "low", "medium", "high", "xhigh", "max",
 )
@@ -40,17 +46,11 @@ CODEBUDDY_RUN_CONFIG_VERSION = (
 CODEBUDDY_RUNTIME_PROFILE = (
     "pier-codebuddy-hy4-preview-isolated-copy-concurrent-v2"
 )
-CODEBUDDY_CONTAINER_IMAGE = f"dradar-codebuddy:{CODEBUDDY_CLI_VERSION}"
 CODEBUDDY_SOURCE_IMAGE_ENV = "DRADAR_CODEBUDDY_SOURCE_IMAGE"
 CODEBUDDY_HOME_ENV = "CODEBUDDY_CONFIG_DIR"
 CODEBUDDY_AUTH_DIR_ENV = "DRADAR_CODEBUDDY_AUTH_DIR"
 CODEBUDDY_MANAGED_HOME_ENV = "DRADAR_CODEBUDDY_MANAGED_HOME"
 CODEBUDDY_HOME_RELATIVE_PATH = Path("providers") / "codebuddy" / "current"
-CODEBUDDY_IMAGE_LABEL = "io.codex-radar.codebuddy.version"
-CODEBUDDY_BASE_IMAGE = (
-    "docker.io/library/debian:bookworm-slim@"
-    "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
-)
 CODEBUDDY_STORE_MAX_FILES = 256
 CODEBUDDY_STORE_MAX_BYTES = 32 * 1024 * 1024
 CODEBUDDY_AUTH_MAX_FILES = 16
@@ -562,13 +562,11 @@ def ensure_codebuddy_runtime_image(docker: str | None = None) -> str:
         raise ValueError("Docker CLI is unavailable")
     if codebuddy_runtime_image_error(executable) is None:
         return CODEBUDDY_CONTAINER_IMAGE
-    from .pier_codebuddy import _install_command
-
     dockerfile = (
         f"FROM {CODEBUDDY_BASE_IMAGE}\n"
         'SHELL ["/bin/bash", "-lc"]\n'
         f"LABEL {CODEBUDDY_IMAGE_LABEL}={CODEBUDDY_CLI_VERSION}\n"
-        f"RUN {_install_command()}\n"
+        f"RUN {codebuddy_install_command()}\n"
     )
     try:
         built = subprocess.run(

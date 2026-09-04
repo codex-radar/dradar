@@ -793,6 +793,40 @@ def test_codebuddy_setup_accepts_newer_compatible_host_as_login_source(
     assert "dradar-codebuddy:2.137.1" in output
 
 
+def test_codebuddy_setup_reports_missing_runtime_component_without_traceback(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(
+        provider_config, "codebuddy_executable", lambda: "/usr/bin/codebuddy",
+    )
+    monkeypatch.setattr(
+        provider_config,
+        "codebuddy_host_cli_status",
+        lambda _executable: (None, "2.143.0"),
+    )
+    monkeypatch.setattr(provider_config, "import_host_login", lambda: tmp_path)
+    monkeypatch.setattr(
+        provider_config, "codebuddy_credential_status", lambda: (True, "ready"),
+    )
+    monkeypatch.setattr(
+        provider_config.shutil,
+        "which",
+        lambda name: "/usr/bin/docker" if name == "docker" else None,
+    )
+
+    def missing_component(_docker):
+        raise ModuleNotFoundError("No module named 'component'", name="component")
+
+    monkeypatch.setattr(
+        provider_config, "ensure_codebuddy_runtime_image", missing_component,
+    )
+
+    assert provider_config._setup_codebuddy_subscription() == 1
+    output = capsys.readouterr().out
+    assert "runtime preparation is missing component" in output
+    assert "Reinstall or upgrade dradar" in output
+
+
 def test_codebuddy_status_distinguishes_host_login_source_from_pinned_runtime(
     tmp_path, monkeypatch, capsys,
 ):
