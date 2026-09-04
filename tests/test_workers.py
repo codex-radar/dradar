@@ -2,7 +2,10 @@
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import os
+import sys
 from types import SimpleNamespace
+import zipfile
 
 import httpx
 import pytest
@@ -48,6 +51,53 @@ def test_cli_accepts_auto_workers(monkeypatch):
     monkeypatch.setattr(cli, "cmd_go", lambda args: seen.append(args) or 0)
     assert cli.main(["resume", "--workers", "auto", "-y"]) == 0
     assert seen[0].workers == "auto"
+
+
+def test_worker_command_reuses_direct_zipapp(monkeypatch, tmp_path):
+    artifact = tmp_path / "dradar-linux-x86_64.pyz"
+    with zipfile.ZipFile(artifact, "w") as bundle:
+        bundle.writestr("__main__.py", "raise SystemExit(0)\n")
+    monkeypatch.setattr(sys, "argv", [str(artifact)])
+
+    command = runloop._worker_command(_args())
+
+    assert command[:2] == [sys.executable, str(artifact.resolve())]
+    assert "-m" not in command[:3]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX verified-fd launch")
+def test_worker_command_preserves_verified_zipapp_fd(monkeypatch, tmp_path):
+    artifact = tmp_path / "candidate.pyz"
+    artifact.write_bytes(b"signed-candidate")
+    with artifact.open("rb") as handle:
+        entrypoint = f"/dev/fd/{handle.fileno()}"
+        monkeypatch.setattr(sys, "argv", [entrypoint])
+
+        assert runloop._worker_command(_args())[:2] == [sys.executable, entrypoint]
+        assert runloop._worker_entrypoint_pass_fds() == (handle.fileno(),)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (ModuleNotFoundError("private module path"), "startup-dependency-missing"),
+        (PermissionError("/private/user/path"), "startup-permission-denied"),
+        (OSError(getattr(os, "ENOSPC", 28), "/private/user/path"),
+         "startup-local-storage-error"),
+    ],
+)
+def test_worker_startup_failure_marker_is_low_cardinality(
+        monkeypatch, tmp_path, failure, expected):
+    marker = tmp_path / "worker.started"
+    marker.write_text("preparing", encoding="utf-8")
+    monkeypatch.setenv(runloop._POOL_WORKER_ACTIVITY_ENV, str(marker))
+
+    runloop._publish_fleet_startup_failure(
+        _args(worker_child=True, fleet_pool=False), failure,
+    )
+
+    assert marker.read_text(encoding="utf-8") == f"preparing:{expected}"
+    assert "private" not in marker.read_text(encoding="utf-8")
 
 
 def test_cli_parses_archive_session_as_explicit_opt_in(monkeypatch):
@@ -1592,6 +1642,11 @@ def test_fleet_pool_fails_after_24_seconds_when_every_child_exits_precheckout(
         "precheckout_exit",
         "startup_failed",
     ]
+    assert all(
+        kwargs.get("reason_code") == "worker-entrypoint-failed"
+        for event, kwargs in observed_events
+        if event in {"precheckout_exit", "startup_failed"}
+    )
     assert observed_flushes
     assert all(item == {"batch_id": batch_id} for item in observed_flushes)
 

@@ -136,6 +136,12 @@ REASON_CODES = frozenset({
     "update_self_test_failed", "update_crash_recovery", "candidate_failed",
     "update_state_corrupt", "update_state_incompatible",
     "precheckout-exit", "startup-timeout", "startup-failed",
+    "worker-entrypoint-failed", "startup-dependency-missing",
+    "startup-permission-denied", "startup-local-storage-error",
+    "startup-network-unavailable", "startup-environment-not-ready",
+    "startup-runtime-not-ready", "startup-state-changed",
+    "startup-unknown", "startup-mixed",
+    "runner_session_capacity_reached", "provider_capability_required",
 })
 OUTCOMES = frozenset({
     "completed", "interrupted", "submitted", "artifact-staging-failed",
