@@ -463,6 +463,130 @@ def test_runtime_try_record_drops_invalid_diagnostic_without_writing(tmp_path):
     assert not recorder.pending_path.exists()
 
 
+@pytest.mark.parametrize(
+    ("failure", "reason", "http_status"),
+    [
+        (RuntimeError("network failed; token=must-not-leak"), "transport_error", None),
+        (
+            type("HttpFailure", (RuntimeError,), {"status_code": 422})(
+                "request body must-not-leak"
+            ),
+            "http_error",
+            422,
+        ),
+        (
+            type("MissingEndpoint", (RuntimeError,), {"status_code": 404})(
+                "server URL must-not-leak"
+            ),
+            "endpoint_unavailable",
+            404,
+        ),
+    ],
+)
+def test_flush_failure_persists_only_bounded_safe_status(
+    tmp_path, failure, reason, http_status,
+):
+    class FailingClient:
+        def flight_events(self, events):
+            raise failure
+
+    recorder = FlightRecorder(tmp_path, FailingClient())
+    recorder.record(
+        "assignment_checked_out", component="claim", batch_id=BATCH_ID,
+        session_id=SESSION_ID, assignment_id=ASSIGNMENT_ID,
+    )
+    assert recorder.flush(batch_id=BATCH_ID, session_id=SESSION_ID) == 0
+    status = json.loads(recorder.flush_status_path.read_text())
+    assert status["last_reason"] == reason
+    assert status["last_http_status"] == http_status
+    assert status["last_pending_count"] == 1
+    assert status["total_failures"] == 1
+    assert status["consecutive_failures"] == 1
+    encoded = recorder.flush_status_path.read_text().lower()
+    assert "must-not-leak" not in encoded
+    assert "token" not in encoded
+    assert "request body" not in encoded
+    assert "server url" not in encoded
+
+
+def test_malformed_or_empty_ack_is_visible_and_success_marks_recovery(tmp_path):
+    class SequencedClient:
+        def __init__(self):
+            self.responses = [
+                {"acknowledged_event_ids": "not-a-list"},
+                {"acknowledged_event_ids": []},
+            ]
+
+        def flight_events(self, events):
+            if self.responses:
+                return self.responses.pop(0)
+            return {"acknowledged_event_ids": [event["event_id"] for event in events]}
+
+    recorder = FlightRecorder(tmp_path, SequencedClient())
+    recorder.record("session_started", component="cli", batch_id=BATCH_ID)
+    assert recorder.flush(batch_id=BATCH_ID) == 0
+    assert json.loads(recorder.flush_status_path.read_text())["last_reason"] == (
+        "invalid_response"
+    )
+    assert recorder.flush(batch_id=BATCH_ID) == 0
+    status = json.loads(recorder.flush_status_path.read_text())
+    assert status["last_reason"] == "unacknowledged_response"
+    assert status["consecutive_failures"] == 2
+
+    assert recorder.flush(batch_id=BATCH_ID) == 1
+    status = json.loads(recorder.flush_status_path.read_text())
+    assert status["total_failures"] == 2
+    assert status["consecutive_failures"] == 0
+    assert status["last_success_at"] is not None
+
+    output = recorder.export_diagnostic_bundle(tmp_path / "flush-status.zip")
+    with zipfile.ZipFile(output) as bundle:
+        manifest = json.loads(bundle.read("manifest.json"))
+    assert manifest["flush_status"] == status
+
+
+def test_tampered_flush_status_cannot_enter_diagnostic_bundle(tmp_path):
+    recorder = FlightRecorder(tmp_path)
+    recorder.root.mkdir(parents=True, exist_ok=True)
+    recorder.flush_status_path.write_text(json.dumps({
+        "schema_version": "dradar.flight_flush_status.v1",
+        "total_failures": 1,
+        "consecutive_failures": 1,
+        "last_failure_at": "2026-09-04T00:00:00+00:00",
+        "last_reason": "transport_error",
+        "last_http_status": None,
+        "last_pending_count": 1,
+        "last_success_at": None,
+        "token": "must-not-leak",
+    }))
+    output = recorder.export_diagnostic_bundle(tmp_path / "tampered-status.zip")
+    with zipfile.ZipFile(output) as bundle:
+        manifest = json.loads(bundle.read("manifest.json"))
+    assert "token" not in json.dumps(manifest)
+    assert set(manifest["flush_status"]) == {
+        "schema_version", "total_failures", "consecutive_failures",
+        "last_failure_at", "last_reason", "last_http_status",
+        "last_pending_count", "last_success_at",
+    }
+
+
+def test_local_pending_commit_failure_is_visible_after_remote_ack(
+    tmp_path, monkeypatch,
+):
+    recorder = FlightRecorder(tmp_path, FlightClient())
+    recorder.record("session_started", component="cli", batch_id=BATCH_ID)
+
+    def fail_write(path, events):
+        raise OSError("local path must-not-leak")
+
+    monkeypatch.setattr(recorder, "_write", fail_write)
+    assert recorder.flush(batch_id=BATCH_ID) == 0
+    status = json.loads(recorder.flush_status_path.read_text())
+    assert status["last_reason"] == "local_storage_error"
+    assert status["last_pending_count"] == 1
+    assert "local path" not in recorder.flush_status_path.read_text()
+
+
 def test_building_phase_is_allowlisted_for_environment_preparation(tmp_path):
     recorder = FlightRecorder(tmp_path)
     event = recorder.record(
