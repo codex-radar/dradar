@@ -819,6 +819,19 @@ def _report_failure_quietly(
         print(f"failure report {payload['report_key'][:8]}: send failed; queued for retry")
 
 
+def _api_failure_report_code(prefix: str, exc: ApiError) -> str:
+    """Reduce one API failure to a bounded enum without retaining its text."""
+    status = exc.status_code
+    if status is None:
+        suffix = "transport"
+    elif status in {400, 401, 403, 404, 409, 410, 422, 426, 429,
+                    500, 502, 503, 504}:
+        suffix = f"http-{status}"
+    else:
+        suffix = "http-other"
+    return f"{prefix}-{suffix}"
+
+
 def _fmt_pct(pct: float) -> str:
     """Adaptive precision, mirroring the radar page's price tags exactly so
     the CLI and the cell a volunteer just clicked always show the same
@@ -2811,6 +2824,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "server ownership stop was not confirmed; refusing to rebind "
                 "the assignment for another model attempt"
             )
+        bind_stage = "worker-registration"
         try:
             if telemetry is not None:
                 # Popen only proves that the local Pier parent exists.  Bind
@@ -2836,18 +2850,22 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 ):
                     raise RunnerError(
                         "worker_registered event was not persisted locally; "
-                        "refusing to start a runtime lease"
+                        "refusing to start a runtime lease",
+                        report_code="worker-registration-local-event-missing",
                     )
                 if not telemetry.flush_for_worker_registration(worker_event_id):
                     raise RunnerError(
                         "server did not acknowledge worker_registered event and "
                         "environment remains in preparation and no runtime "
-                        "lease was started"
+                        "lease was started",
+                        report_code="worker-registration-unacknowledged",
                     )
                 if telemetry.stop_requested:
                     raise RunnerError(
-                        "server requested this worker to stop before registration"
+                        "server requested this worker to stop before registration",
+                        report_code="worker-registration-stop-requested",
                     )
+            bind_stage = "assignment-start"
             response = client.mark_started(
                 assignment["assignment_id"],
                 session_id=telemetry.session_id if telemetry else None,
@@ -2855,7 +2873,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
         except ApiError as exc:
             raise RunnerError(
-                f"server ownership bind failed before model start: {exc}"
+                f"server ownership bind failed before model start: {exc}",
+                report_code=_api_failure_report_code(bind_stage, exc),
             ) from exc
         ownership_state = "bound"
         if response.get("owner_epoch") is not None:
@@ -3041,7 +3060,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             _report_failure_quietly(
                 client, assignment, phase="runner",
                 failure_kind=failure_kind or "runner_failed",
-                failure_code=diagnostic.get("failure_code") or failure_kind or "runner_failed",
+                failure_code=(
+                    exc.report_code or diagnostic.get("failure_code")
+                    or failure_kind or "runner_failed"
+                ),
             )
             return terminal_outcome or "failed"
         except (KeyboardInterrupt, EOFError):
