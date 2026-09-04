@@ -749,6 +749,13 @@ class ApiClient:
             data=data,
         )
 
+    def report_runner_failure(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send one allow-listed incident report; callers own durable retry."""
+        return self._post("/api/v1/runner/failures", json=payload, timeout=3.0)
+
+    def runner_failure_reports(self, limit: int = 20) -> dict[str, Any]:
+        return self._get(f"/api/v1/runner/failures?limit={limit}")
+
     def submit(
         self,
         assignment_id: str,
