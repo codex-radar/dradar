@@ -407,6 +407,30 @@ def test_diagnostic_bundle_contains_only_manifest_and_allowlisted_events(tmp_pat
         assert forbidden not in events.lower()
 
 
+@pytest.mark.parametrize("reason_code", [
+    "worker-entrypoint-failed",
+    "startup-dependency-missing",
+    "startup-permission-denied",
+    "startup-local-storage-error",
+    "startup-network-unavailable",
+    "startup-environment-not-ready",
+    "startup-runtime-not-ready",
+    "startup-state-changed",
+    "startup-unknown",
+    "startup-mixed",
+])
+def test_startup_failure_reasons_are_bounded_and_content_free(
+        tmp_path, reason_code):
+    recorder = FlightRecorder(tmp_path)
+    event = recorder.record(
+        "startup_failed", component="cli", batch_id=BATCH_ID,
+        reason_code=reason_code, attributes={"target_workers": 1},
+    )
+
+    assert event["reason_code"] == reason_code
+    assert event["attributes"] == {"target_workers": 1}
+
+
 def test_client_actor_is_fixed_and_tampered_actor_is_rejected(tmp_path):
     recorder = FlightRecorder(tmp_path)
     event = recorder.record("checkpoint_replayed", component="checkpoint")

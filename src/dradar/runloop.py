@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 
 from . import (
     __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
@@ -197,6 +198,20 @@ _POOL_SESSION_CAPACITY_RETRY_SECONDS = 10 * 60
 _POOL_IMAGE_CACHE_MAINTENANCE_SECONDS = 15 * 60
 _POOL_TARGET_CACHE: dict[Path, int] = {}
 _ZCODE_NETWORK_RETRY_DELAY_SECONDS = 2.0
+_PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
+    "worker-entrypoint-failed",
+    "startup-dependency-missing",
+    "startup-permission-denied",
+    "startup-local-storage-error",
+    "startup-network-unavailable",
+    "startup-environment-not-ready",
+    "startup-runtime-not-ready",
+    "startup-state-changed",
+    "startup-unknown",
+    "startup-mixed",
+    "runner_session_capacity_reached",
+    "provider_capability_required",
+})
 
 
 def _retryable_zcode_network_failure(assignment: dict, exc: RunnerError) -> bool:
@@ -4352,48 +4367,65 @@ def _preflight_scoped_provider(args) -> None:
 
 def _publish_fleet_startup_failure(args, reason: object) -> None:
     """Best-effort structured failure for the Agent-facing startup contract."""
-
-    if not getattr(args, "fleet_pool", False):
-        return
-    from . import fleet
-
     detail = " ".join(str(reason).split()).lower()
     if "deep-swe" in detail or "task snapshot" in detail or "version pin" in detail:
         code = "task_environment_update_failed"
+        reason_code = "startup-environment-not-ready"
         message = (
             "这台设备未能准备与判分一致的题目环境；已有本地文件没有被修改。"
             "请检查网络和磁盘空间后，再次使用原运行说明。"
         )
     elif "egress preflight" in detail and "ready transition" in detail:
         code = "egress_probe_timeout"
+        reason_code = "startup-network-unavailable"
         message = (
             "这台设备的隔离网络环境在 120 秒内仍未完成启动；题目没有开始执行。"
             "请检查 Docker 与网络代理后，再次使用原运行说明。"
         )
     elif any(word in detail for word in ("docker", "pier", "egress", "disk space")):
         code = "local_environment_not_ready"
+        reason_code = "startup-environment-not-ready"
         message = (
             "这台设备的运行环境尚未准备好，题目没有开始执行。"
             "请检查 Docker、网络和磁盘空间后，再次使用原运行说明。"
         )
     elif "auth" in detail or "provider" in detail or "login" in detail:
         code = "runtime_tool_not_ready"
+        reason_code = "startup-runtime-not-ready"
         message = (
             "这台设备上的运行工具尚未准备好，题目没有开始执行。"
             "请先完成该运行工具的登录或修复，再次使用原运行说明。"
         )
     elif reason == "pool ended before startup acknowledgement":
         code = "run_state_changed_before_start"
+        reason_code = "startup-state-changed"
         message = (
             "题目状态在本机准备期间发生了变化，没有题目开始执行。"
             "请重新检查网页状态后，再次使用原运行说明。"
         )
     else:
         code = "local_start_failed"
+        if isinstance(reason, ModuleNotFoundError):
+            reason_code = "startup-dependency-missing"
+        elif isinstance(reason, PermissionError):
+            reason_code = "startup-permission-denied"
+        elif isinstance(reason, OSError) and reason.errno in {
+            getattr(os, "ENOSPC", 28), getattr(os, "EROFS", 30),
+            getattr(os, "EIO", 5),
+        }:
+            reason_code = "startup-local-storage-error"
+        else:
+            reason_code = "startup-unknown"
         message = (
             "这台设备未能完成运行准备，题目没有开始执行。"
             "请检查本机状态后，再次使用原运行说明。"
         )
+    if getattr(args, "worker_child", False):
+        _record_worker_precheckout_failure(reason_code)
+    if not getattr(args, "fleet_pool", False):
+        return
+    from . import fleet
+
     try:
         fleet.publish_pool_startup_failure(
             HOME,
@@ -4699,7 +4731,7 @@ def _worker_command(args) -> list[str]:
     server's atomic checkout endpoint, which prevents duplicate model runs.
     """
     command = [
-        sys.executable, "-m", "dradar.cli", "resume", "-y", "--parallel",
+        *_worker_entrypoint(), "resume", "-y", "--parallel",
         "--workers", "1", "--worker-child",
     ]
     if args.keep:
@@ -4744,6 +4776,41 @@ def _worker_command(args) -> list[str]:
         if getattr(args, "refill_order", None):
             command.extend(("--refill-order", args.refill_order))
     return command
+
+
+def _worker_entrypoint() -> list[str]:
+    """Reuse the running OTA zipapp instead of assuming an installed package."""
+    argv0 = sys.argv[0]
+    fd_match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", argv0)
+    if os.name != "nt" and fd_match is not None:
+        try:
+            os.fstat(int(fd_match.group(1)))
+        except OSError:
+            pass
+        else:
+            return [sys.executable, argv0]
+    candidate = Path(argv0)
+    try:
+        if candidate.is_file() and zipfile.is_zipfile(candidate):
+            return [sys.executable, str(candidate.resolve())]
+    except OSError:
+        pass
+    return [sys.executable, "-m", "dradar.cli"]
+
+
+def _worker_entrypoint_pass_fds() -> tuple[int, ...]:
+    """Keep the launcher's verified artifact descriptor open in POSIX children."""
+    if os.name == "nt":
+        return ()
+    match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", sys.argv[0])
+    if match is None:
+        return ()
+    descriptor = int(match.group(1))
+    try:
+        os.fstat(descriptor)
+    except OSError:
+        return ()
+    return (descriptor,)
 
 
 def _signal_workers(processes: list[subprocess.Popen]) -> None:
@@ -4943,9 +5010,7 @@ def _write_worker_activity_state(value: str) -> bool:
 
 def _record_worker_precheckout_failure(code: str) -> bool:
     """Classify a known safe pre-checkout gate without claiming paid work."""
-    if code not in {
-        "runner_session_capacity_reached", "provider_capability_required",
-    }:
+    if code not in _PRECHECKOUT_FAILURE_REASON_CODES:
         return False
     return _write_worker_activity_state(f"preparing:{code}")
 
@@ -5371,6 +5436,10 @@ def _run_worker_pool(args) -> int:
     popen_kwargs = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        pass_fds = _worker_entrypoint_pass_fds()
+        if pass_fds:
+            popen_kwargs["pass_fds"] = pass_fds
     processes: list[subprocess.Popen] = []
     active_processes: dict[int, subprocess.Popen] = {}
     returncodes: list[tuple[int, int]] = []
@@ -5384,6 +5453,7 @@ def _run_worker_pool(args) -> int:
     backfill_error: str | None = None
     backfill_exhausted = False
     backfill_disabled = False
+    precheckout_failure_reasons: set[str] = set()
     failure_cutoff: datetime | None = None
     abort_reason: str | None = None
     abort_interrupts_siblings = False
@@ -5470,7 +5540,9 @@ def _run_worker_pool(args) -> int:
         # The parent writes the initial state before spawning. Missing or
         # unreadable state later is treated fail-closed; only this exact value
         # proves that the child exited before checkout.
-        activity_file.write_text("preparing", encoding="utf-8")
+        activity_file.write_text(
+            "preparing:worker-entrypoint-failed", encoding="utf-8",
+        )
         env = os.environ.copy()
         env["DRADAR_WORKER_INDEX"] = str(slot)
         env["DRADAR_POOL_SIZE"] = str(target)
@@ -5598,9 +5670,17 @@ def _run_worker_pool(args) -> int:
                     )
                 )
                 if precheckout_exit:
+                    precheckout_reason = (
+                        activity_state.removeprefix("preparing:")
+                        if activity_state and activity_state.startswith("preparing:")
+                        else "precheckout-exit"
+                    )
+                    if precheckout_reason not in _PRECHECKOUT_FAILURE_REASON_CODES:
+                        precheckout_reason = "startup-unknown"
+                    precheckout_failure_reasons.add(precheckout_reason)
                     record_supervisor_event(
                         "precheckout_exit",
-                        reason_code="precheckout-exit",
+                        reason_code=precheckout_reason,
                         attributes={"worker_slot": slot},
                     )
                 # Unknown marker state is safety-significant: never turn a
@@ -5875,6 +5955,12 @@ def _run_worker_pool(args) -> int:
                 ),
             )
         else:
+            if len(precheckout_failure_reasons) == 1:
+                startup_reason = next(iter(precheckout_failure_reasons))
+            elif precheckout_failure_reasons:
+                startup_reason = "startup-mixed"
+            else:
+                startup_reason = "precheckout-exit"
             publish_startup_failure(
                 (
                     "worker_precheckout_exhausted"
@@ -5884,7 +5970,7 @@ def _run_worker_pool(args) -> int:
                     "所有本地 worker 都在完成注册和首个题目 checkout 前退出；"
                     "题目仍然保留，请检查本机日志后重试。"
                 ),
-                reason_code="precheckout-exit",
+                reason_code=startup_reason,
             )
     cleanup_abort_file()
     environment_build_failures = [
