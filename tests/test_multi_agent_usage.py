@@ -9,7 +9,8 @@ from dradar.runner import (
 
 def _session(path: Path, session_id: str, role: str, usages: list[dict],
              parent: str | None = None, inherited: dict | None = None,
-             history_mode: str | None = None) -> None:
+             history_mode: str | None = None,
+             model: str = "gpt-5.6-terra") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     source = "exec"
     if role == "subagent":
@@ -35,7 +36,7 @@ def _session(path: Path, session_id: str, role: str, usages: list[dict],
         ]
     events += [
         {"type": "event_msg", "payload": {"type": "task_started"}},
-        {"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}},
+        {"type": "turn_context", "payload": {"model": model}},
     ]
     events += [{"type": "event_msg", "timestamp": (
         f"2026-08-17T01:00:{index:02d}Z"
@@ -73,6 +74,22 @@ def test_aggregates_final_root_and_subagent_counters(tmp_path: Path):
     assert usage["sessions"][1]["parent_session_id"] == "root-1"
     assert usage["timed_usage_complete"] is True
     assert len(usage["token_usage_events"]) == 3
+
+
+def test_astra_identity_is_retained_in_uploaded_codex_usage(tmp_path: Path):
+    sessions = tmp_path / "agent" / "sessions"
+    _session(
+        sessions / "root.jsonl",
+        "root-astra",
+        "user",
+        [_usage(100, 60, 10, 4)],
+        model="gpt-6-astra",
+    )
+
+    usage = aggregate_codex_session_usage(tmp_path)
+
+    assert usage is not None and usage["complete"] is True
+    assert usage["sessions"][0]["model_name"] == "gpt-6-astra"
 
 
 def test_duplicate_session_id_uses_largest_cumulative_record(tmp_path: Path):
