@@ -142,6 +142,7 @@ def _state(tmp_path, plan):
 def _args(
     *, concurrency=None, decision_token=None, scope=None, upload_only=False,
     recheck_generation=None, docker_install_token=None,
+    concurrency_reply=None, concurrency_decision_token=None,
 ):
     return SimpleNamespace(
         plan=RUN_CODE,
@@ -152,6 +153,8 @@ def _args(
         upload_only=upload_only,
         recheck_generation=recheck_generation,
         docker_install_token=docker_install_token,
+        concurrency_reply=concurrency_reply,
+        concurrency_decision_token=concurrency_decision_token,
         json=True,
     )
 
@@ -231,13 +234,15 @@ def _stale_decision_error(code="decision_invalid_or_state_changed"):
 
 
 class FakeClient:
-    def __init__(self, starts=None, progress=None, stops=None):
+    def __init__(self, starts=None, progress=None, stops=None, decisions=None):
         self.starts = list(starts or [])
         self.progress_results = list(progress or [])
         self.stop_results = list(stops or [])
+        self.decision_results = list(decisions or [])
         self.start_calls = []
         self.progress_calls = []
         self.stop_calls = []
+        self.decision_calls = []
 
     @staticmethod
     def _next(values):
@@ -257,6 +262,10 @@ class FakeClient:
     def stop_run_plan(self, **kwargs):
         self.stop_calls.append(kwargs)
         return self._next(self.stop_results)
+
+    def request_run_plan_concurrency_decision(self, **kwargs):
+        self.decision_calls.append(kwargs)
+        return self._next(self.decision_results)
 
 
 def _prepare_run(
@@ -319,6 +328,17 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
         "--server", "https://api.claudecoderadar.com",
         "--docker-install-token", "drdi_once", "--json",
     ]) == 0
+    assert cli.main([
+        "run", "--plan", RUN_CODE,
+        "--server", "https://api.claudecoderadar.com", "--json",
+        "--decision-token", "drlc_once", "--concurrency-reply", "启用5道",
+    ]) == 0
+    assert cli.main([
+        "run", "--plan", RUN_CODE,
+        "--server", "https://api.claudecoderadar.com",
+        "--concurrency", "5",
+        "--concurrency-decision-token", "drc_once", "--json",
+    ]) == 0
 
     assert seen[0][1].upload_only is True
     assert seen[0][1].server == "https://api.claudecoderadar.com"
@@ -327,6 +347,8 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
     assert seen[2][1].decision_token == "drd_once"
     assert seen[3][1].recheck_generation == 7
     assert seen[4][1].docker_install_token == "drdi_once"
+    assert seen[5][1].concurrency_reply == ["启用5道"]
+    assert seen[6][1].concurrency_decision_token == "drc_once"
 
 
 def test_exchange_keeps_run_code_out_of_state_and_uses_private_files(
@@ -824,12 +846,19 @@ def test_fixed_capacity_reservation_race_requires_one_use_lower_decision(
     assert confirm["decision"] == "server_capacity"
     assert confirm["decision_required"] is True
     assert confirm["choices"] == [
-        {"id": "use_recommended", "label": "按建议同时运行 2 道"},
+        {"id": "use_recommended", "label": "同时运行 2 道（推荐）"},
+        {"id": "concurrency_1", "label": "同时运行 1 道"},
+        {"id": "custom_concurrency", "label": "自定义同时运行数量"},
         {"id": "cancel", "label": "暂不启动"},
     ]
-    assert confirm["agent"]["choice_actions"]["use_recommended"]["args"] == [
-        "--concurrency", "2", "--decision-token", token,
-    ]
+    assert confirm["agent"]["choice_actions"]["use_recommended"] == {
+        "mode": "submit_concurrency_reply",
+        "args": ["--decision-token", token, "--concurrency-reply", "2"],
+    }
+    assert confirm["agent"]["choice_actions"]["custom_concurrency"] == {
+        "mode": "collect_concurrency_input",
+        "args": [],
+    }
     assert all("arguments" not in choice for choice in confirm["choices"])
     assert added == []
 
@@ -2680,11 +2709,347 @@ def test_zero_spare_capacity_asks_in_plain_language_without_internal_ids(tmp_pat
         snapshot=_snapshot(available=0, auto_workers=0),
     )
     assert response["user_message"] == (
-        "这台设备正在运行其他题目。继续同时启动这 1 道可能会让机器变慢，是否仍然启动？"
+        "这台设备当前没有空余运行位置。计划会保留；有可用位置后，"
+        "请输入一个明确整数。"
     )
     assert [choice["label"] for choice in response["choices"]] == [
-        "仍然同时启动 1 道", "暂不启动",
+        "自定义同时运行数量", "暂不启动",
     ]
+
+
+def test_capacity_question_offers_dynamic_quick_values_and_raw_reply_input(tmp_path):
+    plan = _plan(mode="fixed", concurrency=10, task_count=10)
+    path, state = _state(tmp_path, plan)
+    response = run_plans._local_capacity_response(
+        path,
+        state,
+        requested=10,
+        recommended=1,
+        legal_max=10,
+        snapshot=_snapshot(available=10, auto_workers=1, account_limit=10),
+    )
+
+    assert [choice["label"] for choice in response["choices"]] == [
+        "同时运行 1 道（推荐）",
+        "按原计划同时运行 10 道",
+        "同时运行 2 道",
+        "同时运行 5 道",
+        "自定义同时运行数量",
+        "暂不启动",
+    ]
+    actions = response["agent"]["choice_actions"]
+    token = response["decision_token"]
+    assert actions["concurrency_5"] == {
+        "mode": "submit_concurrency_reply",
+        "args": ["--decision-token", token, "--concurrency-reply", "5"],
+    }
+    assert actions["custom_concurrency"] == {
+        "mode": "collect_concurrency_input",
+        "args": [],
+    }
+    assert response["agent"]["input_action"] == {
+        "mode": "submit_user_reply",
+        "args": ["--decision-token", token, "--concurrency-reply"],
+        "input": "exact_user_reply_as_one_argument",
+    }
+
+
+def test_capacity_question_deduplicates_recommended_original_and_caps_at_three(tmp_path):
+    plan = _plan(mode="fixed", concurrency=3, task_count=3)
+    path, state = _state(tmp_path, plan)
+    response = run_plans._local_capacity_response(
+        path,
+        state,
+        requested=3,
+        recommended=3,
+        legal_max=3,
+        snapshot=_snapshot(available=3, auto_workers=3),
+    )
+
+    assert [choice["label"] for choice in response["choices"]] == [
+        "同时运行 3 道（推荐）",
+        "同时运行 1 道",
+        "同时运行 2 道",
+        "自定义同时运行数量",
+        "暂不启动",
+    ]
+    assert sum("3 道" in choice["label"] for choice in response["choices"]) == 1
+
+
+def test_ambiguous_raw_reply_keeps_same_plan_in_a_fresh_human_prompt(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
+    client = FakeClient(decisions=[{
+        "schema_version": 1,
+        "status": "decision_required",
+        "decision_required": True,
+        "user_message": "请输入一个明确整数（必须大于 0），例如 5。",
+        "agent_action": "ask_concurrency_again",
+        "error_code": "concurrency_reply_ambiguous",
+        "retryable": True,
+        "selected_concurrency": None,
+        "max_concurrency": 3,
+        "concurrency_decision_token": None,
+    }])
+    path, _state_value = _prepare_run(
+        monkeypatch,
+        tmp_path,
+        plan=plan,
+        client=client,
+        snapshot=_snapshot(available=3, auto_workers=3),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    question = json.loads(capsys.readouterr().out)
+    assert run_plans.cmd_run_plan(_args(
+        decision_token=question["decision_token"],
+        concurrency_reply=["5到10"],
+    )) == 0
+    retry = json.loads(capsys.readouterr().out)
+
+    assert retry["decision_required"] is True
+    assert retry["user_message"].startswith("请输入一个明确整数")
+    assert retry["decision_token"] != question["decision_token"]
+    assert retry["agent"]["plan"]["plan_id"] == plan["plan_id"]
+    assert run_plans._read_private_json(path)["pending_local_capacity"]
+
+
+def test_raw_natural_reply_is_server_signed_before_exactly_one_start(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=10, task_count=10)
+    signed_token = "drc_server_signed_concurrency_once"
+    client = FakeClient(
+        decisions=[{
+            "schema_version": 1,
+            "status": "resolved",
+            "decision_required": False,
+            "user_message": "已确认同时运行 5 道，正在做最后一次安全检查。",
+            "agent_action": "apply_concurrency_decision",
+            "error_code": None,
+            "retryable": False,
+            "selected_concurrency": 5,
+            "max_concurrency": 5,
+            "concurrency_decision_token": signed_token,
+            "decision_expires_at": "2099-01-01T00:00:00Z",
+        }],
+        starts=[_server_response(plan)],
+    )
+    _prepare_run(
+        monkeypatch,
+        tmp_path,
+        plan=plan,
+        client=client,
+        snapshot=_snapshot(available=5, auto_workers=4, account_limit=10),
+    )
+    added = []
+    monkeypatch.setattr(
+        fleet,
+        "add_batch",
+        lambda **kwargs: added.append(kwargs) or {
+            "batch": {"status": "running", "workers": kwargs["workers"]},
+        },
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    question = json.loads(capsys.readouterr().out)
+    local_token = question["decision_token"]
+
+    assert run_plans.cmd_run_plan(_args(
+        decision_token=local_token,
+        concurrency_reply=["启用5道"],
+    )) == 0
+    resolved = json.loads(capsys.readouterr().out)
+    assert client.decision_calls[0]["user_reply"] == "启用5道"
+    assert resolved["agent_action"] == "apply_concurrency_decision"
+    assert resolved["agent"]["next_commands"][0]["args"] == [
+        "--concurrency", "5",
+        "--concurrency-decision-token", signed_token,
+        "--json",
+    ]
+    assert client.start_calls == []
+
+    assert run_plans.cmd_run_plan(_args(
+        concurrency=5,
+        concurrency_decision_token=signed_token,
+    )) == 0
+    started = json.loads(capsys.readouterr().out)
+    assert started["decision_required"] is False
+    assert client.start_calls == [{
+        "plan_id": plan["plan_id"],
+        "logical_session_id": "drl_logical_session_123456",
+        "concurrency_mode": "fixed",
+        "concurrency": 5,
+        "decision": None,
+        "decision_token": None,
+        "concurrency_decision_token": signed_token,
+    }]
+    assert added[0]["workers"] == 5
+
+    assert run_plans.cmd_run_plan(_args(
+        concurrency=5,
+        concurrency_decision_token=signed_token,
+    )) == 0
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["decision_required"] is True
+    assert replay["decision_token"].startswith("drlc_")
+    assert len(client.start_calls) == 1
+
+
+def test_malformed_concurrency_decision_response_fails_closed(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
+    client = FakeClient(decisions=[{
+        "schema_version": 1,
+        "status": "resolved",
+        "decision_required": False,
+        "user_message": "已确认。",
+        "agent_action": "apply_concurrency_decision",
+        "error_code": None,
+        "retryable": False,
+        "selected_concurrency": 3,
+        "max_concurrency": 3,
+        "concurrency_decision_token": "drc_missing_expiry",
+    }])
+    path, _state_value = _prepare_run(
+        monkeypatch,
+        tmp_path,
+        plan=plan,
+        client=client,
+        snapshot=_snapshot(available=3, auto_workers=3),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    question = json.loads(capsys.readouterr().out)
+    assert run_plans.cmd_run_plan(_args(
+        decision_token=question["decision_token"],
+        concurrency_reply=["3"],
+    )) == 1
+    failed = json.loads(capsys.readouterr().out)
+
+    assert failed["error_code"] == "protocol_invalid"
+    assert client.start_calls == []
+    assert run_plans._read_private_json(path)["pending_local_capacity"]
+
+
+def test_local_capacity_digest_change_rechecks_before_signed_action(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=10, task_count=10)
+    signed_token = "drc_capacity_digest_bound"
+    client = FakeClient(decisions=[{
+        "schema_version": 1,
+        "status": "resolved",
+        "decision_required": False,
+        "user_message": "已确认同时运行 5 道，正在做最后一次安全检查。",
+        "agent_action": "apply_concurrency_decision",
+        "error_code": None,
+        "retryable": False,
+        "selected_concurrency": 5,
+        "max_concurrency": 5,
+        "concurrency_decision_token": signed_token,
+        "decision_expires_at": "2099-01-01T00:00:00Z",
+    }])
+    first_snapshot = _snapshot(
+        available=5, auto_workers=4, account_limit=10,
+    )
+    changed_snapshot = _snapshot(
+        available=10, auto_workers=4, account_limit=10,
+    )
+    changed_snapshot["digest"] = "improved-capacity-digest"
+    _prepare_run(
+        monkeypatch,
+        tmp_path,
+        plan=plan,
+        client=client,
+    )
+    snapshots = iter([
+        first_snapshot, first_snapshot, changed_snapshot, changed_snapshot,
+    ])
+    monkeypatch.setattr(
+        run_plans,
+        "_capacity_snapshot",
+        lambda _client, _plan, _limits=None: next(snapshots),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    question = json.loads(capsys.readouterr().out)
+    assert run_plans.cmd_run_plan(_args(
+        decision_token=question["decision_token"],
+        concurrency_reply=["5"],
+    )) == 0
+    capsys.readouterr()
+
+    assert run_plans.cmd_run_plan(_args(
+        concurrency=5,
+        concurrency_decision_token=signed_token,
+    )) == 0
+    refreshed = json.loads(capsys.readouterr().out)
+
+    assert refreshed["decision_required"] is True
+    assert refreshed["agent"]["plan"]["plan_id"] == plan["plan_id"]
+    assert refreshed["decision_token"].startswith("drlc_")
+    assert refreshed["agent"]["recommended_concurrency"] == 5
+    assert refreshed["agent"]["requested_concurrency"] == 10
+    assert client.start_calls == []
+
+
+def test_expired_server_signed_concurrency_rechecks_without_losing_plan(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=10, task_count=10)
+    signed_token = "drc_expired_signed_concurrency"
+    client = FakeClient(
+        decisions=[{
+            "schema_version": 1,
+            "status": "resolved",
+            "decision_required": False,
+            "user_message": "已确认同时运行 5 道，正在做最后一次安全检查。",
+            "agent_action": "apply_concurrency_decision",
+            "error_code": None,
+            "retryable": False,
+            "selected_concurrency": 5,
+            "max_concurrency": 5,
+            "concurrency_decision_token": signed_token,
+            "decision_expires_at": "2099-01-01T00:00:00Z",
+        }],
+        starts=[ApiError(
+            "stale",
+            status_code=409,
+            code="concurrency_decision_invalid_or_state_changed",
+        )],
+    )
+    _prepare_run(
+        monkeypatch,
+        tmp_path,
+        plan=plan,
+        client=client,
+        snapshot=_snapshot(available=5, auto_workers=4, account_limit=10),
+    )
+    monkeypatch.setattr(
+        fleet, "add_batch", lambda **_kwargs: pytest.fail("stale token cannot start"),
+    )
+
+    assert run_plans.cmd_run_plan(_args()) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert run_plans.cmd_run_plan(_args(
+        decision_token=first["decision_token"],
+        concurrency_reply=["5"],
+    )) == 0
+    capsys.readouterr()
+
+    assert run_plans.cmd_run_plan(_args(
+        concurrency=5,
+        concurrency_decision_token=signed_token,
+    )) == 0
+    refreshed = json.loads(capsys.readouterr().out)
+
+    assert refreshed["decision_required"] is True
+    assert refreshed["agent"]["plan"]["plan_id"] == plan["plan_id"]
+    assert "网页" not in refreshed["user_message"]
+    assert len(client.start_calls) == 1
 
 
 @pytest.mark.parametrize(
