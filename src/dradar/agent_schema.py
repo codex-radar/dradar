@@ -58,7 +58,7 @@ COMMAND_SCHEMAS = {
             "other_stale_device": "confirm_before_continue",
             "different_plan": "notify_and_start_independently",
             "auto_capacity_reduction": "warn_and_start_with_safe_count",
-            "fixed_capacity_shortfall": "confirm_before_server_start",
+            "fixed_capacity_shortfall": "honor_explicit_count_without_local_estimates",
             "capacity_changed_during_start_auto": "retry_lower_then_warn",
             "capacity_changed_during_start_fixed": "confirm_lower_or_cancel",
             "capacity_temporarily_zero": "poll_then_replay_base_run_without_old_choices",
@@ -122,7 +122,7 @@ COMMAND_SCHEMAS = {
             ),
             _argument(
                 "--decision-token",
-                user_intent="执行用户刚刚明确同意的跨设备动作或本机固定数量选择",
+                user_intent="执行用户刚刚明确同意的跨设备动作或服务端可用数量选择",
                 allowed_when="前一次响应 decision_required=true，且用户已选择对应选项",
                 default=None,
                 state_change="消费一次性凭证并允许当前设备加入或继续",

@@ -312,11 +312,12 @@ def test_new_batch_waits_for_active_legacy_controller_without_interrupting(
         fleet.prepare_new_batch_runtime(tmp_path)
 
 
+@pytest.mark.parametrize("old_protocol", (None, 6))
 def test_idle_legacy_controller_is_rotated_without_user_decision(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, old_protocol,
 ):
     state = fleet._initial_state("legacy-controller", None)
-    state.pop("controller_protocol_version")
+    state["controller_protocol_version"] = old_protocol
     state["status"] = "active"
     fleet._write_state(tmp_path, state)
     live = {"value": True}
@@ -444,6 +445,66 @@ def test_auto_workers_subtract_existing_machine_reservations(monkeypatch):
     assert workers == 2  # global automatic cap 4 minus the existing two
     assert warnings == []
     assert metadata["reserved_before"] == 2
+
+
+@pytest.mark.parametrize("probe_state", ("small", "timeout", "unavailable"))
+def test_fixed_fleet_workers_ignore_resource_estimates_and_local_reservations(
+    monkeypatch, probe_state,
+):
+    class Client:
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            return {"active": [{"assignment_id": str(i)} for i in range(5)]}
+
+    probes = []
+
+    def probe(*_args, **_kwargs):
+        probes.append(probe_state)
+        if probe_state == "timeout":
+            raise subprocess.TimeoutExpired("docker info", 10)
+        if probe_state == "unavailable":
+            raise OSError("Docker resource probe is unavailable")
+        return 1, 1.0, ()
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+    monkeypatch.setattr(fleet, "inspect_capacity", probe)
+    monkeypatch.setattr(fleet, "docker_resources", probe)
+    state = {"batches": {BATCH_A: {"status": "running", "workers": 40}}}
+
+    workers, warnings, metadata = fleet._resolve_workers(5, BATCH_B, state)
+
+    assert workers == 5
+    assert warnings == []
+    assert probes == []
+    assert metadata["reserved_before"] == 40
+    assert metadata["account_limit"] == 5
+    assert metadata["held_tasks"] == 5
+    assert metadata["docker_cpus"] is None
+
+
+@pytest.mark.parametrize("workers", (0, 41, 6))
+def test_fixed_fleet_workers_still_reject_invalid_or_unauthorized_count(
+    monkeypatch, workers,
+):
+    client = argparse.Namespace(
+        set_batch_id=lambda _batch: None,
+        whoami=lambda: {"concurrent_limit": 5},
+        get_assignment=lambda: {"active": []},
+    )
+    monkeypatch.setattr(fleet, "_load_config", lambda: {})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: client)
+    monkeypatch.setattr(fleet, "inspect_capacity", lambda *_args: (
+        pytest.fail("fixed workers cannot use resource estimates")
+    ))
+
+    with pytest.raises(fleet.FleetError):
+        fleet._resolve_workers(workers, BATCH_B, {"batches": {}})
 
 
 def test_pool_command_is_exact_batch_resume_without_claim_or_refill(

@@ -5249,26 +5249,6 @@ def _run_worker_pool(args) -> int:
         # immutable BuildKit layers unless the user/config explicitly chose a
         # different policy.
         _refresh_build_cache_mode(args, cfg)
-    elif not fleet_pool:
-        from .capacity import docker_resources, worker_resource_warnings
-
-        cpus, memory_gib, probe_warnings = docker_resources()
-        resource_warnings = worker_resource_warnings(
-            args.workers, cpus, memory_gib,
-        )
-        for warning in (*probe_warnings, *resource_warnings):
-            print(f"warning: {warning}")
-        if resource_warnings:
-            print(
-                "  CPU/memory pressure can change agent retry paths and "
-                "benchmark results; use `--workers auto`, reduce N, or "
-                "increase the Docker VM resources before continuing."
-            )
-            if sys.platform == "darwin":
-                print(
-                    "  Colima users should prefer a dedicated DRadar profile "
-                    "instead of resizing another project's VM."
-                )
     if not args.yes:
         answer = input(
             f"start {args.workers} local workers? They share this machine's "

@@ -239,6 +239,9 @@ class FakeClient:
         self.progress_calls = []
         self.stop_calls = []
 
+    def whoami(self):
+        return {"concurrent_limit": 8, "claim_limit": 8}
+
     @staticmethod
     def _next(values):
         value = values.pop(0)
@@ -1232,144 +1235,153 @@ def test_server_stopped_start_response_never_launches_a_local_pool(
     assert stopped_batches == [BATCH_ID]
 
 
-def test_fixed_capacity_decision_precedes_server_start_and_is_one_use(
-    tmp_path, monkeypatch, capsys,
+@pytest.mark.parametrize("source", ("website", "command", "auto_plan_override"))
+@pytest.mark.parametrize("local_status", (None, "stopped"))
+@pytest.mark.parametrize("harness", (
+    "codex", "claude-code", "dsh-minimal", "grok-build",
+    "kimi-code", "zcode", "antigravity", "codebuddy",
+))
+def test_fixed_workers_reach_fleet_without_local_estimates(
+    tmp_path, monkeypatch, capsys, source, local_status, harness,
 ):
-    plan = _plan(mode="fixed", concurrency=4, task_count=4)
+    plan = _plan(
+        mode="auto" if source == "auto_plan_override" else "fixed",
+        concurrency=None if source == "auto_plan_override" else 5,
+        task_count=5,
+        harness=harness,
+    )
+    client = FakeClient(starts=[_server_response(plan)])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+
+    def forbidden_probe(*_args, **_kwargs):
+        pytest.fail("fixed N must not inspect static capacity or reservations")
+
+    monkeypatch.setattr(run_plans, "_capacity_snapshot", forbidden_probe)
+    monkeypatch.setattr("dradar.capacity.inspect_capacity", forbidden_probe)
+    monkeypatch.setattr("dradar.capacity.docker_resources", forbidden_probe)
+    monkeypatch.setattr(fleet, "reserved_workers", forbidden_probe)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: (
+        {"status": local_status, "plan_id": plan["plan_id"], "workers": 1}
+        if local_status else None
+    ))
+    added = []
+    monkeypatch.setattr(fleet, "add_batch", lambda **kwargs: (
+        added.append(kwargs) or
+        {"batch": {"status": "running", "workers": kwargs["workers"]}}
+    ))
+
+    assert run_plans.cmd_run_plan(
+        _args(concurrency=None if source == "website" else 5),
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["decision_required"] is False
+    assert payload["agent"]["selected_concurrency"] == 5
+    assert client.start_calls[0]["concurrency"] == 5
+    assert added[0]["workers"] == 5
+    assert added[0]["refill_harness"] == harness
+    assert added[0]["plan_id"] == plan["plan_id"]
+
+
+@pytest.mark.parametrize("with_old_token", (False, True))
+def test_upgrade_retires_old_local_resource_confirmation(
+    tmp_path, monkeypatch, capsys, with_old_token,
+):
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
     client = FakeClient(starts=[_server_response(plan)])
     path, state = _prepare_run(
         monkeypatch, tmp_path, plan=plan, client=client,
-        snapshot=_snapshot(available=2, auto_workers=2),
     )
-    added = []
-    monkeypatch.setattr(
-        fleet,
-        "add_batch",
-        lambda **kwargs: added.append(kwargs) or {"batch": {"workers": kwargs["workers"]}},
+    old = run_plans._local_capacity_response(
+        path, state, requested=5, recommended=1,
+        snapshot=_snapshot(available=1),
     )
+    monkeypatch.setattr(run_plans, "_capacity_snapshot", lambda *_args: (
+        pytest.fail("upgrading must not repeat the old resource estimate")
+    ))
+    monkeypatch.setattr(fleet, "add_batch", lambda **kwargs: {
+        "batch": {"workers": kwargs["workers"]},
+    })
 
-    assert run_plans.cmd_run_plan(_args()) == 0
-    decision = json.loads(capsys.readouterr().out)
-    token = decision["decision_token"]
-    assert decision["decision"] == "local_capacity"
-    assert decision["decision_required"] is True
-    assert client.start_calls == []
-    assert added == []
-    assert token not in path.read_text()
-    assert state["pending_local_capacity"]["token_hash"]
+    assert run_plans.cmd_run_plan(_args(
+        concurrency=5 if with_old_token else None,
+        decision_token=old["decision_token"] if with_old_token else None,
+    )) == 0
+    payload = json.loads(capsys.readouterr().out)
 
-    assert run_plans.cmd_run_plan(
-        _args(concurrency=2, decision_token=token),
-    ) == 0
-    started = json.loads(capsys.readouterr().out)
-    assert started["status"] == "started"
-    assert client.start_calls[0]["concurrency"] == 2
-    assert added[0]["workers"] == 2
-
-    assert run_plans.cmd_run_plan(
-        _args(concurrency=2, decision_token=token),
-    ) == 0
-    reused = json.loads(capsys.readouterr().out)
-    assert reused["decision_required"] is True
-    assert reused["decision"] == "local_capacity"
-    assert reused["decision_token"] != token
-    assert len(client.start_calls) == 1
+    assert payload["decision_required"] is False
+    assert client.start_calls[0]["concurrency"] == 5
+    assert client.start_calls[0]["decision_token"] is None
+    assert state["pending_local_capacity"] is None
 
 
-def test_progress_preserves_a_pending_local_capacity_barrier(
+def test_progress_discards_old_local_estimate_barrier_without_starting(
     tmp_path, monkeypatch, capsys,
 ):
-    plan = _plan(mode="fixed", concurrency=2, task_count=2)
-    client = FakeClient(progress=[pytest.fail])
-    path, state = _prepare_run(
-        monkeypatch, tmp_path, plan=plan, client=client,
-        snapshot=_snapshot(available=1, auto_workers=1),
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
+    client = FakeClient(progress=[_server_response(
+        plan, _envelope(status="ready", agent_action="notify_only"),
+    )])
+    path, state = _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    run_plans._local_capacity_response(
+        path, state, requested=5, recommended=1,
+        snapshot=_snapshot(available=1),
     )
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["error_code"] != "local_capacity_decision_pending"
+    assert client.progress_calls == [plan["plan_id"]]
+    assert client.start_calls == []
+    assert run_plans._read_private_json(path)["pending_local_capacity"] is None
+
+
+def test_progress_preserves_server_capacity_confirmation_and_cancel(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
+    client = FakeClient(starts=[
+        _capacity_error(requested=5, available=2, original_mode="fixed"),
+    ])
+    path, state = _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
 
     assert run_plans.cmd_run_plan(_args()) == 0
     decision = json.loads(capsys.readouterr().out)
-    assert decision["decision_required"] is True
+    assert decision["decision"] == "server_capacity"
+    assert decision["agent"]["choice_actions"]["cancel"] == {
+        "mode": "no_command", "args": [],
+    }
 
     assert run_plans.cmd_progress_plan(_args()) == 0
     blocked = json.loads(capsys.readouterr().out)
-
-    assert blocked["status"] == "blocked"
-    assert blocked["agent_action"] == "notify_only"
     assert blocked["error_code"] == "local_capacity_decision_pending"
-    assert blocked["agent"]["pending_user_decision"] is True
-    assert "没有设备" not in blocked["user_message"]
     assert client.progress_calls == []
-    assert run_plans._read_private_json(path)["pending_local_capacity"]
+    assert state["pending_local_capacity"]["decision"] == "server_capacity"
 
 
-def test_keep_requested_confirmation_survives_nonworsening_capacity_churn(
-    tmp_path, monkeypatch, capsys,
+@pytest.mark.parametrize("requested,account_limit,error", (
+    (0, 8, "concurrency_invalid"),
+    (41, 8, "concurrency_invalid"),
+    (6, 8, "concurrency_not_allowed"),
+    (5, 4, "concurrency_not_allowed"),
+))
+def test_fixed_workers_still_enforce_count_plan_and_server_limits(
+    tmp_path, monkeypatch, capsys, requested, account_limit, error,
 ):
-    plan = _plan(mode="fixed", concurrency=1, task_count=1)
-    client = FakeClient(starts=[_server_response(plan)])
-    current = {"snapshot": _snapshot(available=0, auto_workers=0)}
-    current["snapshot"]["digest"] = "before-sibling-startup"
+    plan = _plan(mode="fixed", concurrency=5, task_count=5)
+    client = FakeClient()
+    monkeypatch.setattr(client, "whoami", lambda: {
+        "concurrent_limit": account_limit,
+    })
     _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
-    monkeypatch.setattr(
-        run_plans, "_capacity_snapshot",
-        lambda *_args, **_kwargs: current["snapshot"],
-    )
-    added = []
-    monkeypatch.setattr(
-        fleet, "add_batch",
-        lambda **kwargs: added.append(kwargs) or {
-            "batch": {"status": "running", "workers": kwargs["workers"]},
-        },
-    )
+    monkeypatch.setattr(fleet, "add_batch", lambda **_kwargs: (
+        pytest.fail("invalid or unauthorized concurrency cannot start")
+    ))
 
-    assert run_plans.cmd_run_plan(_args()) == 0
-    decision = json.loads(capsys.readouterr().out)
-    assert decision["decision"] == "local_capacity"
-    token = decision["decision_token"]
-
-    # A sibling Harness completed startup, changing telemetry but not the
-    # zero-slot recommendation the user explicitly chose to override.
-    current["snapshot"] = _snapshot(available=0, auto_workers=0)
-    current["snapshot"]["digest"] = "after-sibling-startup"
-    assert run_plans.cmd_run_plan(
-        _args(concurrency=1, decision_token=token),
-    ) == 0
-    started = json.loads(capsys.readouterr().out)
-
-    assert started["decision_required"] is False
-    assert client.start_calls[0]["concurrency"] == 1
-    assert added[0]["workers"] == 1
-
-
-def test_keep_requested_reasks_when_capacity_recommendation_worsens(
-    tmp_path, monkeypatch, capsys,
-):
-    plan = _plan(mode="fixed", concurrency=4, task_count=4)
-    client = FakeClient(starts=[_server_response(plan)])
-    current = {"snapshot": _snapshot(available=2, auto_workers=2)}
-    current["snapshot"]["digest"] = "two-slots"
-    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
-    monkeypatch.setattr(
-        run_plans, "_capacity_snapshot",
-        lambda *_args, **_kwargs: current["snapshot"],
-    )
-    monkeypatch.setattr(
-        fleet, "add_batch", lambda **_kwargs: pytest.fail("must re-confirm"),
-    )
-
-    assert run_plans.cmd_run_plan(_args()) == 0
-    first = json.loads(capsys.readouterr().out)
-    current["snapshot"] = _snapshot(available=1, auto_workers=1)
-    current["snapshot"]["digest"] = "one-slot"
-
-    assert run_plans.cmd_run_plan(
-        _args(concurrency=4, decision_token=first["decision_token"]),
-    ) == 0
-    second = json.loads(capsys.readouterr().out)
-
-    assert second["decision_required"] is True
-    assert second["decision"] == "local_capacity"
-    assert second["agent"]["recommended_concurrency"] == 1
+    assert run_plans.cmd_run_plan(_args(concurrency=requested)) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_code"] == error
     assert client.start_calls == []
 
 
@@ -1645,8 +1657,9 @@ def test_lost_start_response_retry_ensures_missing_local_fleet_pool(
     assert added[0]["credentials_file"].name.startswith("plan-")
 
 
+@pytest.mark.parametrize("old_controller", (False, True))
 def test_same_device_with_live_local_pool_is_idempotently_ensured(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, old_controller,
 ):
     plan = _plan()
     client = FakeClient(starts=[_server_response(
@@ -1671,13 +1684,17 @@ def test_same_device_with_live_local_pool_is_idempotently_ensured(
         lambda *_args, **_kwargs: pytest.fail("idempotent monitor needs no capacity check"),
     )
     ensured = []
+
+    def ensure(**kwargs):
+        ensured.append(kwargs)
+        if old_controller:
+            raise fleet.FleetControllerUpdatePending()
+        return {"already_active": True, "batch": {"workers": kwargs["workers"]}}
+
     monkeypatch.setattr(
         fleet,
         "add_batch",
-        lambda **kwargs: ensured.append(kwargs) or {
-            "already_active": True,
-            "batch": {"workers": kwargs["workers"]},
-        },
+        ensure,
     )
 
     assert run_plans.cmd_run_plan(_args()) == 0
@@ -1880,7 +1897,7 @@ def test_concurrent_auto_plans_share_one_atomic_local_admission_budget(
     assert "concurrency" not in serialized
 
 
-def test_fixed_plan_rechecks_capacity_after_concurrent_plan_reservation(
+def test_fixed_plan_keeps_workers_after_concurrent_local_reservation(
     tmp_path, monkeypatch,
 ):
     plan_a = _plan(task_count=3)
@@ -1947,10 +1964,10 @@ def test_fixed_plan_rechecks_capacity_after_concurrent_plan_reservation(
         assert first.result(timeout=5) == 0
         assert second.result(timeout=5) == 0
 
-    assert sum(item["workers"] for item in reservations.values()) == 3
-    assert client_b.start_calls == []
-    assert outputs["run_capacity_plan_b"]["decision_required"] is True
-    assert outputs["run_capacity_plan_b"]["agent"]["recommended_concurrency"] == 1
+    assert sum(item["workers"] for item in reservations.values()) == 5
+    assert client_b.start_calls[0]["concurrency"] == 2
+    assert outputs["run_capacity_plan_b"]["decision_required"] is False
+    assert reservations[plan_b["batch_id"]]["workers"] == 2
 
 
 def test_stop_linearizes_after_inflight_start_and_stops_the_new_pool(
@@ -2014,10 +2031,14 @@ def test_stop_linearizes_after_inflight_start_and_stops_the_new_pool(
     assert client.stop_calls[0]["scope"] == "this_device"
 
 
+@pytest.mark.parametrize("fixed", (False, True))
 def test_current_plan_environment_failure_happens_before_server_start(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, fixed,
 ):
-    plan = _plan(harness="grok-build")
+    plan = _plan(
+        harness="grok-build", mode="fixed" if fixed else "auto",
+        concurrency=2 if fixed else None,
+    )
     client = FakeClient(starts=[_server_response(plan)])
     _prepare_run(
         monkeypatch,

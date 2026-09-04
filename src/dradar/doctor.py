@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 
 from . import __version__, docker_runtime, egress, runner
-from .capacity import docker_resources, worker_resource_warnings
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CLI_VERSION,
@@ -673,31 +672,6 @@ def cmd_doctor(args) -> int:
                 egress_ready,
                 egress_hint,
             )
-            cpus, memory_gib, probe_warnings = docker_resources()
-            if cpus is not None and memory_gib is not None:
-                resource_label = (
-                    f"docker resources ({cpus} CPU / {memory_gib:.1f} GiB memory)"
-                )
-                resource_warnings = worker_resource_warnings(
-                    1, cpus, memory_gib,
-                )
-                if resource_warnings:
-                    detail = "; ".join(resource_warnings)
-                    detail += (
-                        "; low Docker VM resources can trigger agent retries "
-                        "and distort benchmark results"
-                    )
-                    if plat == "macos":
-                        detail += (
-                            "; Colima users should prefer a dedicated DRadar "
-                            "profile instead of resizing another project's VM"
-                        )
-                    _warn(resource_label, detail)
-                else:
-                    _check(resource_label, True)
-            else:
-                for warning in probe_warnings:
-                    _warn("docker resources", warning)
 
     # Native Windows cannot run a task until Docker Desktop's Linux engine is
     # healthy. Avoid installing Pier or cloning the benchmark repository while
@@ -1023,9 +997,6 @@ def cmd_doctor(args) -> int:
             "run `dradar go` once — it installs the selected task pack at "
             f"{tasks_root}",
         )
-
-    free_gb = shutil.disk_usage(Path.home()).free / 1e9
-    all_ok &= _check(f"disk free ({free_gb:.0f} GB)", free_gb > 20, "need >20GB for task images")
 
     if cfg.get("server") and cfg.get("token"):
         try:

@@ -1376,14 +1376,16 @@ def test_worker_keeps_last_valid_target_during_atomic_file_replacement(
     assert runloop._worker_slot_is_enabled() is False
 
 
-def test_manual_workers_warn_before_starting_on_small_docker_vm(
-    monkeypatch, capsys,
+@pytest.mark.parametrize("entrypoint", ("pool", "go", "resume"))
+def test_manual_workers_skip_resource_estimates_and_keep_requested_target(
+    monkeypatch, capsys, entrypoint,
 ):
-    _patch_pool_setup(monkeypatch, active_count=3)
+    _patch_pool_setup(monkeypatch, active_count=5)
     monkeypatch.setattr(
         "dradar.capacity.docker_resources",
-        lambda: (2, 4.0, ()),
+        lambda: pytest.fail("fixed workers must not probe Docker capacity"),
     )
+    monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
     calls = []
     monkeypatch.setattr(
         runloop.subprocess, "Popen",
@@ -1392,12 +1394,13 @@ def test_manual_workers_warn_before_starting_on_small_docker_vm(
         ) or calls[-1],
     )
 
-    assert runloop._run_worker_pool(_args(workers=3)) == 0
+    args = _args(workers=5, resume=entrypoint == "resume")
+    command = runloop._run_worker_pool if entrypoint == "pool" else runloop.cmd_go
+    assert command(args) == 0
     out = capsys.readouterr().out
-    assert "reserve 6 Docker CPU" in out
-    assert "reserve 20 GiB Docker memory" in out
-    assert "use `--workers auto`" in out
-    assert len(calls) == 3
+    assert "use `--workers auto`" not in out
+    assert len(calls) == 5
+    assert all(process.env["DRADAR_POOL_SIZE"] == "5" for process in calls)
 
 
 def test_pool_does_not_start_more_workers_than_held_tasks(monkeypatch, capsys):

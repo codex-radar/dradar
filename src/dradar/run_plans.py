@@ -647,6 +647,44 @@ def _capacity_snapshot(
     return facts
 
 
+def _server_capacity_snapshot(
+    client: ApiClient,
+    plan: dict[str, Any],
+    limits: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate fixed concurrency without inspecting local resource estimates."""
+    me = client.whoami()
+    limits = limits if isinstance(limits, dict) else {}
+    account_limit = min(
+        max(1, int(me.get("concurrent_limit") or me.get("claim_limit") or 1)),
+        40,
+        *(
+            value for value in (
+                limits.get("account_concurrency"),
+                limits.get("account_claim_limit") if plan["refill"].get("enabled") else None,
+                limits.get("plan_task_limit"),
+            )
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 1
+        ),
+    )
+    facts = {"account_limit": account_limit, "available": account_limit}
+    facts["digest"] = hashlib.sha256(
+        json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
+    ).hexdigest()
+    return facts
+
+
+def _discard_local_estimate_decision(path: Path, state: dict[str, Any]) -> bool:
+    """Retire pre-upgrade resource prompts, retaining server capacity decisions."""
+    pending = state.get("pending_local_capacity")
+    if not isinstance(pending, dict) or pending.get("decision") == "server_capacity":
+        return False
+    state["pending_local_capacity"] = None
+    state["authorized_concurrency"] = None
+    _atomic_json(path, state)
+    return True
+
+
 def _local_capacity_response(
     path: Path,
     state: dict[str, Any],
@@ -1792,6 +1830,8 @@ def cmd_run_plan(args) -> int:
             and raw_decision_token.startswith("drlc_") else None
         )
         server_decision_token = None if local_decision_token else raw_decision_token
+        if _discard_local_estimate_decision(path, state):
+            local_decision_token = None
         from . import fleet
 
         current_local = fleet.batch_status(plan["batch_id"])
@@ -1959,6 +1999,12 @@ def cmd_run_plan(args) -> int:
                 # coordinator's exact-shape add is the idempotent local ensure
                 # needed after a lost server response or stale public snapshot.
                 fleet_response = ensure_local_pool(current_workers)
+            except fleet.FleetControllerUpdatePending:
+                # Existing work keeps its original controller until it exits;
+                # an upgrade must not interrupt or restart this known pool.
+                if current_status == "starting":
+                    return _local_preparing_response(response, selected=current_workers)
+                return _local_monitor_response(response, selected=current_workers)
             except fleet.FleetError as exc:
                 raise RunPlanClientError(
                     "local_start_failed",
@@ -2014,7 +2060,12 @@ def cmd_run_plan(args) -> int:
                     poll_after_seconds=30,
                 )
 
-        snapshot = _capacity_snapshot(client, plan, state.get("limits"))
+        mode, concurrency, fleet_workers = _concurrency(plan, requested_arg)
+        snapshot = (
+            _capacity_snapshot(client, plan, state.get("limits"))
+            if mode == "auto" and not local_decision_token
+            else _server_capacity_snapshot(client, plan, state.get("limits"))
+        )
         auto_downgraded = False
         refill_policy = plan["refill"]
         if refill_policy.get("enabled"):
@@ -2054,7 +2105,6 @@ def cmd_run_plan(args) -> int:
             automatic_intent = False
         else:
             bound_server_decision = None
-            mode, concurrency, fleet_workers = _concurrency(plan, requested_arg)
             automatic_intent = mode == "auto"
             if mode == "auto":
                 selected_workers = int(snapshot["auto_workers"])
@@ -2080,24 +2130,6 @@ def cmd_run_plan(args) -> int:
                 raise RunPlanClientError(
                     "concurrency_not_allowed",
                     f"这次运行最多可同时处理 {supply_limit} 道，请降低数量。",
-                )
-
-            exceeds_safe_capacity = selected_workers > int(snapshot["available"])
-            if (
-                exceeds_safe_capacity
-                and not _authorized_concurrency(state, selected_workers, snapshot)
-            ):
-                recommended = min(selected_workers, int(snapshot["available"]))
-                pending_server_decision = _decision_for(
-                    state, "run", server_decision_token,
-                )
-                return _local_capacity_response(
-                    path, state,
-                    requested=selected_workers,
-                    recommended=recommended,
-                    snapshot=snapshot,
-                    bound_server_decision=pending_server_decision,
-                    bound_server_decision_token=server_decision_token,
                 )
 
         if selected_workers > supply_limit:
@@ -2282,6 +2314,7 @@ def cmd_progress_plan(args) -> int:
         pending_capacity = state.get("pending_local_capacity")
         if (
             isinstance(pending_capacity, dict)
+            and pending_capacity.get("decision") == "server_capacity"
             and float(pending_capacity.get("expires_at") or 0) > time.time()
         ):
             return {
@@ -2290,8 +2323,8 @@ def cmd_progress_plan(args) -> int:
                 "interaction": "notify",
                 "decision_required": False,
                 "user_message": (
-                    "这次运行仍在等待你确认本机同时运行数量；在你回答刚才的"
-                    "安全确认前，不会启动题目，当前状态仍是等待你的选择。"
+                    "服务端可用运行位置已变化，仍在等待你确认调整后的数量；"
+                    "在你回答前不会启动题目，当前状态仍是等待你的选择。"
                 ),
                 "agent_action": "notify_only",
                 "error_code": "local_capacity_decision_pending",
@@ -2325,6 +2358,7 @@ def cmd_progress_plan(args) -> int:
                 return None
             # Merge only into the freshly re-read state.  Never write the old
             # pre-network snapshot back over a newer run/stop intent.
+            _discard_local_estimate_decision(path, current)
             _remember_response(path, current, response, command="progress")
             return current
 
