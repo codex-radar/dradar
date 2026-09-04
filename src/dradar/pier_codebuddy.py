@@ -66,29 +66,35 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     subset.  Missing or inconsistent evidence stays explicitly incomplete.
     """
 
-    terminals = [
+    terminal_events = [
         event for event in events
         if isinstance(event, dict)
         and event.get("type") == "result"
-        and isinstance(event.get("usage"), dict)
     ]
-    terminal = terminals[0] if len(terminals) == 1 else None
+    terminal = terminal_events[0] if len(terminal_events) == 1 else None
     terminal_usage = _usage_values(
         terminal.get("usage") if terminal is not None else None
     )
+    reasons: set[str] = set()
+    if not terminal_events:
+        reasons.add("terminal_aggregate_missing")
+    elif len(terminal_events) > 1:
+        reasons.add("terminal_aggregate_multiple")
+    elif terminal_usage is None:
+        reasons.add("terminal_usage_missing_or_invalid")
     names = (
         "input_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens", "output_tokens",
     )
     totals = {name: 0 for name in names}
     usage_by_message_id: dict[str, dict[str, int]] = {}
-    ledger_valid = True
+    conflicted_message_ids: set[str] = set()
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant":
             continue
         message = event.get("message")
         if not isinstance(message, dict):
-            ledger_valid = False
+            reasons.add("request_message_invalid")
             continue
         message_id = message.get("id")
         runtime_model = message.get("model")
@@ -97,7 +103,11 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
             and runtime_model
             and runtime_model != SUPPORTED_MODEL
         ):
-            ledger_valid = False
+            # A mismatched model is never admitted to the observed ledger.
+            # Correctly identified requests in the same stream remain useful
+            # evidence, but the run cannot reconcile or settle.
+            reasons.add("request_model_mismatch")
+            continue
         raw_usage = message.get("usage")
         usage = _usage_values(raw_usage)
         if usage is None:
@@ -110,17 +120,23 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 (_nonnegative_int(raw_usage.get(name)) or 0) > 0
                 for name in names
             ):
-                ledger_valid = False
+                reasons.add("request_usage_invalid")
             continue
         if sum(usage.values()) == 0:
             continue
         if not isinstance(message_id, str) or not message_id:
-            ledger_valid = False
+            reasons.add("request_id_missing")
+            continue
+        if message_id in conflicted_message_ids:
             continue
         previous = usage_by_message_id.get(message_id)
         if previous is not None:
             if previous != usage:
-                ledger_valid = False
+                # Neither side of a conflicting identity is authoritative.
+                # Remove only that request and preserve unrelated records.
+                reasons.add("request_id_conflict")
+                conflicted_message_ids.add(message_id)
+                del usage_by_message_id[message_id]
             continue
         usage_by_message_id[message_id] = usage
 
@@ -135,12 +151,20 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
             "cache_creation_tokens": usage["cache_creation_input_tokens"],
         })
 
-    terminal_success = bool(
-        terminal is not None
-        and terminal.get("is_error") is not True
-        and terminal.get("usage_is_incomplete") is not True
-        and terminal.get("subtype") in {"success", None}
-    )
+    if terminal is not None:
+        terminal_model = terminal.get("model")
+        if (
+            isinstance(terminal_model, str)
+            and terminal_model
+            and terminal_model != SUPPORTED_MODEL
+        ):
+            reasons.add("terminal_model_mismatch")
+        if terminal.get("is_error") is True:
+            reasons.add("terminal_error")
+        if terminal.get("usage_is_incomplete") is True:
+            reasons.add("terminal_usage_incomplete")
+        if terminal.get("subtype") not in {"success", None}:
+            reasons.add("terminal_status_not_success")
     if terminal_usage is not None:
         reported_total = terminal.get("total_tokens")
         if reported_total is not None:
@@ -149,39 +173,61 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 + terminal_usage["output_tokens"]
             )
             if _nonnegative_int(reported_total) != expected_total:
-                terminal_success = False
+                reasons.add("terminal_total_tokens_mismatch")
+    observed = bool(token_usage_events)
+    if not observed:
+        reasons.add("request_ledger_unavailable")
+    if terminal_usage is not None and terminal_usage != totals:
+        reasons.add("terminal_aggregate_mismatch")
     complete = bool(
-        terminal_success
-        and ledger_valid
+        not reasons
         and terminal_usage is not None
-        and token_usage_events
+        and observed
         and terminal_usage == totals
-        and sum(totals.values()) > 0
+        and totals["input_tokens"] + totals["output_tokens"] > 0
     )
-    selected = totals if complete else {name: 0 for name in names}
+    selected = totals if observed else {name: 0 for name in names}
     prompt = selected["input_tokens"]
+    reason_order = (
+        "terminal_aggregate_missing",
+        "terminal_aggregate_multiple",
+        "terminal_usage_missing_or_invalid",
+        "terminal_model_mismatch",
+        "terminal_error",
+        "terminal_usage_incomplete",
+        "terminal_status_not_success",
+        "terminal_total_tokens_mismatch",
+        "request_model_mismatch",
+        "request_message_invalid",
+        "request_usage_invalid",
+        "request_id_missing",
+        "request_id_conflict",
+        "request_ledger_unavailable",
+        "terminal_aggregate_mismatch",
+    )
+    incomplete_reasons = [reason for reason in reason_order if reason in reasons]
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "codebuddy",
         "model": SUPPORTED_MODEL,
         "complete": complete,
-        "request_count": len(token_usage_events) if complete else 0,
+        "request_count": len(token_usage_events) if observed else 0,
         "n_input_tokens": prompt,
         "n_cache_tokens": selected["cache_read_input_tokens"],
         "n_output_tokens": selected["output_tokens"],
         "cache_creation_tokens": selected["cache_creation_input_tokens"],
-        "token_usage_events": token_usage_events if complete else [],
+        "token_usage_events": token_usage_events if observed else [],
         "request_usage_complete": complete,
-        "request_usage_observed": complete,
+        "request_usage_observed": observed,
         "timed_usage_complete": False,
         "usage_incomplete_reason": (
-            None if complete else
-            "terminal_aggregate_missing_or_inconsistent"
-            if token_usage_events else
-            "request_ledger_unavailable_or_invalid"
+            None if complete else incomplete_reasons[0]
         ),
+        "usage_incomplete_reasons": incomplete_reasons,
         "usage_evidence_tier": (
-            "complete_reconciled" if complete else "unavailable"
+            "complete_reconciled" if complete
+            else "observed_unreconciled" if observed
+            else "unavailable"
         ),
         "provider_actual_cost_observed": False,
         "cost_semantics": "server-priced-api-equivalent",
@@ -450,10 +496,11 @@ class CodeBuddySubscription(ClaudeCode):
 
         super().populate_context_post_run(context)
         complete = usage["complete"] is True
+        observed = usage["request_usage_observed"] is True
         context.cost_usd = None
-        context.n_input_tokens = int(usage["n_input_tokens"]) if complete else 0
-        context.n_cache_tokens = int(usage["n_cache_tokens"]) if complete else 0
-        context.n_output_tokens = int(usage["n_output_tokens"]) if complete else 0
+        context.n_input_tokens = int(usage["n_input_tokens"]) if observed else 0
+        context.n_cache_tokens = int(usage["n_cache_tokens"]) if observed else 0
+        context.n_output_tokens = int(usage["n_output_tokens"]) if observed else 0
 
         trajectory_path = self.logs_dir / "trajectory.json"
         try:
@@ -481,9 +528,9 @@ class CodeBuddySubscription(ClaudeCode):
             metrics = {}
             trajectory["final_metrics"] = metrics
         metrics.update({
-            "total_prompt_tokens": usage["n_input_tokens"] if complete else None,
-            "total_cached_tokens": usage["n_cache_tokens"] if complete else None,
-            "total_completion_tokens": usage["n_output_tokens"] if complete else None,
+            "total_prompt_tokens": usage["n_input_tokens"] if observed else None,
+            "total_cached_tokens": usage["n_cache_tokens"] if observed else None,
+            "total_completion_tokens": usage["n_output_tokens"] if observed else None,
             "total_cost_usd": None,
         })
         extra = metrics.get("extra")
@@ -493,6 +540,8 @@ class CodeBuddySubscription(ClaudeCode):
             "billing_basis": "subscription",
             "cost_not_reported": True,
             "usage_complete": complete,
+            "usage_evidence_tier": usage["usage_evidence_tier"],
+            "usage_incomplete_reason": usage["usage_incomplete_reason"],
         })
         metrics["extra"] = extra
         try:

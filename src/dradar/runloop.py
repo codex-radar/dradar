@@ -1401,14 +1401,66 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             "request_ledger_unavailable_or_invalid",
         },
         "codebuddy": {
+            # Legacy 0.5.189 sidecars may still be waiting for upload when a
+            # newer launcher resumes them. Accept their coarse codes without
+            # emitting those codes for newly observed runs.
             "terminal_aggregate_missing_or_inconsistent",
             "request_ledger_unavailable_or_invalid",
+            "terminal_aggregate_missing",
+            "terminal_aggregate_multiple",
+            "terminal_usage_missing_or_invalid",
+            "terminal_model_mismatch",
+            "terminal_error",
+            "terminal_usage_incomplete",
+            "terminal_status_not_success",
+            "terminal_total_tokens_mismatch",
+            "request_model_mismatch",
+            "request_message_invalid",
+            "request_usage_invalid",
+            "request_id_missing",
+            "request_id_conflict",
+            "request_ledger_unavailable",
+            "terminal_aggregate_mismatch",
         },
     }
     if (not complete and (
             value.get("complete") is not False
             or incomplete_reason not in allowed_incomplete_reasons[expected_provider])):
         return None
+    raw_incomplete_reasons = value.get("usage_incomplete_reasons")
+    if expected_provider != "codebuddy":
+        if raw_incomplete_reasons is not None:
+            return None
+        incomplete_reasons = None
+    else:
+        if raw_incomplete_reasons is None:
+            incomplete_reasons = [] if complete else [incomplete_reason]
+        elif (
+            not isinstance(raw_incomplete_reasons, list)
+            or len(raw_incomplete_reasons) > len(
+                allowed_incomplete_reasons[expected_provider]
+            )
+            or any(
+                not isinstance(reason, str)
+                or reason not in allowed_incomplete_reasons[expected_provider]
+                for reason in raw_incomplete_reasons
+            )
+            or len(set(raw_incomplete_reasons)) != len(raw_incomplete_reasons)
+        ):
+            return None
+        else:
+            incomplete_reasons = list(raw_incomplete_reasons)
+        if (
+            (complete and incomplete_reasons)
+            or (
+                not complete
+                and (
+                    not incomplete_reasons
+                    or incomplete_reasons[0] != incomplete_reason
+                )
+            )
+        ):
+            return None
     names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
     if any(
         not isinstance(value.get(name), int)
@@ -1468,13 +1520,16 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             return None
     else:
         events = []
-    return {
+    normalized = {
         **value,
         "token_usage_events": events,
         "request_usage_complete": request_complete,
         "request_usage_observed": observed,
         "timed_usage_complete": timed,
     }
+    if incomplete_reasons is not None:
+        normalized["usage_incomplete_reasons"] = incomplete_reasons
+    return normalized
 
 
 def _claude_trial_usage_from_trajectory(
@@ -2013,6 +2068,7 @@ def _upload_trial(
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
             "request_usage_complete", "request_usage_observed",
+            "usage_incomplete_reasons",
             "timed_usage_incomplete_reason", "usage_aggregate_source",
             "usage_incomplete_reason", "usage_evidence_tier",
             "session_usage_model_request_count", "request_ledger_duplicate_count",
