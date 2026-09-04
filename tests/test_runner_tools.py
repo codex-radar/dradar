@@ -58,6 +58,29 @@ def test_codex_disables_server_side_network_tools(tmp_path, monkeypatch):
     assert config["__pier_allowlist"] == {"url": "https://chatgpt.com"}
 
 
+def test_codex_astra_assignment_reaches_pier_without_model_or_effort_aliasing(
+    tmp_path, monkeypatch,
+):
+    _stub_pier(monkeypatch)
+    (tmp_path / "abs-module-cache-flags").mkdir()
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(auth))
+    home = tmp_path / "home"
+    home.mkdir()
+
+    cmd = build_pier_command(
+        _assignment("codex", model="gpt-6-astra", effort="ultra"),
+        tmp_path,
+        tmp_path / "jobs",
+        "j",
+        home,
+    )
+
+    assert cmd[cmd.index("--model") + 1] == "gpt-6-astra"
+    assert "reasoning_effort=ultra" in cmd
+
+
 def test_codex_prompt_leaves_post_run_artifact_to_pier(tmp_path, monkeypatch):
     _stub_pier(monkeypatch)
     task = tmp_path / "abs-module-cache-flags"
