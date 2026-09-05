@@ -153,6 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run_plan = sub.add_parser(
         "run", help="run the exact tasks selected on the website")
     p_run_plan.add_argument(
+        "--follow", action="store_true",
+        help="manage this plan locally until finished or user action is needed")
+    p_run_plan.add_argument(
+        "--locale", choices=("zh-CN", "en-US"), default="zh-CN",
+        help="language for local session instructions")
+    p_run_plan.add_argument("--confirmation", help="local session request ID to resume after an explicit choice")
+    p_run_plan.add_argument("--choice", choices=("install", "join_existing", "recover_stale", "use_recommended", "keep_requested", "cancel"),
+                           help="explicit user choice for a pending local session request")
+    p_run_plan.add_argument(
         "--plan", required=True, metavar="CODE",
         help="short-lived run code copied from the website",
     )
