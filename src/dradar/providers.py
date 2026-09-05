@@ -1329,6 +1329,33 @@ def claude_oauth_path(home: Path | None = None) -> Path:
     return claude_home(home) / CLAUDE_OAUTH_TOKEN_FILENAME
 
 
+def claude_config_path(home: Path | None = None) -> Path:
+    return claude_home(home) / "oauth-config" / ".credentials.json"
+
+
+def claude_cli_path() -> str | None:
+    explicit = os.environ.get("CLAUDE_CLI_PATH", "").strip()
+    return str(Path(explicit).expanduser()) if explicit else shutil.which("claude")
+
+
+def claude_subscription_path(home: Path | None = None) -> Path:
+    config = claude_config_path(home)
+    # An invalid imported configuration must not silently select another login.
+    return config if config.exists() or config.is_symlink() else claude_oauth_path(home)
+
+
+def claude_subscription_error(home: Path | None = None) -> str | None:
+    path = claude_subscription_path(home)
+    if path == claude_oauth_path(home):
+        return claude_oauth_error(path)
+    from .credential_files import claude_config_payload, read_private_credential
+    try:
+        claude_config_payload(read_private_credential(path))
+    except (OSError, ValueError):
+        return "Claude native OAuth configuration is unsafe or incomplete"
+    return None
+
+
 def claude_oauth_error(path: Path | None = None) -> str | None:
     """Validate an owner-only Claude.ai subscription setup token.
 
@@ -1401,20 +1428,22 @@ def store_claude_oauth_token(
 
 @contextmanager
 def claude_subscription_session(directory: Path, *, home: Path | None = None):
-    """Expose the canonical OAuth token to one host-side Pier adapter.
+    """Expose the selected subscription credential to one Pier adapter.
 
     Claude setup tokens do not rotate in place, so concurrent trials may read
     the same owner-only file. The adapter transfers only the value to Claude's
-    process environment inside the disposable task container.
+    process environment inside the disposable task container. Native OAuth
+    configuration instead receives a private container-local snapshot; the
+    authority file is never mounted writable or changed by the adapter.
     """
 
-    canonical = claude_oauth_path(home)
-    issue = claude_oauth_error(canonical)
+    canonical = claude_subscription_path(home)
+    issue = claude_subscription_error(home)
     if issue is not None:
         raise ValueError(issue + "; run `dradar provider setup claude` first")
     directory.mkdir(parents=True, exist_ok=True)
     yield canonical
-    issue = claude_oauth_error(canonical)
+    issue = claude_subscription_error(home)
     if issue is not None:
         raise ValueError("Claude OAuth credential became unsafe: " + issue)
 
@@ -1983,7 +2012,7 @@ def advertised_capabilities(
     if grok_cli_path(environ) and grok_auth_error() is None:
         capabilities.append(GROK_CAPABILITY)
     if (
-        claude_oauth_error() is None
+        claude_subscription_error() is None
         and Path(__file__).with_name("pier_claude.py").is_file()
     ):
         capabilities.append(CLAUDE_CAPABILITY)

@@ -2414,7 +2414,7 @@ def test_claude_plan_accepts_ready_subscription_runtime(monkeypatch):
     )
     monkeypatch.setattr(doctor, "_probe", lambda _command: True)
     monkeypatch.setattr(doctor.runner, "ensure_pier", lambda: None)
-    monkeypatch.setattr(doctor, "claude_oauth_error", lambda: None)
+    monkeypatch.setattr(doctor, "claude_subscription_error", lambda: None)
 
     assert doctor.plan_environment_issue(
         _plan(harness="claude-code", task_count=1),
@@ -2505,7 +2505,7 @@ def test_claude_plan_fails_closed_with_actionable_setup(missing, monkeypatch):
     monkeypatch.setattr(doctor, "_probe", lambda _command: True)
     monkeypatch.setattr(doctor.runner, "ensure_pier", lambda: None)
     monkeypatch.setattr(
-        doctor, "claude_oauth_error",
+        doctor, "claude_subscription_error",
         lambda: "missing OAuth" if missing == "oauth" else None,
     )
 

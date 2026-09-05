@@ -203,8 +203,7 @@ DRadar 服务端。若代理协议、容器路由或官方镜像下载不可用�
 
 Claude Code Harness 只接受 Claude.ai 订阅 OAuth，不接受 `ANTHROPIC_API_KEY`、
 `ANTHROPIC_AUTH_TOKEN`、Bedrock 或自定义 API Base URL。普通 `claude auth login` 用于先确认
-当前账号和模型权限；Pier 容器需要官方 `claude setup-token` 生成的长期订阅 OAuth，统一由
-下面的交互式命令采集，输入不回显：
+当前账号和模型权限。原有的长期订阅 `setup-token` 流程继续支持，输入不回显：
 
 ```bash
 claude install latest
@@ -213,6 +212,18 @@ dradar provider setup claude
 dradar provider status claude --live
 dradar doctor --agent claude-code
 ```
+
+已有官方 Claude OAuth 配置时，也可以显式导入完整订阅配置，避免重新登录：
+
+```bash
+dradar provider setup claude --claude-config-dir /private/official-claude-config
+```
+
+源目录中的 `.credentials.json` 必须由当前用户所有且为 `0600` 普通文件；仅导入完整
+`claudeAiOauth` 配置，不导入 plugins、hooks 或 MCP。原文件保持不变，且不会把 access token
+转换成 setup-token。容器配置保存在采集目录之外，仅将会话日志单独保留；即使清理失败，
+认证文件也不会进入上传目录。导入配置被明确选择后，不会自动回退到旧 setup-token 或
+遗留的按量 API/云后端认证。可用 `CLAUDE_CLI_PATH` 明确选择现有官方 CLI。
 
 当前运行合同固定为 Claude Code `2.1.251`，前端展示两张模型卡片：
 
@@ -379,6 +390,11 @@ dradar go --pick TASK_ID:glm-5.3:high
 dradar go --pick TASK_ID:glm-5.3-flash:high
 ```
 
+已有私有 Coding Plan key 文件时，使用
+`dradar provider setup zcode --coding-plan-key-file /private/coding-plan-key`。
+文件须由当前用户所有且为 `0600` 普通文件；导入前只验证 Coding Plan 专用入口，不回退
+到普通按量 API 入口。验证失败保留旧凭据，成功时也不修改源文件。
+
 `provider setup` 会从官方桌面安装的 `Resources/glm/zcode.cjs` 导入协议 CLI；新任务默认
 使用当前已验证的 `0.16.5`。桌面版本与内嵌协议 CLI 版本分别管理，assignment 中的旧版本
 只作兼容提示，不会阻塞本机最新版。普通 GLM-5.3 接受 `0.16.x >= 0.16.3`，Flash 接受
@@ -394,6 +410,12 @@ allowlist/denylist，保留完整编码和 `Agent` 子代理能力；网络仍�
 端点。任务中断不会恢复 ZCode session/rollout；运行完成后的精确产物只走待上传账本。
 
 ### Google Antigravity Gemini 3.7 Flash 订阅 OAuth agent
+
+已有官方 `.gemini` consumer OAuth 目录时，可运行
+`dradar provider setup antigravity --antigravity-oauth-dir /private/official/.gemini`。
+导入只保存 OAuth、最小 project 选择和当前受审查设置，不复制历史会话、缓存、MCP 或
+备份凭据，不发起新的容器 OAuth 登录。源文件必须私有且归当前用户所有，源目录保持不变，
+失败保留旧配置。导入证明本地格式与运行时就绪，不证明某模型仍有额度或调用资格。
 
 Antigravity 只使用 DRadar 独立的 Google OAuth 状态和固定 Linux CLI `1.1.22`，模型固定为
 `gemini-3.7-flash` 的 `low`/`medium`/`high` 三档。每题在 Pier Docker 中使用
