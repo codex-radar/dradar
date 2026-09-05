@@ -203,6 +203,7 @@ def _plan_agent_recovery(
         })
     return {
         "schema_version": 1,
+        "environment_scope": {"harness": harness, "provider": setup_provider},
         "requires_user_action": bool(codex_login or setup_provider),
         "next_commands": commands,
     }

@@ -34,6 +34,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .local_config import HOME, _load_config
+from .agent_actions import ActionValidationError, validate_actions, validate_envelope
 
 
 SCHEMA_VERSION = 1
@@ -397,11 +398,16 @@ def _validate_envelope(value: object) -> dict[str, Any]:
         raise RunPlanClientError("protocol_invalid", "服务返回的信息不完整，请升级后重试。")
     if value.get("schema_version", SCHEMA_VERSION) != SCHEMA_VERSION:
         raise RunPlanClientError("schema_version_unsupported", "运行协议版本不兼容，请升级后重试。")
+    try:
+        validate_envelope(value)
+    except ActionValidationError as exc:
+        raise RunPlanClientError("protocol_invalid", f"运行信息校验失败：{exc}。已停止后续动作，请升级 DRadar 或联系支持。") from None
     return value
 
 
 def _validate_response(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
+    if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+            or value.get("schema_version") != SCHEMA_VERSION):
         raise RunPlanClientError("schema_version_unsupported", "运行协议版本不兼容，请升级后重试。")
     _validate_envelope(value.get("envelope"))
     return value
@@ -410,7 +416,9 @@ def _validate_response(value: object) -> dict[str, Any]:
 def _validate_plan(value: object) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
         or value.get("schema_version") != SCHEMA_VERSION
+        or type(value.get("plan_version")) is not int
         or value.get("plan_version") != 1
     ):
         raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
@@ -1476,7 +1484,11 @@ def _remember_response(
     command: str,
 ) -> None:
     if isinstance(response.get("plan"), dict):
-        state["plan"] = _validate_plan(response["plan"])
+        plan = _validate_plan(response["plan"])
+        if any(plan.get(key) != state["plan"].get(key)
+               for key in ("plan_id", "batch_id", "benchmark_id", "harness")):
+            raise RunPlanClientError("plan_scope_mismatch", "服务返回的运行范围已改变，已停止后续动作。")
+        state["plan"] = plan
     envelope = _validate_envelope(response["envelope"])
     if envelope.get("decision_required"):
         decision = envelope.get("decision")
@@ -1508,10 +1520,43 @@ def _decision_for(state: dict[str, Any], command: str, token: str | None) -> str
 
 
 def _output(args, response: dict[str, Any]) -> int:
-    if not isinstance(response, dict) or response.get("schema_version") != SCHEMA_VERSION:
+    try:
+        return _validated_output(args, response)
+    except (ActionValidationError, RunPlanClientError) as exc:
+        # Never include raw response values, arguments, paths or capabilities.
+        message = (exc.user_message if isinstance(exc, RunPlanClientError)
+                   else f"后续动作校验失败：{exc}。已停止后续动作，请升级 DRadar 或联系支持。")
+        safe = _local_error_response(RunPlanClientError("agent_action_invalid", message))
+        safe["agent"] = {"schema_version": 1, "action_contract_version": 1}
+        if getattr(args, "json", False):
+            print(json.dumps(safe, ensure_ascii=False, sort_keys=True))
+        else:
+            print(message)
+        return 1
+
+
+def _validated_output(args, response: dict[str, Any]) -> int:
+    if (not isinstance(response, dict) or type(response.get("schema_version")) is not int
+            or response.get("schema_version") != SCHEMA_VERSION):
         raise RunPlanClientError("protocol_invalid", "服务返回的信息不完整，请升级后重试。")
     _validate_envelope(response)
-    agent = response.get("agent")
+    agent = validate_actions(response)
+    response = {**response, "agent": agent}
+    # Human-readable fields may quote a capability supplied by an upstream
+    # error. Preserve the concrete reason while masking known capabilities.
+    secrets_to_mask = [getattr(args, name, None) for name in
+                       ("plan", "decision_token", "docker_install_token")]
+    secrets_to_mask.append(response.get("decision_token"))
+    def public_text(value: str) -> str:
+        for secret in secrets_to_mask:
+            if isinstance(secret, str) and secret:
+                value = value.replace(secret, "[已脱敏]")
+        return value
+    response["user_message"] = public_text(response["user_message"])
+    response["choices"] = [
+        {**choice, "label": public_text(choice["label"])}
+        for choice in response["choices"]
+    ]
     if isinstance(agent, dict):
         nested_version = agent.get("schema_version")
         if nested_version not in {None, SCHEMA_VERSION}:
@@ -1607,11 +1652,21 @@ def _followup_launcher() -> dict[str, Any] | None:
 def _agent_response_from_server(response: dict[str, Any]) -> dict[str, Any]:
     """Expose exactly one decision envelope while retaining machine state."""
     response = _validate_response(response)
-    envelope = dict(response["envelope"])
+    envelope = {key: value for key, value in response["envelope"].items() if key in {
+        "schema_version", "status", "interaction", "decision_required",
+        "user_message", "agent_action", "error_code", "retryable", "choices",
+        "decision", "decision_token", "poll_after_seconds", "user_message_policy",
+    }}
     result = {"schema_version": SCHEMA_VERSION, **envelope}
     agent = {
         key: value for key, value in response.items()
-        if key not in {"schema_version", "envelope", "plan_access_token"}
+        if key in {
+            "plan", "state", "progress", "device", "identity", "limits",
+            "requested_concurrency", "available_concurrency",
+            "account_concurrency", "account_concurrency_in_use",
+            "plan_concurrency", "plan_concurrency_in_use",
+            "original_concurrency_mode", "limiting_scope",
+        }
     }
     if envelope.get("decision_required"):
         token = envelope.get("decision_token")
@@ -1754,10 +1809,15 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
         return 1
     except ApiError as exc:
         response = _api_error_response(exc)
-        _output(args, response)
+        if _output(args, response):
+            return 1
         return 0 if response.get("decision_required") else 1
     if "envelope" in response:
-        response = _agent_response_from_server(response)
+        try:
+            response = _agent_response_from_server(response)
+        except RunPlanClientError as exc:
+            _output(args, _local_error_response(exc))
+            return 1
     return _output(args, response)
 
 
@@ -1957,7 +2017,7 @@ def cmd_run_plan(args) -> int:
                             f"这台设备已在同时运行 {current_workers} 道。要改为 "
                             f"{requested_workers} 道，请先停止这台设备，再按新数量运行。"
                         ),
-                        agent_action="ask_user",
+                        agent_action="notify_only",
                         agent_details={
                             "schema_version": SCHEMA_VERSION,
                             "requires_user_action": True,
