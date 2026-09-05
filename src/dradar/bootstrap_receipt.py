@@ -50,6 +50,8 @@ def ready(path: Path, nonce: str, revision: str) -> bool:
             return False
         if os.name != "nt" and (path.stat().st_uid != os.getuid() or stat.S_IMODE(path.stat().st_mode) & 0o077):
             return False
-        return json.loads(path.read_bytes()) == {"version": 1, "nonce": nonce, "revision": revision}
+        value = json.loads(path.read_bytes())
+        return (isinstance(value, dict) and type(value.get("version")) is int and
+                value == {"version": 1, "nonce": nonce, "revision": revision})
     except (OSError, ValueError, TypeError):
         return False
