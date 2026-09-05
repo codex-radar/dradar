@@ -128,3 +128,11 @@ def test_invalid_receipt_environment_cannot_signal_readiness(monkeypatch, tmp_pa
     monkeypatch.setenv(bootstrap_receipt.NONCE_ENV, 'invalid')
     with pytest.raises(ValueError): bootstrap_receipt.signal_ready('a' * 40)
     assert not path.exists()
+
+def test_receipt_version_is_not_coerced_from_boolean(monkeypatch, tmp_path):
+    path, nonce = receipt_env(monkeypatch, tmp_path)
+    bootstrap_receipt.signal_ready('a' * 40)
+    value = json.loads(path.read_text())
+    value['version'] = True
+    path.write_text(json.dumps(value))
+    assert not bootstrap_receipt.ready(path, nonce, 'a' * 40)
