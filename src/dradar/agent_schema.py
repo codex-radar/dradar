@@ -67,6 +67,32 @@ COMMAND_SCHEMAS = {
         },
         "arguments": [
             _argument(
+                "--confirmation",
+                user_intent="在用户明确选择后继续本机保存的同一确认请求",
+                allowed_when="--follow 与 --choice 同时提供，且本地编号、计划、站点、代次及有效期匹配",
+                default=None, state_change="消费一次本地确认；不接收远端命令数组",
+                decision_required=True, idempotency="single_use_local_confirmation",
+                failure_codes=["session_confirmation_expired"],
+            ),
+            _argument(
+                "--choice",
+                user_intent="提交用户刚明确选择的有限选项",
+                allowed_when="仅与当前 --confirmation 配对；不从自然语言构造命令",
+                default=None, state_change="仅进入固定的确认或取消分支",
+                decision_required=True, idempotency="single_use_local_confirmation",
+                failure_codes=["session_confirmation_expired", "session_decision_unsupported"],
+            ),
+            _argument(
+                "--follow",
+                user_intent="由本机 CLI 持续管理同一计划，外层仅展示进度和处理必要确认",
+                allowed_when="已授权运行当前计划；不能携带旧确认/恢复参数或 --json",
+                default=False,
+                state_change="直接调用本地运行、进度、有限恢复操作；不执行响应里的通用命令",
+                decision_required=False,
+                conflicts_with=["--json", "--upload-only", "--decision-token", "--docker-install-token", "--recheck-generation"],
+                idempotency="reuse_plan_scope_and_existing_one_use_decisions",
+            ),
+            _argument(
                 "--plan",
                 user_intent="运行网页交给 Agent 的这次领取",
                 allowed_when="运行码仍可交换，或本机已保存该计划的短期权限",
