@@ -26,7 +26,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -1234,6 +1234,7 @@ def _plan_recheck_response(
     )
     agent: dict[str, Any] = {
         "next_commands": [_plan_recheck_action(command, generation)],
+        "intent_generation": generation,
     }
     if server_status is not None:
         agent["server_status"] = server_status
@@ -1758,7 +1759,7 @@ def _api_error_response(exc: ApiError) -> dict[str, Any]:
     ))
 
 
-def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
+def _plan_operation(args, operation: Callable[[], dict[str, Any]]) -> tuple[int, dict[str, Any]]:
     @contextmanager
     def isolated_operation_stdout():
         """Keep Agent JSON stdout valid even when a dependency prints.
@@ -1777,23 +1778,32 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
             try:
                 with tempfile.TemporaryFile(mode="w+b") as sink:
                     saved_stdout = os.dup(1)
+                    saved_stderr = os.dup(2) if getattr(args, "_session", False) else None
                     try:
                         try:
                             sys.stdout.flush()
                         except (AttributeError, OSError):
                             pass
                         os.dup2(sink.fileno(), 1)
+                        if saved_stderr is not None:
+                            sys.stderr.flush()
+                            os.dup2(sink.fileno(), 2)
                         with os.fdopen(
                             os.dup(sink.fileno()),
                             "w",
                             encoding="utf-8",
                             errors="replace",
-                        ) as text_sink, redirect_stdout(text_sink):
+                        ) as text_sink, redirect_stdout(text_sink), (
+                            redirect_stderr(text_sink) if saved_stderr is not None else nullcontext()
+                        ):
                             yield
                             text_sink.flush()
                     finally:
                         os.dup2(saved_stdout, 1)
                         os.close(saved_stdout)
+                        if saved_stderr is not None:
+                            os.dup2(saved_stderr, 2)
+                            os.close(saved_stderr)
             except OSError as exc:
                 raise RunPlanClientError(
                     "json_output_isolation_failed",
@@ -1805,20 +1815,22 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
         with isolated_operation_stdout():
             response = operation()
     except RunPlanClientError as exc:
-        _output(args, _local_error_response(exc))
-        return 1
+        return 1, _local_error_response(exc)
     except ApiError as exc:
         response = _api_error_response(exc)
-        if _output(args, response):
-            return 1
-        return 0 if response.get("decision_required") else 1
+        return (0 if response.get("decision_required") else 1), response
     if "envelope" in response:
         try:
             response = _agent_response_from_server(response)
         except RunPlanClientError as exc:
-            _output(args, _local_error_response(exc))
-            return 1
-    return _output(args, response)
+            return 1, _local_error_response(exc)
+    return 0, response
+
+
+def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
+    code, response = _plan_operation(args, operation)
+    return _output(args, response) or code
+
 
 
 def _run_with_admission(operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
@@ -1827,7 +1839,7 @@ def _run_with_admission(operation: Callable[[], dict[str, Any]]) -> dict[str, An
         return operation()
 
 
-def cmd_run_plan(args) -> int:
+def _run_plan_operation(args) -> tuple[int, dict[str, Any]]:
     def operate(*, authoritative_recheck: bool = False) -> dict[str, Any]:
         recheck_generation = getattr(args, "recheck_generation", None)
         docker_install_token = getattr(args, "docker_install_token", None)
@@ -1861,6 +1873,13 @@ def cmd_run_plan(args) -> int:
                 # an older capacity recheck before server or Fleet state can
                 # change.  The admission lock linearizes this with stop.
                 if docker_install_token is None:
+                    if getattr(args, "_session", False):
+                        requested = getattr(args, "concurrency", None)
+                        if requested is not None:
+                            _concurrency(state["plan"], requested)
+                        state["session_requested_concurrency"] = requested
+                    else:
+                        state.pop("session_requested_concurrency", None)
                     _advance_intent_generation(path, state)
                 else:
                     _consume_docker_install(
@@ -1880,6 +1899,9 @@ def cmd_run_plan(args) -> int:
             None if authoritative_recheck
             else getattr(args, "concurrency", None)
         )
+        if (getattr(args, "_session", False) and not authoritative_recheck and
+                (recheck_generation is not None or docker_install_token is not None)):
+            requested_arg = state.get("session_requested_concurrency", requested_arg)
         raw_decision_token = (
             None if authoritative_recheck
             else getattr(args, "decision_token", None)
@@ -2365,10 +2387,22 @@ def cmd_run_plan(args) -> int:
             return _local_warn_response(response, selected=actual_workers)
         return _local_monitor_response(response, selected=actual_workers)
 
-    return _run_command(args, lambda: _run_with_admission(operate))
+    return _plan_operation(args, lambda: _run_with_admission(operate))
 
 
-def cmd_progress_plan(args) -> int:
+def cmd_run_plan(args) -> int:
+    if getattr(args, "follow", False):
+        from .run_session import follow_plan
+        return follow_plan(args)
+    if getattr(args, "confirmation", None) is not None or getattr(args, "choice", None) is not None:
+        _output(args, _local_error_response(RunPlanClientError(
+            "session_confirmation_requires_follow", "确认续跑参数只能用于本地持续模式。")))
+        return 2
+    code, response = _run_plan_operation(args)
+    return _output(args, response) or code
+
+
+def _progress_plan_operation(args) -> tuple[int, dict[str, Any]]:
     def operate() -> dict[str, Any]:
         _run_code, path, state, client = _state_and_client(args)
         pending_capacity = state.get("pending_local_capacity")
@@ -2472,7 +2506,28 @@ def cmd_progress_plan(args) -> int:
 
     # The potentially slow server read stays outside the global admission
     # lock.  Only the fresh-state comparison and merge take the lock.
-    return _run_command(args, operate)
+    return _plan_operation(args, operate)
+
+
+def cmd_progress_plan(args) -> int:
+    code, response = _progress_plan_operation(args)
+    return _output(args, response) or code
+
+
+def _with_session_state(args, operation):
+    """Short local transaction; never hold admission while waiting for input."""
+    def read():
+        saved = _saved_state(_validate_run_code(args.plan), home=HOME)
+        if saved is None:
+            raise RunPlanClientError("session_scope_expired", "本次运行权限已过期或不存在，请重新取得运行说明。")
+        _resolve_server(args.server, saved)
+        _validate_plan(saved[1].get("plan"))
+        return operation(saved[0], saved[1])
+    return _run_with_admission(read)
+
+
+def _session_local_state(args) -> dict[str, Any]:
+    return _with_session_state(args, lambda _path, state: state)
 
 
 def cmd_stop_plan(args) -> int:
