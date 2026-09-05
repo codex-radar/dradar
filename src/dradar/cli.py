@@ -17,6 +17,7 @@ dropped once a grep of the public consumers showed nothing reaching through
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import __version__
 from .agent_schema import cmd_schema
@@ -440,6 +441,13 @@ def main(argv: list[str] | None = None) -> int:
             "codebuddy", "hy4",
         )
     )
+    imports = p_provider_setup.add_mutually_exclusive_group()
+    imports.add_argument("--coding-plan-key-file", type=Path,
+                         help="ZCode: import an existing private Coding Plan key file")
+    imports.add_argument("--claude-config-dir", type=Path,
+                         help="Claude: import an existing native subscription OAuth configuration")
+    imports.add_argument("--antigravity-oauth-dir", type=Path,
+                         help="Antigravity: import an existing official .gemini OAuth directory")
     p_provider_setup.set_defaults(func=cmd_provider_setup)
     p_provider_status = provider_sub.add_parser(
         "status", help="check provider readiness without displaying credentials")

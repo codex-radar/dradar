@@ -1,18 +1,21 @@
-"""Interactive, local-only model-provider credential setup."""
+"""Local provider setup, including explicit imports of existing credentials."""
 
 from __future__ import annotations
 
 import getpass
 import hashlib
+import json
 import os
 import platform
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -30,6 +33,14 @@ from .codebuddy_provider import (
     ensure_codebuddy_runtime_image,
     import_host_login,
     managed_codebuddy_home,
+)
+from .credential_files import (
+    atomic_private_credential,
+    claude_config_payload,
+    credential_json,
+    private_directory,
+    read_private_credential,
+    is_claude_metered_auth,
 )
 from .codebuddy_provider import (
     credential_status as codebuddy_credential_status,
@@ -56,10 +67,13 @@ from .providers import (
     ZCODE_MODELS,
     ZCODE_OFFICIAL_DOWNLOAD_PAGE,
     antigravity_auth_path,
+    antigravity_auth_error,
     antigravity_home,
     antigravity_ready_path,
-    claude_oauth_error,
-    claude_oauth_path,
+    claude_config_path,
+    claude_cli_path,
+    claude_subscription_error,
+    claude_subscription_path,
     deepseek_api_key,
     deepseek_credential_source,
     deepseek_secret_error,
@@ -689,7 +703,11 @@ def _claude_cli_version(executable: str | Path) -> str | None:
 def _setup_claude_subscription() -> int:
     """Import an official Claude.ai setup token into DRadar's private store."""
 
-    executable = shutil.which("claude")
+    configured = claude_config_path()
+    if configured.exists() or configured.is_symlink():
+        # Re-running setup must not silently select a different legacy login.
+        return _status_claude_subscription(live=False)
+    executable = claude_cli_path()
     version = _claude_cli_version(executable) if executable else None
     if not executable or version != CLAUDE_CLI_VERSION:
         print(
@@ -734,15 +752,15 @@ def _setup_claude_subscription() -> int:
 
 
 def _status_claude_subscription(*, live: bool) -> int:
-    path = claude_oauth_path()
-    issue = claude_oauth_error(path)
+    path = claude_subscription_path()
+    issue = claude_subscription_error()
     if issue is not None:
         print(
             f"Claude Code provider not ready: {issue}. Run "
             "`dradar provider setup claude`."
         )
         return 1
-    executable = shutil.which("claude")
+    executable = claude_cli_path()
     version = _claude_cli_version(executable) if executable else None
     if version != CLAUDE_CLI_VERSION:
         print(
@@ -759,11 +777,15 @@ def _status_claude_subscription(*, live: bool) -> int:
 
 
 def _live_claude_status(executable: str, path: Path) -> int:
-    token = path.read_text(encoding="utf-8").strip()
     base_env = provider_subprocess_env()
-    for name in (*CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
-        base_env.pop(name, None)
-    base_env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    for name in list(base_env):
+        if is_claude_metered_auth(name) or name in {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"}:
+            base_env.pop(name, None)
+    if path.name == ".credentials.json":
+        claude_config_payload(read_private_credential(path))
+        base_env["CLAUDE_CONFIG_DIR"] = str(path.parent)
+    else:
+        base_env["CLAUDE_CODE_OAUTH_TOKEN"] = path.read_text(encoding="utf-8").strip()
     for model in sorted(CLAUDE_MODELS):
         command = [
             executable, "-p", "--safe-mode", "--disable-slash-commands",
@@ -792,9 +814,145 @@ def _live_claude_status(executable: str, path: Path) -> int:
     return 0
 
 
+def _owned_source_directory(path: Path) -> None:
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("OAuth source directory must not be a symlink")
+    if os.name != "nt" and info.st_uid != os.getuid():
+        raise ValueError("OAuth source directory must be owned by you")
+
+
+def _import_zcode_key(source: Path) -> int:
+    if source.resolve() == zcode_secret_path().resolve():
+        raise ValueError("import source must be separate from managed credentials")
+    key = read_private_credential(source).decode("utf-8").strip()
+    if not key or any(character.isspace() for character in key):
+        raise ValueError("Coding Plan key must be one non-empty line")
+    cli = zcode_cli_path()
+    if zcode_cli_error(cli) is not None:
+        print("A compatible official ZCode runtime is required before import; previous credentials were preserved.")
+        return 1
+    # Verify the explicit Coding Plan endpoint before changing any credential.
+    # Never fall back to a general, metered BigModel API endpoint.
+    if _live_zcode_status(key) != 0:
+        print("Coding Plan validation failed; previous credentials were preserved.")
+        return 1
+    target = zcode_secret_path()
+    if target.exists() or target.is_symlink():
+        read_private_credential(target)
+    store_zcode_cli(cli)
+    atomic_private_credential(target, (key + "\n").encode())
+    print("Existing Coding Plan key imported privately; source unchanged, no model request made.")
+    return 0
+
+
+def _import_claude_config(source: Path) -> int:
+    _owned_source_directory(source)
+    if source.resolve() == claude_config_path().parent.resolve():
+        raise ValueError("import source must be separate from managed credentials")
+    payload = claude_config_payload(read_private_credential(source / ".credentials.json"))
+    target = claude_config_path()
+    atomic_private_credential(target, json.dumps(payload, separators=(",", ":")).encode())
+    print("Native Claude subscription OAuth configuration imported privately; source unchanged.")
+    print("No setup-token conversion, login, or model request was performed; verify runtime readiness with provider status.")
+    return 0
+
+
+def _import_antigravity_config(source: Path) -> int:
+    _owned_source_directory(source)
+    _owned_source_directory(source / "antigravity-cli")
+    content = read_private_credential(source / "antigravity-cli" / "antigravity-oauth-token")
+    payload = credential_json(content)
+    token = payload.get("token")
+    if (
+        payload.get("auth_method") != "consumer" or not isinstance(token, dict)
+        or not all(isinstance(token.get(key), str) and token[key].strip()
+                   for key in ("access_token", "refresh_token", "expiry"))
+        or str(token.get("token_type", "")).lower() != "bearer"
+    ):
+        raise ValueError("existing official consumer OAuth credentials are required")
+    try:
+        expiry = datetime.fromisoformat(token["expiry"].replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            raise ValueError
+    except ValueError:
+        raise ValueError("official OAuth expiry must include a timezone") from None
+    # Retain only project selection, never source MCP commands, logs or history.
+    project_config = None
+    config_file = source / "config" / "config.json"
+    if config_file.exists() or config_file.is_symlink():
+        _owned_source_directory(config_file.parent)
+        original = credential_json(read_private_credential(config_file))
+        settings = original.get("userSettings", {})
+        if not isinstance(settings, dict):
+            raise ValueError("invalid official project configuration")
+        project_config = {"userSettings": {
+            key: settings[key] for key in ("projectId", "project_id", "defaultProjectId")
+            if isinstance(settings.get(key), str)
+        }}
+    target = antigravity_auth_path()
+    if source.resolve() == target.resolve():
+        raise ValueError("source must be separate from the managed import target")
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise ValueError("managed OAuth target must be a real directory")
+    ready = antigravity_ready_path()
+    old_ready = read_private_credential(ready) if ready.exists() or ready.is_symlink() else None
+    docker = shutil.which("docker")
+    if not docker or _ensure_antigravity_linux_cli(docker) is None:
+        print("Antigravity runtime preparation failed; previous credentials were preserved.")
+        return 1
+    private_directory(target.parent)
+    with tempfile.TemporaryDirectory(prefix=".oauth-import-", dir=target.parent) as temporary:
+        staging_home = Path(temporary)
+        staged = antigravity_auth_path(staging_home)
+        atomic_private_credential(staged / "antigravity-cli" / "antigravity-oauth-token", content)
+        if project_config is not None:
+            atomic_private_credential(staged / "config" / "config.json", json.dumps(project_config).encode())
+        restore_antigravity_settings(staging_home)
+        mark_antigravity_ready(staging_home)
+        if antigravity_auth_error(staging_home) is not None:
+            raise ValueError("imported local OAuth state did not validate")
+        backup = staging_home / "previous-auth"
+        if target.exists():
+            target.rename(backup)
+        try:
+            staged.rename(target)
+            atomic_private_credential(ready, read_private_credential(antigravity_ready_path(staging_home)))
+        except BaseException:
+            if target.exists():
+                shutil.rmtree(target)
+            if backup.exists():
+                backup.rename(target)
+            if old_ready is not None:
+                atomic_private_credential(ready, old_ready)
+            else:
+                ready.unlink(missing_ok=True)
+            raise
+    print("Existing Antigravity consumer OAuth imported privately; source unchanged.")
+    print("No new OAuth login or live model check was performed; local readiness is not proof of model quota.")
+    return 0
+
+
 def cmd_provider_setup(args) -> int:
     """Read a DeepSeek key without echoing it or placing it in argv/history."""
 
+    imports = (
+        ("coding_plan_key_file", {"zcode"}, _import_zcode_key),
+        ("claude_config_dir", {"claude", "claude-code"}, _import_claude_config),
+        ("antigravity_oauth_dir", {"antigravity", "agy"}, _import_antigravity_config),
+    )
+    for option, providers, importer in imports:
+        source = getattr(args, option, None)
+        if source is None:
+            continue
+        if args.provider not in providers:
+            print("The selected credential import option does not match this provider.")
+            return 2
+        try:
+            return importer(Path(source).expanduser())
+        except (OSError, ValueError) as exc:
+            print(f"Existing credential import failed ({type(exc).__name__}); previous credentials were preserved.")
+            return 1
     if args.provider in {"claude", "claude-code"}:
         return _setup_claude_subscription()
     if args.provider == "grok":

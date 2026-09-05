@@ -698,13 +698,17 @@ def _ensure_codex_agent_module(home: Path) -> Path:
 def _ensure_claude_agent_module(home: Path) -> Path:
     source = Path(__file__).with_name("pier_claude.py")
     usage_source = Path(__file__).with_name("claude_usage.py")
-    if not source.is_file() or not usage_source.is_file():
+    credential_source = Path(__file__).with_name("credential_files.py")
+    if not source.is_file() or not usage_source.is_file() or not credential_source.is_file():
         raise RunnerError(
             "Claude Code Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_worker_event_module(home)
     _materialize_shared_file(
         home / CLAUDE_USAGE_MODULE_FILENAME, usage_source.read_bytes()
+    )
+    _materialize_shared_file(
+        home / "_dradar_credential_files.py", credential_source.read_bytes()
     )
     return _materialize_shared_file(
         home / CLAUDE_AGENT_MODULE_FILENAME, source.read_bytes()
@@ -1513,11 +1517,15 @@ def build_pier_command(
                 "Claude Code subscription OAuth is unavailable; run "
                 "`dradar provider setup claude` in your own interactive Terminal"
             )
+        credential_argument = (
+            "oauth_config_file" if provider_auth_path.name == ".credentials.json"
+            else "oauth_token_file"
+        )
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"version={CLAUDE_CLI_VERSION}",
-            "--ak", f"oauth_token_file={provider_auth_path}",
+            "--ak", f"{credential_argument}={provider_auth_path}",
             "--ak", f"disallowed_tools={CLAUDE_DISALLOWED_TOOLS}",
             "--ae", "API_TIMEOUT_MS=3000000",
             "--ae", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000",

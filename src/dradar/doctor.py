@@ -39,8 +39,9 @@ from .providers import (
     ZCODE_CLI_VERSION,
     prepare_antigravity_auth,
     antigravity_auth_path,
-    claude_oauth_error,
-    claude_oauth_path,
+    claude_cli_path,
+    claude_subscription_error,
+    claude_subscription_path,
     deepseek_api_key,
     deepseek_catalog_error,
     deepseek_opted_in,
@@ -382,8 +383,8 @@ def plan_environment_issue(
             )
         return None
     if harness == CLAUDE_AGENT:
-        executable = shutil.which("claude")
-        ready = bool(executable) and claude_oauth_error() is None
+        executable = claude_cli_path()
+        ready = bool(executable) and claude_subscription_error() is None
         if not ready:
             return _plan_issue(
                 harness, "current_tool_not_ready",
@@ -714,10 +715,10 @@ def cmd_doctor(args) -> int:
     auth = runner.codex_auth_path()
     codex_ready = bool(codex) and auth.is_file()
     claude_requested = claude_only or (
-        selected_agent is None and claude_oauth_path().exists()
+        selected_agent is None and claude_subscription_path().exists()
     )
-    claude_cli = shutil.which("claude") if claude_requested else None
-    claude_oauth_issue = claude_oauth_error() if claude_requested else None
+    claude_cli = claude_cli_path() if claude_requested else None
+    claude_oauth_issue = claude_subscription_error() if claude_requested else None
     claude_ready = bool(claude_cli and claude_oauth_issue is None)
     grok_requested = grok_only or (
         selected_agent is None and grok_auth_path().exists()
