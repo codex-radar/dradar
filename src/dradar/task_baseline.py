@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 BASELINE_REQUEST_ENV = "DRADAR_TASK_BASELINE_REQUEST"
 REMOTE_BASELINE = "/tmp/dradar-task-base-commit"
+SOURCE_ORIGIN_PROOF = "/tmp/dradar-build-source-origin"
+SOURCE_COMMIT_PROOF = "/tmp/dradar-build-source-commit"
 
 
 def repository_identity(value):
@@ -36,24 +38,43 @@ async def verify_task_baseline(environment):
         raise ValueError("task baseline is not a hexadecimal commit abbreviation")
     expected_repository = repository_identity(request.get("repository_url"))
 
-    async def git(arguments):
+    async def git(arguments, *, allow_missing=False):
         result = await environment.exec(
             command="git --no-replace-objects -c safe.directory=/app -C /app " + arguments,
             env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"},
             timeout_sec=30,
         )
         if result.return_code != 0:
+            if allow_missing:
+                return None
             raise ValueError("task baseline cannot be verified in the prepared source repository")
         return (result.stdout or "").strip()
 
     if await git("rev-parse --show-toplevel") != "/app":
         raise ValueError("task baseline source is not the prepared /app repository")
-    if repository_identity(await git("remote get-url origin")) != expected_repository:
+    origin = await git("remote get-url origin", allow_missing=True)
+    build_commit = None
+    if origin is None and request.get("build_origin_proof") is True:
+        # Only a runner-created per-run Dockerfile overlay enables this path.
+        # It records the real origin and declared commit immediately before
+        # the original task deliberately removes its remote. No remote lookup.
+        async def proof(filename):
+            result = await environment.exec(command="cat -- " + filename, timeout_sec=30)
+            if result.return_code != 0:
+                raise ValueError("task build source proof is missing")
+            return (result.stdout or "").strip()
+        origin = await proof(SOURCE_ORIGIN_PROOF)
+        build_commit = await proof(SOURCE_COMMIT_PROOF)
+        if re.fullmatch(r"[0-9a-f]{40}", build_commit) is None:
+            raise ValueError("task build commit proof is invalid")
+    if repository_identity(origin) != expected_repository:
         raise ValueError("prepared source repository differs from the task declaration")
     matches = (await git("rev-parse --disambiguate=" + prefix)).splitlines()
     if len(matches) != 1 or re.fullmatch(r"[0-9a-f]{40}", matches[0]) is None:
         raise ValueError("task baseline abbreviation is missing or ambiguous")
     commit = matches[0]
+    if build_commit is not None and build_commit != commit:
+        raise ValueError("resolved task baseline differs from the verified build commit")
     if not commit.startswith(prefix) or await git("cat-file -t " + commit) != "commit":
         raise ValueError("task baseline does not identify a commit object")
     # Persist the verified full object ID before any provider can run. The

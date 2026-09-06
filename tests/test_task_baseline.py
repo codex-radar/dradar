@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dradar.task_baseline import BASELINE_REQUEST_ENV, REMOTE_BASELINE, verify_task_baseline
+from dradar.task_baseline import (
+    BASELINE_REQUEST_ENV, REMOTE_BASELINE, SOURCE_COMMIT_PROOF,
+    SOURCE_ORIGIN_PROOF, verify_task_baseline,
+)
 
 
 class LocalEnvironment:
@@ -25,6 +28,8 @@ class LocalEnvironment:
         assert timeout_sec <= 30
         command = command.replace("/app", shlex.quote(str(self.repo)))
         command = command.replace(REMOTE_BASELINE, shlex.quote(str(self.baseline)))
+        command = command.replace(SOURCE_ORIGIN_PROOF, shlex.quote(str(self.repo.parent / "origin-proof")))
+        command = command.replace(SOURCE_COMMIT_PROOF, shlex.quote(str(self.repo.parent / "commit-proof")))
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout_sec)
         stdout = result.stdout
         if "--show-toplevel" in command and result.returncode == 0:
@@ -185,3 +190,107 @@ def test_collector_uses_resolved_original_commit_after_model_changes_head(source
         patch = (tmp_path / "artifacts/model.patch").read_text()
         assert "+ordinary implementation" in patch
         assert "answer.txt" in patch
+
+
+def test_original_dockerfile_remote_removal_preserves_verified_build_proof(source, tmp_path):
+    from dradar.runner import _artifact_tasks_overlay
+    repo, git, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    (task / "environment").mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "' + full[:7] + '"\n'
+        'repository_url = "https://example.invalid/project/source"\n'
+    )
+    original = (
+        "FROM fixture\nRUN git clone https://example.invalid/project/source . \\\n"
+        " && git checkout -B fixture " + full[:7] + " \\\n"
+        " && git remote remove origin \\\n && true\n"
+    )
+    dockerfile = task / "environment/Dockerfile"
+    dockerfile.write_text(original)
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+        baseline_request_path=request,
+    ) as selected:
+        overlay = (selected / "fixture-task/environment/Dockerfile").read_text()
+        assert json.loads(request.read_text())["build_origin_proof"] is True
+        assert overlay.index("git remote get-url origin") < overlay.index("git remote remove origin")
+        command = overlay.split("RUN ", 1)[1]
+        # Replace only transport in the fixture: preserve the original
+        # clone -> checkout declared prefix -> remove-origin build ordering.
+        command = command.replace(
+            "git clone https://example.invalid/project/source .",
+            "git clone " + shlex.quote(str(repo)) + " . && "
+            "git remote set-url origin https://example.invalid/project/source",
+        )
+        command = command.replace(SOURCE_ORIGIN_PROOF, shlex.quote(str(tmp_path / "origin-proof")))
+        command = command.replace(SOURCE_COMMIT_PROOF, shlex.quote(str(tmp_path / "commit-proof")))
+        built = tmp_path / "built"
+        built.mkdir()
+        subprocess.run(["sh", "-c", command], cwd=built, check=True)
+        assert not subprocess.check_output(["git", "-C", str(built), "remote"], text=True).strip()
+        assert (tmp_path / "commit-proof").read_text().strip() == full
+        asyncio.run(verify_task_baseline(LocalEnvironment(built)))
+        assert json.loads(request.with_suffix(".resolved.json").read_text())["resolved_commit"] == full
+    assert dockerfile.read_text() == original
+
+
+@pytest.mark.parametrize("proof", ["absent", "wrong-origin", "wrong-commit", "not-enabled"])
+def test_removed_origin_requires_matching_runner_enabled_build_proof(source, proof):
+    repo, git, full, request, configure = source
+    configure(full[:7])
+    value = json.loads(request.read_text())
+    value["build_origin_proof"] = proof != "not-enabled"
+    request.write_text(json.dumps(value))
+    git("remote", "remove", "origin")
+    if proof != "absent":
+        (repo.parent / "origin-proof").write_text(
+            "https://example.invalid/another/source" if proof == "wrong-origin"
+            else "https://example.invalid/project/source"
+        )
+        (repo.parent / "commit-proof").write_text("0" * 40 if proof == "wrong-commit" else full)
+    with pytest.raises(ValueError):
+        asyncio.run(verify_task_baseline(LocalEnvironment(repo)))
+    assert not request.with_suffix(".resolved.json").exists()
+
+
+@pytest.mark.parametrize("removal", [" && git remote rm origin", " && git remote remove origin && true"])
+def test_unknown_removal_forms_do_not_enable_build_proof(source, tmp_path, removal):
+    from dradar.runner import _artifact_tasks_overlay
+    _, _, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    (task / "environment").mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "' + full[:7] + '"\n'
+        'repository_url = "https://example.invalid/project/source"\n'
+    )
+    original = "FROM fixture\nRUN true \\\n" + removal + "\n"
+    (task / "environment/Dockerfile").write_text(original)
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+        baseline_request_path=request,
+    ) as selected:
+        assert json.loads(request.read_text())["build_origin_proof"] is False
+        assert (selected / "fixture-task/environment/Dockerfile").read_text() == original
+
+
+def test_dockerfile_symlink_cannot_modify_source_outside_overlay(source, tmp_path):
+    from dradar.runner import _artifact_tasks_overlay, RunnerError
+    _, _, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    (task / "environment").mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "' + full[:7] + '"\n'
+        'repository_url = "https://example.invalid/project/source"\n'
+    )
+    external = tmp_path / "original-Dockerfile"
+    original = "FROM fixture\nRUN true \\\n && git remote remove origin\n"
+    external.write_text(original)
+    (task / "environment/Dockerfile").symlink_to(external)
+    with pytest.raises(RunnerError, match="escapes"):
+        with _artifact_tasks_overlay(
+            {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+            baseline_request_path=request,
+        ):
+            pass
+    assert external.read_text() == original
