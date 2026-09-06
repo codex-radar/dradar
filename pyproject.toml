@@ -1,6 +1,6 @@
 [project]
 name = "dradar"
-version = "0.5.191"
+version = "0.5.193"
 description = "Crowd Radar client — run benchmark tasks locally and submit them for independent server-side grading"
 requires-python = ">=3.11"
 dependencies = [

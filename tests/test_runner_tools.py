@@ -784,6 +784,26 @@ def test_artifact_task_overlay_rejects_untrusted_base_ref(tmp_path):
             pass
 
 
+def test_short_baseline_overlay_requires_pre_model_resolution(tmp_path):
+    import json
+    task = tmp_path / "tasks" / "short-task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "68dafce"\n'
+        'repository_url = "https://github.com/eicrud/eicrud"\n'
+    )
+    request = tmp_path / "request.json"
+    with _artifact_tasks_overlay(
+        {"task_id": "short-task"}, task.parent, tmp_path / "work", "job",
+        baseline_request_path=request,
+    ) as selected:
+        hook = (selected / "short-task" / "pre_artifacts.sh").read_text()
+        assert "68dafce" not in hook
+        assert "cat /tmp/dradar-task-base-commit" in hook
+        assert json.loads(request.read_text())["base_commit"] == "68dafce"
+    assert not (task / "pre_artifacts.sh").exists()
+
+
 def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
                trajectory_payload=None, runtime_diagnostic=None,
                zcode_outcome=None, provider_usage_sidecar=None,

@@ -26,9 +26,9 @@ except ModuleNotFoundError:
         codebuddy_install_command,
     )
 try:
-    from _dradar_worker_events import emit_worker_registered
+    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered
+    from dradar.worker_events import emit_worker_registered, verify_task_baseline
 
 SUPPORTED_MODEL = "hy4-preview"
 SUPPORTED_EFFORTS = {"low", "high", "max"}
@@ -297,6 +297,7 @@ class CodeBuddySubscription(ClaudeCode):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        await verify_task_baseline(environment)
         emit_worker_registered(runtime="pier", context="agent", profile="codebuddy")
         del context
         remote_secret = self._REMOTE_SECRET_ROOT.as_posix()
