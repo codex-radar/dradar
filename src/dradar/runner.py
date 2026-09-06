@@ -43,7 +43,10 @@ from .codebuddy_provider import (
     codebuddy_subscription_session,
 )
 from .manifest import task_content_hash
-from .task_baseline import BASELINE_REQUEST_ENV, REMOTE_BASELINE, repository_identity
+from .task_baseline import (
+    BASELINE_REQUEST_ENV, REMOTE_BASELINE, SOURCE_COMMIT_PROOF,
+    SOURCE_ORIGIN_PROOF, repository_identity,
+)
 from .worker_events import (
     WORKER_EVENT_FILE_ENV,
     read_worker_event,
@@ -3515,6 +3518,34 @@ def _artifact_tasks_overlay(
                 "__DRADAR_BASE_COMMIT__", base_commit
             )
         if short_commit:
+            build_origin_proof = False
+            dockerfile = overlay_task / "environment" / "Dockerfile"
+            if dockerfile.is_file():
+                if not dockerfile.resolve().is_relative_to(overlay_task.resolve()):
+                    raise RunnerError("task Dockerfile escapes the private overlay")
+                text = dockerfile.read_text(encoding="utf-8")
+                # Preserve task behavior, including remote removal. Support
+                # only this explicit standalone shell-chain step; other forms
+                # must retain origin or fail closed at the pre-model check.
+                pattern = re.compile(
+                    r"^([ \t]*&& )git remote remove origin(?: "
+                    + re.escape("\\") + r")?[ \t]*$",
+                    re.MULTILINE,
+                )
+                removals = list(pattern.finditer(text))
+                if len(removals) > 1:
+                    raise RunnerError("task Dockerfile has ambiguous origin-removal steps")
+                if removals:
+                    removal = removals[0]
+                    step = removal.group(1)
+                    proof = (
+                        step + "git remote get-url origin > " + SOURCE_ORIGIN_PROOF + " \\\n"
+                        + step + "git rev-parse --verify '" + base_commit
+                        + "^{commit}' > " + SOURCE_COMMIT_PROOF + " \\\n"
+                    )
+                    text = text[:removal.start()] + proof + text[removal.start():]
+                    dockerfile.write_text(text, encoding="utf-8")
+                    build_origin_proof = True
             collector = collector.replace(
                 "base_ref='" + base_commit + "'",
                 'base_ref=$(cat ' + REMOTE_BASELINE + ')\n'
@@ -3523,6 +3554,7 @@ def _artifact_tasks_overlay(
             )
             baseline_request_path.write_text(json.dumps({
                 "base_commit": base_commit, "repository_url": repository_url,
+                "build_origin_proof": build_origin_proof,
             }))
             baseline_request_path.chmod(0o600)
         hook.write_text(collector, encoding="utf-8")
