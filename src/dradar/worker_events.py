@@ -20,6 +20,14 @@ WORKER_REGISTERED = "worker_registered"
 WORKER_EVENT_FILE_ENV = "DRADAR_PIER_WORKER_EVENT_FILE"
 
 
+async def verify_task_baseline(environment):
+    try:
+        from _dradar_task_baseline import verify_task_baseline as verify
+    except ModuleNotFoundError:
+        from dradar.task_baseline import verify_task_baseline as verify
+    await verify(environment)
+
+
 @dataclass(frozen=True)
 class WorkerRegistered:
     session_id: str

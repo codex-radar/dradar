@@ -24,9 +24,9 @@ from pier.models.agent.context import AgentContext
 from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.agent.network import NetworkAllowlist
 try:
-    from _dradar_worker_events import emit_worker_registered
+    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered
+    from dradar.worker_events import emit_worker_registered, verify_task_baseline
 
 try:
     from _dradar_pier_runtime_safety import RuntimeSafety
@@ -526,6 +526,7 @@ class DshMinimal(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        await verify_task_baseline(environment)
         emit_worker_registered(runtime="pier", context="agent", profile="dsh")
         del context
         remote_home = self._REMOTE_HOME.as_posix()

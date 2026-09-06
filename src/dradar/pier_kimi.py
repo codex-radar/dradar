@@ -25,9 +25,9 @@ from pier.models.agent.network import NetworkAllowlist
 from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
 try:
-    from _dradar_worker_events import emit_worker_registered
+    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered
+    from dradar.worker_events import emit_worker_registered, verify_task_baseline
 
 from _dradar_pier_runtime_safety import (
     AgentLogStore,
@@ -664,6 +664,7 @@ class KimiCode(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        await verify_task_baseline(environment)
         emit_worker_registered(runtime="pier", context="agent", profile="kimi")
         del context
         self._instruction = instruction

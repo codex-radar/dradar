@@ -43,6 +43,7 @@ from .codebuddy_provider import (
     codebuddy_subscription_session,
 )
 from .manifest import task_content_hash
+from .task_baseline import BASELINE_REQUEST_ENV, REMOTE_BASELINE, repository_identity
 from .worker_events import (
     WORKER_EVENT_FILE_ENV,
     read_worker_event,
@@ -738,6 +739,10 @@ def _ensure_worker_event_module(home: Path) -> Path:
         raise RunnerError(
             "Pier worker lifecycle helper is missing; reinstall or upgrade dradar"
         ) from exc
+    _materialize_shared_file(
+        home / "_dradar_task_baseline.py",
+        importlib.resources.files("dradar").joinpath("task_baseline.py").read_bytes(),
+    )
     return _materialize_shared_file(
         home / "_dradar_worker_events.py", source,
     )
@@ -3451,6 +3456,7 @@ def _artifact_tasks_overlay(
     tasks_root: Path,
     work_dir: Path,
     job_name: str,
+    baseline_request_path: Path | None = None,
 ):
     """Backport ``verifier.collect`` to Pier's public pre-artifact hook.
 
@@ -3484,9 +3490,18 @@ def _artifact_tasks_overlay(
     base_commit = task_config.get("metadata", {}).get("base_commit_hash", "")
     if not isinstance(base_commit, str) or (
         base_commit
-        and re.fullmatch(r"[0-9a-f]{40}", base_commit) is None
+        and re.fullmatch(r"[0-9a-f]{4,40}", base_commit) is None
     ):
         raise RunnerError("task has an invalid metadata.base_commit_hash")
+    short_commit = bool(base_commit and len(base_commit) < 40)
+    if short_commit:
+        repository_url = task_config.get("metadata", {}).get("repository_url")
+        try:
+            repository_identity(repository_url)
+        except ValueError as exc:
+            raise RunnerError(str(exc)) from exc
+        if baseline_request_path is None:
+            raise RunnerError("short task baseline requires validation before model execution")
 
     work_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
@@ -3496,12 +3511,21 @@ def _artifact_tasks_overlay(
         overlay_task = overlay_root / task_id
         shutil.copytree(source, overlay_task, symlinks=True)
         hook = overlay_task / "pre_artifacts.sh"
-        hook.write_text(
-            DSH_PRE_ARTIFACTS_SCRIPT.replace(
+        collector = DSH_PRE_ARTIFACTS_SCRIPT.replace(
                 "__DRADAR_BASE_COMMIT__", base_commit
-            ),
-            encoding="utf-8",
-        )
+            )
+        if short_commit:
+            collector = collector.replace(
+                "base_ref='" + base_commit + "'",
+                'base_ref=$(cat ' + REMOTE_BASELINE + ')\n'
+                '[ "${#base_ref}" -eq 40 ] || exit 1\n'
+                'case "$base_ref" in *[!0-9a-f]*) exit 1 ;; esac',
+            )
+            baseline_request_path.write_text(json.dumps({
+                "base_commit": base_commit, "repository_url": repository_url,
+            }))
+            baseline_request_path.chmod(0o600)
+        hook.write_text(collector, encoding="utf-8")
         hook.chmod(0o755)
         yield overlay_root
 
@@ -4161,6 +4185,8 @@ def run_trial(
             )
             else {}
         )
+        baseline_request_path = work_dir / (job_name + ".baseline-request.json")
+        baseline_request_path.unlink(missing_ok=True)
         pier_tasks_root = tasks_root
         if effective_agent == DSH_AGENT:
             pier_tasks_root = provider_stack.enter_context(
@@ -4191,6 +4217,7 @@ def run_trial(
                     tasks_root,
                     work_dir,
                     job_name,
+                    baseline_request_path=baseline_request_path,
                 )
             )
         build_options = dict(provider_kwargs)
@@ -4237,6 +4264,9 @@ def run_trial(
         worker_event_path = work_dir / f"{job_name}.worker-events.jsonl"
         worker_event_path.unlink(missing_ok=True)
         env[WORKER_EVENT_FILE_ENV] = str(worker_event_path)
+        env.pop(BASELINE_REQUEST_ENV, None)
+        if baseline_request_path.is_file():
+            env[BASELINE_REQUEST_ENV] = str(baseline_request_path)
         if builder_lease.name is not None:
             # Select the assignment builder only for Pier. Never mutate the
             # user's global/default buildx selection.
