@@ -3546,6 +3546,29 @@ def _artifact_tasks_overlay(
                     text = text[:removal.start()] + proof + text[removal.start():]
                     dockerfile.write_text(text, encoding="utf-8")
                     build_origin_proof = True
+            if build_origin_proof and task_config.get("environment", {}).get("docker_image"):
+                # Pier's build-time agent installer otherwise starts FROM the
+                # prebuilt image and never reads our proof-producing Dockerfile.
+                # Change only this private copy's explicit image declaration;
+                # preserve every other parsed task value, or refuse the edit.
+                config_path = overlay_task / "task.toml"
+                if not config_path.resolve().is_relative_to(overlay_task.resolve()):
+                    raise RunnerError("task metadata escapes the private overlay")
+                config_text = config_path.read_text(encoding="utf-8")
+                rewritten, count = re.subn(
+                    r"(?m)^[ \t]*docker_image[ \t]*=[^\n]*(?:\n|$)",
+                    "", config_text,
+                )
+                environment_config = dict(task_config["environment"])
+                del environment_config["docker_image"]
+                expected = {**task_config, "environment": environment_config}
+                try:
+                    matches = count == 1 and tomllib.loads(rewritten) == expected
+                except tomllib.TOMLDecodeError:
+                    matches = False
+                if not matches:
+                    raise RunnerError("cannot select the verified task Dockerfile without changing other metadata")
+                config_path.write_text(rewritten, encoding="utf-8")
             collector = collector.replace(
                 "base_ref='" + base_commit + "'",
                 'base_ref=$(cat ' + REMOTE_BASELINE + ')\n'

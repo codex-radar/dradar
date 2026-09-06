@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import tomllib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -294,3 +295,94 @@ def test_dockerfile_symlink_cannot_modify_source_outside_overlay(source, tmp_pat
         ):
             pass
     assert external.read_text() == original
+
+
+def test_pier_agent_build_uses_proof_dockerfile_instead_of_prebuilt_image(source, tmp_path):
+    from dradar.runner import _artifact_tasks_overlay
+    from pier.environments.docker.docker import DockerEnvironment
+    from pier.models.agent.install import AgentInstallSpec, InstallStep
+    from pier.models.task.config import TaskConfig
+    _, _, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    (task / "environment").mkdir(parents=True)
+    original = (
+        '[metadata]\nbase_commit_hash = "' + full[:7] + '"\n'
+        'repository_url = "https://example.invalid/project/source"\n'
+        '[environment]\ndocker_image = "registry.invalid/prebuilt:original"\n'
+        'build_timeout_sec = 1800\ncpus = 2\nallow_internet = false\n'
+    )
+    (task / "task.toml").write_text(original)
+    dockerfile = "FROM fixture-source\nRUN true \\\n && git remote remove origin\n"
+    (task / "environment/Dockerfile").write_text(dockerfile)
+    install = AgentInstallSpec(agent_name="fixture", steps=[InstallStep(run="true")])
+
+    def prepare(environment_dir, config, trial_dir):
+        # Call the actual public Pier agent-build-context selector and writer;
+        # no Docker daemon, credentials, package installation or model is used.
+        fake = SimpleNamespace(
+            agent_install_spec=install, _uses_compose=False, _is_windows_container=False,
+            trial_paths=SimpleNamespace(trial_dir=trial_dir),
+            task_env_config=config.environment,
+            environment_dir=environment_dir, _resolve_user=lambda _: "root",
+            _env_vars=SimpleNamespace(context_dir=None),
+        )
+        DockerEnvironment._prepare_agent_build_context(fake)
+        return (fake._agent_build_context_dir / "Dockerfile").read_text()
+
+    old_build = prepare(task / "environment", TaskConfig.model_validate(tomllib.loads(original)), tmp_path / "old-trial")
+    assert old_build.startswith("FROM registry.invalid/prebuilt:original")
+    assert SOURCE_ORIGIN_PROOF not in old_build
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+        baseline_request_path=request,
+    ) as selected:
+        selected_task = selected / "fixture-task"
+        changed = tomllib.loads((selected_task / "task.toml").read_text())
+        expected = tomllib.loads(original)
+        del expected["environment"]["docker_image"]
+        assert changed == expected
+        loaded = TaskConfig.model_validate(tomllib.loads((selected_task / "task.toml").read_text()))
+        assert loaded.environment.docker_image is None
+        build = prepare(selected_task / "environment", loaded, tmp_path / "new-trial")
+        assert build.startswith("FROM fixture-source")
+        assert SOURCE_ORIGIN_PROOF in build and SOURCE_COMMIT_PROOF in build
+        assert "git remote remove origin" in build
+        assert "PIER_AGENT_INSTALL_FINGERPRINT" in build
+    assert (task / "task.toml").read_text() == original
+    assert (task / "environment/Dockerfile").read_text() == dockerfile
+
+
+def test_full_sha_prebuilt_task_is_unchanged(source, tmp_path):
+    from dradar.runner import _artifact_tasks_overlay
+    _, _, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    task.mkdir(parents=True)
+    original = '[metadata]\nbase_commit_hash = "' + full + '"\n[environment]\ndocker_image = "registry.invalid/prebuilt:original"\n'
+    (task / "task.toml").write_text(original)
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+        baseline_request_path=request,
+    ) as selected:
+        assert (selected / "fixture-task/task.toml").read_text() == original
+        assert not request.exists()
+
+
+def test_complex_prebuilt_declaration_is_rejected_without_editing_source(source, tmp_path):
+    from dradar.runner import _artifact_tasks_overlay, RunnerError
+    _, _, full, request, _ = source
+    task = tmp_path / "tasks" / "fixture-task"
+    (task / "environment").mkdir(parents=True)
+    original = (
+        '[metadata]\nbase_commit_hash = "' + full[:7] + '"\n'
+        'repository_url = "https://example.invalid/project/source"\n'
+        '[environment]\n"docker_image" = "registry.invalid/prebuilt:original"\n'
+    )
+    (task / "task.toml").write_text(original)
+    (task / "environment/Dockerfile").write_text("FROM fixture\nRUN true \\\n && git remote remove origin\n")
+    with pytest.raises(RunnerError, match="without changing other metadata"):
+        with _artifact_tasks_overlay(
+            {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+            baseline_request_path=request,
+        ):
+            pass
+    assert (task / "task.toml").read_text() == original
