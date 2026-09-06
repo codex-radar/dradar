@@ -671,6 +671,68 @@ def test_shared_oauth_guard_hands_rootful_runtime_state_back_to_host() -> None:
     subprocess.run(["bash", "-n", "-c", command], check=True)
 
 
+@pytest.mark.parametrize("uid", [0, 1000])
+@pytest.mark.parametrize("exit_status", [0, 23])
+def test_shared_oauth_guard_repairs_during_command_and_preserves_exit_status(
+    tmp_path: Path, uid: int, exit_status: int,
+) -> None:
+    helper = _shared_oauth_guard_helper()
+    root = tmp_path / "shared home" / ".gemini"
+    log_dir = root / "antigravity-cli"
+    log_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.log"
+    outside.write_text("untouched", encoding="utf-8")
+    log_link = log_dir / "cli.log"
+    log_link.symlink_to(outside)
+    trace = tmp_path / "trace"
+    repaired = tmp_path / "repaired"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # Exercise the generated shell without requiring root or GNU utilities.
+    # The fake find records a repair; it never changes real file ownership.
+    for name, body in {
+        "id": f"printf '%s\\n' {uid}",
+        "stat": "printf '%s\\n' '1000:1000'",
+        "find": 'printf "repair\\n" >> "$GUARD_TRACE"; : > "$GUARD_REPAIRED"',
+    }.items():
+        executable = fake_bin / name
+        executable.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+        executable.chmod(0o700)
+    payload = 'printf "command\\n" >> "$GUARD_TRACE"; '
+    if uid == 0:
+        # Require a new repair while the foreground command is still active.
+        payload += (
+            'rm -f "$GUARD_REPAIRED"; tries=0; '
+            'while [ ! -f "$GUARD_REPAIRED" ] && [ "$tries" -lt 100 ]; do '
+            'sleep 0.01; tries=$((tries + 1)); done; '
+            '[ -f "$GUARD_REPAIRED" ] || exit 99; '
+        )
+    payload += f"exit {exit_status}"
+    result = subprocess.run(
+        ["bash", "-c", helper(payload, remote_gemini=str(root))],
+        env={
+            **os.environ,
+            "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
+            "GUARD_TRACE": str(trace),
+            "GUARD_REPAIRED": str(repaired),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == exit_status, result.stderr
+    events = trace.read_text(encoding="utf-8").splitlines()
+    if uid == 0:
+        assert events[0] == events[-1] == "repair"
+        assert "repair" in events[events.index("command") + 1:-1]
+        assert not log_link.is_symlink()
+    else:
+        assert events == ["command"]
+        assert log_link.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "untouched"
+
+
 def test_runtime_model_preflight_accepts_the_official_tabular_output() -> None:
     helper = _model_line_pattern_helper()
     slug = ANTIGRAVITY_RUNTIME_MODELS["low"]
