@@ -1372,6 +1372,8 @@ def _local_progress_fault_response(
             "status": str(local_item.get("status") or "interrupted"),
             "returncode": local_item.get("returncode"),
         }
+        if isinstance(local_item.get("startup_diagnostic"), dict):
+            agent["local_runner"]["diagnostic"] = local_item["startup_diagnostic"]
     agent["next_commands"] = [{
         "id": "inspect_local_runner",
         "argv": ["dradar", "fleet", "status"],
@@ -1473,6 +1475,77 @@ def _local_progress_fault_response(
             "poll_after_seconds": None,
         })
     result["agent"] = agent
+    return result
+
+
+def _local_active_progress_response(
+    server_response: dict[str, Any], local_item: dict[str, Any],
+    *, pending_upload_count: int, blocked_upload_count: int,
+) -> dict[str, Any]:
+    """Do not declare completion/replay uploads while the same pool owns work.
+
+    Fleet checks controller heartbeats and process-lifetime locks. A live
+    supervisor proves processing, not that a model has already started. The
+    server remains authoritative for assignment counts, decisions and stops.
+    """
+    local_status = local_item.get("status")
+    if local_status == "starting":
+        result = _local_preparing_response(
+            server_response, selected=int(local_item.get("workers") or 1),
+        )
+    else:
+        result = _agent_response_from_server(server_response)
+        agent = dict(result.get("agent") or {})
+        agent["server_status"] = {
+            key: value for key, value in result.items()
+            if key not in {"schema_version", "agent"}
+        }
+        if local_status == "running":
+            message = "这台设备仍在处理本次任务，正在同步最新进度。无需重复运行。"
+        elif local_status == "stopping":
+            message = "这台设备正在停止并处理剩余工作；确认退出前，请勿重复运行或补交。"
+        elif local_status == "orphaned":
+            message = (
+                "这台设备的监督进程已失去连接，任务进程仍在收尾。"
+                "正在核对退出状态，请勿重复运行或补交。"
+            )
+        else:
+            message = "本机运行状态暂时无法确认，正在核对；请勿重复运行或补交。"
+        result.update({
+            "status": "running" if local_status == "running" else "waiting",
+            "interaction": "notify" if local_status == "running" else "warn",
+            "decision_required": False,
+            "user_message": message,
+            "agent_action": "monitor",
+            "choices": [],
+            "poll_after_seconds": 10,
+            "user_message_policy": "on_change_or_heartbeat",
+            "agent": agent,
+        })
+        result.pop("decision", None)
+        result.pop("decision_token", None)
+    agent = result["agent"]
+    agent["local_runner"] = {"status": local_status or "unknown"}
+    # Neither stale server followups nor an old upload recovery action can be
+    # forwarded while this exact local pool may still be uploading the result.
+    agent.pop("next_commands", None)
+    if pending_upload_count:
+        agent["completed_result_count"] = pending_upload_count
+        result["user_message"] += " 已完成结果由本次运行继续处理，退出后再核实补交状态。"
+    if blocked_upload_count:
+        agent["requires_user_action"] = True
+        agent["blocked_result_count"] = blocked_upload_count
+        result["interaction"] = "warn"
+        result["user_message"] += " 其中有结果需要人工检查。"
+    if local_item.get("startup_status") == "failed":
+        agent["requires_user_action"] = True
+        result["interaction"] = "warn"
+        result["user_message"] = str(
+            local_item.get("startup_user_message") or "本次启动检查未通过。"
+        ) + " 正在确认本次进程退出，请勿重复运行。"
+        result["error_code"] = local_item.get("startup_error_code") or "local_start_failed"
+        if isinstance(local_item.get("startup_diagnostic"), dict):
+            agent["local_runner"]["diagnostic"] = local_item["startup_diagnostic"]
     return result
 
 
@@ -2442,6 +2515,21 @@ def cmd_progress_plan(args) -> int:
                 and local_item.get("startup_status") == "failed"
             )
         )
+        envelope = response["envelope"]
+        # A monitoring overlay must never erase a required confirmation or an
+        # authoritative server stop. It does not start/stop/re-enroll anything.
+        if envelope.get("decision_required") or envelope.get("agent_action") not in {
+            "monitor", "done", "recover_upload", "review_failure",
+        }:
+            return response
+        if same_local_plan and local_status not in {
+            "completed", "stopped", "failed", "interrupted",
+        }:
+            return _local_active_progress_response(
+                response, local_item,
+                pending_upload_count=len(pending_uploads),
+                blocked_upload_count=sum(bool(entry.get("upload_blocked")) for entry in pending_uploads),
+            )
         if pending_uploads:
             return _local_progress_fault_response(
                 response,
@@ -2459,14 +2547,6 @@ def cmd_progress_plan(args) -> int:
         ):
             return _local_progress_fault_response(
                 response, local_item,
-            )
-        if (
-            same_local_plan
-            and local_status == "starting"
-            and response["envelope"].get("agent_action") == "monitor"
-        ):
-            return _local_preparing_response(
-                response, selected=int(local_item.get("workers") or 1),
             )
         return response
 
