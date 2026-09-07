@@ -4406,11 +4406,11 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
             "请先完成该运行工具的登录或修复，再次使用原运行说明。"
         )
     elif reason == "pool ended before startup acknowledgement":
-        code = "run_state_changed_before_start"
-        reason_code = "startup-state-changed"
+        code = "local_runner_never_ready"
+        reason_code = "startup-unknown"
         message = (
-            "题目状态在本机准备期间发生了变化，没有题目开始执行。"
-            "请重新检查网页状态后，再次使用原运行说明。"
+            "这台设备的运行进程已退出，但没有收到启动确认。"
+            "请先检查当前运行状态，确认后再使用原运行说明重试。"
         )
     else:
         code = "local_start_failed"
@@ -4446,6 +4446,32 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
     except (fleet.FleetError, OSError, ValueError):
         # The original startup result remains authoritative. A dead coordinator
         # or an already-ready pool must never be replaced by reporting cleanup.
+        pass
+
+
+def _publish_builder_preflight_failure(args, failure: image_cache.TrialBuilderPreflight) -> None:
+    """Carry the typed builder result without guessing its category from logs."""
+    if not getattr(args, "fleet_pool", False):
+        return
+    from . import fleet
+
+    try:
+        fleet.publish_pool_startup_failure(
+            HOME, args.batch_id,
+            error_code="local_environment_not_ready",
+            user_message=(
+                "这台设备的构建环境检查未通过，题目尚未开始执行。"
+                "请检查 Docker 构建工具、镜像源访问和磁盘空间后，再次使用原运行说明。"
+            ),
+            retryable=True,
+            diagnostic={
+                "stage": failure.stage, "failure_code": failure.failure_code,
+                "returncode": failure.returncode, "detail": failure.detail,
+                "cleanup_detail": failure.cleanup_detail,
+            },
+        )
+    except (fleet.FleetError, OSError, ValueError):
+        # Reporting must not change the pool's environment-failure exit code.
         pass
 
 
@@ -5330,6 +5356,7 @@ def _run_worker_pool(args) -> int:
     if target > 1:
         builder_preflight = image_cache.preflight_trial_builder(HOME)
         if not builder_preflight.ok:
+            _publish_builder_preflight_failure(args, builder_preflight)
             print(
                 "isolated BuildKit preflight failed before worker sessions or "
                 "task checkout: "
@@ -5339,6 +5366,8 @@ def _run_worker_pool(args) -> int:
             )
             if builder_preflight.detail:
                 print(builder_preflight.detail)
+            if builder_preflight.cleanup_detail:
+                print("builder cleanup: " + builder_preflight.cleanup_detail)
             print(
                 "no worker was started; check Docker registry access or its "
                 "credential-free HTTPS mirror, then run `dradar resume`"
