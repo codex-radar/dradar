@@ -9,11 +9,28 @@ Pinning src/ at the front of sys.path removes the failure mode regardless of
 how (or whether) the package is installed in the interpreter.
 """
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Protect import-time paths before pytest collects application modules.
+
+    The per-test fixture runs too late for local_config.HOME and function
+    defaults that capture it. Give those paths a disposable session directory,
+    even when the caller already has DRADAR_HOME set to a real installation.
+    """
+
+    runtime_home = tempfile.TemporaryDirectory(prefix="dradar-pytest-")
+    config.add_cleanup(runtime_home.cleanup)
+    environment = pytest.MonkeyPatch()
+    environment.setenv("DRADAR_HOME", runtime_home.name)
+    config.add_cleanup(environment.undo)
 
 
 @pytest.fixture(autouse=True)
