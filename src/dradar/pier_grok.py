@@ -23,6 +23,13 @@ from pier.models.agent.network import NetworkAllowlist
 from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
 try:
+    from _dradar_pier_credential_delivery import inject_private_files
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import inject_private_files
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -390,7 +397,7 @@ class GrokBuild(BaseInstalledAgent):
             env=env,
         )
         if not self._shared_oauth:
-            await environment.upload_file(self._auth_json_file, remote_auth)
+            await inject_private_files(self, environment, [(self._auth_json_file, remote_auth)])
         else:
             await self.exec_as_agent(
                 environment,

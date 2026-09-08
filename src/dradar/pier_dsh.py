@@ -24,6 +24,13 @@ from pier.models.agent.context import AgentContext
 from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.agent.network import NetworkAllowlist
 try:
+    from _dradar_pier_credential_delivery import inject_private_files
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import inject_private_files
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -599,7 +606,7 @@ class DshMinimal(BaseInstalledAgent):
             local_patch.parent.mkdir(parents=True, exist_ok=True)
             local_patch.write_text(_MINIMAL_PATCH, encoding="utf-8")
             local_runner.write_text(_MINIMAL_HEADLESS_RUNNER, encoding="utf-8")
-            await environment.upload_file(self._api_key_file, remote_api_key)
+            await inject_private_files(self, environment, [(self._api_key_file, remote_api_key)])
             await environment.upload_file(local_patch, remote_patch)
             await environment.upload_file(local_runner, remote_runner)
 

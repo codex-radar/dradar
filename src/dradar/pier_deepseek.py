@@ -21,6 +21,13 @@ from pier.environments.base import BaseEnvironment
 from pier.models.agent.context import AgentContext
 from pier.models.agent.network import NetworkAllowlist
 try:
+    from _dradar_pier_credential_delivery import credential_upload_environment
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import credential_upload_environment
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -112,7 +119,9 @@ class DeepSeekCodex(Codex):
             "DeepSeek Codex model catalog verified in task container: %s",
             _CATALOG_SHA256,
         )
-        await super().run(instruction, environment, context)
+        source = self._resolve_auth_json_path()
+        auth_environment = credential_upload_environment(environment, self, [source] if source else [])
+        await super().run(instruction, auth_environment, context)
 
 
 __all__ = ["DeepSeekCodex"]
