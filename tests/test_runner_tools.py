@@ -1278,7 +1278,9 @@ def _antigravity_assignment_for_trial():
 def _prepare_fake_antigravity(monkeypatch, tmp_path):
     @contextmanager
     def fake_session(_work_dir):
-        yield tmp_path / "antigravity-auth"
+        credential_root = tmp_path / "antigravity-auth"
+        credential_root.mkdir(exist_ok=True)
+        yield credential_root
 
     @contextmanager
     def passthrough_overlay(_assignment, tasks_root, _work_dir, _job_name):
@@ -1351,7 +1353,7 @@ def test_run_trial_stops_live_codex_quota_error_loop(tmp_path, monkeypatch):
     terminated = []
     cleaned = []
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
 
@@ -1479,7 +1481,7 @@ def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
     captured = {}
     cleaned = []
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
 
@@ -2147,7 +2149,7 @@ def test_registry_io_timeout_is_a_build_failure_with_bounded_diagnostic():
 
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
     captured = {}
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
     class FakePopen:
@@ -2373,7 +2375,7 @@ def test_run_trial_overrides_stale_server_pin_before_start(
 
     monkeypatch.setattr(runner_mod, "resolve_latest_codex_cli_version", resolve)
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["version"] = assignment["agent_version"]
         captured["job_name"] = job_name
         return ["pier", "run", job_name]
