@@ -731,8 +731,21 @@ def _ensure_runtime_safety_module(home: Path) -> Path:
     )
 
 
+def _ensure_credential_delivery_module(home: Path) -> None:
+    for source_name, target_name in (
+        ("pier_credential_delivery.py", "_dradar_pier_credential_delivery.py"),
+        ("credential_files.py", "_dradar_credential_files.py"),
+    ):
+        try:
+            content = importlib.resources.files("dradar").joinpath(source_name).read_bytes()
+        except (FileNotFoundError, OSError) as exc:
+            raise RunnerError("Pier credential delivery helper is missing; reinstall or upgrade dradar") from exc
+        _materialize_shared_file(home / target_name, content)
+
+
 def _ensure_worker_event_module(home: Path) -> Path:
     """Copy the tiny Pier->CLI lifecycle sidecar helper into the run dir."""
+    _ensure_credential_delivery_module(home)
     try:
         source = (
             importlib.resources.files("dradar")

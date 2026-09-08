@@ -26,6 +26,13 @@ except ModuleNotFoundError:
         codebuddy_install_command,
     )
 try:
+    from _dradar_pier_credential_delivery import inject_private_files
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import inject_private_files
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -341,10 +348,10 @@ class CodeBuddySubscription(ClaudeCode):
             ),
             env=env,
         )
-        for source in self._storage_files:
-            await environment.upload_file(source, f"{remote_storage}/{source.name}")
-        for source in self._auth_files:
-            await environment.upload_file(source, f"{remote_auth}/{source.name}")
+        await inject_private_files(self, environment, [
+            *[(source, f"{remote_storage}/{source.name}") for source in self._storage_files],
+            *[(source, f"{remote_auth}/{source.name}") for source in self._auth_files],
+        ])
         empty_mcp = self.logs_dir / "codebuddy-empty-mcp.json"
         empty_mcp.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
         if os.name != "nt":

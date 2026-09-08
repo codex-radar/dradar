@@ -188,7 +188,7 @@ def test_native_claude_credentials_never_enter_collected_logs(tmp_path,monkeypat
                 return SimpleNamespace(return_code=0,stdout='',stderr='')
             if 'rm -rf -- /tmp/dradar-claude-auth-' in command and finish=='cleanup_failure':
                 return SimpleNamespace(return_code=1,stdout='',stderr='inert cleanup failure')
-            local=command.replace('/tmp/dradar-claude-auth-',mapped('/tmp/dradar-claude-auth-')).replace('/logs/agent',mapped('/logs/agent'))
+            local=command.replace('/tmp',mapped('/tmp')).replace('/logs/agent',mapped('/logs/agent'))
             r=subprocess.run(['bash','-c',local],capture_output=True,text=True)
             return SimpleNamespace(return_code=r.returncode,stdout=r.stdout,stderr=r.stderr)
     async def native_run(self,instruction,environment,context):

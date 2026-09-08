@@ -27,6 +27,13 @@ except ModuleNotFoundError as exc:
         raise
     from dradar.credential_files import claude_config_payload, read_private_credential, is_claude_metered_auth
 try:
+    from _dradar_pier_credential_delivery import inject_private_files
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import inject_private_files
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -119,11 +126,11 @@ class ClaudeCodeSubscription(ClaudeCode):
         if result.return_code != 0:
             raise ValueError("cannot create private Claude configuration directory")
         with tempfile.TemporaryDirectory(prefix="dradar-claude-upload-") as temporary:
-            source = Path(temporary) / ".credentials.json"
+            source = Path(temporary).resolve() / ".credentials.json"
             fd = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(self._oauth_config)
-            await environment.upload_file(source, root + "/.credentials.json")
+            await inject_private_files(self, environment, [(source, root + "/.credentials.json")])
         result = await self.exec_as_root(
             environment, command=(
                 f"chmod 700 {shlex.quote(root)} && "

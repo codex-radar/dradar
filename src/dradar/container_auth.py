@@ -38,6 +38,7 @@ class AuthCapabilities:
     # True only when the current transport exposes the provider's shared store.
     # It does not certify hot reload, server rotation semantics, or OS locks.
     shares_native_store: bool = False
+    compatibility_exception: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,8 @@ class AuthBinding:
                 or capabilities.persistence not in ('shared-store', 'validated-merge', 'container-only', 'unchanged')
                 or capabilities.shares_native_store != (capabilities.delivery == 'shared-directory')):
             raise ContainerAuthError('inconsistent authentication capabilities')
+        if capabilities.delivery in ('shared-directory', 'process-token') and not capabilities.compatibility_exception:
+            raise ContainerAuthError('non-file delivery requires an explicit compatibility exception')
         exists = self.source.is_dir() if self.source_kind == 'directory' else self.source.is_file()
         if not exists:
             raise ContainerAuthError(f'{self.harness} credential {self.source_kind} is unavailable; prepare this provider before running')
@@ -88,7 +91,9 @@ class AuthBinding:
         return {'harness': self.harness, 'provider': self.provider,
                 'delivery': self.capabilities.delivery, 'refresh': self.capabilities.refresh,
                 'persistence': self.capabilities.persistence,
-                'shares_native_store': self.capabilities.shares_native_store}
+                'shares_native_store': self.capabilities.shares_native_store,
+                **({'compatibility_exception': self.capabilities.compatibility_exception}
+                   if self.capabilities.compatibility_exception else {})}
 
 
 @dataclass(frozen=True)
@@ -181,13 +186,15 @@ def default_registry() -> AuthRegistry:
 
     copied = AuthCapabilities('file-copy', 'native-cli', 'container-only')
     key = AuthCapabilities('file-copy', 'static', 'unchanged')
-    shared = AuthCapabilities('shared-directory', 'native-cli', 'shared-store', True)
+    shared = AuthCapabilities('shared-directory', 'native-cli', 'shared-store', True,
+        'Preserve native shared storage until isolated-copy renewal coordination is validated')
     add('codex', DEFAULT_CODEX_PROVIDER, 'codex_auth_path', 'CODEX_AUTH_JSON_PATH', copied, direct=True, channel='agent-env')
     add('codex', DEEPSEEK_PROVIDER, 'create_deepseek_auth_json', 'CODEX_AUTH_JSON_PATH', key, temporary=True, channel='agent-env', default=False)
 
     def claude_bind(path):
         native = path.name == '.credentials.json'
-        caps = copied if native else AuthCapabilities('process-token', 'session-token', 'unchanged')
+        caps = copied if native else AuthCapabilities('process-token', 'session-token', 'unchanged',
+            compatibility_exception='Official setup-token is consumed through the CLI process environment')
         return AuthBinding(CLAUDE_AGENT, CLAUDE_PROVIDER, path, 'file', caps,
                            'oauth_config_file' if native else 'oauth_token_file')
     registry.register(AuthAdapter(CLAUDE_AGENT, CLAUDE_PROVIDER, _source('claude_subscription_session'), claude_bind), default=True)

@@ -157,3 +157,14 @@ def test_binding_cannot_silently_change_harness_or_provider(tmp_path):
     with pytest.raises(ContainerAuthError,match='match'):
         with registry.session(AuthRequest('one',None,tmp_path),{}): pass
     with pytest.raises(ContainerAuthError,match='already registered'):registry.register(bad)
+
+
+def test_non_file_delivery_must_explain_compatibility_exception(tmp_path):
+    source=tmp_path/'auth';source.write_text('credential')
+    binding=AuthBinding('new-harness','provider',source,'file',
+        AuthCapabilities('shared-directory','native-cli','shared-store',True),'auth_file')
+    with pytest.raises(ContainerAuthError,match='compatibility exception'):
+        binding.pier_args()
+    explained=replace(binding,capabilities=replace(binding.capabilities,
+        compatibility_exception='Provider requires its validated shared native lock'))
+    assert 'shared_oauth=true' in explained.pier_args()
