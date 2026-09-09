@@ -36,7 +36,6 @@ TARGETS = (
     ("macos", "x86_64"),
     ("macos", "arm64"),
     ("windows", "x86_64"),
-    ("windows", "arm64"),
 )
 ROLLOUT_STAGES = {"internal", "canary", "progressive", "general"}
 KEY_STATUSES = {"active", "next", "retired"}
@@ -227,7 +226,7 @@ def _policy(path: Path) -> dict[str, Any]:
     targets = policy["targets"]
     parsed_targets = tuple((item.get("os"), item.get("arch")) for item in targets)
     if parsed_targets != TARGETS:
-        raise ReleaseError("policy must contain the exact six supported targets")
+        raise ReleaseError("policy must contain the exact five supported targets")
     validity = policy["max_manifest_validity_days"]
     if not isinstance(validity, int) or isinstance(validity, bool) or not 1 <= validity <= 90:
         raise ReleaseError("unsafe manifest validity limit")
@@ -613,12 +612,12 @@ def _validate_plan(plan: dict[str, Any], policy: dict[str, Any]) -> None:
         raise ReleaseError("compatibility differs from reviewed policy")
     artifacts = plan["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != len(TARGETS):
-        raise ReleaseError("release plan must contain exactly six artifacts")
+        raise ReleaseError("release plan must contain exactly five artifacts")
     if not all(isinstance(item, dict) for item in artifacts):
         raise ReleaseError("invalid artifact plan")
     targets = tuple((item.get("os"), item.get("arch")) for item in artifacts)
     if targets != TARGETS:
-        raise ReleaseError("release plan must contain the exact six targets")
+        raise ReleaseError("release plan must contain the exact five targets")
     prefix = expected_prefix + "/"
     public_bases: set[str] = set()
     for item, (os_name, arch) in zip(artifacts, TARGETS, strict=True):

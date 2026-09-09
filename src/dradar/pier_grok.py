@@ -277,6 +277,12 @@ def _install_command() -> str:
     )
 
 
+try:
+    from _dradar_artifact_boundary import private_post_run
+except ModuleNotFoundError:
+    from dradar.artifact_boundary import private_post_run
+
+
 class GrokBuild(BaseInstalledAgent):
     """Run the official Grok CLI headlessly with an isolated OAuth home."""
 
@@ -547,6 +553,7 @@ class GrokBuild(BaseInstalledAgent):
                     parts.append(block["text"])
         return "\n\n".join(part for part in parts if part)
 
+    @private_post_run
     def populate_context_post_run(self, context: AgentContext) -> None:
         """Create a conservative ATIF transcript from the Messages NDJSON.
 

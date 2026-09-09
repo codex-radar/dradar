@@ -14,6 +14,11 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .artifact_boundary import (
+    UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
+    preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
+)
+
 import json
 import os
 import re
@@ -1284,7 +1289,7 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
     """
     path = trial_dir / "agent" / "dsh-home" / "dsh-usage.json"
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(read_trial_file(trial_dir, path.relative_to(trial_dir)).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(value, dict) or value.get("schema") != "dsh-provider-usage-v2":
@@ -1362,9 +1367,11 @@ def _dsh_trial_usage(trial_dir: Path) -> dict | None:
 def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
     """Read normalized usage or a structurally checked observed ledger."""
 
-    path = trial_dir / "agent" / "provider-usage.json"
+    path = preferred_log_path(trial_dir, "provider-usage.json")
+    if path is None:
+        return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(read_trial_file(trial_dir, path.relative_to(trial_dir)).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     expected_provider = (
@@ -1496,7 +1503,7 @@ def _claude_trial_usage_from_trajectory(
         return None
     for attempt in range(max(1, attempts)):
         try:
-            trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            trajectory = json.loads(read_trial_file(trial_dir, trajectory_path.relative_to(trial_dir)).decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             trajectory = None
         if trajectory is not None:
@@ -1527,9 +1534,9 @@ def _dsh_completed_outcome(
     """
     outcome_path = trial_dir / "agent" / "dsh-home" / "dsh-outcome.json"
     try:
-        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
-        result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
-        patch_bytes = patch.read_bytes()
+        outcome = json.loads(read_trial_file(trial_dir, outcome_path.relative_to(trial_dir)).decode("utf-8"))
+        result_value = json.loads(read_trial_file(trial_dir, result.relative_to(trial_dir)).decode("utf-8")) if result else None
+        patch_bytes = read_trial_file(trial_dir, patch.relative_to(trial_dir))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(outcome, dict) or not isinstance(result_value, dict):
@@ -1581,11 +1588,13 @@ def _grok_completed_outcome(
         or assignment.get("model") != GROK_MODEL
     ):
         return None
-    trajectory_path = trial_dir / "agent" / "trajectory.json"
+    _, trajectory_path, _ = trial_artifact_paths(trial_dir)
+    if trajectory_path is None:
+        return None
     try:
-        result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
-        trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
-        patch_bytes = patch.read_bytes()
+        result_value = json.loads(read_trial_file(trial_dir, result.relative_to(trial_dir)).decode("utf-8")) if result else None
+        trajectory = json.loads(read_trial_file(trial_dir, trajectory_path.relative_to(trial_dir)).decode("utf-8"))
+        patch_bytes = read_trial_file(trial_dir, patch.relative_to(trial_dir))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(result_value, dict) or not isinstance(trajectory, dict):
@@ -1728,8 +1737,8 @@ def _bundled_completed_outcome(
     }:
         return None
     try:
-        result_value = json.loads(result.read_text(encoding="utf-8")) if result else None
-        patch_bytes = patch.read_bytes()
+        result_value = json.loads(read_trial_file(trial_dir, result.relative_to(trial_dir)).decode("utf-8")) if result else None
+        patch_bytes = read_trial_file(trial_dir, patch.relative_to(trial_dir))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(result_value, dict):
@@ -1786,9 +1795,31 @@ def _bundled_completed_outcome(
     }
 
 
-def _upload_trial(
+def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False):
+    try:
+        if (entry.get("upload_blocked") and not request_salvage) or not Path(entry["trial_dir"]).exists():
+            return _upload_trial_checked(
+                client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
+            )
+        with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
+            return _upload_trial_checked(
+                client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
+                log_snapshot=snapshot,
+            )
+    except UnsafeArtifact as exc:
+        blocked = dict(entry)
+        blocked["upload_blocked"] = "unsafe_artifact"
+        blocked["artifact_boundary_reason"] = str(exc)
+        pending.record(HOME, blocked)
+        print("  artifact boundary rejected the upload; local evidence retained (" + str(exc) + ")")
+        print("  unsafe_artifact requires independent review of the preserved source; "
+              "retry-upload and salvage cannot clear this block. See docs/ARTIFACT_BOUNDARY_RECOVERY.md.")
+        return "upload-blocked"
+
+
+def _upload_trial_checked(
     client: ApiClient, entry: dict, *, ask_cleanup: bool = False,
-    request_salvage: bool = False,
+    request_salvage: bool = False, log_snapshot: Path | None = None,
 ) -> str:
     """Scrub + upload one trial's artifacts, described by a pending-ledger
     entry dict (assignment_id/nonce/task_id/trial_dir/meta/outcome/job_dir/
@@ -1894,6 +1925,8 @@ def _upload_trial(
 
     patch, trajectory, result = trial_artifact_paths(trial_dir)
     patch = staged.staged
+    if log_snapshot is not None:
+        _, trajectory, result = trial_artifact_paths(log_snapshot)
 
     # Use the byte snapshot verified while the staging lock was held. The
     # multipart request below gets its own temporary file, so a concurrent
@@ -1957,7 +1990,7 @@ def _upload_trial(
             return "assignment-reopened"
 
     upload_meta = dict(entry.get("meta") or {})
-    trial_dir = Path(entry["trial_dir"])
+    trial_dir = log_snapshot if log_snapshot is not None else Path(entry["trial_dir"])
     # Claude Code emits an ATIF trajectory that is intentionally useful for
     # audit, but it is not a Codex session tree. Prefer the adapter's strictly
     # reconciled provider sidecar so the generic Codex bundle parser cannot
@@ -1993,9 +2026,9 @@ def _upload_trial(
         else None
     )
     if upload_meta.get("dsh_version") and usage is None:
-        usage = _dsh_trial_usage(Path(entry["trial_dir"]))
+        usage = _dsh_trial_usage(trial_dir)
     if usage is None:
-        usage = _subscription_trial_usage(Path(entry["trial_dir"]), upload_meta)
+        usage = _subscription_trial_usage(trial_dir, upload_meta)
     if entry.get("artifact_staging_recovery"):
         upload_meta["artifact_staging_recovery"] = entry["artifact_staging_recovery"]
     if redacted_patch is not None:
@@ -2078,7 +2111,7 @@ def _upload_trial(
         if trajectory:
             traj_scrubbed = scrubbed / "trajectory.json"
             try:
-                scrubbed_trajectory = scrub_json_bytes(trajectory.read_bytes())
+                scrubbed_trajectory = scrub_json_bytes(read_trial_file(trial_dir, trajectory.relative_to(trial_dir)))
                 value = json.loads(scrubbed_trajectory)
                 if not isinstance(value, dict):
                     raise ValueError("top level is not an object")
@@ -2091,7 +2124,7 @@ def _upload_trial(
         result_scrubbed = None
         if result:
             result_scrubbed = scrubbed / "result.json"
-            result_scrubbed.write_bytes(scrub_json_bytes(result.read_bytes()))
+            result_scrubbed.write_bytes(scrub_json_bytes(read_trial_file(trial_dir, result.relative_to(trial_dir))))
             if usage is not None:
                 _apply_usage_to_result(result_scrubbed, usage)
         # Refresh before submitting: from here on an unacked completed trial
@@ -4450,6 +4483,10 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
 
 
 def cmd_go(args) -> int:
+    try:
+        preflight_artifact_platform()
+    except UnsafeArtifact:
+        sys.exit(PLATFORM_PREFLIGHT_MESSAGE)
     try:
         args.batch_id = normalize_batch_id(getattr(args, "batch_id", None))
     except ValueError as exc:

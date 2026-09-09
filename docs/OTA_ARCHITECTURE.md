@@ -52,7 +52,7 @@ rollout stage 为 `internal → canary → progressive → general`。稳定 `cl
 
 ## 发布输入契约与本地端到端演练
 
-发布方必须离线生成 Ed25519 签名 Manifest，并为六个唯一目标提供 zipapp：`macos/linux/windows × x86_64/arm64`。每个 zipapp 必须支持 `python candidate.pyz --version` 自检；Manifest 中的 filename、HTTPS URL、精确 byte size 和小写 SHA-256 必须与最终不可变对象一致。签名覆盖 rollout、有效期、sequence 及全部兼容合同。公钥轮换通过重复 `--trusted-key next-id=/path/to/raw.pub` 同时携带旧/新公钥，不允许从 Manifest 自行引入信任根。
+发布方必须离线生成 Ed25519 签名 Manifest，并为五个唯一目标提供 zipapp：`macos/linux × x86_64/arm64` 加 `windows/x86_64`。每个 zipapp 必须支持 `python candidate.pyz --version` 自检；Manifest 中的 filename、HTTPS URL、精确 byte size 和小写 SHA-256 必须与最终不可变对象一致。签名覆盖 rollout、有效期、sequence 及全部兼容合同。公钥轮换通过重复 `--trusted-key next-id=/path/to/raw.pub` 同时携带旧/新公钥，不允许从 Manifest 自行引入信任根。
 
 ```text
 dradar update status --json

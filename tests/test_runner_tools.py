@@ -979,6 +979,8 @@ def test_run_trial_timeout_raises_naming_log(tmp_path, monkeypatch):
     assert killed  # the wedged process was reaped, not left running
     assert cleaned == [tmp_path / "jobs" / "aa1"]
     assert popen_kwargs["start_new_session"] is (os.name != "nt")
+    if os.name == "posix":
+        assert popen_kwargs["umask"] == 0o077
     assert str(tmp_path / "aa1.log") in str(exc.value)
     # the actual cause is inlined, not just the file name
     assert "docker: no space left on device" in str(exc.value)
@@ -2595,7 +2597,8 @@ def test_dsh_vision_deepswe_binding_requires_text_only_input(tmp_path):
 
 
 def test_dsh_utf16_patch_is_normalized_only_after_git_validation(tmp_path):
-    patch = tmp_path / "model.patch"
+    patch = tmp_path / "artifacts" / "model.patch"
+    patch.parent.mkdir()
     diff = (
         "diff --git a/answer.txt b/answer.txt\n"
         "new file mode 100644\n"
@@ -2607,5 +2610,9 @@ def test_dsh_utf16_patch_is_normalized_only_after_git_validation(tmp_path):
     patch.write_bytes(diff.encode("utf-16"))
 
     assert _normalize_utf16_patch(patch) is True
-    assert patch.read_bytes() == diff.encode("utf-8")
-    assert _normalize_utf16_patch(patch) is False
+    assert patch.read_bytes() == diff.encode("utf-16")
+    normalized = tmp_path / ".dradar/host-output/model.patch"
+    assert normalized.read_bytes() == diff.encode("utf-8")
+    assert _normalize_utf16_patch(normalized) is False
+    from dradar.artifact_staging import ensure_staged_patch
+    assert ensure_staged_patch(tmp_path).data == diff.encode("utf-8")

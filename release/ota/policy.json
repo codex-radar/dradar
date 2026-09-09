@@ -8,8 +8,7 @@
     {"os": "linux", "arch": "arm64"},
     {"os": "macos", "arch": "x86_64"},
     {"os": "macos", "arch": "arm64"},
-    {"os": "windows", "arch": "x86_64"},
-    {"os": "windows", "arch": "arm64"}
+    {"os": "windows", "arch": "x86_64"}
   ],
   "compatibility": {
     "launcher_min_version": "1.0.0",

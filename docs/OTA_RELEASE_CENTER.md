@@ -32,11 +32,11 @@ channels/stable/current.json
 
 发布顺序固定如下：
 
-1. 从受保护 `main` 的精确 commit/tree 确定性构建六个平台 zipapp。
-2. `publish-r2` 入口通过拒绝 symlink 的 regular-file descriptor，把 plan、manifest、registry、previous manifest、audit、SHA256SUMS 和六个 artifact 各读取一次并固化为内存 snapshot。后续发布必须用同一份 previous bytes 完成链验签、audit previous digest 和 authenticated `current.json` 精确字节比较；路径之后发生任何替换都不能改变本次决策或上传内容。首次发布必须得到 404，后续发布还必须保存 authenticated current 的 ETag。
+1. 从受保护 `main` 的精确 commit/tree 确定性构建五个平台 zipapp。
+2. `publish-r2` 入口通过拒绝 symlink 的 regular-file descriptor，把 plan、manifest、registry、previous manifest、audit、SHA256SUMS 和五个 artifact 各读取一次并固化为内存 snapshot。后续发布必须用同一份 previous bytes 完成链验签、audit previous digest 和 authenticated `current.json` 精确字节比较；路径之后发生任何替换都不能改变本次决策或上传内容。首次发布必须得到 404，后续发布还必须保存 authenticated current 的 ETag。
 3. 使用 `ota-production` Environment 中的 Ed25519 secret 签名；私钥派生公钥必须与已审查注册表完全一致。
-4. 使用客户端同一 closed manifest/artifact 规则复验签名、schema、版本、sequence、有效期、六平台 hash/size 和前序链。发布边界重新读取 registry，要求 manifest key 仍为 `active`，并要求 `published_at` 与当前发布时点都位于当前 key 有效期内。在任何网络写之前另取一次当前时钟，强制 manifest 满足 `published_at <= now < expires_at`；上传版本对象后、提交 pointer 前必须另取新的时钟，同时重验 key 当前有效期和 manifest 半开有效区间。
-5. 从已验证 plan、manifest、前序 snapshot 摘要和 canonical registry snapshot 重新构造唯一 canonical audit；调用方 audit 和 SHA256SUMS snapshot 必须逐字节匹配。SHA256SUMS 覆盖六个 artifact、manifest、registry 和 audit，上传只使用已验证的内存 snapshot 与重构字节，不再打开任何输入路径，也不使用调用方原始 audit。随后用 `If-None-Match: *` 上传版本对象；任何重名对象都失败，绝不覆盖。
+4. 使用客户端同一 closed manifest/artifact 规则复验签名、schema、版本、sequence、有效期、五平台 hash/size 和前序链。发布边界重新读取 registry，要求 manifest key 仍为 `active`，并要求 `published_at` 与当前发布时点都位于当前 key 有效期内。在任何网络写之前另取一次当前时钟，强制 manifest 满足 `published_at <= now < expires_at`；上传版本对象后、提交 pointer 前必须另取新的时钟，同时重验 key 当前有效期和 manifest 半开有效区间。
+5. 从已验证 plan、manifest、前序 snapshot 摘要和 canonical registry snapshot 重新构造唯一 canonical audit；调用方 audit 和 SHA256SUMS snapshot 必须逐字节匹配。SHA256SUMS 覆盖五个 artifact、manifest、registry 和 audit，上传只使用已验证的内存 snapshot 与重构字节，不再打开任何输入路径，也不使用调用方原始 audit。随后用 `If-None-Match: *` 上传版本对象；任何重名对象都失败，绝不覆盖。
 6. 通过 R2 鉴权端点和匿名自定义域名分别回读每个对象；两侧都必须直接 HTTP 200、无重定向且字节完全一致。
 7. 最后更新 `channels/stable/current.json`：首次使用 `If-None-Match: *`，后续使用旧 ETag 的 `If-Match`。CAS 失败时版本对象成为不可发现的安全孤儿，不能覆盖并发发布。
 8. CAS 成功是不可逆 commit point。随后再次从 R2 和公开域名回读 pointer；只有两侧字节、SHA-256 和 ETag 验证通过才报告 `committed_and_verified`。CAS 后任何回读失败返回退出码 `3` 和 `committed_but_unverified`、`retryable=false`、预期 ETag/SHA-256/size 及只读核验步骤；不得自动或人工重跑 publish，不得用覆盖 current 的方式“回滚”。

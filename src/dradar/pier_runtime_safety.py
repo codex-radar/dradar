@@ -43,7 +43,7 @@ class AgentLogStore:
 
     def __init__(self, logs_dir: Path) -> None:
         self.logs_dir = Path(logs_dir)
-        self.uid = os.getuid()
+        self.uid = os.getuid() if os.name != "nt" else None
 
     @staticmethod
     def _fingerprint(value: os.stat_result) -> tuple[int, ...]:
@@ -129,6 +129,19 @@ class AgentLogStore:
         self, path: Path, *, max_bytes: int = _MAX_AGENT_LOG_BYTES,
     ) -> tuple[str, tuple[int, ...]] | None:
         leaf = self._leaf(path)
+        if os.name == "nt":
+            import hashlib
+            try:
+                try:
+                    from _dradar_artifact_boundary import read_trial_file, UnsafeArtifact
+                except ModuleNotFoundError:
+                    from dradar.artifact_boundary import read_trial_file, UnsafeArtifact
+                data = read_trial_file(self.logs_dir.parent, Path("agent") / leaf, max_bytes=max_bytes)
+                return data.decode("utf-8", errors="replace"), tuple(hashlib.sha256(data).digest())
+            except FileNotFoundError:
+                return None
+            except UnsafeArtifact as exc:
+                raise UnsafeAgentLog(str(exc)) from exc
         directory_fd, identity = self._open_dir()
         try:
             try:
@@ -182,6 +195,20 @@ class AgentLogStore:
         payload = text.encode()
         if len(payload) > _MAX_AGENT_LOG_BYTES:
             raise UnsafeAgentLog("replacement agent log is too large")
+        if os.name == "nt":
+            try:
+                from _dradar_artifact_boundary import TrialFiles, UnsafeArtifact
+            except ModuleNotFoundError:
+                from dradar.artifact_boundary import TrialFiles, UnsafeArtifact
+            try:
+                current = self.read_text(path) if expected is not None else None
+                matched = expected is None or (current is not None and current[1] == expected)
+                with TrialFiles(self.logs_dir.parent) as files:
+                    files.write_log(Path("agent") / leaf, payload)
+                return matched
+            except UnsafeArtifact as exc:
+                raise UnsafeAgentLog(str(exc)) from exc
+
         directory_fd, identity = self._open_dir()
         temporary = f".dradar-log-{uuid.uuid4().hex}.tmp"
         created_temp = False
@@ -286,10 +313,20 @@ class RuntimeSafety:
     def __init__(self, logs_dir: Path) -> None:
         self.logs_dir = Path(logs_dir)
         self.trial_dir = self.logs_dir.parent
-        self.host_uid = os.getuid()
-        self.host_gid = os.getgid()
+        # Windows host ownership is an ACL/SID contract, not a Linux uid.
+        self.host_uid = os.getuid() if os.name != "nt" else None
+        self.host_gid = os.getgid() if os.name != "nt" else None
 
     def prepare_host_layout(self) -> None:
+        if os.name == "nt":
+            try:
+                from _dradar_artifact_boundary import TrialFiles
+            except ModuleNotFoundError:
+                from dradar.artifact_boundary import TrialFiles
+            with TrialFiles(self.trial_dir) as files:
+                files.parent(Path("agent") / "layout-check")
+                files.verify()
+            return
         descriptors: list[int] = []
         try:
             for path in (self.trial_dir, self.logs_dir):
@@ -342,6 +379,10 @@ class RuntimeSafety:
             or not candidate.is_relative_to(logs_root)
         ):
             raise RuntimeSafetyError("runtime ownership handoff path is unsafe")
+        if os.name == "nt":
+            # Do not invent a POSIX owner for NTFS or run a guessed chown.
+            # Host input/output is checked through the native ACL boundary.
+            return
         path = shlex.quote(candidate.as_posix())
         owner = f"{self.host_uid}:{self.host_gid}"
         await self.exec_root_maintenance(
