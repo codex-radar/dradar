@@ -92,7 +92,9 @@ def test_install_spec_is_fully_pinned(tmp_path: Path) -> None:
 
     assert spec.agent_name == "dsh-minimal"
     assert spec.version == DSH_VERSION
-    assert f"@deepseek-ai/dsh@{DSH_VERSION}" in command
+    assert f"@deepseek-ai/dsh/-/dsh-{DSH_VERSION}.tgz" in command
+    assert pier_dsh.DSH_SHA512 in command
+    assert "sha512sum --check --strict" in command
     assert f"node-v{NODE_VERSION}-linux-${{node_arch}}.tar.xz" in command
     assert NODE_SHA256["x64"] in command
     assert NODE_SHA256["arm64"] in command
@@ -215,7 +217,7 @@ def test_run_supports_model_effort_matrix_without_logging_secret(
     assert "id: agent-presets" in patch
     assert "default: minimal" in patch
     assert "includeUserRoot: false" in patch
-    assert "config/agent-presets" in patch
+    assert "@deepseek-ai/dsh-agent-presets/presets" in patch
     assert "id: tool-web\n  disabled: true" in patch
     assert "id: tool-subagent\n  disabled: true" not in patch
     assert "id: tool-subagent-fork\n  disabled: true" not in patch
@@ -235,7 +237,7 @@ def test_run_supports_model_effort_matrix_without_logging_secret(
     assert "resumeSessionId" not in runner
     assert 'writeFileSync(process.env.DSH_SESSION_ID_FILE' in runner
     assert 'String(agent.session.id) + "\\n"' in runner
-    assert "const outcome = summarize(agent.session.events, 0)" in runner
+    assert "const outcome = summarize(agent.session.snapshotEvents(), 0)" in runner
     assert "continue the previous" not in runner.lower()
     assert 'const attachments = ctx.get("attachments")' in runner
     assert "unlinkSync(process.env.DSH_CREDENTIALS_FILE)" in runner

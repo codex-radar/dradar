@@ -85,10 +85,10 @@ DEEPSEEK_RUN_CONFIG_VERSION = "deepseek-codex-official-catalog-v2"
 DEEPSEEK_RUNTIME_PROFILE = "public-pier-0.3.0-catalog-v1"
 
 # DSH Minimal is a separate Pier agent, not a Codex provider alias. It reuses
-# the same local DeepSeek credential while preserving DSH 0.1.1-rc.2's native
+# the same local DeepSeek credential while preserving DSH 0.1.2-rc.1's native
 # effort surface: off/high/max (there is deliberately no synthetic low mode).
 DSH_AGENT = "dsh-minimal"
-DSH_VERSION = "0.1.1-rc.2"
+DSH_VERSION = "0.1.2-rc.1"
 DSH_FLASH_MODEL = "dsh-deepseek-v4-flash"
 DSH_PRO_MODEL = "dsh-deepseek-v4-pro"
 DSH_VISION_MODEL = "dsh-deepseek-v4-flash-vision-exp"
@@ -109,7 +109,7 @@ DSH_VISION_TEXT_CAPABILITY = (
 )
 DSH_FLASH_LEGACY_CAPABILITY = "dsh-minimal-deepseek-v4-flash-artifact-v4"
 DSH_PRO_LEGACY_CAPABILITY = "dsh-minimal-deepseek-v4-pro-artifact-v4"
-DSH_RUN_CONFIG_VERSION = "dsh-minimal-native-full-container-0.1.1-rc.2-v3"
+DSH_RUN_CONFIG_VERSION = "dsh-minimal-native-full-container-0.1.2-rc.1-v3"
 DSH_RUNTIME_PROFILE = "public-pier-0.3.0-dsh-minimal-full-container-v3"
 
 # Grok Build is intentionally subscription/OAuth-only.  In particular, the
@@ -210,31 +210,17 @@ _KIMI_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 ANTIGRAVITY_PROVIDER = "google-antigravity-subscription"
 ANTIGRAVITY_AGENT = "antigravity"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
-ANTIGRAVITY_CLI_VERSION = "1.1.22"
-ANTIGRAVITY_LINUX_RELEASE = "1.1.22-5711547746615296"
+ANTIGRAVITY_CLI_VERSION = "1.1.27"
+ANTIGRAVITY_LINUX_RELEASE = "1.1.27-5211191891591168"
 ANTIGRAVITY_LINUX_ARTIFACTS = {
     "x86_64": {
-        "url": (
-            "https://storage.googleapis.com/antigravity-public/"
-            "antigravity-cli/1.1.22-5711547746615296/linux-x64/"
-            "cli_linux_x64.tar.gz"
-        ),
-        "sha512": (
-            "40225d4b1f009412e905f0a234ba3d51487038d1ad1b8fa19331c84be55610a0"
-            "1f5b0ad9916fb871151cc45456c6bc30cc0b1ea5dab6c0616bc8fb262bcdd7a9"
-        ),
+        "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.27-5211191891591168/linux-x64/cli_linux_x64.tar.gz",
+        "sha512": "793d4b9ea2c08d9a7e50bafa02cfc8c19424bd60d6e83f91408d45f9c6d4ce79a5d576fede5bef164d823abf84f81359a14b4ca665952c47b0a7cfd743bb69c0"
     },
     "aarch64": {
-        "url": (
-            "https://storage.googleapis.com/antigravity-public/"
-            "antigravity-cli/1.1.22-5711547746615296/linux-arm/"
-            "cli_linux_arm64.tar.gz"
-        ),
-        "sha512": (
-            "b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623"
-            "e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
-        ),
-    },
+        "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.27-5211191891591168/linux-arm/cli_linux_arm64.tar.gz",
+        "sha512": "ed45f6930785aa4b42f14e07ace1c9d91a94fb76e760f54acbd7d3d3951e1f957fd456a0dae2a3124dd9a3b689bf7afb7c9303a3e4ba95037fc10063424d9bf9"
+    }
 }
 ANTIGRAVITY_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high"})
 ANTIGRAVITY_RUNTIME_MODELS = {
