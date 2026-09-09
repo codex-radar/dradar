@@ -29,6 +29,10 @@ from pathlib import Path
 
 import httpx
 
+from .artifact_boundary import (
+    TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
+    preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
+)
 from . import egress, image_cache
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -676,7 +680,7 @@ def _validated_deepseek_catalog() -> Path:
 def _ensure_deepseek_agent_module(home: Path) -> Path:
     """Expose DeepSeek and its host-private Codex dependencies to Pier."""
 
-    source = Path(__file__).with_name("pier_deepseek.py")
+    source = importlib.resources.files("dradar").joinpath("pier_deepseek.py")
     if not source.is_file():
         raise RunnerError(
             "DeepSeek Pier adapter is missing; reinstall or upgrade dradar "
@@ -688,7 +692,7 @@ def _ensure_deepseek_agent_module(home: Path) -> Path:
 
 
 def _ensure_codex_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_codex.py")
+    source = importlib.resources.files("dradar").joinpath("pier_codex.py")
     if not source.is_file():
         raise RunnerError(
             "Codex Pier adapter is missing; reinstall or upgrade dradar"
@@ -700,9 +704,9 @@ def _ensure_codex_agent_module(home: Path) -> Path:
 
 
 def _ensure_claude_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_claude.py")
-    usage_source = Path(__file__).with_name("claude_usage.py")
-    credential_source = Path(__file__).with_name("credential_files.py")
+    source = importlib.resources.files("dradar").joinpath("pier_claude.py")
+    usage_source = importlib.resources.files("dradar").joinpath("claude_usage.py")
+    credential_source = importlib.resources.files("dradar").joinpath("credential_files.py")
     if not source.is_file() or not usage_source.is_file() or not credential_source.is_file():
         raise RunnerError(
             "Claude Code Pier adapter is missing; reinstall or upgrade dradar"
@@ -720,7 +724,7 @@ def _ensure_claude_agent_module(home: Path) -> Path:
 
 
 def _ensure_runtime_safety_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_runtime_safety.py")
+    source = importlib.resources.files("dradar").joinpath("pier_runtime_safety.py")
     if not source.is_file():
         raise RunnerError(
             "Pier runtime safety helper is missing; reinstall or upgrade dradar"
@@ -732,6 +736,14 @@ def _ensure_runtime_safety_module(home: Path) -> Path:
 
 def _ensure_worker_event_module(home: Path) -> Path:
     """Copy the tiny Pier->CLI lifecycle sidecar helper into the run dir."""
+    _materialize_shared_file(
+        home / "_dradar_artifact_boundary.py",
+        importlib.resources.files("dradar").joinpath("artifact_boundary.py").read_bytes(),
+    )
+    _materialize_shared_file(
+        home / "_dradar_artifact_boundary_win.py",
+        importlib.resources.files("dradar").joinpath("artifact_boundary_win.py").read_bytes(),
+    )
     try:
         source = (
             importlib.resources.files("dradar")
@@ -752,8 +764,8 @@ def _ensure_worker_event_module(home: Path) -> Path:
 
 
 def _ensure_grok_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_grok.py")
-    recovery_source = Path(__file__).with_name("grok_recovery.py")
+    source = importlib.resources.files("dradar").joinpath("pier_grok.py")
+    recovery_source = importlib.resources.files("dradar").joinpath("grok_recovery.py")
     if not source.is_file() or not recovery_source.is_file():
         raise RunnerError(
             "Grok Build Pier adapter is missing; reinstall or upgrade dradar"
@@ -768,8 +780,8 @@ def _ensure_grok_agent_module(home: Path) -> Path:
 
 
 def _ensure_kimi_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_kimi.py")
-    recovery_source = Path(__file__).with_name("kimi_recovery.py")
+    source = importlib.resources.files("dradar").joinpath("pier_kimi.py")
+    recovery_source = importlib.resources.files("dradar").joinpath("kimi_recovery.py")
     if not source.is_file() or not recovery_source.is_file():
         raise RunnerError(
             "Kimi Code Pier adapter is missing; reinstall or upgrade dradar"
@@ -785,7 +797,7 @@ def _ensure_kimi_agent_module(home: Path) -> Path:
 
 
 def _ensure_antigravity_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_antigravity.py")
+    source = importlib.resources.files("dradar").joinpath("pier_antigravity.py")
     if not source.is_file():
         raise RunnerError(
             "Antigravity Pier adapter is missing; reinstall or upgrade dradar"
@@ -797,7 +809,7 @@ def _ensure_antigravity_agent_module(home: Path) -> Path:
 
 
 def _ensure_shared_oauth_environment_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_shared_oauth_docker.py")
+    source = importlib.resources.files("dradar").joinpath("pier_shared_oauth_docker.py")
     if not source.is_file():
         raise RunnerError(
             "shared OAuth Docker environment is missing; reinstall or upgrade dradar"
@@ -887,7 +899,7 @@ def _shared_oauth_mounts_json(agent: str, auth_path: Path) -> str:
 
 
 def _ensure_zcode_agent_module(home: Path) -> Path:
-    source = Path(__file__).with_name("pier_zcode.py")
+    source = importlib.resources.files("dradar").joinpath("pier_zcode.py")
     if not source.is_file():
         raise RunnerError(
             "ZCode Pier adapter is missing; reinstall or upgrade dradar"
@@ -902,7 +914,7 @@ def _ensure_zcode_agent_module(home: Path) -> Path:
 def _ensure_dsh_agent_module(home: Path) -> Path:
     """Expose only the pinned standalone DSH adapter to public Pier."""
 
-    source = Path(__file__).with_name("pier_dsh.py")
+    source = importlib.resources.files("dradar").joinpath("pier_dsh.py")
     if not source.is_file():
         raise RunnerError(
             "DSH Minimal Pier adapter is missing; reinstall or upgrade dradar"
@@ -940,7 +952,7 @@ def _ensure_codebuddy_agent_module(home: Path) -> Path:
 def _ensure_pier_sitecustomize(home: Path) -> Path:
     """Install the fail-closed prebuilt-egress shim into Pier's PYTHONPATH."""
 
-    source = Path(__file__).with_name("pier_sitecustomize.py")
+    source = importlib.resources.files("dradar").joinpath("pier_sitecustomize.py")
     if not source.is_file():
         raise RunnerError(
             "Pier egress bootstrap is missing; reinstall or upgrade dradar"
@@ -1813,10 +1825,12 @@ def trial_artifact_paths(trial_dir: Path) -> tuple[Path, Path | None, Path | Non
     bare trial_dir long after the process that ran the trial exited. The
     optional files are None when absent; the patch path is returned either
     way (callers decide whether a missing patch is fatal)."""
-    patch = trial_dir / "artifacts" / "model.patch"
-    trajectory = trial_dir / "agent" / "trajectory.json"
+    patch = trial_dir / ".dradar" / "host-output" / "model.patch"
+    if not (patch.exists() or patch.is_symlink()):
+        patch = trial_dir / "artifacts" / "model.patch"
+    trajectory = preferred_log_path(trial_dir, "trajectory.json")
     result = trial_dir / "result.json"
-    return patch, (trajectory if trajectory.is_file() else None), (result if result.is_file() else None)
+    return patch, trajectory, (result if result.exists() or result.is_symlink() else None)
 
 
 def _verify_dsh_artifact_binding(
@@ -1825,7 +1839,7 @@ def _verify_dsh_artifact_binding(
     """Reject DSH artifacts that cannot be tied to this exact checkout/run."""
     path = trial_dir / "agent" / "dsh-home" / "dsh-outcome.json"
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(read_trial_file(trial_dir, path.relative_to(trial_dir)))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RunnerError(
             "DSH artifact identity sidecar is missing or unreadable; refusing "
@@ -1894,7 +1908,7 @@ def _verify_dsh_artifact_binding(
 def _normalize_utf16_patch(patch: Path) -> bool:
     """Convert a BOM-marked, valid unified diff to UTF-8 before upload."""
     try:
-        raw = patch.read_bytes()
+        raw = read_trial_file(patch.parent.parent, patch.relative_to(patch.parent.parent))
     except OSError as exc:
         raise RunnerError(f"model.patch is unreadable: {exc}") from exc
     if not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -1921,7 +1935,8 @@ def _normalize_utf16_patch(patch: Path) -> bool:
             "UTF-16 model.patch could not be converted into a valid unified "
             "diff; keeping it locally instead of uploading"
         )
-    _materialize_shared_file(patch, normalized, mode=0o600)
+    with TrialFiles(patch.parent.parent) as files:
+        files.write_host(".dradar/host-output/model.patch", normalized)
     return True
 
 
@@ -2123,6 +2138,11 @@ def _analyze_codex_session_events(events: list[dict], fallback_id: str) -> dict:
 
 
 def build_codex_trajectory_bundle(trial_dir: Path) -> dict | None:
+    with snapshot_agent(trial_dir) as snapshot:
+        return _build_codex_trajectory_bundle_snapshot(snapshot)
+
+
+def _build_codex_trajectory_bundle_snapshot(trial_dir: Path) -> dict | None:
     """Convert all Codex JSONL files into one versioned multi-agent bundle.
 
     The bundle retains every parsed event and the root/subagent relationship.
@@ -2290,6 +2310,11 @@ def build_codex_trajectory_bundle(trial_dir: Path) -> dict | None:
 
 
 def build_kimi_trajectory_bundle(trial_dir: Path) -> dict | None:
+    with snapshot_agent(trial_dir) as snapshot:
+        return _build_kimi_trajectory_bundle_snapshot(snapshot)
+
+
+def _build_kimi_trajectory_bundle_snapshot(trial_dir: Path) -> dict | None:
     """Normalize Kimi's lossless session log into an auditable tool bundle.
 
     ``trajectory.json`` intentionally stays compact and display-oriented.  The
@@ -2306,9 +2331,9 @@ def build_kimi_trajectory_bundle(trial_dir: Path) -> dict | None:
     if not log_path.is_file():
         return None
 
-    trajectory_path = trial_dir / "agent" / "trajectory.json"
+    _, trajectory_path, _ = trial_artifact_paths(trial_dir)
     session_id = None
-    if trajectory_path.is_file():
+    if trajectory_path is not None:
         try:
             trajectory = json.loads(trajectory_path.read_text(errors="replace"))
         except (OSError, json.JSONDecodeError):
@@ -3958,6 +3983,18 @@ def _wait_for_worker_registration(
         time.sleep(0.25)
 
 
+
+def _pier_process_options() -> dict:
+    """Only the newly launched Pier process gets private creation defaults.
+
+    Never change the multithreaded CLI's umask or chmod an existing trial.
+    The unmodified upstream TrialPaths.mkdir then creates host roots as 0700.
+    """
+    if os.name == "posix":
+        return {"start_new_session": True, "umask": 0o077}
+    return {"start_new_session": False}
+
+
 def run_trial(
     assignment: dict,
     tasks_root: Path,
@@ -3969,6 +4006,10 @@ def run_trial(
     environment_build_timeout_multiplier: float | None = None,
     build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
 ) -> TrialArtifacts:
+    try:
+        preflight_artifact_platform(work_dir)
+    except UnsafeArtifact as exc:
+        raise RunnerError(PLATFORM_PREFLIGHT_MESSAGE) from exc
     effective_assignment = assignment
     codex_cli_version = None
     kimi_cli_version = None
@@ -4363,7 +4404,7 @@ def run_trial(
                 stderr=subprocess.STDOUT,
                 cwd=work_dir,
                 env=env,
-                start_new_session=(os.name != "nt"),
+                **_pier_process_options(),
             )
             try:
                 if on_worker_registered is None and worker_event_source is None:
@@ -4565,7 +4606,8 @@ def run_trial(
         and patch.is_file()
         and _normalize_utf16_patch(patch)
     ):
-        print("  normalized BOM-marked UTF-16 model.patch to validated UTF-8")
+        patch, trajectory, result = trial_artifact_paths(trial_dir)
+        print("  normalized BOM-marked UTF-16 model.patch to a private validated UTF-8 copy")
     if not patch.is_file():
         # No patch at all means the agent never produced anything — usually
         # the environment died under it. Say which, instead of blaming the

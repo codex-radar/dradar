@@ -50,7 +50,8 @@ Pier + Docker 作为现阶段的任务执行方案；未来可以继续接入其
 - 本机已登录 `codex` 或 `claude` CLI，二者准备好一个即可
 - 至少约 20 GB 可用磁盘；多 worker 需要更多 CPU、内存和磁盘
 
-原生 Windows 为候选支持，需要 Docker Desktop 运行 Linux containers，并确保 Codex CLI
+原生 Windows 仅支持 x64 候选环境与固定本地 NTFS；Windows ARM 不在支持范围。
+需要 Docker Desktop 运行 Linux containers，并确保 Codex CLI
 能直接在 PowerShell 的 `PATH` 中调用。WSL2 也可使用，不限定 Ubuntu。
 
 ```powershell
@@ -931,7 +932,7 @@ profile。这样可以提高任务资源而不改变其他项目正在使用的�
 
 ### Windows 与 WSL2
 
-- 原生 Windows：Docker Desktop 必须切换到 Linux containers；IDE 中的 Codex 扩展登录
+- 原生 Windows x64（固定本地 NTFS；不支持 Windows ARM）：Docker Desktop 必须切换到 Linux containers；IDE 中的 Codex 扩展登录
   不等于 PowerShell 可以执行 `codex`。
 - WSL2：Debian、Ubuntu、OpenSUSE 等普通发行版都可使用；Docker Desktop 自带的
   `docker-desktop` 是内部发行版，不能作为用户运行 DRadar 的终端环境。

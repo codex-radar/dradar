@@ -244,8 +244,8 @@ def test_build_sign_verify_bootstrap_bundle_with_temporary_key(tmp_path, capsys)
     )
 
     plan = json.loads((bundle / "release-plan.json").read_text())
-    assert len(plan["artifacts"]) == 6
-    assert len({item["filename"] for item in plan["artifacts"]}) == 6
+    assert len(plan["artifacts"]) == 5
+    assert len({item["filename"] for item in plan["artifacts"]}) == 5
     audit = json.loads((bundle / "release-audit.json").read_text())
     assert audit["sequence"] == 1
     assert audit["previous_manifest_sha256"] is None
@@ -626,7 +626,7 @@ def test_r2_publication_uploads_immutable_inputs_before_bootstrap_pointer(
     puts = [item for item in _FakeR2.operations if item[0].startswith("PUT")]
     assert puts[-1] == ("PUT_NEW", pointer)
     assert puts[-2][1].endswith("/manifest.json")
-    assert len([item for item in puts if item[1].endswith(".pyz")]) == 6
+    assert len([item for item in puts if item[1].endswith(".pyz")]) == 5
 
 
 def test_pointer_readback_accepts_matching_weak_etag_after_exact_body_check(
@@ -869,7 +869,7 @@ def test_manifest_expiring_during_immutable_upload_stops_before_pointer_commit(
         for operation in _FakeR2.operations
         if operation[0] == "PUT_NEW"
     ]
-    assert len(immutable_puts) == 10
+    assert len(immutable_puts) == 9  # five artifacts plus four immutable metadata objects
     assert "channels/stable/current.json" not in _FakeR2.state
 
 
@@ -1080,3 +1080,22 @@ def test_fetch_current_bootstrap_requires_real_404(monkeypatch, capsys):
         ]
     ) == 0
     assert "absent" in capsys.readouterr().out
+
+
+def test_supported_policy_is_exact_five_and_preserves_other_arm_targets(tmp_path):
+    policy = json.loads(POLICY.read_text())
+    expected = [('linux','x86_64'),('linux','arm64'),('macos','x86_64'),
+                ('macos','arm64'),('windows','x86_64')]
+    assert list(ota_release.TARGETS) == expected
+    assert [(p['os'],p['arch']) for p in policy['targets']] == expected
+    ota_release._policy(POLICY)
+    for remove in range(len(expected)):
+        changed = dict(policy, targets=policy['targets'][:remove]+policy['targets'][remove+1:])
+        path = tmp_path / f'missing-{remove}.json'
+        path.write_text(json.dumps(changed))
+        with pytest.raises(ota_release.ReleaseError, match='exact five'):
+            ota_release._policy(path)
+    path = tmp_path/'extra-arm.json'
+    path.write_text(json.dumps(dict(policy, targets=policy['targets']+[{'os':'windows','arch':'arm64'}])))
+    with pytest.raises(ota_release.ReleaseError, match='exact five'):
+        ota_release._policy(path)

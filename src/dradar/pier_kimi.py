@@ -575,6 +575,12 @@ def _install_command() -> str:
     )
 
 
+try:
+    from _dradar_artifact_boundary import private_post_run
+except ModuleNotFoundError:
+    from dradar.artifact_boundary import private_post_run
+
+
 class KimiCode(BaseInstalledAgent):
     """Run pinned Kimi K3 headlessly with an isolated OAuth data root."""
 
@@ -942,6 +948,7 @@ class KimiCode(BaseInstalledAgent):
                 parts.append(text)
         return "\n\n".join(part for part in parts if part)
 
+    @private_post_run
     def populate_context_post_run(self, context: AgentContext) -> None:
         stream_path = self.logs_dir / self._STREAM_FILE
         stderr_path = self.logs_dir / self._STDERR_FILE

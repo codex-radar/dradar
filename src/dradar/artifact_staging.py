@@ -9,6 +9,9 @@ Conflicting copies are never overwritten automatically.
 
 from __future__ import annotations
 
+from .artifact_boundary import TrialFiles, UnsafeArtifact, read_trial_file
+
+import stat
 import hashlib
 import json
 import os
@@ -96,7 +99,7 @@ class StagedPatch:
 
     @property
     def recovery_telemetry(self) -> dict | None:
-        if self.action not in {"source-reconstructed", "staged-reconstructed"}:
+        if self.action not in {"source-reconstructed", "source-only"}:
             return None
         return {
             "schema_version": SCHEMA_VERSION,
@@ -131,20 +134,11 @@ def _raise(reason: str, source: Path, staged: Path) -> None:
 
 
 def _read_optional(path: Path, *, label: str, source: Path, staged: Path) -> bytes | None:
-    if path.is_symlink():
-        _raise(f"{label}_is_symlink", source, staged)
-    if not path.exists():
-        return None
-    if not path.is_file():
-        _raise(f"{label}_is_not_file", source, staged)
+    root = source.parents[2]
     try:
-        return path.read_bytes()
-    except OSError as exc:
-        raise PatchStagingError(
-            f"{label}_unreadable:{type(exc).__name__}",
-            source_present=source.is_file() and not source.is_symlink(),
-            staged_present=staged.is_file() and not staged.is_symlink(),
-        ) from exc
+        return read_trial_file(root, path.relative_to(root))
+    except FileNotFoundError:
+        return None
 
 
 def _fsync_directory(path: Path) -> None:
@@ -161,26 +155,9 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Durably replace ``path`` without ever exposing a partial destination."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, raw_tmp = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    tmp = Path(raw_tmp)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        _fsync_directory(path.parent)
-    finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+    root = path.parents[2]
+    with TrialFiles(root) as files:
+        files.write_host(path.relative_to(root), data)
 
 
 def _atomic_write_checked(
@@ -207,11 +184,16 @@ def _staging_lock(trial_dir: Path, source: Path, staged: Path) -> Iterator[None]
     lock_path = trial_dir / _LOCK_RELATIVE
     with _PROCESS_LOCK:
         fd = None
+        boundary = None
         windows_lock = False
         try:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-            if os.fstat(fd).st_size == 0:
+            boundary = TrialFiles(trial_dir).__enter__()
+            fd = boundary.open_lock(_LOCK_RELATIVE)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise UnsafeArtifact("unsafe_lock_file")
+            boundary.verify()
+            if info.st_size == 0:
                 os.write(fd, b"\0")
             os.lseek(fd, 0, os.SEEK_SET)
             try:
@@ -224,6 +206,7 @@ def _staging_lock(trial_dir: Path, source: Path, staged: Path) -> Iterator[None]
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
                 windows_lock = True
             yield
+            boundary.verify()
         except PatchStagingError:
             raise
         except OSError as exc:
@@ -250,6 +233,8 @@ def _staging_lock(trial_dir: Path, source: Path, staged: Path) -> Iterator[None]
                     pass
             if fd is not None:
                 os.close(fd)
+            if boundary is not None:
+                boundary.__exit__(None, None, None)
 
 
 def _parse_expected(
@@ -271,7 +256,7 @@ def _parse_expected(
     try:
         source_matches = (
             isinstance(source_value, str)
-            and Path(source_value).resolve() == source_path
+            and Path(source_value).absolute() == source_path
         )
     except (OSError, RuntimeError):
         source_matches = False
@@ -280,7 +265,7 @@ def _parse_expected(
     try:
         staged_matches = (
             isinstance(staged_value, str)
-            and Path(staged_value).resolve() == staged_path
+            and Path(staged_value).absolute() == staged_path
         )
     except (OSError, RuntimeError):
         staged_matches = False
@@ -334,7 +319,7 @@ def _expected_from_manifest(
     if not manifest.is_file():
         _raise("manifest_is_not_file", source, staged)
     try:
-        value = json.loads(manifest.read_text())
+        value = json.loads(read_trial_file(trial_dir, manifest.relative_to(trial_dir)))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PatchStagingError(
             f"manifest_unreadable:{type(exc).__name__}",
@@ -370,7 +355,7 @@ def _write_manifest(
     payload = {
         "schema_version": SCHEMA_VERSION,
         "source_patch": SOURCE_RELATIVE.as_posix(),
-        "staged_patch": STAGED_RELATIVE.as_posix(),
+        "staged_patch": staged.relative_to(source.parents[2]).as_posix(),
         "sha256": expected.sha256,
         "bytes": expected.size,
     }
@@ -394,9 +379,13 @@ def ensure_staged_patch(trial_dir: Path, entry: dict | None = None) -> StagedPat
     copy is rebuilt via temp-file + fsync + atomic rename.  If both copies are
     present but either disagrees with the authority, neither is modified.
     """
-    trial_dir = trial_dir.resolve()
+    trial_dir = trial_dir.absolute()
+    if not trial_dir.exists():
+        raise PatchStagingError("source_and_staged_missing", source_present=False, staged_present=False)
     source = trial_dir / SOURCE_RELATIVE
-    staged = trial_dir / STAGED_RELATIVE
+    staged = trial_dir / ".dradar" / "host-output" / "model.patch"
+    if not (staged.exists() or staged.is_symlink()):
+        staged = trial_dir / STAGED_RELATIVE
     manifest = trial_dir / MANIFEST_RELATIVE
 
     # These directories are host-owned boundaries. Following a task-created
@@ -474,11 +463,10 @@ def ensure_staged_patch(trial_dir: Path, entry: dict | None = None) -> StagedPat
             action = "source-reconstructed" if had_authority else "source-initialized"
         if staged_data is None:
             assert source_data is not None
-            _atomic_write_checked(
-                staged, source_data, label="staged", source=source, staged=staged,
-            )
+            # Upload the verified private source; never reconstruct host data
+            # inside the container-writable artifacts directory.
             staged_data = source_data
-            action = "staged-reconstructed"
+            action = "source-only"
 
         # Verify the committed destinations, then persist the authority.  A
         # crash before this manifest write is harmless: two equal copies are
@@ -491,7 +479,9 @@ def ensure_staged_patch(trial_dir: Path, entry: dict | None = None) -> StagedPat
         )
         if committed_source is None or not _matches(committed_source, expected):
             _raise("source_commit_verification_failed", source, staged)
-        if committed_staged is None or not _matches(committed_staged, expected):
+        if (committed_staged is None and staged_before) or (
+            committed_staged is not None and not _matches(committed_staged, expected)
+        ):
             _raise("staged_commit_verification_failed", source, staged)
         if manifest_expected is None:
             _write_manifest(

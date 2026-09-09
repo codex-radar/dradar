@@ -1727,20 +1727,20 @@ def test_claude_trajectory_read_retries_a_transient_partial_json(
             "extra": {"total_cache_creation_input_tokens": 3},
         },
     })
-    original_read_text = Path.read_text
+    original_read = runloop.read_trial_file
     reads = 0
 
-    def finish_after_first_read(path, *args, **kwargs):
+    def finish_after_first_read(root, relative, **kwargs):
         nonlocal reads
-        value = original_read_text(path, *args, **kwargs)
-        if path == trajectory_path:
+        value = original_read(root, relative, **kwargs)
+        if root / relative == trajectory_path:
             reads += 1
             if reads == 1:
                 trajectory_path.write_text(complete, encoding="utf-8")
         return value
 
     delays = []
-    monkeypatch.setattr(Path, "read_text", finish_after_first_read)
+    monkeypatch.setattr(runloop, "read_trial_file", finish_after_first_read)
     monkeypatch.setattr(runloop.time, "sleep", delays.append)
 
     usage = runloop._claude_trial_usage_from_trajectory(
@@ -2249,7 +2249,7 @@ def test_retry_recovers_missing_staged_patch_and_uploads_verified_source(
     client = CaptureClient(lambda _aid: None)
     assert runloop._upload_trial(client, retry_entry) == "submitted"
     assert client.calls == ["a1"]
-    assert staged.read_bytes() == raw
+    assert not staged.exists()
     assert source.read_bytes() == raw
     assert pending.load(tmp_path) == []
     assert "recovered model.patch staging" in capsys.readouterr().out

@@ -38,6 +38,12 @@ except ModuleNotFoundError as exc:
     from dradar.claude_usage import claude_usage_facts
 
 
+try:
+    from _dradar_artifact_boundary import private_post_run
+except ModuleNotFoundError:
+    from dradar.artifact_boundary import private_post_run
+
+
 class ClaudeCodeSubscription(ClaudeCode):
     """Claude.ai subscription variant with a fail-closed auth boundary."""
 
@@ -165,6 +171,7 @@ class ClaudeCodeSubscription(ClaudeCode):
                 if result.return_code != 0:
                     raise ValueError("private Claude credential cleanup failed; credentials remain outside collected logs")
 
+    @private_post_run
     def populate_context_post_run(self, context) -> None:
         """Keep upstream ATIF output and add a reconciled subscription ledger."""
 

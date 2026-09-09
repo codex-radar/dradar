@@ -63,10 +63,10 @@ def test_interruption_before_atomic_rename_keeps_original_and_is_retryable(
     staged = trial / artifact_staging.STAGED_RELATIVE
     real_replace = artifact_staging.os.replace
 
-    def interrupted_replace(temp, destination):
-        if Path(destination) == source:
+    def interrupted_replace(temp, destination, **kwargs):
+        if Path(destination).name == source.name:
             raise OSError("simulated process interruption before rename")
-        return real_replace(temp, destination)
+        return real_replace(temp, destination, **kwargs)
 
     monkeypatch.setattr(artifact_staging.os, "replace", interrupted_replace)
     with pytest.raises(
@@ -83,15 +83,16 @@ def test_interruption_before_atomic_rename_keeps_original_and_is_retryable(
     assert recovered.staged.read_bytes() == PATCH
 
 
-def test_resume_reconstructs_missing_staged_copy_from_verified_source(tmp_path: Path):
+def test_resume_uses_private_source_without_writing_into_shared_directory(tmp_path: Path):
     trial = _trial(tmp_path)
     initial = artifact_staging.ensure_staged_patch(trial)
     initial.staged.unlink()
 
     recovered = artifact_staging.ensure_staged_patch(trial, _entry(initial))
 
-    assert recovered.action == "staged-reconstructed"
-    assert recovered.staged.read_bytes() == PATCH
+    assert recovered.action == "source-only"
+    assert not recovered.staged.exists()
+    assert recovered.data == PATCH
     assert recovered.recovery_telemetry == {
         "schema_version": 1,
         "status": "recovered",
@@ -110,7 +111,7 @@ def test_process_restart_uses_serialized_ledger_metadata(tmp_path: Path):
 
     recovered = artifact_staging.ensure_staged_patch(trial, persisted)
 
-    assert recovered.action == "staged-reconstructed"
+    assert recovered.action == "source-only"
     assert recovered.sha256 == persisted["patch_sha256"]
 
 

@@ -610,3 +610,32 @@ def test_launcher_crash_recovery_restores_lkg_and_records_recovery(tmp_path):
     event = recorder._load(recorder.events_path)[-1]
     assert event["event_type"] == "update_rolled_back"
     assert event["reason_code"] == "update_crash_recovery"
+
+
+def test_windows_arm_withdrawal_keeps_previous_release_without_download(tmp_path):
+    root = tmp_path / 'old-arm'
+    pointer = seed_lkg(root)
+    record_path = root / 'releases' / pointer['release_id'] / 'release-record.json'
+    record = json.loads(record_path.read_text())
+    prior = record['manifest']
+    prior.pop('signature')
+    prior['artifacts'][0].update(os='windows', arch='arm64')
+    record['manifest'] = sign_document(prior)
+    _atomic_json(record_path, record)
+    before = {name: (root/name).read_bytes() for name in ('current.json','last-known-good.json')}
+    class NoDownload:
+        def stream(self, *args, **kwargs):
+            raise AssertionError('withdrawn target must not download any substitute')
+    runtime = UpdateRuntime(root, recorder=FlightRecorder(tmp_path/'audit'), download_client=NoDownload())
+    document, keys = signed_release()
+    document.pop('signature')
+    document['artifacts'] = [item for item in document['artifacts']
+                             if (item['os'],item['arch']) != ('windows','arm64')]
+    decision = runtime.prepare(sign_document(document), trusted_keys=keys,
+        current_version=pointer['version'], committed_sequence=pointer['sequence'],
+        compatibility=compatibility(), rollout=RolloutContext(subject='fixture'),
+        target=PlatformTarget('windows','arm64'))
+    assert not decision.eligible and decision.artifact is None
+    assert decision.reason == 'platform_artifact_unavailable'
+    assert all((root/name).read_bytes() == value for name,value in before.items())
+    assert {p.name for p in (root/'releases').iterdir()} == {pointer['release_id']}
