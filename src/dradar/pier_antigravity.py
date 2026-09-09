@@ -30,23 +30,17 @@ except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
 
 
-ANTIGRAVITY_CLI_VERSION = "1.1.22"
+ANTIGRAVITY_CLI_VERSION = "1.1.27"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
 ANTIGRAVITY_RUNTIME_MODELS = {
     "low": "gemini-3.7-flash-low",
     "medium": "gemini-3.7-flash-medium",
     "high": "gemini-3.7-flash-high",
 }
-ANTIGRAVITY_LINUX_RELEASE = "1.1.22-5711547746615296"
+ANTIGRAVITY_LINUX_RELEASE = "1.1.27-5211191891591168"
 ANTIGRAVITY_LINUX_SHA512 = {
-    "x86_64": (
-        "40225d4b1f009412e905f0a234ba3d51487038d1ad1b8fa19331c84be55610a0"
-        "1f5b0ad9916fb871151cc45456c6bc30cc0b1ea5dab6c0616bc8fb262bcdd7a9"
-    ),
-    "aarch64": (
-        "b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623"
-        "e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
-    ),
+    "x86_64": "793d4b9ea2c08d9a7e50bafa02cfc8c19424bd60d6e83f91408d45f9c6d4ce79a5d576fede5bef164d823abf84f81359a14b4ca665952c47b0a7cfd743bb69c0",
+    "aarch64": "ed45f6930785aa4b42f14e07ace1c9d91a94fb76e760f54acbd7d3d3951e1f957fd456a0dae2a3124dd9a3b689bf7afb7c9303a3e4ba95037fc10063424d9bf9"
 }
 ANTIGRAVITY_STREAM_INTERRUPTED_MESSAGE = (
     "The stream was interrupted. Please continue the task you were working on."

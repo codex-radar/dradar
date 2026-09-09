@@ -35,7 +35,8 @@ except ModuleNotFoundError as exc:  # Local source/test import before materializ
         raise
     from dradar.pier_runtime_safety import RuntimeSafety
 
-DSH_VERSION = "0.1.1-rc.2"
+DSH_VERSION = "0.1.2-rc.1"
+DSH_SHA512 = "44fab8f13cf1bf0a5d4fdffb5b5b5b8590c132678af9bc43ad7f5ca900b6ed6c7f2eab60245f0f49addbdf1ae253ca31b6f870626936d70d9c7a3dee310ae754"
 NODE_VERSION = "22.23.2"
 NODE_SHA256 = {
     "x64": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307",
@@ -77,6 +78,11 @@ _MINIMAL_PATCH = """\
   disabled: true
 - id: web
   disabled: true
+- id: web-fetch-http
+  disabled: true
+# Session titles are auxiliary model calls outside the benchmark usage ledger.
+- id: session-title-llm
+  disabled: true
 
 # Headless does not normally mount the agent-preset roster. Pin it to the
 # read-only presets shipped by this exact DSH installation and exclude the
@@ -87,7 +93,7 @@ _MINIMAL_PATCH = """\
       config:
         default: minimal
         roots:
-          - path: /opt/dsh-runtime/lib/node_modules/@deepseek-ai/dsh/config/agent-presets
+          - path: /opt/dsh-runtime/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets
             trust: system
         includeUserRoot: false
 
@@ -279,7 +285,7 @@ async function run(ctx, task, io) {
   await agent.whenIdle();
   await sessions.flush(agent.session);
   // Fold this fresh session's full event stream into the usage ledger.
-  const outcome = summarize(agent.session.events, 0);
+  const outcome = summarize(agent.session.snapshotEvents(), 0);
   const terminalKind = outcome.reason?.kind;
   writeFileSync(process.env.DSH_OUTCOME_FILE, JSON.stringify({
     schema: "dradar-dsh-outcome-v1",
@@ -367,11 +373,17 @@ def _install_command() -> str:
         '  ln -sfn "${node_root}/bin/${binary}" "/usr/local/bin/${binary}"; '
         "done; "
         "mkdir -p /opt/dsh-runtime; "
+        f"dsh_archive=/tmp/dsh-{DSH_VERSION}.tgz; "
+        "curl --fail --silent --show-error --location "
+        f"  https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-{DSH_VERSION}.tgz "
+        '  --output "${dsh_archive}"; '
+        f'printf "%s  %s\\n" "{DSH_SHA512}" "${{dsh_archive}}" '
+        "  | sha512sum --check --strict -; "
         "npm install --fetch-retries=5 --fetch-retry-factor=2 "
         "  --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 "
-        f"  --global --prefix /opt/dsh-runtime '@deepseek-ai/dsh@{DSH_VERSION}'; "
+        '  --global --prefix /opt/dsh-runtime "${dsh_archive}"; '
         "ln -sfn /opt/dsh-runtime/bin/dsh /usr/local/bin/dsh; "
-        'rm -f "${node_archive}"; '
+        'rm -f "${node_archive}" "${dsh_archive}"; '
         f"test \"$(node --version)\" = 'v{NODE_VERSION}'; "
         f"test \"$(dsh --version)\" = '{DSH_VERSION}'"
     )
