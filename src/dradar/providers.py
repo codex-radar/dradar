@@ -55,16 +55,19 @@ CLAUDE_API_KEY_ENVS = frozenset({
 DEEPSEEK_PROVIDER = "deepseek"
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+DEEPSEEK_FLASH_41_MODEL = "deepseek-v4.1-flash"
 # Backwards-compatible import used by older extensions and Flash-only tests.
 DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
-DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL)
+DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, DEEPSEEK_FLASH_41_MODEL)
 DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
 DEEPSEEK_ENABLE_ENV = "DRADAR_ENABLE_DEEPSEEK"
 DEEPSEEK_SECRET_RELATIVE_PATH = Path("secrets") / "deepseek_api_key"
 DEEPSEEK_CAPABILITY = "codex-deepseek-v4-flash-v2"
 DEEPSEEK_PRO_CAPABILITY = "codex-deepseek-v4-pro-v1"
+DEEPSEEK_FLASH_41_CAPABILITY = "codex-deepseek-v4.1-flash-v1"
 DEEPSEEK_FLASH_OFF_CAPABILITY = "codex-deepseek-v4-flash-off-v1"
 DEEPSEEK_PRO_OFF_CAPABILITY = "codex-deepseek-v4-pro-off-v1"
+DEEPSEEK_FLASH_41_OFF_CAPABILITY = "codex-deepseek-v4.1-flash-off-v1"
 # DeepSeek follows npm's latest stable Codex release at run time.  Keep the
 # last audited fixed release as a compatibility floor, not as a permanent pin.
 DEEPSEEK_MIN_CODEX_VERSION = "0.147.0"
@@ -74,7 +77,7 @@ DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DEEPSEEK_CATALOG_EFFORTS = frozenset({"none", "low", "high", "max"})
 DEEPSEEK_CATALOG_FILENAME = "deepseek_codex_models.json"
 DEEPSEEK_CATALOG_SHA256 = (
-    "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
+    "efe364bc99485c18d1cb044121639b3cef9b1e1e810af5f55cdb3f11271e71ae"
 )
 DEEPSEEK_CATALOG_REMOTE_PATH = "/tmp/codex-home/models.json"
 DEEPSEEK_CATALOG_SOURCE = (
@@ -91,16 +94,19 @@ DSH_AGENT = "dsh-minimal"
 DSH_VERSION = "0.1.2-rc.1"
 DSH_FLASH_MODEL = "dsh-deepseek-v4-flash"
 DSH_PRO_MODEL = "dsh-deepseek-v4-pro"
+DSH_FLASH_41_MODEL = "dsh-deepseek-v4.1-flash"
 DSH_VISION_MODEL = "dsh-deepseek-v4-flash-vision-exp"
-DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL, DSH_VISION_MODEL)
+DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL, DSH_FLASH_41_MODEL, DSH_VISION_MODEL)
 DSH_RUNTIME_MODELS = {
     DSH_FLASH_MODEL: DEEPSEEK_FLASH_MODEL,
     DSH_PRO_MODEL: DEEPSEEK_PRO_MODEL,
+    DSH_FLASH_41_MODEL: DEEPSEEK_FLASH_41_MODEL,
     DSH_VISION_MODEL: "deepseek-v4-flash-vision-exp",
 }
 DSH_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DSH_FLASH_CAPABILITY = "dsh-minimal-deepseek-v4-flash-artifact-v6"
 DSH_PRO_CAPABILITY = "dsh-minimal-deepseek-v4-pro-artifact-v6"
+DSH_FLASH_41_CAPABILITY = "dsh-minimal-deepseek-v4.1-flash-artifact-v6"
 DSH_VISION_CAPABILITY = (
     "dsh-minimal-deepseek-v4-flash-vision-exp-pompeii-image-v2"
 )
@@ -210,6 +216,8 @@ _KIMI_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 ANTIGRAVITY_PROVIDER = "google-antigravity-subscription"
 ANTIGRAVITY_AGENT = "antigravity"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
+ANTIGRAVITY_FLASH_38_MODEL = "gemini-3.8-flash"
+ANTIGRAVITY_MODELS = frozenset({ANTIGRAVITY_MODEL, ANTIGRAVITY_FLASH_38_MODEL})
 ANTIGRAVITY_CLI_VERSION = "1.1.27"
 ANTIGRAVITY_LINUX_RELEASE = "1.1.27-5211191891591168"
 ANTIGRAVITY_LINUX_ARTIFACTS = {
@@ -228,6 +236,14 @@ ANTIGRAVITY_RUNTIME_MODELS = {
     "medium": "gemini-3.7-flash-medium",
     "high": "gemini-3.7-flash-high",
 }
+ANTIGRAVITY_MODEL_RUNTIME_MODELS = {
+    model: {effort: f"{model}-{effort}" for effort in ("low", "medium", "high")}
+    for model in ANTIGRAVITY_MODELS
+}
+
+ANTIGRAVITY_FLASH_38_CAPABILITY = (
+    "antigravity-gemini-3.8-flash-subscription-1.1.27-v1"
+)
 ANTIGRAVITY_CAPABILITY = (
     "antigravity-gemini-3.7-flash-subscription-oauth-sandbox-v1"
 )
@@ -236,6 +252,12 @@ ANTIGRAVITY_RUN_CONFIG_VERSION = (
 )
 ANTIGRAVITY_RUNTIME_PROFILE = (
     "pier-antigravity-gemini-3.7-flash-shared-oauth-full-container-v2"
+)
+ANTIGRAVITY_FLASH_38_RUN_CONFIG_VERSION = (
+    "antigravity-gemini-3.8-flash-subscription-oauth-full-container-v1"
+)
+ANTIGRAVITY_FLASH_38_RUNTIME_PROFILE = (
+    "pier-antigravity-gemini-3.8-flash-shared-oauth-full-container-v1"
 )
 ANTIGRAVITY_ARTIFACT_CAPTURE = "full-worktree-v1"
 ANTIGRAVITY_HOME_RELATIVE_PATH = Path("providers") / "antigravity"
@@ -313,7 +335,7 @@ REFILL_HARNESS_CONSTRAINTS = {
     KIMI_AGENT: (frozenset({KIMI_MODEL}), KIMI_SUPPORTED_EFFORTS),
     GROK_AGENT: (frozenset({GROK_MODEL}), GROK_SUPPORTED_EFFORTS),
     ANTIGRAVITY_AGENT: (
-        frozenset({ANTIGRAVITY_MODEL}), ANTIGRAVITY_SUPPORTED_EFFORTS,
+        ANTIGRAVITY_MODELS, ANTIGRAVITY_SUPPORTED_EFFORTS,
     ),
     CODEBUDDY_AGENT: (
         frozenset({CODEBUDDY_MODEL}), CODEBUDDY_SUPPORTED_EFFORTS,
@@ -1101,8 +1123,12 @@ def antigravity_auth_error(home: Path | None = None) -> str | None:
     if not isinstance(ready_payload, dict) or (
         ready_payload.get("schema") != "dradar-antigravity-ready-v1"
         or ready_payload.get("cli_version") != ANTIGRAVITY_CLI_VERSION
-        or ready_payload.get("models")
-        != sorted(ANTIGRAVITY_RUNTIME_MODELS.values())
+        or not isinstance(ready_payload.get("models"), list)
+        or not all(isinstance(model, str) for model in ready_payload["models"])
+        or not any(
+            set(slugs.values()).issubset(set(ready_payload["models"]))
+            for slugs in ANTIGRAVITY_MODEL_RUNTIME_MODELS.values()
+        )
     ):
         return "Antigravity readiness proof does not match this DRadar release"
     return None
@@ -1135,7 +1161,9 @@ def write_antigravity_settings(home: Path | None = None) -> Path:
     return path
 
 
-def mark_antigravity_ready(home: Path | None = None) -> Path:
+def mark_antigravity_ready(
+    home: Path | None = None, *, verified_models: list[str] | None = None,
+) -> Path:
     path = antigravity_ready_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
@@ -1147,7 +1175,11 @@ def mark_antigravity_ready(home: Path | None = None) -> Path:
             json.dump({
                 "schema": "dradar-antigravity-ready-v1",
                 "cli_version": ANTIGRAVITY_CLI_VERSION,
-                "models": sorted(ANTIGRAVITY_RUNTIME_MODELS.values()),
+                "models": sorted(
+                    verified_models
+                    if verified_models is not None
+                    else ANTIGRAVITY_RUNTIME_MODELS.values()
+                ),
             }, handle, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
@@ -1975,8 +2007,10 @@ def advertised_capabilities(
         capabilities.extend((
             DEEPSEEK_CAPABILITY,
             DEEPSEEK_PRO_CAPABILITY,
+            DEEPSEEK_FLASH_41_CAPABILITY,
             DEEPSEEK_FLASH_OFF_CAPABILITY,
             DEEPSEEK_PRO_OFF_CAPABILITY,
+            DEEPSEEK_FLASH_41_OFF_CAPABILITY,
         ))
     # The adapter installs its pinned DSH runtime inside each task image, so
     # its only local runtime prerequisite is a usable DeepSeek credential.
@@ -1989,6 +2023,7 @@ def advertised_capabilities(
         capabilities.extend((
             DSH_FLASH_CAPABILITY,
             DSH_PRO_CAPABILITY,
+            DSH_FLASH_41_CAPABILITY,
             DSH_VISION_CAPABILITY,
             DSH_VISION_TEXT_CAPABILITY,
         ))
@@ -2008,7 +2043,22 @@ def advertised_capabilities(
         prepare_antigravity_auth() is None
         and Path(__file__).with_name("pier_antigravity.py").is_file()
     ):
-        capabilities.append(ANTIGRAVITY_CAPABILITY)
+        # Each Gemini product advertises only after its complete low/medium/
+        # high group was live-verified during setup; an account without 3.8
+        # access keeps the 3.7 lane without unlocking 3.8 cells.
+        try:
+            ready_models = set(
+                json.loads(antigravity_ready_path().read_text(encoding="utf-8"))
+                ["models"]
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+            ready_models = set()
+        if set(ANTIGRAVITY_RUNTIME_MODELS.values()).issubset(ready_models):
+            capabilities.append(ANTIGRAVITY_CAPABILITY)
+        if set(
+            ANTIGRAVITY_MODEL_RUNTIME_MODELS[ANTIGRAVITY_FLASH_38_MODEL].values()
+        ).issubset(ready_models):
+            capabilities.append(ANTIGRAVITY_FLASH_38_CAPABILITY)
     if (
         zcode_api_key(environ) is not None
         and zcode_cli_error(environ=environ) is None

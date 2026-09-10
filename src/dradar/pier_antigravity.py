@@ -32,10 +32,16 @@ except ModuleNotFoundError:
 
 ANTIGRAVITY_CLI_VERSION = "1.1.27"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
+ANTIGRAVITY_FLASH_38_MODEL = "gemini-3.8-flash"
+ANTIGRAVITY_MODELS = frozenset({ANTIGRAVITY_MODEL, ANTIGRAVITY_FLASH_38_MODEL})
 ANTIGRAVITY_RUNTIME_MODELS = {
     "low": "gemini-3.7-flash-low",
     "medium": "gemini-3.7-flash-medium",
     "high": "gemini-3.7-flash-high",
+}
+ANTIGRAVITY_MODEL_RUNTIME_MODELS = {
+    model: {effort: f"{model}-{effort}" for effort in ("low", "medium", "high")}
+    for model in ANTIGRAVITY_MODELS
 }
 ANTIGRAVITY_LINUX_RELEASE = "1.1.27-5211191891591168"
 ANTIGRAVITY_LINUX_SHA512 = {
@@ -198,7 +204,7 @@ def _antigravity_usage_facts(
     facts: dict[str, object] = {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "antigravity",
-        "model": ANTIGRAVITY_MODEL,
+        "model": expected_runtime_model.rsplit("-", 1)[0],
         "provider_runtime_model": expected_runtime_model,
         "complete": reconciled,
         "request_count": len(token_usage_events) if observed else 0,
@@ -311,7 +317,12 @@ class Antigravity(BaseInstalledAgent):
             raise ValueError("Antigravity shared_oauth must be a boolean")
         self._auth_home_dir = auth_home
         self._reasoning_effort = reasoning_effort
-        self._runtime_model = ANTIGRAVITY_RUNTIME_MODELS[reasoning_effort]
+        model = str(kwargs.get("model_name") or ANTIGRAVITY_MODEL).split("/")[-1]
+        if model not in ANTIGRAVITY_MODELS:
+            raise ValueError(f"unsupported Antigravity model: {model}")
+        self._runtime_model = (
+            ANTIGRAVITY_MODEL_RUNTIME_MODELS[model][reasoning_effort]
+        )
         self._shared_oauth = shared_oauth
         self._instruction = ""
         super().__init__(*args, **kwargs)
@@ -380,7 +391,7 @@ class Antigravity(BaseInstalledAgent):
                 f"grep -Eq {shlex.quote(_model_line_pattern(slug))} "
                 f"{shlex.quote(models_file)}"
             )
-            for slug in ANTIGRAVITY_RUNTIME_MODELS.values()
+            for slug in (self._runtime_model,)
         )
         await self.exec_as_agent(
             environment,

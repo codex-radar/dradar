@@ -21,6 +21,8 @@ from dradar.providers import (
     DEEPSEEK_CATALOG_REMOTE_PATH,
     DEEPSEEK_CATALOG_SHA256,
     DEEPSEEK_MIN_CODEX_VERSION,
+    DEEPSEEK_FLASH_41_CAPABILITY,
+    DEEPSEEK_FLASH_41_OFF_CAPABILITY,
     DEEPSEEK_FLASH_OFF_CAPABILITY,
     DEEPSEEK_MODEL,
     DEEPSEEK_MODELS,
@@ -28,6 +30,7 @@ from dradar.providers import (
     DEEPSEEK_PRO_OFF_CAPABILITY,
     DEEPSEEK_PRO_MODEL,
     DEEPSEEK_PROVIDER,
+    DSH_FLASH_41_CAPABILITY,
     DSH_FLASH_CAPABILITY,
     DSH_PRO_CAPABILITY,
     DSH_VISION_CAPABILITY,
@@ -94,13 +97,18 @@ def test_capability_advertises_software_support_before_first_key_setup():
     assert advertised_capabilities({}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
+        DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
+        DEEPSEEK_FLASH_41_OFF_CAPABILITY,
     )
     assert advertised_capabilities({DEEPSEEK_API_KEY_ENV: "key"}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
+        DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
+        DEEPSEEK_FLASH_41_OFF_CAPABILITY,
         DSH_FLASH_CAPABILITY, DSH_PRO_CAPABILITY,
+        DSH_FLASH_41_CAPABILITY,
         DSH_VISION_CAPABILITY, DSH_VISION_TEXT_CAPABILITY,
     )
 
@@ -114,7 +122,7 @@ def test_bundled_catalog_has_expected_integrity_and_reasoning_levels():
 
     assert hashlib.sha256(payload).hexdigest() == DEEPSEEK_CATALOG_SHA256
     assert [item["slug"] for item in parsed["models"]] == [
-        "deepseek-v4-flash", "deepseek-v4-pro",
+        "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4-pro",
     ]
     assert deepseek_catalog_error(catalog) is None
     for model in DEEPSEEK_MODELS:

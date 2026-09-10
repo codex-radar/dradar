@@ -826,3 +826,90 @@ def test_capability_name_is_additive_and_refill_alias_is_canonical() -> None:
     assert providers.validate_refill_scope(
         "antigravity", ANTIGRAVITY_MODEL, "high",
     ) == (ANTIGRAVITY_AGENT, ANTIGRAVITY_MODEL, "high")
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_gemini_38_routes_and_keeps_usage_separate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effort: str,
+) -> None:
+    model = providers.ANTIGRAVITY_FLASH_38_MODEL
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    auth = tmp_path / "providers" / "antigravity" / ".gemini"
+    auth.mkdir(parents=True)
+    cmd = runner.build_pier_command(
+        _assignment(model=model, effort=effort), tasks, tmp_path / "jobs", "job",
+        tmp_path, provider_auth_path=auth.resolve(),
+    )
+    assert cmd[cmd.index("--model") + 1] == model
+    runner._validate_antigravity_assignment(_assignment(model=model, effort=effort))
+    with pytest.raises(RunnerError, match="unsupported Antigravity model"):
+        runner._validate_antigravity_assignment(_assignment(model="gemini-3.9-flash"))
+
+    runtime = f"{model}-{effort}"
+    events = [
+        {"event": "init", "init": {
+            "model": runtime, "cwd": "/app", "permission_mode": "always-proceed",
+        }},
+        {"event": "step_update", "step_update": {
+            "step_index": 1, "step_type": "agent_response", "state": "DONE",
+            "usage": _usage(10, 2, 0, 1),
+        }},
+        {"event": "result", "result": {
+            "status": "SUCCESS", "num_turns": 1, "usage": _usage(10, 2, 0, 1),
+        }},
+    ]
+    facts = _usage_helper()(events, expected_runtime_model=runtime)
+    assert facts["complete"] is True
+    assert facts["model"] == model
+    # The 3.7 runtime identity must never reconcile a 3.8 ledger.
+    assert not _usage_helper()(
+        events, expected_runtime_model=f"{ANTIGRAVITY_MODEL}-{effort}",
+    )["complete"]
+
+    adapter_source = Path(providers.__file__).with_name(
+        "pier_antigravity.py",
+    ).read_text()
+    assert "ANTIGRAVITY_FLASH_38_MODEL = \"gemini-3.8-flash\"" in adapter_source
+    assert (
+        "ANTIGRAVITY_MODEL_RUNTIME_MODELS[model][reasoning_effort]"
+        in adapter_source
+    )
+    assert "for slug in (self._runtime_model,)" in adapter_source
+
+
+def test_gemini_38_capability_requires_verified_model_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ready_home(tmp_path, monkeypatch)
+    new_capability = providers.ANTIGRAVITY_FLASH_38_CAPABILITY
+    # The default proof verifies only the 3.7 group, so 3.8 stays locked.
+    assert ANTIGRAVITY_CAPABILITY in advertised_capabilities({})
+    assert new_capability not in advertised_capabilities({})
+    slugs = list(
+        providers.ANTIGRAVITY_MODEL_RUNTIME_MODELS[
+            providers.ANTIGRAVITY_FLASH_38_MODEL
+        ].values(),
+    )
+    providers.mark_antigravity_ready(verified_models=slugs)
+    assert antigravity_auth_error() is None
+    assert new_capability in advertised_capabilities({})
+    assert ANTIGRAVITY_CAPABILITY not in advertised_capabilities({})
+    providers.mark_antigravity_ready(verified_models=slugs[:2])
+    assert new_capability not in advertised_capabilities({})
+
+
+def test_pinned_artifacts_match_independently_captured_official_manifests():
+    manifests = json.loads(
+        (Path(__file__).parent / "fixtures/antigravity-1.1.27-manifests.json")
+        .read_text(encoding="utf-8"),
+    )
+    adapter_source = Path(providers.__file__).with_name(
+        "pier_antigravity.py",
+    ).read_text()
+    for arch, platform in (("x86_64", "linux_amd64"), ("aarch64", "linux_arm64")):
+        actual = providers.ANTIGRAVITY_LINUX_ARTIFACTS[arch]
+        assert actual["url"] == manifests[platform]["url"]
+        assert actual["sha512"] == manifests[platform]["sha512"]
+        assert manifests[platform]["sha512"] in adapter_source
