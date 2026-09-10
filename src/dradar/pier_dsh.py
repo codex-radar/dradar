@@ -50,10 +50,14 @@ SUPPORTED_MODELS = frozenset(
         "dsh-deepseek-v4-flash-vision-exp",
     }
 )
+# DeepSeek's official catalog v1.3.0 serves the Flash family only as
+# deepseek-flash (the legacy deepseek-v4-flash listing is retired); both Flash
+# lanes resolve to it.  Vision keeps its legacy slug, which the API still
+# accepts and which has no announced replacement name.
 RUNTIME_MODELS = {
-    "dsh-deepseek-v4-flash": "deepseek-v4-flash",
+    "dsh-deepseek-v4-flash": "deepseek-flash",
     "dsh-deepseek-v4-pro": "deepseek-v4-pro",
-    "dsh-deepseek-v4.1-flash": "deepseek-v4.1-flash",
+    "dsh-deepseek-v4.1-flash": "deepseek-flash",
     "dsh-deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
 }
 SUPPORTED_REASONING_EFFORTS = frozenset({"off", "high", "max"})
@@ -116,7 +120,7 @@ _MINIMAL_PATCH = """\
 - id: agent-default-model
   config:
     provider: deepseek-official
-    model: !!js process.env.DSH_MODEL ?? 'deepseek-v4-flash'
+    model: !!js process.env.DSH_MODEL ?? 'deepseek-flash'
 
 - id: llm-deepseek
   config:

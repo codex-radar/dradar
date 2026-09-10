@@ -80,6 +80,7 @@ from .providers import (
     DEEPSEEK_PROVIDER,
     DEEPSEEK_SUPPORTED_EFFORTS,
     deepseek_codex_reasoning_effort,
+    deepseek_request_model,
     DSH_AGENT,
     DSH_MODELS,
     DSH_VISION_MODEL,
@@ -1521,7 +1522,9 @@ def build_pier_command(
         if deepseek_catalog is None:  # defensive: validation must precede argv
             raise RunnerError("DeepSeek model catalog was not prepared")
         cmd += [
-            "--model", assignment["model"],
+            # The official catalog only serves the Flash family as
+            # deepseek-flash; resolve the dispatched lane id to that slug.
+            "--model", deepseek_request_model(assignment["model"]),
             "--ak", "reasoning_effort=" + deepseek_codex_reasoning_effort(
                 assignment["effort"]
             ),

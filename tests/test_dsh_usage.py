@@ -11,7 +11,7 @@ from dradar.runloop import _apply_usage_to_result, _dsh_trial_usage
 def _write_usage(trial_dir: Path, **overrides: object) -> None:
     payload: dict[str, object] = {
         "schema": "dsh-provider-usage-v2",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
         "uncachedInputTokens": 120,
         "cacheReadTokens": 30,
         "cacheWriteTokens": 5,

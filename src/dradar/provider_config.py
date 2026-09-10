@@ -54,8 +54,9 @@ from .providers import (
     CLAUDE_CLI_VERSION,
     CLAUDE_MODELS,
     CLAUDE_SUPPORTED_EFFORTS,
+    DEEPSEEK_API_FLASH_MODEL,
     DEEPSEEK_API_KEY_ENV,
-    DEEPSEEK_MODELS,
+    DEEPSEEK_FLASH_MODEL,
     GROK_API_KEY_ENV,
     GROK_CLI_VERSION,
     GROK_MODEL,
@@ -1288,14 +1289,21 @@ def _live_deepseek_status(key: str) -> int:
         for item in payload.get("data", [])
         if isinstance(item, dict)
     } if isinstance(payload, dict) else set()
-    missing = [model for model in DEEPSEEK_MODELS if model not in available]
-    if missing:
+    # DeepSeek retired the deepseek-v4-flash listing: accounts now expose the
+    # Flash family only as deepseek-flash, and pro/vision entries never appear
+    # in this list.  Gate on any Flash-family slug so both migrated and
+    # not-yet-migrated accounts pass; request-time routing resolves both to
+    # the slug the account actually serves.
+    flash_witnesses = (DEEPSEEK_API_FLASH_MODEL, DEEPSEEK_FLASH_MODEL)
+    if not any(slug in available for slug in flash_witnesses):
+        listed = ", ".join(sorted(str(item) for item in available if item)) or "none"
         print(
-            "DeepSeek authentication succeeded, but the required V4 models are "
-            "not available to this account: " + ", ".join(missing)
+            "DeepSeek authentication succeeded, but no Flash-family model "
+            f"({DEEPSEEK_API_FLASH_MODEL}, or legacy {DEEPSEEK_FLASH_MODEL}) "
+            "is listed for this account; models listed: " + listed
         )
         return 1
-    print("DeepSeek API authentication and V4 model availability verified live.")
+    print("DeepSeek API authentication and Flash model availability verified live.")
     return 0
 
 
