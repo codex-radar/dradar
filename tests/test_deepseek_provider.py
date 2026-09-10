@@ -16,16 +16,19 @@ import dradar.providers as providers
 import dradar.runner as runner
 from dradar.providers import (
     DEFAULT_CODEX_PROVIDER,
+    DEEPSEEK_API_FLASH_MODEL,
     DEEPSEEK_API_KEY_ENV,
     DEEPSEEK_CAPABILITY,
     DEEPSEEK_CATALOG_REMOTE_PATH,
     DEEPSEEK_CATALOG_SHA256,
     DEEPSEEK_MIN_CODEX_VERSION,
     DEEPSEEK_FLASH_41_CAPABILITY,
+    DEEPSEEK_FLASH_41_MODEL,
     DEEPSEEK_FLASH_41_OFF_CAPABILITY,
     DEEPSEEK_FLASH_OFF_CAPABILITY,
     DEEPSEEK_MODEL,
     DEEPSEEK_MODELS,
+    DEEPSEEK_REQUEST_MODELS,
     DEEPSEEK_PRO_CAPABILITY,
     DEEPSEEK_PRO_OFF_CAPABILITY,
     DEEPSEEK_PRO_MODEL,
@@ -118,14 +121,17 @@ def test_bundled_catalog_has_expected_integrity_and_reasoning_levels():
     payload = catalog.read_bytes()
     parsed = json.loads(payload)
     by_slug = {item["slug"]: item for item in parsed["models"]}
-    flash = by_slug[DEEPSEEK_MODEL]
+    flash = by_slug[DEEPSEEK_API_FLASH_MODEL]
 
     assert hashlib.sha256(payload).hexdigest() == DEEPSEEK_CATALOG_SHA256
+    # Regenerated verbatim from the official setup script v1.3.0: the catalog
+    # sells the Flash family only as deepseek-flash and never carried the
+    # hand-written deepseek-v4.1-flash slug an earlier pin invented.
     assert [item["slug"] for item in parsed["models"]] == [
-        "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4-pro",
+        "deepseek-flash", "deepseek-v4-pro",
     ]
     assert deepseek_catalog_error(catalog) is None
-    for model in DEEPSEEK_MODELS:
+    for model in dict.fromkeys(DEEPSEEK_REQUEST_MODELS.values()):
         assert {level["effort"] for level in by_slug[model]["supported_reasoning_levels"]} >= {
             "none", "low", "high", "max",
         }
@@ -151,6 +157,20 @@ def test_corrupt_catalog_withholds_paid_provider_capability(
     assert advertised_capabilities({}) == (TASK_PACKAGE_SYNC_CAPABILITY,)
 
 
+def test_command_resolves_both_flash_lanes_to_the_official_slug(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """DeepSeek retired the v4-flash listing; both Flash lanes must request
+    the one slug the official catalog and account lists actually serve."""
+
+    for index, lane in enumerate((DEEPSEEK_MODEL, DEEPSEEK_FLASH_41_MODEL)):
+        command, _ = _command(
+            tmp_path / f"lane-{index}", monkeypatch, _assignment(model=lane),
+        )
+        assert command[command.index("--model") + 1] == DEEPSEEK_API_FLASH_MODEL
+
+
 def test_missing_provider_preserves_original_codex_path():
     assert assignment_codex_provider({"agent": "codex"}) == DEFAULT_CODEX_PROVIDER
     assert assignment_codex_provider({"agent": "claude-code"}) is None
@@ -164,6 +184,7 @@ def test_command_uses_official_catalog_adapter_and_auth_without_secret_env(
     joined = " ".join(command)
 
     assert command[:2] == ["/usr/bin/pier", "run"]
+    assert command[command.index("--model") + 1] == DEEPSEEK_API_FLASH_MODEL
     assert command[command.index("--agent-import-path") + 1] == (
         runner.DEEPSEEK_AGENT_IMPORT_PATH
     )

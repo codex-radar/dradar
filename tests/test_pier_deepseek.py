@@ -20,7 +20,7 @@ def _agent(tmp_path: Path) -> DeepSeekCodex:
     logs_dir.mkdir(parents=True, mode=0o700)
     return DeepSeekCodex(
         logs_dir=logs_dir,
-        model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
         version="0.149.0",
         model_catalog_json_file=str(deepseek_catalog_path()),
         extra_env={},
@@ -45,7 +45,7 @@ def test_catalog_integrity_is_fail_closed(tmp_path: Path):
     with pytest.raises(ValueError, match="integrity check failed"):
         DeepSeekCodex(
             logs_dir=tmp_path / "agent",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             version="0.149.0",
             model_catalog_json_file=str(catalog),
             extra_env={},

@@ -56,6 +56,18 @@ DEEPSEEK_PROVIDER = "deepseek"
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
 DEEPSEEK_FLASH_41_MODEL = "deepseek-v4.1-flash"
+# DeepSeek's official catalog v1.3.0 sells the Flash family only as
+# ``deepseek-flash``: the legacy ``deepseek-v4-flash`` listing is gone from the
+# catalog and from account model lists (the API still accepts it as a request
+# alias).  DRadar keeps its historical lane ids for dispatch, pricing, and
+# leaderboard identity, and resolves them to the official request slug here so
+# both Flash lanes hit the one slug DeepSeek actually serves.
+DEEPSEEK_API_FLASH_MODEL = "deepseek-flash"
+DEEPSEEK_REQUEST_MODELS = {
+    DEEPSEEK_FLASH_MODEL: DEEPSEEK_API_FLASH_MODEL,
+    DEEPSEEK_PRO_MODEL: DEEPSEEK_PRO_MODEL,
+    DEEPSEEK_FLASH_41_MODEL: DEEPSEEK_API_FLASH_MODEL,
+}
 # Backwards-compatible import used by older extensions and Flash-only tests.
 DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
 DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, DEEPSEEK_FLASH_41_MODEL)
@@ -77,13 +89,17 @@ DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DEEPSEEK_CATALOG_EFFORTS = frozenset({"none", "low", "high", "max"})
 DEEPSEEK_CATALOG_FILENAME = "deepseek_codex_models.json"
 DEEPSEEK_CATALOG_SHA256 = (
-    "efe364bc99485c18d1cb044121639b3cef9b1e1e810af5f55cdb3f11271e71ae"
+    "3d6878027084e3e08e1f386c099c55b4156c0a2ffe3d1a352e64d664dd57572f"
 )
 DEEPSEEK_CATALOG_REMOTE_PATH = "/tmp/codex-home/models.json"
 DEEPSEEK_CATALOG_SOURCE = (
     "https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh"
 )
-DEEPSEEK_CATALOG_SOURCE_VERSION = "1.1.0+dradar-off"
+# Regenerated from the official setup script v1.3.0 (deepseek-flash +
+# deepseek-v4-pro entries verbatim) with DRadar's none-effort transform.
+# The earlier 1.1.0-derived catalog carried a hand-written
+# "deepseek-v4.1-flash" entry that the official API never served.
+DEEPSEEK_CATALOG_SOURCE_VERSION = "1.3.0+dradar-off"
 DEEPSEEK_RUN_CONFIG_VERSION = "deepseek-codex-official-catalog-v2"
 DEEPSEEK_RUNTIME_PROFILE = "public-pier-0.3.0-catalog-v1"
 
@@ -98,9 +114,9 @@ DSH_FLASH_41_MODEL = "dsh-deepseek-v4.1-flash"
 DSH_VISION_MODEL = "dsh-deepseek-v4-flash-vision-exp"
 DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL, DSH_FLASH_41_MODEL, DSH_VISION_MODEL)
 DSH_RUNTIME_MODELS = {
-    DSH_FLASH_MODEL: DEEPSEEK_FLASH_MODEL,
+    DSH_FLASH_MODEL: DEEPSEEK_API_FLASH_MODEL,
     DSH_PRO_MODEL: DEEPSEEK_PRO_MODEL,
-    DSH_FLASH_41_MODEL: DEEPSEEK_FLASH_41_MODEL,
+    DSH_FLASH_41_MODEL: DEEPSEEK_API_FLASH_MODEL,
     DSH_VISION_MODEL: "deepseek-v4-flash-vision-exp",
 }
 DSH_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
@@ -434,7 +450,7 @@ def deepseek_catalog_error(path: Path | None = None) -> str | None:
         for item in models
         if isinstance(item, dict) and isinstance(item.get("slug"), str)
     }
-    for model in DEEPSEEK_MODELS:
+    for model in dict.fromkeys(DEEPSEEK_REQUEST_MODELS.values()):
         entry = by_slug.get(model)
         if entry is None:
             return f"DeepSeek model catalog is missing {model}"
@@ -458,6 +474,17 @@ def assignment_codex_provider(assignment: dict) -> str | None:
         return None
     value = assignment.get("provider")
     return value if isinstance(value, str) and value else DEFAULT_CODEX_PROVIDER
+
+
+def deepseek_request_model(model: str) -> str:
+    """Resolve a dispatched DeepSeek lane id to the official request slug.
+
+    The catalog and account lists only expose ``deepseek-flash`` for the Flash
+    family; unknown lane ids (extensions, future lanes) pass through unchanged
+    and fail closed at catalog or assignment validation instead.
+    """
+
+    return DEEPSEEK_REQUEST_MODELS.get(model, model)
 
 
 def deepseek_codex_reasoning_effort(effort: str) -> str:

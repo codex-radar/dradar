@@ -223,8 +223,9 @@ def test_live_status_verifies_auth_and_required_models(
         return SimpleNamespace(
             status_code=200,
             json=lambda: {"data": [
-                {"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"},
-                {"id": "deepseek-v4.1-flash"},
+                # The real account list a DeepSeek user reported on
+                # 2026-09-10: the legacy deepseek-v4-flash listing is gone.
+                {"id": "deepseek-flash"}, {"id": "deepseek-v4-pro"},
             ]},
         )
 
@@ -241,6 +242,45 @@ def test_live_status_verifies_auth_and_required_models(
     }
     output = capsys.readouterr().out
     assert "verified live" in output
+    assert "sentinel-provider-secret" not in output
+
+
+def test_live_status_accepts_not_yet_migrated_legacy_flash_listing(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    store_deepseek_api_key("sentinel-provider-secret")
+    monkeypatch.setattr(
+        provider_config, "_provider_httpx_get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [
+                {"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"},
+            ]},
+        ),
+    )
+    assert provider_config.cmd_provider_status(
+        SimpleNamespace(provider="deepseek", live=True)) == 0
+    assert "verified live" in capsys.readouterr().out
+
+
+def test_live_status_fails_closed_without_any_flash_family_model(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setenv("DRADAR_HOME", str(tmp_path))
+    store_deepseek_api_key("sentinel-provider-secret")
+    monkeypatch.setattr(
+        provider_config, "_provider_httpx_get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"id": "deepseek-chat"}]},
+        ),
+    )
+    assert provider_config.cmd_provider_status(
+        SimpleNamespace(provider="deepseek", live=True)) == 1
+    output = capsys.readouterr().out
+    assert "no Flash-family model" in output
+    assert "deepseek-flash" in output
     assert "sentinel-provider-secret" not in output
 
 
