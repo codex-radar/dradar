@@ -257,7 +257,7 @@ class TrialFiles:
         finally:
             os.close(fd)
 
-    def files(self, relative, *, suffix=None):
+    def files(self, relative, *, suffix=None, skip_dirs=frozenset()):
         parts = _parts(relative)
         fd = self.fd
         for name in parts:
@@ -279,6 +279,11 @@ class TrialFiles:
                     observed_entries[entry.name] = (*_identity(info), info.st_nlink)
                     path = prefix / entry.name
                     if stat.S_ISDIR(info.st_mode):
+                        # Pruned subtrees are never read, so their contents are
+                        # neither collected nor pinned; the pruned directory
+                        # entry itself stays pinned in this parent's snapshot.
+                        if path.as_posix() in skip_dirs:
+                            continue
                         walk(self._directory(directory, entry.name), path, depth + 1)
                     elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                         raise UnsafeArtifact('unsafe_file_type')
@@ -326,6 +331,19 @@ def read_trial_file(root, relative, *, max_bytes=MAX_FILE_BYTES):
         raise UnsafeArtifact('artifact_io_rejected') from exc
 
 
+# DSH mounts the agent's own third-party home (a Node runtime) at
+# agent/dsh-home; its private state (sockets, lock files, caches) is neither
+# consumed nor uploaded by DRadar, and its unbounded contents must not be able
+# to fail an otherwise complete, paid run's upload. The walk prunes that whole
+# subtree and re-adds only the two DRadar-owned artifacts everything reads;
+# each re-added file still passes the full per-file read() verification.
+DSH_HOME_DIR = 'agent/dsh-home'
+DSH_HOME_ARTIFACTS = (
+    'agent/dsh-home/dsh-usage.json',
+    'agent/dsh-home/dsh-outcome.json',
+)
+
+
 @contextmanager
 def snapshot_agent(root, *, include_result=False):
     """Copy verified bytes into an unmounted, host-private scratch directory."""
@@ -333,7 +351,14 @@ def snapshot_agent(root, *, include_result=False):
         with tempfile.TemporaryDirectory(prefix='dradar-logs-') as temporary:
             destination = Path(temporary).resolve()  # host-created, not input
             with TrialFiles(root) as source:
-                paths = source.files('agent') if source.exists('agent') else []
+                paths = (
+                    source.files('agent', skip_dirs={DSH_HOME_DIR})
+                    if source.exists('agent') else []
+                )
+                paths.extend(
+                    relative for relative in DSH_HOME_ARTIFACTS
+                    if source.exists(relative)
+                )
                 extra = ['.dradar/host-output/trajectory.json', '.dradar/host-output/provider-usage.json', '.dradar/host-output/state.json']
                 if include_result:
                     extra.append('result.json')
