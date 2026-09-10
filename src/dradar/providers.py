@@ -216,6 +216,8 @@ _KIMI_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 ANTIGRAVITY_PROVIDER = "google-antigravity-subscription"
 ANTIGRAVITY_AGENT = "antigravity"
 ANTIGRAVITY_MODEL = "gemini-3.7-flash"
+ANTIGRAVITY_FLASH_38_MODEL = "gemini-3.8-flash"
+ANTIGRAVITY_MODELS = frozenset({ANTIGRAVITY_MODEL, ANTIGRAVITY_FLASH_38_MODEL})
 ANTIGRAVITY_CLI_VERSION = "1.1.27"
 ANTIGRAVITY_LINUX_RELEASE = "1.1.27-5211191891591168"
 ANTIGRAVITY_LINUX_ARTIFACTS = {
@@ -234,6 +236,14 @@ ANTIGRAVITY_RUNTIME_MODELS = {
     "medium": "gemini-3.7-flash-medium",
     "high": "gemini-3.7-flash-high",
 }
+ANTIGRAVITY_MODEL_RUNTIME_MODELS = {
+    model: {effort: f"{model}-{effort}" for effort in ("low", "medium", "high")}
+    for model in ANTIGRAVITY_MODELS
+}
+
+ANTIGRAVITY_FLASH_38_CAPABILITY = (
+    "antigravity-gemini-3.8-flash-subscription-1.1.27-v1"
+)
 ANTIGRAVITY_CAPABILITY = (
     "antigravity-gemini-3.7-flash-subscription-oauth-sandbox-v1"
 )
@@ -242,6 +252,12 @@ ANTIGRAVITY_RUN_CONFIG_VERSION = (
 )
 ANTIGRAVITY_RUNTIME_PROFILE = (
     "pier-antigravity-gemini-3.7-flash-shared-oauth-full-container-v2"
+)
+ANTIGRAVITY_FLASH_38_RUN_CONFIG_VERSION = (
+    "antigravity-gemini-3.8-flash-subscription-oauth-full-container-v1"
+)
+ANTIGRAVITY_FLASH_38_RUNTIME_PROFILE = (
+    "pier-antigravity-gemini-3.8-flash-shared-oauth-full-container-v1"
 )
 ANTIGRAVITY_ARTIFACT_CAPTURE = "full-worktree-v1"
 ANTIGRAVITY_HOME_RELATIVE_PATH = Path("providers") / "antigravity"
@@ -319,7 +335,7 @@ REFILL_HARNESS_CONSTRAINTS = {
     KIMI_AGENT: (frozenset({KIMI_MODEL}), KIMI_SUPPORTED_EFFORTS),
     GROK_AGENT: (frozenset({GROK_MODEL}), GROK_SUPPORTED_EFFORTS),
     ANTIGRAVITY_AGENT: (
-        frozenset({ANTIGRAVITY_MODEL}), ANTIGRAVITY_SUPPORTED_EFFORTS,
+        ANTIGRAVITY_MODELS, ANTIGRAVITY_SUPPORTED_EFFORTS,
     ),
     CODEBUDDY_AGENT: (
         frozenset({CODEBUDDY_MODEL}), CODEBUDDY_SUPPORTED_EFFORTS,
@@ -1107,8 +1123,12 @@ def antigravity_auth_error(home: Path | None = None) -> str | None:
     if not isinstance(ready_payload, dict) or (
         ready_payload.get("schema") != "dradar-antigravity-ready-v1"
         or ready_payload.get("cli_version") != ANTIGRAVITY_CLI_VERSION
-        or ready_payload.get("models")
-        != sorted(ANTIGRAVITY_RUNTIME_MODELS.values())
+        or not isinstance(ready_payload.get("models"), list)
+        or not all(isinstance(model, str) for model in ready_payload["models"])
+        or not any(
+            set(slugs.values()).issubset(set(ready_payload["models"]))
+            for slugs in ANTIGRAVITY_MODEL_RUNTIME_MODELS.values()
+        )
     ):
         return "Antigravity readiness proof does not match this DRadar release"
     return None
@@ -1141,7 +1161,9 @@ def write_antigravity_settings(home: Path | None = None) -> Path:
     return path
 
 
-def mark_antigravity_ready(home: Path | None = None) -> Path:
+def mark_antigravity_ready(
+    home: Path | None = None, *, verified_models: list[str] | None = None,
+) -> Path:
     path = antigravity_ready_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
@@ -1153,7 +1175,11 @@ def mark_antigravity_ready(home: Path | None = None) -> Path:
             json.dump({
                 "schema": "dradar-antigravity-ready-v1",
                 "cli_version": ANTIGRAVITY_CLI_VERSION,
-                "models": sorted(ANTIGRAVITY_RUNTIME_MODELS.values()),
+                "models": sorted(
+                    verified_models
+                    if verified_models is not None
+                    else ANTIGRAVITY_RUNTIME_MODELS.values()
+                ),
             }, handle, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
@@ -2017,7 +2043,22 @@ def advertised_capabilities(
         prepare_antigravity_auth() is None
         and Path(__file__).with_name("pier_antigravity.py").is_file()
     ):
-        capabilities.append(ANTIGRAVITY_CAPABILITY)
+        # Each Gemini product advertises only after its complete low/medium/
+        # high group was live-verified during setup; an account without 3.8
+        # access keeps the 3.7 lane without unlocking 3.8 cells.
+        try:
+            ready_models = set(
+                json.loads(antigravity_ready_path().read_text(encoding="utf-8"))
+                ["models"]
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+            ready_models = set()
+        if set(ANTIGRAVITY_RUNTIME_MODELS.values()).issubset(ready_models):
+            capabilities.append(ANTIGRAVITY_CAPABILITY)
+        if set(
+            ANTIGRAVITY_MODEL_RUNTIME_MODELS[ANTIGRAVITY_FLASH_38_MODEL].values()
+        ).issubset(ready_models):
+            capabilities.append(ANTIGRAVITY_FLASH_38_CAPABILITY)
     if (
         zcode_api_key(environ) is not None
         and zcode_cli_error(environ=environ) is None

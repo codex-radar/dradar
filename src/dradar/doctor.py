@@ -895,7 +895,7 @@ def cmd_doctor(args) -> int:
             )
             if antigravity_ready:
                 _check(
-                    f"Gemini 3.7 Flash low/medium/high — AGY CLI "
+                    f"Gemini Flash low/medium/high groups — AGY CLI "
                     f"{ANTIGRAVITY_CLI_VERSION} provider ready",
                     True,
                 )

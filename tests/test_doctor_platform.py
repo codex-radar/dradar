@@ -573,7 +573,7 @@ def test_antigravity_scoped_doctor_does_not_require_codex_or_claude(
 
     assert rc == 0
     assert "Antigravity subscription OAuth" in out
-    assert "Gemini 3.7 Flash" in out
+    assert "Gemini Flash low/medium/high groups" in out
     assert "codex CLI" not in out
     assert "claude CLI" not in out
     assert "all checks passed" in out

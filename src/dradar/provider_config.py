@@ -48,7 +48,7 @@ from .codebuddy_provider import (
 from .providers import (
     ANTIGRAVITY_CLI_VERSION,
     ANTIGRAVITY_LINUX_ARTIFACTS,
-    ANTIGRAVITY_MODEL,
+    ANTIGRAVITY_MODEL_RUNTIME_MODELS,
     ANTIGRAVITY_RUNTIME_MODELS,
     CLAUDE_API_KEY_ENVS,
     CLAUDE_CLI_VERSION,
@@ -572,9 +572,18 @@ def _antigravity_models_live(docker: str, executable: Path) -> str | None:
         for line in proc.stdout.splitlines()
         if line.strip()
     }
-    missing = set(ANTIGRAVITY_RUNTIME_MODELS.values()) - available
-    if missing:
-        return "the account cannot access " + ", ".join(sorted(missing))
+    verified = sorted({
+        slug
+        for group in ANTIGRAVITY_MODEL_RUNTIME_MODELS.values()
+        if set(group.values()).issubset(available)
+        for slug in group.values()
+    })
+    if not verified:
+        return "the account has no complete supported Antigravity low/medium/high model group"
+    try:
+        mark_antigravity_ready(verified_models=verified)
+    except (OSError, ValueError) as exc:
+        return f"could not persist verified Antigravity models: {type(exc).__name__}"
     return None
 
 
@@ -586,12 +595,17 @@ def _setup_antigravity_subscription() -> int:
     executable = _ensure_antigravity_linux_cli(docker)
     if executable is None:
         return 1
-    if prepare_antigravity_auth() is None:
+    prior_issue = prepare_antigravity_auth()
+    if prior_issue in {
+        None, "Antigravity readiness proof does not match this DRadar release",
+    }:
+        # Re-verify an older proof using the existing private OAuth state;
+        # upgrading the CLI alone must not force a new login.
         issue = _antigravity_models_live(docker, executable)
         if issue is None:
             print(
                 f"Antigravity subscription provider is already ready (CLI "
-                f"{ANTIGRAVITY_CLI_VERSION}, {ANTIGRAVITY_MODEL} low/medium/high verified)."
+                f"{ANTIGRAVITY_CLI_VERSION}, available model groups verified)."
             )
             return 0
     if not sys.stdin.isatty():
@@ -644,7 +658,7 @@ def _setup_antigravity_subscription() -> int:
         print(f"Antigravity login completed, but live model verification failed: {live_issue}.")
         return 1
     try:
-        mark_antigravity_ready()
+        # The live model check already persisted the exact verified groups.
         privatize_antigravity_home()
     except (OSError, ValueError) as exc:
         print(f"could not seal Antigravity readiness state: {exc}")
@@ -655,7 +669,7 @@ def _setup_antigravity_subscription() -> int:
         return 1
     print(
         f"Antigravity subscription OAuth is ready at {antigravity_auth_path()} "
-        f"(tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, three Gemini 3.7 Flash "
+        f"(tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, available Gemini Flash "
         "effort levels verified)."
     )
     return 0
@@ -681,7 +695,7 @@ def _status_antigravity_subscription(*, live: bool) -> int:
     print(
         f"Antigravity subscription provider ready via {antigravity_auth_path()} "
         f"(OAuth tokens hidden, CLI {ANTIGRAVITY_CLI_VERSION}, "
-        f"{ANTIGRAVITY_MODEL} low/medium/high, API keys disabled)."
+        "available Gemini Flash low/medium/high groups, API keys disabled)."
     )
     return 0
 

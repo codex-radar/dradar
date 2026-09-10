@@ -56,6 +56,10 @@ from .providers import (
     ANTIGRAVITY_AGENT,
     ANTIGRAVITY_ARTIFACT_CAPTURE,
     ANTIGRAVITY_CAPABILITY,
+    ANTIGRAVITY_FLASH_38_CAPABILITY,
+    ANTIGRAVITY_FLASH_38_MODEL,
+    ANTIGRAVITY_FLASH_38_RUN_CONFIG_VERSION,
+    ANTIGRAVITY_FLASH_38_RUNTIME_PROFILE,
     ANTIGRAVITY_PROVIDER,
     ANTIGRAVITY_RUN_CONFIG_VERSION,
     ANTIGRAVITY_RUNTIME_PROFILE,
@@ -1162,7 +1166,9 @@ def _exit_for(exc: ApiError) -> None:
         sys.exit(f"{exc}\nserver error code: {exc.code}")
     if (
         exc.status_code == 426
-        and exc.required_capability == ANTIGRAVITY_CAPABILITY
+        and exc.required_capability in {
+            ANTIGRAVITY_CAPABILITY, ANTIGRAVITY_FLASH_38_CAPABILITY,
+        }
     ):
         _signal_pool_abort(
             "Antigravity provider is not ready for this batch",
@@ -3411,9 +3417,16 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "kimi_native_efforts": ["low", "high", "max"],
         })
     if assignment.get("agent") == ANTIGRAVITY_AGENT:
+        gemini_38 = assignment.get("model") == ANTIGRAVITY_FLASH_38_MODEL
         meta.update({
-            "model_config_version": ANTIGRAVITY_RUN_CONFIG_VERSION,
-            "model_runtime_profile": ANTIGRAVITY_RUNTIME_PROFILE,
+            "model_config_version": (
+                ANTIGRAVITY_FLASH_38_RUN_CONFIG_VERSION
+                if gemini_38 else ANTIGRAVITY_RUN_CONFIG_VERSION
+            ),
+            "model_runtime_profile": (
+                ANTIGRAVITY_FLASH_38_RUNTIME_PROFILE
+                if gemini_38 else ANTIGRAVITY_RUNTIME_PROFILE
+            ),
             "subscription_oauth": True,
             "subscription_concurrency": (
                 telemetry.target_workers if telemetry is not None else 1
