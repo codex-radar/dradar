@@ -224,6 +224,7 @@ def test_live_status_verifies_auth_and_required_models(
             status_code=200,
             json=lambda: {"data": [
                 {"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"},
+                {"id": "deepseek-v4.1-flash"},
             ]},
         )
 

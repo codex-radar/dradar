@@ -46,12 +46,14 @@ SUPPORTED_MODELS = frozenset(
     {
         "dsh-deepseek-v4-flash",
         "dsh-deepseek-v4-pro",
+        "dsh-deepseek-v4.1-flash",
         "dsh-deepseek-v4-flash-vision-exp",
     }
 )
 RUNTIME_MODELS = {
     "dsh-deepseek-v4-flash": "deepseek-v4-flash",
     "dsh-deepseek-v4-pro": "deepseek-v4-pro",
+    "dsh-deepseek-v4.1-flash": "deepseek-v4.1-flash",
     "dsh-deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
 }
 SUPPORTED_REASONING_EFFORTS = frozenset({"off", "high", "max"})
