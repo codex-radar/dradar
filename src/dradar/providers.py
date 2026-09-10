@@ -55,16 +55,19 @@ CLAUDE_API_KEY_ENVS = frozenset({
 DEEPSEEK_PROVIDER = "deepseek"
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+DEEPSEEK_FLASH_41_MODEL = "deepseek-v4.1-flash"
 # Backwards-compatible import used by older extensions and Flash-only tests.
 DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
-DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL)
+DEEPSEEK_MODELS = (DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, DEEPSEEK_FLASH_41_MODEL)
 DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
 DEEPSEEK_ENABLE_ENV = "DRADAR_ENABLE_DEEPSEEK"
 DEEPSEEK_SECRET_RELATIVE_PATH = Path("secrets") / "deepseek_api_key"
 DEEPSEEK_CAPABILITY = "codex-deepseek-v4-flash-v2"
 DEEPSEEK_PRO_CAPABILITY = "codex-deepseek-v4-pro-v1"
+DEEPSEEK_FLASH_41_CAPABILITY = "codex-deepseek-v4.1-flash-v1"
 DEEPSEEK_FLASH_OFF_CAPABILITY = "codex-deepseek-v4-flash-off-v1"
 DEEPSEEK_PRO_OFF_CAPABILITY = "codex-deepseek-v4-pro-off-v1"
+DEEPSEEK_FLASH_41_OFF_CAPABILITY = "codex-deepseek-v4.1-flash-off-v1"
 # DeepSeek follows npm's latest stable Codex release at run time.  Keep the
 # last audited fixed release as a compatibility floor, not as a permanent pin.
 DEEPSEEK_MIN_CODEX_VERSION = "0.147.0"
@@ -74,7 +77,7 @@ DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DEEPSEEK_CATALOG_EFFORTS = frozenset({"none", "low", "high", "max"})
 DEEPSEEK_CATALOG_FILENAME = "deepseek_codex_models.json"
 DEEPSEEK_CATALOG_SHA256 = (
-    "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
+    "efe364bc99485c18d1cb044121639b3cef9b1e1e810af5f55cdb3f11271e71ae"
 )
 DEEPSEEK_CATALOG_REMOTE_PATH = "/tmp/codex-home/models.json"
 DEEPSEEK_CATALOG_SOURCE = (
@@ -91,16 +94,19 @@ DSH_AGENT = "dsh-minimal"
 DSH_VERSION = "0.1.2-rc.1"
 DSH_FLASH_MODEL = "dsh-deepseek-v4-flash"
 DSH_PRO_MODEL = "dsh-deepseek-v4-pro"
+DSH_FLASH_41_MODEL = "dsh-deepseek-v4.1-flash"
 DSH_VISION_MODEL = "dsh-deepseek-v4-flash-vision-exp"
-DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL, DSH_VISION_MODEL)
+DSH_MODELS = (DSH_FLASH_MODEL, DSH_PRO_MODEL, DSH_FLASH_41_MODEL, DSH_VISION_MODEL)
 DSH_RUNTIME_MODELS = {
     DSH_FLASH_MODEL: DEEPSEEK_FLASH_MODEL,
     DSH_PRO_MODEL: DEEPSEEK_PRO_MODEL,
+    DSH_FLASH_41_MODEL: DEEPSEEK_FLASH_41_MODEL,
     DSH_VISION_MODEL: "deepseek-v4-flash-vision-exp",
 }
 DSH_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DSH_FLASH_CAPABILITY = "dsh-minimal-deepseek-v4-flash-artifact-v6"
 DSH_PRO_CAPABILITY = "dsh-minimal-deepseek-v4-pro-artifact-v6"
+DSH_FLASH_41_CAPABILITY = "dsh-minimal-deepseek-v4.1-flash-artifact-v6"
 DSH_VISION_CAPABILITY = (
     "dsh-minimal-deepseek-v4-flash-vision-exp-pompeii-image-v2"
 )
@@ -1975,8 +1981,10 @@ def advertised_capabilities(
         capabilities.extend((
             DEEPSEEK_CAPABILITY,
             DEEPSEEK_PRO_CAPABILITY,
+            DEEPSEEK_FLASH_41_CAPABILITY,
             DEEPSEEK_FLASH_OFF_CAPABILITY,
             DEEPSEEK_PRO_OFF_CAPABILITY,
+            DEEPSEEK_FLASH_41_OFF_CAPABILITY,
         ))
     # The adapter installs its pinned DSH runtime inside each task image, so
     # its only local runtime prerequisite is a usable DeepSeek credential.
@@ -1989,6 +1997,7 @@ def advertised_capabilities(
         capabilities.extend((
             DSH_FLASH_CAPABILITY,
             DSH_PRO_CAPABILITY,
+            DSH_FLASH_41_CAPABILITY,
             DSH_VISION_CAPABILITY,
             DSH_VISION_TEXT_CAPABILITY,
         ))
