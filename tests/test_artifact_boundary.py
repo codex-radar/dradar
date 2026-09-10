@@ -15,6 +15,54 @@ def trial(tmp_path):
     return root
 
 
+def _make_dsh_home(trial, *, fifo=False, junk=0):
+    home = trial / 'agent' / 'dsh-home'
+    (home / '.dsh' / 'state').mkdir(parents=True, exist_ok=True)
+    (home / 'dsh-usage.json').write_text('{"schema":"dsh-provider-usage-v2"}')
+    (home / 'dsh-outcome.json').write_text('{"schema":"dradar-dsh-outcome-v1"}')
+    # The agent's own third-party runtime state: never consumed, never uploaded.
+    (home / '.credentials.yaml').write_text('k: v')
+    if fifo:
+        os.mkfifo(home / '.dsh' / 'daemon.sock')
+    for index in range(junk):
+        (home / '.dsh' / 'state' / f'f{index}.json').write_text('{}')
+    return home
+
+
+def test_dsh_home_runtime_state_never_blocks_the_upload_snapshot(trial):
+    """Regress 0.5.196+: DSH mounts its Node home at agent/dsh-home, and the
+    strict whole-tree walk failed every DSH upload once that home contained a
+    socket/fifo or unbounded cache entries (all completed solves lost). The
+    walk now prunes that subtree and re-adds only the two DRadar artifacts."""
+    _make_dsh_home(trial, fifo=True, junk=5000)
+    with boundary.snapshot_agent(trial) as snapshot:
+        collected = sorted(
+            str(path.relative_to(snapshot))
+            for path in snapshot.rglob('*') if path.is_file()
+        )
+    assert collected == [
+        'agent/dsh-home/dsh-outcome.json',
+        'agent/dsh-home/dsh-usage.json',
+        'agent/sessions/normal.jsonl',
+    ]
+
+
+def test_snapshot_still_fail_closed_outside_dsh_home(trial):
+    _make_dsh_home(trial)
+    os.mkfifo(trial / 'agent' / 'rogue.sock')
+    with pytest.raises(boundary.UnsafeArtifact, match='unsafe_file_type'):
+        boundary.snapshot_agent(trial).__enter__()
+
+
+def test_dsh_home_artifacts_are_byte_verified(trial):
+    _make_dsh_home(trial, fifo=True)
+    with boundary.snapshot_agent(trial) as snapshot:
+        assert (snapshot / 'agent/dsh-home/dsh-usage.json').read_bytes() == (
+            b'{"schema":"dsh-provider-usage-v2"}'
+        )
+        assert not (snapshot / 'agent/dsh-home/.credentials.yaml').exists()
+
+
 def test_private_snapshot_preserves_bytes_and_is_outside_trial(trial):
     with boundary.snapshot_agent(trial) as snapshot:
         assert not snapshot.is_relative_to(trial)
