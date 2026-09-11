@@ -2920,6 +2920,99 @@ def test_progress_keeps_local_preparation_distinct_from_server_admission(
     assert payload["agent"]["server_status"]["status"] == "running"
 
 
+@pytest.mark.parametrize("local_status", ["starting", "running", "stopping", "orphaned", "unknown"])
+@pytest.mark.parametrize("server_status,action", [("running", "monitor"), ("completed", "done")])
+@pytest.mark.parametrize("upload_state", ["none", "pending", "blocked"])
+def test_progress_waits_for_live_pool_before_completion_or_upload_recovery(
+    tmp_path, monkeypatch, capsys, local_status, server_status, action, upload_state,
+):
+    plan = _plan(refill=True, refill_to=2, max_tasks=48)
+    response = _server_response(plan, _envelope(
+        status=server_status, agent_action=action,
+        user_message="设备刚刚结束运行，正在同步结果。",
+    ), progress={"submitted": 1}, state={"current_device": {"phase": "done"}})
+    client = FakeClient(progress=[response])
+    path, state = _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: {
+        "batch_id": BATCH_ID, "plan_id": plan["plan_id"], "status": local_status,
+        "startup_status": "pending" if local_status == "starting" else "ready", "workers": 2,
+    })
+    uploads = [] if upload_state == "none" else [{"upload_blocked": upload_state == "blocked"}]
+    monkeypatch.setattr(run_plans, "_exact_pending_uploads", lambda *_a: uploads)
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agent_action"] == "monitor"
+    assert payload["status"] != "completed"
+    assert payload["poll_after_seconds"] > 0
+    assert payload["agent"]["server_status"]["status"] == server_status
+    assert payload["agent"]["progress"]["submitted"] == 1
+    assert "刚刚结束运行" not in payload["user_message"]
+    assert "题目尚未开始执行" not in payload["user_message"] or local_status == "starting"
+    if upload_state == "blocked":
+        assert payload["agent"]["requires_user_action"] is True
+    assert client.start_calls == client.stop_calls == []
+    assert run_plans._read_private_json(path)["plan"] == plan
+
+
+@pytest.mark.parametrize("action", ["ask_user", "stop_runner"])
+def test_progress_preserves_authoritative_decision_or_stop_with_live_upload(
+    tmp_path, monkeypatch, capsys, action,
+):
+    plan = _plan()
+    response = _server_response(plan, _envelope(
+        status="decision_required" if action == "ask_user" else "stopped",
+        decision_required=action == "ask_user", agent_action=action,
+        decision="stop_all_devices", decision_token="synthetic-token",
+        choices=[{"id": "stop_all_devices", "label": "停止"}] if action == "ask_user" else [],
+    ))
+    client = FakeClient(progress=[response])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: {
+        "batch_id": BATCH_ID, "plan_id": plan["plan_id"], "status": "running",
+    })
+    monkeypatch.setattr(run_plans, "_exact_pending_uploads", lambda *_a: [{"upload_blocked": False}])
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agent_action"] == action
+    assert payload["decision_required"] == (action == "ask_user")
+
+
+def test_progress_does_not_use_another_local_plan_to_override_server(tmp_path, monkeypatch, capsys):
+    plan = _plan()
+    client = FakeClient(progress=[_server_response(plan, _envelope(status="completed", agent_action="done"))])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: {
+        "batch_id": BATCH_ID, "plan_id": "another-plan", "status": "running",
+    })
+    monkeypatch.setattr(run_plans, "_exact_pending_uploads", lambda *_a: [])
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    assert json.loads(capsys.readouterr().out)["agent_action"] == "done"
+
+
+def test_progress_converges_from_active_upload_to_recovery_then_completion(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(refill=True, refill_to=2, max_tasks=48)
+    response = _server_response(plan, _envelope(status="completed", agent_action="done"))
+    client = FakeClient(progress=[response, response, response])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    local = {"batch_id": BATCH_ID, "plan_id": plan["plan_id"], "status": "running"}
+    uploads = [{"upload_blocked": False}]
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: local)
+    monkeypatch.setattr(run_plans, "_exact_pending_uploads", lambda *_a: uploads)
+
+    for expected in ("monitor", "recover_upload", "done"):
+        assert run_plans.cmd_progress_plan(_args()) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["agent_action"] == expected
+        if expected == "monitor":
+            local["status"] = "completed"
+        elif expected == "recover_upload":
+            uploads.clear()
+    assert client.start_calls == client.stop_calls == []
+
+
 def test_progress_surfaces_specific_pre_start_failure_without_internal_terms(
     tmp_path, monkeypatch, capsys,
 ):

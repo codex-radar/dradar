@@ -24,7 +24,7 @@ import tempfile
 import time
 import urllib.parse
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -125,6 +125,7 @@ class TrialBuilderPreflight:
     failure_code: str | None
     detail: str
     registry_mirrors: tuple[str, ...] = ()
+    cleanup_detail: str | None = None
 
 
 @dataclass
@@ -276,11 +277,15 @@ def docker_registry_mirrors() -> tuple[str, ...]:
             detail = (proc.stderr or proc.stdout or "Docker info failed").strip()
             raise DockerUnavailable(redact_docker_diagnostic(detail, limit=300))
         try:
-            values = json.loads(proc.stdout.strip() or "[]")
+            values = json.loads(proc.stdout.strip())
         except json.JSONDecodeError as exc:
             raise DockerUnavailable(
                 "Docker returned malformed registry mirror metadata"
             ) from exc
+        # An unset daemon slice is commonly serialized as null. The versioned
+        # parent-to-worker snapshot above remains an array-only contract.
+        if values is None:
+            values = []
     if not isinstance(values, list) or len(values) > 8:
         raise DockerUnavailable("Docker returned invalid registry mirror metadata")
     return tuple(dict.fromkeys(_validated_registry_mirror(value) for value in values))
@@ -761,6 +766,14 @@ def prepare_trial_builder(
     return TrialBuilderLease(name, True)
 
 
+def _buildx_check_rejected(proc: subprocess.CompletedProcess) -> bool:
+    """Recognize a CLI capability rejection, not arbitrary registry prose."""
+    return proc.returncode != 0 and any(
+        re.fullmatch(r"(?:ERROR: )?unknown flag: --check", line.strip())
+        for line in f"{proc.stdout or ''}\n{proc.stderr or ''}".splitlines()
+    )
+
+
 def preflight_trial_builder(
     home: Path,
     *,
@@ -781,57 +794,86 @@ def preflight_trial_builder(
             redact_docker_diagnostic(exc, limit=500),
         )
     preflight_id = f"preflight-{os.getpid()}-{time.time_ns()}"
-    lease = prepare_trial_builder(
-        home,
-        assignment_id=preflight_id,
-        mode="isolated",
-        registry_mirrors=mirrors,
-    )
-    if not lease.isolated or lease.name is None:
-        return TrialBuilderPreflight(
-            False, 1, "builder_create", "builder_create_failed",
-            redact_docker_diagnostic(
-                lease.note or "isolated builder unavailable", limit=500,
-            ),
-            mirrors,
-        )
-    result: TrialBuilderPreflight
+    stage = "builder_create"
+    cleanup_detail = None
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="dradar-buildkit-preflight-",
-        ) as context:
-            dockerfile = Path(context) / "Dockerfile"
-            dockerfile.write_text(f"FROM {image}\n", encoding="utf-8")
-            proc = _run_docker(
-                [
-                    "buildx", "build", "--builder", lease.name,
-                    "--check", "--pull", "--progress=plain",
-                    "--file", str(dockerfile), context,
-                ],
-                timeout=90,
-                allow_fail=True,
-            )
-        output = f"{proc.stdout}\n{proc.stderr}"
-        result = TrialBuilderPreflight(
-            proc.returncode == 0,
-            proc.returncode,
-            "base_image_metadata",
-            None if proc.returncode == 0 else _build_failure_code(output),
-            "" if proc.returncode == 0 else _redacted_build_excerpt(output),
-            mirrors,
+        lease = prepare_trial_builder(
+            home, assignment_id=preflight_id, mode="isolated",
+            registry_mirrors=mirrors,
         )
-    except DockerUnavailable as exc:
+        if not lease.isolated or lease.name is None:
+            result = TrialBuilderPreflight(
+                False, 1, stage, "builder_create_failed",
+                redact_docker_diagnostic(lease.note or "isolated builder unavailable", limit=500),
+                mirrors,
+            )
+        else:
+            stage = "builder_capability"
+            help_result = _run_docker(["buildx", "build", "--help"], timeout=30, allow_fail=True)
+            if help_result.returncode != 0 or not help_result.stdout.strip():
+                result = TrialBuilderPreflight(
+                    False, help_result.returncode or 1, stage, "builder_capability_failed",
+                    _redacted_build_excerpt(
+                        help_result.stderr or help_result.stdout or "Buildx returned empty help",
+                    ), mirrors,
+                )
+            else:
+                supports_check = bool(re.search(r"(?m)^\s*--check(?:\s|=|$)", help_result.stdout))
+                stage = "base_image_metadata"
+                with tempfile.TemporaryDirectory(prefix="dradar-buildkit-preflight-") as context:
+                    dockerfile = Path(context) / "Dockerfile"
+                    dockerfile.write_text(f"FROM {image}\n", encoding="utf-8", newline="\n")
+                    command = [
+                        "buildx", "build", "--builder", lease.name,
+                        "--check" if supports_check else "--output=type=cacheonly",
+                        "--pull", "--progress=plain", "--file", str(dockerfile), context,
+                    ]
+                    proc = _run_docker(command, timeout=90, allow_fail=True)
+                    if supports_check and _buildx_check_rejected(proc):
+                        # A wrapper/plugin may differ from the one whose help
+                        # we queried. One FROM-only fallback; never RUN, load or
+                        # push an image, including on drivers with default-load.
+                        command = [
+                            "--output=type=cacheonly" if arg == "--check" else arg
+                            for arg in command
+                        ]
+                        proc = _run_docker(command, timeout=90, allow_fail=True)
+                output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+                result = TrialBuilderPreflight(
+                    proc.returncode == 0, proc.returncode, stage,
+                    None if proc.returncode == 0 else _build_failure_code(output),
+                    "" if proc.returncode == 0 else _redacted_build_excerpt(output), mirrors,
+                )
+    except (DockerUnavailable, OSError) as exc:
+        code = {
+            "builder_create": "builder_create_failed",
+            "builder_capability": "builder_capability_failed",
+        }.get(stage, "builder_preflight_unavailable")
+        if stage == "base_image_metadata":
+            classified = _build_failure_code(str(exc))
+            if classified != "registry_metadata_failed":
+                code = classified
         result = TrialBuilderPreflight(
-            False, 1, "base_image_metadata", "builder_preflight_unavailable",
+            False, 1, stage, code,
             _redacted_build_excerpt(str(exc)), mirrors,
         )
-    removed, removal_note = remove_trial_builder(home, preflight_id)
-    if not removed:
-        return TrialBuilderPreflight(
-            False, 1, "builder_cleanup", "builder_cleanup_failed",
-            _redacted_build_excerpt(removal_note or "builder cleanup failed"),
-            mirrors,
-        )
+    finally:
+        # Creation itself can fail after leaving a resource behind. Remove
+        # only this unique probe, even on local I/O errors and interruption.
+        try:
+            removed, removal_note = remove_trial_builder(home, preflight_id)
+        except (DockerUnavailable, OSError) as exc:
+            removed, removal_note = False, str(exc)
+        if not removed:
+            cleanup_detail = _redacted_build_excerpt(removal_note or "builder cleanup failed")
+            if sys.exc_info()[0] is not None:
+                print(f"builder probe cleanup failed: {cleanup_detail}", file=sys.stderr)
+    if cleanup_detail:
+        if result.ok:
+            result = TrialBuilderPreflight(
+                False, 1, "builder_cleanup", "builder_cleanup_failed", cleanup_detail, mirrors,
+            )
+        result = replace(result, cleanup_detail=cleanup_detail)
     return result
 
 
@@ -848,7 +890,12 @@ def remove_trial_builder(
             ["buildx", "inspect", name], timeout=30, allow_fail=True,
         )
         if inspected.returncode != 0:
-            return True, None
+            output = f"{inspected.stdout or ''}\n{inspected.stderr or ''}".strip()
+            if re.fullmatch(r'(?:ERROR: )?no builder "' + re.escape(name) + r'" found', output):
+                return True, None
+            return False, redact_docker_diagnostic(
+                output or "could not confirm whether the builder still exists", limit=300,
+            )
         removed = _run_docker(
             ["buildx", "rm", name], timeout=180, allow_fail=True,
         )

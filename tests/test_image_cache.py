@@ -261,6 +261,8 @@ def test_builder_preflight_preserves_stage_exit_and_redacted_stderr(
         image_cache,
         "_run_docker",
         lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, "Options:\n      --check  Check build\n", "",
+        ) if command == ["buildx", "build", "--help"] else subprocess.CompletedProcess(
             command,
             1,
             "",

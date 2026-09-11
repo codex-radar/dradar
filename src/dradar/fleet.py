@@ -681,14 +681,35 @@ def _validated_pool_startup_target(home: Path, batch_id: str) -> Path:
     return expected
 
 
+def _pool_startup_event_matches(event: dict | None, controller_id: str, batch_id: str, pid: int) -> bool:
+    return bool(event and (
+        event.get("schema_version") == SCHEMA_VERSION
+        and event.get("controller_id") == controller_id
+        and event.get("batch_id") == batch_id
+        and event.get("pid") == pid
+    ))
+
+
+def _current_pool_startup_event(path: Path, batch_id: str) -> dict | None:
+    """A late writer must never replace a newer pool's pending/terminal event."""
+    existing = _read_json(path)
+    if existing and not _pool_startup_event_matches(
+        existing, os.environ[CONTROLLER_ID_ENV], normalize_batch_id(batch_id), os.getpid(),
+    ):
+        raise FleetError("Fleet startup belongs to a different pool generation")
+    return existing
+
+
 def publish_pool_startup_ready(home: Path, batch_id: str) -> None:
     """Prove that a child registered and checked out its first assignment."""
 
     path = _validated_pool_startup_target(home, batch_id)
     with _locked(_pool_startup_lock_path(home, batch_id)):
-        existing = _read_json(path)
+        existing = _current_pool_startup_event(path, batch_id)
         if existing and existing.get("status") == "failed":
             raise FleetError("Fleet startup was already marked failed")
+        if existing and existing.get("status") == "ready":
+            return
         _atomic_json(path, {
             "schema_version": SCHEMA_VERSION,
             "controller_id": os.environ[CONTROLLER_ID_ENV],
@@ -706,17 +727,18 @@ def publish_pool_startup_failure(
     error_code: str,
     user_message: str,
     retryable: bool = True,
+    diagnostic: dict | None = None,
 ) -> bool:
     """Publish a bounded, credential-free failure before a pool becomes ready."""
 
     path = _validated_pool_startup_target(home, batch_id)
     with _locked(_pool_startup_lock_path(home, batch_id)):
-        existing = _read_json(path)
-        if existing and existing.get("status") == "ready":
+        existing = _current_pool_startup_event(path, batch_id)
+        if existing and existing.get("status") in {"ready", "failed"}:
             return False
         safe_code = str(error_code)[:80]
         safe_message = " ".join(str(user_message).split())[:500]
-        _atomic_json(path, {
+        event = {
             "schema_version": SCHEMA_VERSION,
             "controller_id": os.environ[CONTROLLER_ID_ENV],
             "batch_id": normalize_batch_id(batch_id),
@@ -726,7 +748,20 @@ def publish_pool_startup_failure(
             "user_message": safe_message,
             "retryable": bool(retryable),
             "recorded_at": _now(),
-        })
+        }
+        if diagnostic is not None:
+            from .image_cache import redact_docker_diagnostic
+
+            event["diagnostic"] = {
+                key: redact_docker_diagnostic(diagnostic[key], limit=limit)
+                for key, limit in (
+                    ("stage", 80), ("failure_code", 80),
+                    ("detail", 1200), ("cleanup_detail", 1200),
+                ) if diagnostic.get(key) is not None
+            }
+            if type(diagnostic.get("returncode")) is int:
+                event["diagnostic"]["returncode"] = diagnostic["returncode"]
+        _atomic_json(path, event)
         return True
 
 
@@ -836,7 +871,6 @@ def _spawn_pool(
     env[CONTROLLER_ID_ENV] = controller_id
     env[POOL_BATCH_ENV] = batch_id
     startup_path = _pool_startup_path(home, batch_id)
-    startup_path.unlink(missing_ok=True)
     env[POOL_STARTUP_FILE_ENV] = str(startup_path)
     env["DRADAR_REFILL_PLAN_SCOPE"] = batch_id
     abort_path = _root(home) / ABORT_DIR / f"{batch_id}.stop"
@@ -862,9 +896,23 @@ def _spawn_pool(
             kwargs["pass_fds"] = (lock_handle.fileno(),)
     if os.name == "nt":  # pragma: no cover
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    process = None
     try:
-        process = subprocess.Popen(command, **kwargs)
+        # Register ownership before the child can acknowledge startup. The
+        # lock closes both the fast-child race and the old-writer retry race.
+        with _locked(_pool_startup_lock_path(home, batch_id)):
+            process = subprocess.Popen(command, **kwargs)
+            _atomic_json(startup_path, {
+                "schema_version": SCHEMA_VERSION,
+                "controller_id": controller_id,
+                "batch_id": batch_id,
+                "pid": process.pid,
+                "status": "pending",
+                "recorded_at": _now(),
+            })
     except BaseException:
+        if process is not None:
+            _send_interrupt(process)
         log_handle.close()
         raise
     return process, log_handle
@@ -1205,6 +1253,10 @@ def _handle_request(
             if only_if_startup_pending:
                 with _locked(_pool_startup_lock_path(home, batch_id)):
                     event = _read_json(_pool_startup_path(home, batch_id))
+                    if not _pool_startup_event_matches(
+                        event, state.get("controller_id"), batch_id, process.pid,
+                    ):
+                        event = None
                     if event and event.get("status") == "ready":
                         item["startup_status"] = "ready"
                         item["status"] = "running"
@@ -1305,13 +1357,9 @@ def _refresh_pool_startups(
         if not isinstance(item, dict) or item.get("startup_status") != "pending":
             continue
         event = _read_json(_pool_startup_path(home, batch_id))
-        if not event or not (
-            event.get("schema_version") == SCHEMA_VERSION
-            and event.get("controller_id") == state.get("controller_id")
-            and event.get("batch_id") == batch_id
-            and event.get("pid") == process.pid
-            and event.get("status") in {"ready", "failed"}
-        ):
+        if not _pool_startup_event_matches(
+            event, state.get("controller_id"), batch_id, process.pid,
+        ) or event.get("status") not in {"ready", "failed"}:
             continue
         item["startup_status"] = event["status"]
         item["updated_at"] = _now()
@@ -1332,6 +1380,8 @@ def _refresh_pool_startups(
                 or "这台设备未能完成运行准备；题目仍然保留。"
             ).split())[:500]
             item["startup_retryable"] = bool(event.get("retryable", True))
+            if isinstance(event.get("diagnostic"), dict):
+                item["startup_diagnostic"] = event["diagnostic"]
         changed = True
     if changed:
         _write_state(home, state)
@@ -1346,6 +1396,10 @@ def _settle_pool(
     returncode: int,
 ) -> None:
     """Persist one child exit without widening a run-plan device failure."""
+    # The child can write its final acknowledgement between the controller's
+    # refresh and poll(). Consume that last event before removing the process.
+    if batch_id in processes:
+        _refresh_pool_startups(home, state, {batch_id: processes[batch_id]})
     item = state["batches"][batch_id]
     requested_stop = item.get("status") == "stopping"
     startup_failed = item.get("startup_status") == "failed"
