@@ -124,3 +124,51 @@ def test_windows_runtime_layout_and_no_posix_owner(trial):
         safety.return_runtime_tree_to_host_owner(NoExec(), '/logs/agent/fixture').send(None)
     with pytest.raises(RuntimeSafetyError):
         safety.return_runtime_tree_to_host_owner(NoExec(), '/outside').send(None)
+
+
+def test_skip_dirs_prunes_exact_subtree_and_keeps_owned_sidecars(trial, monkeypatch):
+    home = trial / 'agent/dsh-home'
+    home.mkdir()
+    for name in ('dsh-usage.json', 'dsh-outcome.json'):
+        (home / name).write_bytes(b'{"synthetic":true}')
+    (home / '.credentials.yaml').write_bytes(b'synthetic-private-state')
+    cache = home / 'cache'
+    cache.mkdir()
+    for index in range(40):
+        (cache / str(index)).write_bytes(b'cache')
+    sibling = trial / 'agent/dsh-home-other'
+    sibling.mkdir()
+    (sibling / 'keep.jsonl').write_bytes(b'keep')
+    monkeypatch.setattr(boundary, 'MAX_ENTRIES', 12)
+    with boundary.TrialFiles(trial) as files:
+        paths = files.files('agent', suffix='.jsonl', skip_dirs={'agent/dsh-home'})
+        assert {p.as_posix() for p in paths} == {
+            'agent/sessions/normal.jsonl', 'agent/dsh-home-other/keep.jsonl',
+        }
+        files.verify()
+    with boundary.snapshot_agent(trial) as snapshot:
+        assert not (snapshot / 'agent/dsh-home/cache').exists()
+        assert not (snapshot / 'agent/dsh-home/.credentials.yaml').exists()
+        assert (snapshot / 'agent/dsh-home/dsh-usage.json').read_bytes() == b'{"synthetic":true}'
+        assert (snapshot / 'agent/dsh-home/dsh-outcome.json').read_bytes() == b'{"synthetic":true}'
+
+
+def test_skipped_directory_junction_is_still_rejected(trial):
+    target = trial / 'ordinary'
+    target.mkdir()
+    link = trial / 'agent/dsh-home'
+    result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(target)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0
+    with pytest.raises(boundary.UnsafeArtifact, match='windows_reparse_point'):
+        with boundary.TrialFiles(trial) as files:
+            files.files('agent', skip_dirs={'agent/dsh-home'})
+
+
+def test_skipped_sidecar_hardlink_is_still_rejected(trial):
+    home = trial / 'agent/dsh-home'
+    home.mkdir()
+    os.link(trial / 'agent/sessions/normal.jsonl', home / 'dsh-usage.json')
+    with pytest.raises(boundary.UnsafeArtifact):
+        with boundary.snapshot_agent(trial):
+            pass

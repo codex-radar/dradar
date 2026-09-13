@@ -312,7 +312,7 @@ class WindowsTrialFiles:
                                       info.attributes, info.links)
         return result
 
-    def files(self, relative, *, suffix=None):
+    def files(self, relative, *, suffix=None, skip_dirs=frozenset()):
         parent, leaf = self.parent(Path(relative) / '__boundary_leaf__')
         result, count = [], 0
         def walk(path, prefix, depth):
@@ -326,6 +326,10 @@ class WindowsTrialFiles:
                 if count > self.max_entries:
                     raise self.error('entry_limit')
                 if info[3] & 0x10:
+                    # _entries already validates and pins the directory handle.
+                    # Only its contents are pruned, matching the POSIX boundary.
+                    if (prefix / name).as_posix() in skip_dirs:
+                        continue
                     walk(path / name, prefix / name, depth + 1)
                 elif suffix is None or Path(name).suffix == suffix:
                     result.append(prefix / name)
