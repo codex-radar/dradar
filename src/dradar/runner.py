@@ -3481,6 +3481,7 @@ def _dsh_tasks_overlay(
                     "__DRADAR_BASE_COMMIT__", base_commit
                 ),
                 encoding="utf-8",
+                newline="\n",
             )
             hook.chmod(0o755)
         yield overlay_root
@@ -3613,7 +3614,7 @@ def _artifact_tasks_overlay(
                 "build_origin_proof": build_origin_proof,
             }))
             baseline_request_path.chmod(0o600)
-        hook.write_text(collector, encoding="utf-8")
+        hook.write_text(collector, encoding="utf-8", newline="\n")
         hook.chmod(0o755)
         yield overlay_root
 
@@ -3680,6 +3681,7 @@ def _antigravity_tasks_overlay(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
             encoding="utf-8",
+            newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root

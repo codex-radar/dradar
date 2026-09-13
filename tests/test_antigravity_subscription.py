@@ -123,11 +123,14 @@ def test_antigravity_task_overlay_captures_complete_worktree(
 
         logs = tmp_path / "logs"
         runnable = tmp_path / "collect.sh"
+        repo_posix = repository.as_posix()
+        artifacts_posix = (logs / "artifacts").as_posix()
         runnable.write_text(
-            script.replace("cd /app", f"cd {repository}").replace(
-                "/logs/artifacts", str(logs / "artifacts")
+            script.replace("cd /app", f"cd '{repo_posix}'").replace(
+                "/logs/artifacts", f"'{artifacts_posix}'"
             ),
             encoding="utf-8",
+            newline="\n",
         )
         subprocess.run(["sh", str(runnable)], check=True)
         patch = (logs / "artifacts" / "model.patch").read_text(encoding="utf-8")
