@@ -70,3 +70,77 @@ def test_adapter_resources_are_materialized_without_network(package_sources, tmp
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'PASS' in result.stdout
+
+
+DEEPSEEK_CONSTRUCTOR_PROBE = r'''
+import sys, socket, importlib, importlib.resources
+from pathlib import Path
+source, mode, destination = sys.argv[1:]
+def denied(*args, **kwargs):
+    raise AssertionError('constructor regression must not access network')
+socket.socket.connect = denied
+socket.create_connection = denied
+sys.path.insert(0, source)
+from dradar import runner
+from dradar.deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256
+home = Path(destination)
+home.mkdir(mode=0o700)
+resources = importlib.resources.files('dradar')
+catalog = home / 'models.json'
+catalog.write_bytes(resources.joinpath('deepseek_codex_models.json').read_bytes())
+if mode == 'materialized':
+    module_path = runner._ensure_deepseek_agent_module(home)
+    sys.path.insert(0, str(home))
+    module = importlib.import_module('_dradar_pier_deepseek')
+    pin = importlib.import_module('_dradar_deepseek_catalog_pin')
+    assert Path(pin.__file__).parent == home
+else:
+    module = importlib.import_module('dradar.pier_deepseek')
+    assert module.__file__.startswith(source)
+assert module._CATALOG_SHA256 == DEEPSEEK_CATALOG_SHA256
+agent = module.DeepSeekCodex(logs_dir=home/'logs', model_name='deepseek-flash',
+    version='0.149.0', model_catalog_json_file=str(catalog), extra_env={})
+assert agent.network_allowlist().domains == ['api.deepseek.com']
+catalog.write_bytes(catalog.read_bytes() + b'\n')
+try:
+    module.DeepSeekCodex(logs_dir=home/'bad-logs', model_name='deepseek-flash',
+        version='0.149.0', model_catalog_json_file=str(catalog), extra_env={})
+except ValueError as error:
+    assert 'integrity check failed' in str(error)
+else:
+    raise AssertionError('tampered catalog accepted')
+print('actual-constructor-and-tamper-rejection PASS')
+'''
+
+
+@pytest.mark.parametrize('delivery', ['package', 'materialized'])
+@pytest.mark.parametrize('mode', ['source', 'zipapp'])
+def test_deepseek_constructor_uses_packaged_pin_and_rejects_tampering(
+    package_sources, tmp_path, delivery, mode,
+):
+    pytest.importorskip('pier')
+    result = subprocess.run(
+        [sys.executable, '-c', DEEPSEEK_CONSTRUCTOR_PROBE,
+         str(package_sources[mode]), delivery, str(tmp_path/'output')],
+        env=dict(os.environ, PYTHONPATH='', PYTHONDONTWRITEBYTECODE='1',
+                 DRADAR_HOME=str(tmp_path/'fixture-home')),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'actual-constructor-and-tamper-rejection PASS' in result.stdout
+
+
+def test_catalog_checkout_retains_pinned_bytes_with_autocrlf(tmp_path):
+    import hashlib
+    from dradar.deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256
+    root = Path(__file__).resolve().parents[1]
+    catalog = tmp_path / 'src/dradar/deepseek_codex_models.json'
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes((root/'src/dradar/deepseek_codex_models.json').read_bytes())
+    (tmp_path/'.gitattributes').write_bytes((root/'.gitattributes').read_bytes())
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    git = ['git', '-C', str(tmp_path), '-c', 'core.autocrlf=true']
+    subprocess.run([*git, 'add', '.gitattributes', 'src/dradar/deepseek_codex_models.json'], check=True)
+    catalog.unlink()
+    subprocess.run([*git, 'checkout-index', '-a', '-f'], check=True)
+    assert hashlib.sha256(catalog.read_bytes()).hexdigest() == DEEPSEEK_CATALOG_SHA256

@@ -88,9 +88,7 @@ DEEPSEEK_MIN_CODEX_VERSION = "0.147.0"
 DEEPSEEK_SUPPORTED_EFFORTS = frozenset({"off", "high", "max"})
 DEEPSEEK_CATALOG_EFFORTS = frozenset({"none", "low", "high", "max"})
 DEEPSEEK_CATALOG_FILENAME = "deepseek_codex_models.json"
-DEEPSEEK_CATALOG_SHA256 = (
-    "3d6878027084e3e08e1f386c099c55b4156c0a2ffe3d1a352e64d664dd57572f"
-)
+from .deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256
 DEEPSEEK_CATALOG_REMOTE_PATH = "/tmp/codex-home/models.json"
 DEEPSEEK_CATALOG_SOURCE = (
     "https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh"

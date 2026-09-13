@@ -1,0 +1,2 @@
+# Integrity-pinned catalog must retain its reviewed bytes on Windows checkouts.
+src/dradar/deepseek_codex_models.json text eol=lf

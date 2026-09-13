@@ -689,6 +689,8 @@ def _ensure_deepseek_agent_module(home: Path) -> Path:
             "DeepSeek Pier adapter is missing; reinstall or upgrade dradar "
             "before running a paid task"
         )
+    pin = importlib.resources.files("dradar").joinpath("deepseek_catalog_pin.py")
+    _materialize_shared_file(home / "_dradar_deepseek_catalog_pin.py", pin.read_bytes())
     _ensure_worker_event_module(home)
     target = home / DEEPSEEK_AGENT_MODULE_FILENAME
     return _materialize_shared_file(target, source.read_bytes())
