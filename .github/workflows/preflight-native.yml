@@ -42,8 +42,8 @@ jobs:
           PYTHONPATH: src
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git diff --exit-code 5805d3e5410e2660b0ee5b20263ff9ec12272244 HEAD -- src tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py
+          git diff --exit-code adedbe0d34f7e148e39741c7cf91d08df43295d0 HEAD -- src tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py tests/test_windows_artifact_boundary.py
           git --version
           "$QA_PYTHON" --version
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
-          "$QA_PYTHON" -m pytest tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py -q --tb=short
+          "$QA_PYTHON" -m pytest tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py tests/test_windows_artifact_boundary.py -q --tb=short
