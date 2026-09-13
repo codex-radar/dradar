@@ -1978,22 +1978,15 @@ def _upload_trial_checked(
             for line in format_patch_guard_report(guard):
                 print(f"    {line}")
             print(f"    raw artifact preserved at: {patch}")
-            print(
-                "    assignment reopened for an independent ZCode re-solve; "
-                "no prior model answer is reused"
-            )
-            pending.remove(
-                HOME, assignment_id,
-                scope_fingerprint=entry.get("scope_fingerprint"),
-            )
-            settle_terminal_local_failure()
-            # This guard is assignment-local: the model completed normally,
-            # but did not produce the one allowed deliverable.  The server has
-            # reopened this cell for an independent attempt, so a supervised
-            # worker may safely exclude it for this session and continue with
-            # another waiting cell.  Keep transport, auth, secret, and payload
-            # rejections on the fail-closed ``rejected`` path below.
-            return "assignment-reopened"
+            # Preserve the completed result and pending fence. A local guard
+            # failure is not authority to discard paid work or reopen a solve.
+            if guard.inspection.parse_error and guard.violations == (guard.inspection.parse_error,):
+                print("    patch statistics could not be verified; completed artifacts kept for retry-upload after fixing Git or upgrading the CLI")
+                return "upload-failed"
+            entry["upload_blocked"] = "patch_preflight"
+            pending.record(HOME, entry)
+            print("    upload blocked; completed artifacts kept for review, with no automatic re-solve")
+            return "upload-blocked"
 
     upload_meta = dict(entry.get("meta") or {})
     trial_dir = log_snapshot if log_snapshot is not None else Path(entry["trial_dir"])
@@ -2702,8 +2695,13 @@ def _mark_stopped_quietly(
     )
     runner_session_id = (
         None if isinstance(assignment, str)
-        else assignment.get("_runner_session_id")
+        else (assignment.get("_runner_session_id") or assignment.get("runner_session_id"))
     )
+    if (isinstance(assignment, dict) and assignment.get("_runner_session_id")
+            and assignment.get("runner_session_id")
+            and assignment["_runner_session_id"] != assignment["runner_session_id"]):
+        print("warning: checkout cleanup blocked: conflicting runner session identities; local evidence retained")
+        return False
     if failure_diagnostic is not None:
         sensitive_key_parts = {
             "auth", "authorization", "token", "secret", "password", "passwd",

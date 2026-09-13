@@ -2621,16 +2621,18 @@ def test_zcode_pompeii_preflight_names_binary_file_before_submit(
 
     outcome = runloop._upload_trial(client, entry)
 
-    assert outcome == "assignment-reopened"
+    assert outcome == "upload-blocked"
     assert client.calls == []
-    assert client.stopped == ["a1"]
-    assert pending.load(tmp_path) == []
+    assert client.stopped == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "patch_preflight"
     assert (trial_dir / "artifacts" / "model.patch").read_bytes() == raw_patch
     out = capsys.readouterr().out
     assert "patch preflight blocked upload" in out
     assert "cache/stitch.png" in out
     assert "binary" in out
-    assert "independent ZCode re-solve" in out
+    assert "no automatic re-solve" in out
+    assert runloop._upload_trial(client, pending.load(tmp_path)[0]) == "upload-blocked"
+    assert pending.assignment_ids(tmp_path) == {"a1"}
 
 
 def test_zcode_pompeii_preflight_allows_small_model_answer_patch(
@@ -2943,3 +2945,48 @@ def test_403_stays_retryable_by_policy(tmp_path: Path, monkeypatch):
     outcome = runloop._upload_trial(FakeClient(_raise(403)), _entry(trial_dir))
     assert outcome == "upload-failed"
     assert [e["assignment_id"] for e in pending.load(tmp_path)] == ["a1"]
+
+
+def test_patch_statistics_failure_preserves_completed_upload_for_retry(tmp_path, monkeypatch):
+    from dradar import patch_guard
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial = _make_trial_dir(tmp_path)
+    patch = (b"diff --git a/model_answer.json b/model_answer.json\n"
+             b"--- a/model_answer.json\n+++ b/model_answer.json\n"
+             b"@@ -1 +1 @@\n-{}\n+{\"edges\":[]}\n")
+    (trial / "artifacts" / "model.patch").write_bytes(patch)
+    entry = _entry(trial, task_id="pompeii-adjacency-synthetic", meta={"zcode_protocol_version": 1})
+    client = FakeClient(lambda aid: {"submission_id": "synthetic", "grade_status": "pending"})
+    original = patch_guard._numstat
+    monkeypatch.setattr(patch_guard, "_numstat", lambda data: ([], "statistics unavailable"))
+    assert runloop._upload_trial(client, entry) == "upload-failed"
+    assert pending.assignment_ids(tmp_path) == {"a1"}
+    assert not client.calls and not client.stopped
+    # Reload the on-disk ledger, as a new retry-upload invocation does.
+    restored = pending.load(tmp_path)[0]
+    monkeypatch.setattr(patch_guard, "_numstat", original)
+    assert runloop._upload_trial(client, restored) == "submitted"
+    assert client.calls == ["a1"]
+    assert pending.load(tmp_path) == []
+
+
+@pytest.mark.parametrize("fields,expected", [
+    ({"_runner_session_id": "session-old"}, "session-old"),
+    ({"runner_session_id": "session-new"}, "session-new"),
+    ({"_runner_session_id": "same", "runner_session_id": "same"}, "same"),
+    ({}, None),
+])
+def test_cleanup_session_field_compatibility(fields, expected):
+    calls = []
+    client = SimpleNamespace(mark_stopped=lambda aid, **kw: calls.append(kw))
+    assert runloop._mark_stopped_quietly(client, {"assignment_id": "synthetic", "owner_epoch": 7, **fields})
+    assert calls[0]["session_id"] == expected
+    assert calls[0]["owner_epoch"] == 7
+
+
+def test_cleanup_conflicting_sessions_does_not_send():
+    client = SimpleNamespace(mark_stopped=lambda *a, **kw: pytest.fail("must not send conflicting identity"))
+    assert not runloop._mark_stopped_quietly(client, {
+        "assignment_id": "synthetic", "owner_epoch": 7,
+        "_runner_session_id": "one", "runner_session_id": "two",
+    })

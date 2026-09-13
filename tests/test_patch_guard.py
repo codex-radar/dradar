@@ -60,3 +60,42 @@ def test_malformed_patch_fails_closed_without_content_dump():
 
     assert inspection.files == ()
     assert inspection.parse_error is not None
+
+
+def test_statistics_ignore_cwd_and_git_environment(tmp_path, monkeypatch):
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    child = repo / "child"
+    child.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for cwd in (repo, child, outside):
+        monkeypatch.chdir(cwd)
+        monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(repo))
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "apply.ignoreWhitespace")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "invalid-value")
+        assert check_pompeii_patch(_text_patch()).accepted
+
+
+def test_missing_statistics_is_not_binary(monkeypatch):
+    from dradar import patch_guard
+    monkeypatch.setattr(patch_guard, "_numstat", lambda data: ([], None))
+    result = check_pompeii_patch(_text_patch())
+    assert not result.accepted
+    assert result.inspection.parse_error
+    assert not result.inspection.files[0].binary
+
+
+def test_native_git_binary_patch_stays_rejected(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "model_answer.json").write_bytes(b"binary\x00data")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "model_answer.json"], check=True)
+    patch = subprocess.check_output(["git", "-C", str(tmp_path), "diff", "--cached", "--binary"])
+    result = check_pompeii_patch(patch)
+    assert not result.accepted
+    assert result.inspection.files[0].binary

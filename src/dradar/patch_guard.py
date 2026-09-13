@@ -9,6 +9,8 @@ request reaches the server's body-size limit.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -94,13 +96,17 @@ def _diff_header_paths(line: bytes) -> tuple[str, str] | None:
 def _numstat(data: bytes) -> tuple[list[tuple[int | None, int | None]], str | None]:
     """Return per-section line counts while asking git to validate the diff."""
     try:
-        proc = subprocess.run(
-            ["git", "apply", "--numstat", "-"],
-            input=data,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        # Statistics must not depend on the caller's repository prefix or
+        # user-supplied Git configuration/environment. No patch is applied.
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        with tempfile.TemporaryDirectory(prefix="dradar-patch-stat-") as directory:
+            env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(directory)
+            proc = subprocess.run(
+                ["git", "apply", "--numstat", "-"],
+                input=data, cwd=directory, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
     except OSError as exc:
         return [], f"git apply could not start: {exc}"
     if proc.returncode != 0:
@@ -112,8 +118,13 @@ def _numstat(data: bytes) -> tuple[list[tuple[int | None, int | None]], str | No
         fields = line.split("\t", 2)
         if len(fields) != 3:
             return [], "git returned malformed patch statistics"
-        added = None if fields[0] == "-" else int(fields[0])
-        deleted = None if fields[1] == "-" else int(fields[1])
+        try:
+            added = None if fields[0] == "-" else int(fields[0])
+            deleted = None if fields[1] == "-" else int(fields[1])
+        except ValueError:
+            return [], "git returned malformed patch statistics"
+        if (added is None) != (deleted is None) or any(value is not None and value < 0 for value in (added, deleted)):
+            return [], "git returned malformed patch statistics"
         stats.append((added, deleted))
     return stats, None
 
@@ -154,8 +165,7 @@ def inspect_patch(data: bytes) -> PatchInspection:
         binary = (
             b"\nGIT binary patch\n" in b"\n" + section
             or b"\nBinary files " in b"\n" + section
-            or added is None
-            or deleted is None
+            or (index < len(stats) and added is None and deleted is None)
         )
         files.append(PatchFile(
             source_path=source_path,
