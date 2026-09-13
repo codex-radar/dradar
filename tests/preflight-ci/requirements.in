@@ -1,0 +1,4 @@
+pytest==8.4.2
+httpx[socks]==0.28.1
+cryptography==50.0.1
+certifi==2026.7.22

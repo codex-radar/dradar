@@ -1,0 +1,48 @@
+name: Preflight native regression (bounded)
+on:
+  push:
+    branches: [codex/preflight-native-qa]
+    paths: [".github/workflows/preflight-native.yml", "tests/preflight-ci/**"]
+permissions:
+  contents: read
+concurrency:
+  group: preflight-native-qa
+  cancel-in-progress: true
+jobs:
+  regression:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Prepare isolated test dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.13 .qa-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/Scripts/python.exe"
+          else
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/bin/python"
+          fi
+          echo "QA_PYTHON=$QA_PYTHON" >> "$GITHUB_ENV"
+          uv pip install --python "$QA_PYTHON" --require-hashes -r tests/preflight-ci/requirements.lock
+      - name: Verify candidate and run synthetic regression only
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code 5805d3e5410e2660b0ee5b20263ff9ec12272244 HEAD -- src tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py
+          git --version
+          "$QA_PYTHON" --version
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+          "$QA_PYTHON" -m pytest tests/test_patch_guard.py tests/test_pending_upload.py tests/test_api_client.py tests/test_checkpoint_retired.py tests/test_artifact_staging.py -q --tb=short
