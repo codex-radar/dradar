@@ -128,3 +128,19 @@ def test_deepseek_constructor_uses_packaged_pin_and_rejects_tampering(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'actual-constructor-and-tamper-rejection PASS' in result.stdout
+
+
+def test_catalog_checkout_retains_pinned_bytes_with_autocrlf(tmp_path):
+    import hashlib
+    from dradar.deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256
+    root = Path(__file__).resolve().parents[1]
+    catalog = tmp_path / 'src/dradar/deepseek_codex_models.json'
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes((root/'src/dradar/deepseek_codex_models.json').read_bytes())
+    (tmp_path/'.gitattributes').write_bytes((root/'.gitattributes').read_bytes())
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    git = ['git', '-C', str(tmp_path), '-c', 'core.autocrlf=true']
+    subprocess.run([*git, 'add', '.gitattributes', 'src/dradar/deepseek_codex_models.json'], check=True)
+    catalog.unlink()
+    subprocess.run([*git, 'checkout-index', '-a', '-f'], check=True)
+    assert hashlib.sha256(catalog.read_bytes()).hexdigest() == DEEPSEEK_CATALOG_SHA256
