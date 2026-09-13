@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -124,8 +125,8 @@ def test_antigravity_task_overlay_captures_complete_worktree(
         logs = tmp_path / "logs"
         runnable = tmp_path / "collect.sh"
         runnable.write_text(
-            script.replace("cd /app", f"cd {repository}").replace(
-                "/logs/artifacts", str(logs / "artifacts")
+            script.replace("cd /app", f"cd '{repository.as_posix()}'").replace(
+                "/logs/artifacts", f"'{logs.as_posix()}/artifacts'"
             ),
             encoding="utf-8",
         )
@@ -913,3 +914,206 @@ def test_pinned_artifacts_match_independently_captured_official_manifests():
         assert actual["url"] == manifests[platform]["url"]
         assert actual["sha512"] == manifests[platform]["sha512"]
         assert manifests[platform]["sha512"] in adapter_source
+
+
+def _antigravity_adapter_constant(name: str) -> str:
+    source = Path(providers.__file__).with_name("pier_antigravity.py").read_text()
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            value = ast.literal_eval(node.value)
+            assert isinstance(value, str)
+            return value
+    raise AssertionError(f"missing Antigravity adapter constant: {name}")
+
+
+def test_antigravity_loop_breaker_script_passthrough() -> None:
+    script = _antigravity_adapter_constant("ANTIGRAVITY_LOOP_BREAKER_SCRIPT")
+    lines = [
+        json.dumps({"event": "init", "init": {"model": "gemini-3.7-flash-low"}}),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 1,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": "/app/test.py"}},
+            },
+        }),
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 1,
+                "state": "DONE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": "/app/test.py"}},
+                "output": "print('hello')",
+            },
+        }),
+        json.dumps({"event": "result", "result": {"status": "SUCCESS"}}),
+    ]
+    input_text = "\n".join(lines) + "\n"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == input_text
+    assert result.stderr == ""
+
+
+def test_antigravity_loop_breaker_different_files_do_not_trigger() -> None:
+    script = _antigravity_adapter_constant("ANTIGRAVITY_LOOP_BREAKER_SCRIPT")
+    lines = [
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "step_index": i,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": f"/app/file_{i}.py"}},
+            },
+        })
+        for i in range(10)
+    ]
+    input_text = "\n".join(lines) + "\n"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == input_text
+    assert "Deadlock detected" not in result.stderr
+
+
+def test_antigravity_loop_breaker_modifications_reset_counter() -> None:
+    script = _antigravity_adapter_constant("ANTIGRAVITY_LOOP_BREAKER_SCRIPT")
+    tool_events = []
+    for i in range(4):
+        tool_events.append({
+            "event": "step_update",
+            "step_update": {
+                "step_index": i,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": "/app/target.py"}},
+            },
+        })
+    tool_events.append({
+        "event": "step_update",
+        "step_update": {
+            "step_index": 4,
+            "state": "ACTIVE",
+            "step_type": "tool",
+            "tool_name": "replace_file_content",
+            "tool_info": {"parameters": {"TargetFile": "/app/target.py"}},
+        },
+    })
+    for i in range(5, 9):
+        tool_events.append({
+            "event": "step_update",
+            "step_update": {
+                "step_index": i,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": "/app/target.py"}},
+            },
+        })
+    input_text = "\n".join(json.dumps(ev) for ev in tool_events) + "\n"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == input_text
+    assert "Deadlock detected" not in result.stderr
+
+
+def test_antigravity_loop_breaker_triggers_on_consecutive_repeats(tmp_path: Path) -> None:
+    script = _antigravity_adapter_constant("ANTIGRAVITY_LOOP_BREAKER_SCRIPT")
+    tool_events = [
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_index": i,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {"parameters": {"AbsolutePath": "/app/stuck.py"}},
+            },
+        }
+        for i in range(5)
+    ]
+    tool_events.append({
+        "event": "result",
+        "result": {"status": "INTERRUPTED", "response": "Interrupted by signal"},
+    })
+    input_text = "\n".join(json.dumps(ev) for ev in tool_events) + "\n"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == input_text
+    assert "Deadlock detected: 5 consecutive identical calls to read-only tool 'view_file'" in result.stderr
+    assert "Triggering interrupt." in result.stderr
+
+
+def test_antigravity_loop_breaker_configurable_threshold() -> None:
+    script = _antigravity_adapter_constant("ANTIGRAVITY_LOOP_BREAKER_SCRIPT")
+    tool_events = [
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_index": i,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "list_dir",
+                "tool_info": {"parameters": {"DirectoryPath": "/app/src"}},
+            },
+        }
+        for i in range(3)
+    ]
+    input_text = "\n".join(json.dumps(ev) for ev in tool_events) + "\n"
+    env = dict(os.environ, DRADAR_LOOP_BREAKER_MAX_REPEATS="3")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == input_text
+    assert "Deadlock detected: 3 consecutive identical calls to read-only tool 'list_dir'" in result.stderr
+
+
+def test_antigravity_adapter_wires_loop_breaker_in_install_and_run() -> None:
+    adapter_source = Path(providers.__file__).with_name("pier_antigravity.py").read_text()
+    assert "ANTIGRAVITY_LOOP_BREAKER_SCRIPT" in adapter_source
+    assert "/opt/antigravity-runtime/bin/loop_breaker.py" in adapter_source
+    assert "chmod 0755 /opt/antigravity-runtime/bin/loop_breaker.py" in adapter_source
+    assert "dradar_breaker=/tmp/loop_breaker.py" in adapter_source
+    assert 'python3 -u "$dradar_breaker"' in adapter_source
+    assert "/tmp/dradar-loop-breaker-triggered" in adapter_source
+    assert 'cache_key=f"dradar-antigravity-{version}-linux-runtime-v2"' in adapter_source

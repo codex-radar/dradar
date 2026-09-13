@@ -8,6 +8,7 @@ usage to DRadar.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -54,6 +55,197 @@ ANTIGRAVITY_STREAM_INTERRUPTED_MESSAGE = (
 ANTIGRAVITY_TERMINAL_RECOVERY_SCHEMA = (
     "dradar-antigravity-terminal-recovery-v1"
 )
+ANTIGRAVITY_LOOP_BREAKER_SCRIPT = r'''#!/usr/bin/env python3
+"""Watchdog stream filter that breaks repetitive read-only tool deadlocks in Antigravity."""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+DEFAULT_MAX_REPEATS = 5
+READ_ONLY_TOOLS = frozenset({
+    "view_file",
+    "list_dir",
+    "grep_search",
+    "find_by_name",
+    "read_resource",
+    "read_url_content",
+    "list_resources",
+})
+TRIGGER_MARKER_PATH = Path("/tmp/dradar-loop-breaker-triggered")
+
+
+def _find_antigravity_pids() -> list[int]:
+    pids: list[int] = []
+    my_pid = os.getpid()
+    proc_dir = Path("/proc")
+    if not proc_dir.is_dir():
+        return pids
+    for entry in proc_dir.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            pid = int(entry.name)
+            if pid == my_pid:
+                continue
+            comm_file = entry / "comm"
+            comm = comm_file.read_bytes().strip() if comm_file.is_file() else b""
+            if comm in (b"bash", b"sh", b"python", b"python3", b"tee"):
+                continue
+            cmdline = (entry / "cmdline").read_bytes()
+            parts = [p for p in cmdline.split(b"\x00") if p]
+            if not parts:
+                continue
+            argv0 = parts[0]
+            if comm == b"antigravity" or argv0 == b"antigravity" or argv0.endswith(b"/antigravity"):
+                pids.append(pid)
+        except (OSError, IOError, ValueError):
+            continue
+    return pids
+
+
+def _escalate_terminate(pids: list[int], delay: float = 10.0) -> None:
+    time.sleep(delay)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+class LoopBreaker:
+    def __init__(
+        self,
+        max_repeats: int | None = None,
+        on_break: Any = None,
+        stderr_stream: Any = None,
+        marker_path: Path | None = None,
+    ):
+        if max_repeats is None:
+            raw = os.environ.get("DRADAR_LOOP_BREAKER_MAX_REPEATS")
+            try:
+                max_repeats = int(raw) if raw else DEFAULT_MAX_REPEATS
+            except ValueError:
+                max_repeats = DEFAULT_MAX_REPEATS
+        self.max_repeats = max(1, max_repeats)
+        self.on_break = on_break
+        self.stderr = stderr_stream if stderr_stream is not None else sys.stderr
+        self.marker_path = marker_path or TRIGGER_MARKER_PATH
+        self.last_tool_call: tuple[str, str] | None = None
+        self.repeat_count = 0
+        self.triggered = False
+
+    def handle_tool_call(self, tool_name: str, parameters: dict[str, Any]) -> bool:
+        if tool_name not in READ_ONLY_TOOLS:
+            self.last_tool_call = None
+            self.repeat_count = 0
+            return False
+
+        try:
+            serialized = json.dumps(parameters, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            serialized = str(parameters)
+        key = (tool_name, serialized)
+
+        if key == self.last_tool_call:
+            self.repeat_count += 1
+        else:
+            self.last_tool_call = key
+            self.repeat_count = 1
+
+        if self.repeat_count >= self.max_repeats and not self.triggered:
+            self.triggered = True
+            self.fire(tool_name, serialized)
+            return True
+        return False
+
+    def process_line(self, line: str) -> bool:
+        line_str = line.strip()
+        if not line_str or not line_str.startswith("{"):
+            return False
+        try:
+            event = json.loads(line_str)
+        except Exception:
+            return False
+        if not isinstance(event, dict) or event.get("event") != "step_update":
+            return False
+        step = event.get("step_update")
+        if not isinstance(step, dict) or step.get("state") != "ACTIVE":
+            return False
+        tool_name = step.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            return False
+        tool_info = step.get("tool_info")
+        params = tool_info.get("parameters") if isinstance(tool_info, dict) else {}
+        if not isinstance(params, dict):
+            params = {}
+        return self.handle_tool_call(tool_name, params)
+
+    def fire(self, tool_name: str, serialized_params: str) -> None:
+        try:
+            self.marker_path.touch(exist_ok=True)
+        except OSError:
+            pass
+        try:
+            self.stderr.write(
+                f"[dradar-loop-breaker] Deadlock detected: {self.repeat_count} consecutive "
+                f"identical calls to read-only tool '{tool_name}' with parameters {serialized_params}. "
+                "Triggering interrupt.\n"
+            )
+            self.stderr.flush()
+        except Exception:
+            pass
+
+        if self.on_break is not None:
+            self.on_break(tool_name, serialized_params)
+        else:
+            self._default_break()
+
+    def _default_break(self) -> None:
+        pids = _find_antigravity_pids()
+        if not pids:
+            try:
+                self.stderr.write(
+                    "[dradar-loop-breaker] Warning: No antigravity PID found to signal.\n"
+                )
+                self.stderr.flush()
+            except Exception:
+                pass
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGINT)
+                self.stderr.write(
+                    f"[dradar-loop-breaker] Sent SIGINT to antigravity (PID {pid}).\n"
+                )
+                self.stderr.flush()
+            except OSError:
+                pass
+        t = threading.Thread(target=_escalate_terminate, args=(pids, 10.0), daemon=True)
+        t.start()
+
+    def run_stream(self, stdin=None, stdout=None) -> None:
+        stdin = stdin if stdin is not None else sys.stdin
+        stdout = stdout if stdout is not None else sys.stdout
+        while True:
+            line = stdin.readline()
+            if not line:
+                break
+            stdout.write(line)
+            stdout.flush()
+            self.process_line(line)
+
+
+if __name__ == "__main__":
+    LoopBreaker().run_stream()
+'''
 
 
 def _model_line_pattern(model: str) -> str:
@@ -253,17 +445,20 @@ def _antigravity_usage_facts(
 
 
 def _install_command() -> str:
+    b64_breaker = base64.b64encode(
+        ANTIGRAVITY_LOOP_BREAKER_SCRIPT.encode("utf-8")
+    ).decode("ascii")
     return (
         "set -euo pipefail; "
         "if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then "
         "  echo 'Antigravity CLI requires a glibc task image' >&2; exit 1; "
         "elif command -v apt-get >/dev/null 2>&1; then "
         "  apt-get update && DEBIAN_FRONTEND=noninteractive "
-        "  apt-get install -y --no-install-recommends ca-certificates curl; "
+        "  apt-get install -y --no-install-recommends ca-certificates curl python3; "
         "elif command -v dnf >/dev/null 2>&1; then "
-        "  dnf install -y ca-certificates curl tar gzip; "
+        "  dnf install -y ca-certificates curl tar gzip python3; "
         "elif command -v yum >/dev/null 2>&1; then "
-        "  yum install -y ca-certificates curl tar gzip; "
+        "  yum install -y ca-certificates curl tar gzip python3; "
         "else echo 'No supported package manager found' >&2; exit 1; fi; "
         'case "$(uname -m)" in '
         f"  x86_64) agy_dir=x64; agy_arch=x64; agy_sha={ANTIGRAVITY_LINUX_SHA512['x86_64']} ;; "
@@ -280,6 +475,8 @@ def _install_command() -> str:
         "tar -xzf /tmp/antigravity-cli.tar.gz -C /opt/antigravity-runtime/bin; "
         "rm -f /tmp/antigravity-cli.tar.gz; "
         "chmod 0755 /opt/antigravity-runtime/bin/antigravity; "
+        f"echo {shlex.quote(b64_breaker)} | base64 -d > /opt/antigravity-runtime/bin/loop_breaker.py; "
+        "chmod 0755 /opt/antigravity-runtime/bin/loop_breaker.py; "
         "/opt/antigravity-runtime/bin/antigravity --version "
         f"  | grep -Fqx '{ANTIGRAVITY_CLI_VERSION}'"
     )
@@ -340,7 +537,7 @@ class Antigravity(BaseInstalledAgent):
                 f"{self._REMOTE_CLI.as_posix()} --version "
                 f"| grep -Fqx {shlex.quote(ANTIGRAVITY_CLI_VERSION)}"
             ),
-            cache_key=f"dradar-antigravity-{version}-linux-runtime-v1",
+            cache_key=f"dradar-antigravity-{version}-linux-runtime-v2",
         )
 
     def network_allowlist(self) -> NetworkAllowlist:
@@ -420,12 +617,32 @@ class Antigravity(BaseInstalledAgent):
             "--print-timeout", "120m",
         ]
         command = " ".join(shlex.quote(part) for part in invocation)
+        remote_loop_breaker = "/opt/antigravity-runtime/bin/loop_breaker.py"
+        b64_breaker = base64.b64encode(
+            ANTIGRAVITY_LOOP_BREAKER_SCRIPT.encode("utf-8")
+        ).decode("ascii")
+        breaker_setup = (
+            f"if [ ! -f {shlex.quote(remote_loop_breaker)} ]; then "
+            f"  echo {shlex.quote(b64_breaker)} | base64 -d > /tmp/loop_breaker.py "
+            f"  && chmod 0755 /tmp/loop_breaker.py "
+            f"  && dradar_breaker=/tmp/loop_breaker.py; "
+            f"else dradar_breaker={shlex.quote(remote_loop_breaker)}; fi; "
+        )
+        pipeline_cmd = (
+            f"{breaker_setup}"
+            f"rm -f /tmp/dradar-loop-breaker-triggered; "
+            f"umask 077; cd /app && "
+            f"(status=0; {command} 2>{shlex.quote(stderr)} || status=$?; "
+            f'[ "$status" -eq 0 ] || [ -f /tmp/dradar-loop-breaker-triggered ] || [ "$status" -eq 130 ]) '
+            f'| python3 -u "$dradar_breaker" '
+            f"| tee {shlex.quote(stream)}; "
+            f'pipe_status=("${{PIPESTATUS[@]}}"); '
+            f'if [ -f /tmp/dradar-loop-breaker-triggered ]; then exit 0; fi; '
+            f'for s in "${{pipe_status[@]}}"; do [ "$s" -eq 0 ] || exit "$s"; done; exit 0'
+        )
         await self.exec_as_agent(
             environment,
-            command="bash -o pipefail -c " + shlex.quote(
-                f"umask 077; cd /app && {command} 2>{shlex.quote(stderr)} "
-                f"| tee {shlex.quote(stream)}"
-            ),
+            command="bash -o pipefail -c " + shlex.quote(pipeline_cmd),
             env=env,
         )
 
@@ -461,7 +678,13 @@ class Antigravity(BaseInstalledAgent):
         ), {})
         response = terminal.get("response") if isinstance(terminal, dict) else None
         if not isinstance(response, str) or not response.strip():
-            return
+            error_msg = terminal.get("error") if isinstance(terminal, dict) else None
+            if isinstance(error_msg, str) and error_msg.strip():
+                response = error_msg.strip()
+            elif terminal.get("status") in {"INTERRUPTED", "CANCELED"}:
+                response = f"Execution {terminal.get('status').lower()}."
+            else:
+                return
         steps = [
             Step(step_id=1, source="user", message=self._instruction),
             Step(
