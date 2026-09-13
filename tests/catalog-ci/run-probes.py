@@ -3,7 +3,7 @@ import importlib.util, os, subprocess, sys, tempfile, zipfile
 root=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('publisher',root/'scripts/ota_release.py')
 tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(tool)
-base='e69e9ff44c69d2de4bf506f91f0aae644af894aa'
+base='f2c199c9b6d3e2c4d7c1430327d126f097b8374a'
 tree=subprocess.check_output(['git','rev-parse',base+'^{tree}'],text=True).strip()
 with tempfile.TemporaryDirectory() as directory:
  package=Path(directory)/'candidate.pyz'

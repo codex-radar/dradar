@@ -42,7 +42,7 @@ jobs:
           PYTHONPATH: src
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git diff --exit-code e69e9ff44c69d2de4bf506f91f0aae644af894aa HEAD -- src tests/test_pier_deepseek.py tests/test_deepseek_provider.py tests/test_packaged_adapter_resources.py
+          git diff --exit-code f2c199c9b6d3e2c4d7c1430327d126f097b8374a HEAD -- .gitattributes src tests/test_pier_deepseek.py tests/test_deepseek_provider.py tests/test_packaged_adapter_resources.py
           git --version
           "$QA_PYTHON" --version
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
