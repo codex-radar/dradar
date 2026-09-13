@@ -832,3 +832,22 @@ def test_connect_retries_default_when_unproxied(monkeypatch):
     # httpcore internal, pinned deliberately: this is the only observable
     # evidence that the connect-phase retry default is actually in effect.
     assert client._client._transport._pool._retries == 2
+
+
+def test_cleanup_ledger_session_422_then_identity_recovery():
+    from dradar import runloop
+    seen = []
+    def handler(request):
+        body = urllib.parse.parse_qs(request.read().decode(), keep_blank_values=True)
+        seen.append(body)
+        if not body.get("session_id", [""])[0]:
+            return httpx.Response(422, json={"detail": "运行会话信息缺失，请重新开始。"})
+        assert body["session_id"] == ["synthetic-session"]
+        assert body["owner_epoch"] == ["9"]
+        return httpx.Response(200, json={"ok": True})
+    client = _client(handler)
+    missing = {"assignment_id": "synthetic", "owner_epoch": 9}
+    assert not runloop._mark_stopped_quietly(client, missing)
+    assert len(seen) == 1  # no retries or identity downgrade on 422
+    assert runloop._mark_stopped_quietly(client, {**missing, "runner_session_id": "synthetic-session"})
+    assert len(seen) == 2
