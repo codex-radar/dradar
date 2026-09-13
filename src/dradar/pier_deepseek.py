@@ -25,9 +25,11 @@ try:
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
 
-_CATALOG_SHA256 = (
-    "8cfa8ab037573ae9914478e6dcd544c43d93c1b126cab5ad58252230dcbe071d"
-)
+try:
+    from _dradar_deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256 as _CATALOG_SHA256
+except ModuleNotFoundError:
+    from dradar.deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256 as _CATALOG_SHA256
+
 
 
 class DeepSeekCodex(Codex):
