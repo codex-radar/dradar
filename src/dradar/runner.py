@@ -673,12 +673,16 @@ def _ensure_deepseek_config(home: Path) -> Path:
     return _materialize_shared_file(path, DEEPSEEK_TOML.encode())
 
 
-def _validated_deepseek_catalog() -> Path:
+def _validated_deepseek_catalog(home: Path | None = None) -> Path:
     path = deepseek_catalog_path()
     error = deepseek_catalog_error(path)
     if error is not None:
         raise RunnerError(error)
-    return path
+    if isinstance(path, Path):
+        return path
+    if home is None:
+        raise RunnerError("OTA catalog requires a task-local materialization directory")
+    return _materialize_shared_file(home / "deepseek_codex_models.json", path.read_bytes())
 
 
 def _ensure_deepseek_agent_module(home: Path) -> Path:
@@ -1458,7 +1462,7 @@ def build_pier_command(
     deepseek_catalog = None
     if provider == DEEPSEEK_PROVIDER:
         _validate_deepseek_assignment(assignment)
-        deepseek_catalog = _validated_deepseek_catalog()
+        deepseek_catalog = _validated_deepseek_catalog(home)
         _ensure_deepseek_agent_module(home)
         agent_args = ["--agent-import-path", DEEPSEEK_AGENT_IMPORT_PATH]
     elif agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
