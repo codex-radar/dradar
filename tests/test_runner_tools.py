@@ -743,7 +743,11 @@ def test_artifact_task_overlay_adapts_verifier_collect_without_mutation(
         assert selected != tasks
         hook = selected / task_id / "pre_artifacts.sh"
         assert b"\r\n" not in hook.read_bytes()
-        assert hook.stat().st_mode & 0o111
+        if os.name == "nt":
+            # Windows has no POSIX executable bit; the consumer invokes sh.
+            assert hook.read_bytes().startswith(b"#!/bin/sh\n")
+        else:
+            assert hook.stat().st_mode & 0o111
         assert f"base_ref='{base_commit}'" in hook.read_text()
         assert 'git -c safe.directory="$PWD" diff --binary' in hook.read_text()
         assert not (task / "pre_artifacts.sh").exists()
@@ -1719,7 +1723,7 @@ def test_run_trial_maps_structured_zcode_quota_to_existing_quota_limit(
         tmp_path,
         patch=False,
         trajectory=False,
-        zcode_outcome=json.loads(fixture.read_text()),
+        zcode_outcome=json.loads(fixture.read_text(encoding="utf-8")),
         runtime_diagnostic={
             "schema": "dradar-zcode-runtime-v1",
             "status": "idle",

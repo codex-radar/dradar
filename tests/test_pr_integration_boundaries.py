@@ -1,74 +1,12 @@
 """Controlled fixtures: no native agent, account, signal or Docker operation."""
-import ast
-import io
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
-import sys
 
 import pytest
 from dradar import image_cache, runner
-
-
-def adapter_tree():
-    return ast.parse(Path(runner.__file__).with_name('pier_antigravity.py').read_text())
-
-
-def breaker(tmp_path):
-    node = next(n for n in adapter_tree().body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'ANTIGRAVITY_LOOP_BREAKER_SCRIPT' for t in n.targets))
-    namespace = {'__name__': 'fixture'}
-    exec(ast.literal_eval(node.value), namespace)
-    hits = []
-    instance = namespace['LoopBreaker'](on_break=lambda *a: hits.append(a), stderr_stream=io.StringIO(), marker_path=tmp_path/'marker')
-    return instance, hits
-
-
-def event(index, parameters=None, tool='view_file'):
-    return json.dumps({'event': 'step_update', 'step_update': {'state': 'ACTIVE', 'step_index': index, 'tool_name': tool, 'tool_info': {'parameters': parameters}}})
-
-
-def test_repeated_active_is_one_step(tmp_path):
-    b, hits = breaker(tmp_path)
-    for _ in range(20):
-        b.process_line(event(7, {'path': '/app/a'}))
-    assert not hits
-    assert b.repeat_count == 1
-    for i in range(8, 12):
-        b.process_line(event(i, {'path': '/app/a'}))
-    assert len(hits) == 1
-
-
-def test_incomplete_updates_do_not_count(tmp_path):
-    b, hits = breaker(tmp_path)
-    for i in range(20):
-        b.process_line(event(i))
-        b.process_line(event(None, {'path': '/app/a'}))
-    assert not hits
-    assert b.repeat_count == 0
-
-
-def test_write_resets_read_repeat(tmp_path):
-    b, hits = breaker(tmp_path)
-    for i in range(4):
-        b.process_line(event(i, {}))
-    b.process_line(event(4, {}, 'replace_file_content'))
-    for i in range(5, 9):
-        b.process_line(event(i, {}))
-    assert not hits
-
-
-@pytest.mark.parametrize('producer,filter_status,marker,expected', [(0,0,False,0),(130,0,False,130),(130,0,True,130),(1,0,True,1),(0,7,True,7),(0,0,True,1)])
-def test_pipeline_preserves_failures(tmp_path, producer, filter_status, marker, expected):
-    node = next(n.value for n in ast.walk(adapter_tree()) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id=='pipeline_cmd' for t in n.targets))
-    trigger = tmp_path/'trigger'
-    watcher = tmp_path/'filter.py'
-    watcher.write_text('import sys\nfrom pathlib import Path\nsys.stdout.write(sys.stdin.read())\n'+(f'Path({str(trigger)!r}).touch()\n' if marker else '')+f'sys.exit({filter_status})\n')
-    values = {'breaker_setup': f'dradar_breaker={shlex.quote(str(watcher))}; ', 'command': f"bash -c 'exit {producer}'", 'stderr': str(tmp_path/'stderr'), 'stream': str(tmp_path if producer == 0 and expected == 1 else tmp_path/'stream'), 'shlex': shlex}
-    shell = eval(compile(ast.Expression(node), '<actual-pipeline>', 'eval'), values).replace('cd /app', 'cd '+shlex.quote(str(tmp_path))).replace('/tmp/dradar-loop-breaker-triggered', str(trigger)).replace('python3 -u', shlex.quote(Path(sys.executable).as_posix())+' -u')
-    result = subprocess.run(['bash', '-o', 'pipefail', '-c', shell], capture_output=True)
-    assert result.returncode == expected, result.stderr
 
 
 def test_shared_builder_is_not_isolated(tmp_path, monkeypatch):

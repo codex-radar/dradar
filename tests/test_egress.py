@@ -328,7 +328,7 @@ def test_compose_uses_pinned_image_and_never_dynamic_build(
     assert service["environment"]["PROXY_TOKEN"] == "runtime-secret"
     assert service["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert not (tmp_path / "must-not-exist").exists()
-    assert path.stat().st_mode & 0o077 == 0
+    _assert_private_compose_file(path)
 
 
 def test_pier_bootstrap_accepts_only_local_image_id_or_official_digest():
@@ -375,7 +375,7 @@ def test_runtime_proxy_token_moves_into_private_compose_environment(tmp_path):
     compose = json.loads(path.read_text())
     assert compose["services"]["main"]["environment"] == runtime
     assert compose["services"]["main"]["build"] == build
-    assert path.stat().st_mode & 0o077 == 0
+    _assert_private_compose_file(path)
 
 
 def test_runtime_probe_keeps_credentials_out_of_process_arguments(monkeypatch):
@@ -595,3 +595,33 @@ def test_runtime_failure_names_explicit_container_override(monkeypatch):
 
     assert egress.DRADAR_CONTAINER_HTTP_PROXY_ENV in hint
     assert "Docker bridge container" in hint
+
+
+def _assert_private_compose_file(path):
+    """Check actual access, not Unix mode bits synthesized by Windows stat."""
+    import os
+    import subprocess
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o077 == 0
+        return
+    # Read the real DACL. Only owner, SYSTEM and local administrators may
+    # receive allow entries; no skip or chmod-success surrogate on Windows.
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath $env:DRADAR_QA_ACL_FILE
+$owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+  @{sid=$_.IdentityReference.Value; type=$_.AccessControlType.ToString(); rights=[int64]$_.FileSystemRights}
+})
+@{owner=$owner; rules=$rules} | ConvertTo-Json -Depth 4 -Compress
+"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        env=dict(os.environ, DRADAR_QA_ACL_FILE=str(path)),
+        capture_output=True, text=True, check=True,
+    )
+    acl = json.loads(result.stdout)
+    allowed = {acl["owner"], "S-1-5-18", "S-1-5-32-544"}
+    assert acl["rules"], "empty DACL does not establish private access"
+    assert all(rule["sid"] in allowed or rule["type"] != "Allow" or rule["rights"] == 0
+               for rule in acl["rules"]), acl
