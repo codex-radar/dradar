@@ -1,0 +1,45 @@
+name: '#0092 OTA bootstrap Windows native bounded QA'
+on:
+  push:
+    branches: [codex/0092-ota-native-qa]
+    paths: ['.github/workflows/0092-ota-native.yml', 'tests/0092-ota-native/**']
+permissions:
+  contents: read
+concurrency:
+  group: dradar-0092-cli-native-qa
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          path: tools
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: 3f6b0f4e96be9e3f00549dbc362110695a88fa2d
+          path: candidate
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Install pinned QA dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.12 .qa-venv
+          echo "QA_PYTHON=$GITHUB_WORKSPACE/.qa-venv/Scripts/python.exe" >> "$GITHUB_ENV"
+          echo "DRADAR_HOME=$RUNNER_TEMP/dradar-0092-ota-qa" >> "$GITHUB_ENV"
+          uv pip install --python .qa-venv/Scripts/python.exe --require-hashes -r tools/tests/0092-native-ci/requirements.lock
+      - name: Verify frozen input and native contracts
+        shell: bash
+        working-directory: candidate
+        env:
+          PYTHONPATH: src
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+          "$QA_PYTHON" ../tools/tests/0092-ota-native/verify_candidate.py .
+          "$QA_PYTHON" -m pytest -q tests/test_ota_discovery.py tests/test_ota_runtime.py tests/test_ota_state.py tests/test_ota_integration.py tests/test_ota_multiprocess.py ../tools/tests/0092-ota-native/test_windows_native.py

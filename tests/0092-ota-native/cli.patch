@@ -1,0 +1,969 @@
+diff --git a/docs/automatic-updates.md b/docs/automatic-updates.md
+new file mode 100644
+index 0000000..75e203b
+--- /dev/null
++++ b/docs/automatic-updates.md
+@@ -0,0 +1,54 @@
++# Automatic update bootstrap (0.5.203 candidate)
++
++0.5.202 and older do not automatically discover signed releases. An existing
++user must finish their current work and migrate once to this bootstrap version.
++Updating the server cannot inject discovery code into an old running process.
++The website's pinned uvx source must be updated separately after publication.
++No account re-login is required by the updater. Do not terminate old workers to
++perform that initial migration; old workers do not participate in the new
++invocation-lock protocol.
++
++The console entry and newly built PYZ share `dradar.launcher`. On launch,
++discovery reads only the fixed HTTPS stable pointer, verifies the existing
++embedded public root, checks expiry/sequence/platform/compatibility and uses
++the existing streaming downloader/controller to prepare a candidate. A manifest
++cannot introduce a trusted key. Each check has an eight-second total budget
++plus at most the bounded in-flight read timeout, with a three-second per-request
++timeout; preparation is throttled for fifteen minutes, failures for five.
++Network errors, corrupt manifests and policy rejection keep the installed CLI.
++A daemon checks the throttle once per minute while an invocation remains alive;
++it only prepares, never interrupts or replaces a running worker.
++
++Cross-process discovery and update locks serialize writers. Each new launcher
++and its verified child hold independent invocation locks for their whole run,
++so a parent crash does not make a still-running new child look idle. Activation
++runs only under the launch gate when no invocation remains and durable uploads
++are clear. A prepared release can therefore wait indefinitely during continuous
++work; there is no promise to replace code between every pair of tasks. A new
++invocation can hand off once to the verified candidate; an already-running
++invocation exits normally and uses the committed candidate on its next launch.
++No claim or model request is replayed by handoff. Do not describe this as remote
++hot-patching or seamless upgrade of all existing sessions.
++
++The candidate version self-test has a separate internal `--version` dispatch
++path so it cannot recursively acquire the parent's activation lock. Normal
++verified children register their own liveness and bypass only repeated
++discovery, not the parent's artifact verification. An internal environment flag
++is not a trust source and does not authorize an arbitrary executable path.
++The existing current/LKG and monotonic sequence protections remain in effect.
++Windows keeps the existing replacement-denying candidate handle through child
++exit. Native Windows validation is required before release; POSIX tests do not
++substitute for it.
++
++OTA history before authentication remains local. Core flight batches exclude
++all `update_*` events. When a server advertises `ota_update_v1`, an independent,
++bounded optional batch sends `update_observed`: a snapshot scoped to the current
++authenticated batch/session, including the update state/sequence (when known),
++launch method and whether this invocation has discovery enabled. It does not
++rebind historical unscoped events to a later account. Heartbeat client_version
++is the reported running version; downloaded/staged state is not installation.
++Fast stages may occur between observations; offline/unmapped devices remain
++unknown. Optional observation failure cannot fail worker registration.
++
++This candidate does not enable managed-auth cohorts, change OAuth, change
++server admission, or reserve a release sequence. 0.5.202 artifacts stay immutable.
+diff --git a/pyproject.toml b/pyproject.toml
+index 0b49e95..e92d1bc 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "dradar"
+-version = "0.5.202"
++version = "0.5.203"
+ description = "Crowd Radar client — run benchmark tasks locally and submit them for independent server-side grading"
+ requires-python = ">=3.11"
+ dependencies = [
+diff --git a/scripts/ota_release.py b/scripts/ota_release.py
+index 4a721f0..5fa46e1 100755
+--- a/scripts/ota_release.py
++++ b/scripts/ota_release.py
+@@ -366,7 +366,7 @@ def _build_zipapp(
+             ("dradar/_ota_build.json", _canonical(metadata) + b"\n"),
+             (
+                 "__main__.py",
+-                b"from dradar.cli import main\nraise SystemExit(main())\n",
++                b"from dradar.launcher import main\nraise SystemExit(main())\n",
+             ),
+         ]
+     )
+diff --git a/src/dradar/__init__.py b/src/dradar/__init__.py
+index 40007d0..6f4271b 100644
+--- a/src/dradar/__init__.py
++++ b/src/dradar/__init__.py
+@@ -1 +1 @@
+-__version__ = "0.5.202"
++__version__ = "0.5.203"
+diff --git a/src/dradar/flight_recorder.py b/src/dradar/flight_recorder.py
+index 9eb8b6c..ee653f3 100644
+--- a/src/dradar/flight_recorder.py
++++ b/src/dradar/flight_recorder.py
+@@ -101,7 +101,7 @@ EVENT_TYPES = frozenset({
+     "release_requested", "release_completed", "release_failed",
+     "upload_started", "upload_completed", "upload_failed",
+     "request_started", "request_completed", "request_failed",
+-    "update_policy_rejected", "update_detected", "update_downloaded",
++    "update_observed", "update_policy_rejected", "update_detected", "update_downloaded",
+     "update_verified", "update_staged", "update_waiting_safe_point",
+     "update_paused", "update_activated", "update_self_testing",
+     "update_committed", "update_rollback_pending", "update_rolled_back",
+@@ -125,7 +125,7 @@ ATTRIBUTE_KEYS = frozenset({
+     "attempt", "elapsed_ms", "force", "http_status", "offline_replay",
+     "outcome", "phase", "previous_phase", "provider", "release_count",
+     "target_workers", "was_running", "worker_slot",
+-    "update_eligible", "update_sequence", "update_state",
++    "update_eligible", "update_sequence", "update_state", "update_enabled", "launch_method",
+ })
+ REASON_CODES = frozenset({
+     "api_error", "transport_error", "completed", "paused", "interrupted",
+@@ -190,6 +190,8 @@ ATTRIBUTE_RULES = {
+     "target_workers": (int, 1, 40),
+     "was_running": (bool, None, None),
+     "worker_slot": (int, 1, 40),
++    "update_enabled": (bool, None, None),
++    "launch_method": (str, {"launcher", "verified_child", "unknown"}, None),
+     "update_eligible": (bool, None, None),
+     "update_sequence": (int, 1, 2_147_483_647),
+     "update_state": (str, UPDATE_STATES, None),
+@@ -366,7 +368,7 @@ class FlightRecorder:
+     def _write(path: Path, events: list[dict[str, Any]]) -> None:
+         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+         checked = [validate_event(event) for event in events]
+-        auth_indices = [i for i, event in enumerate(checked) if event["event_type"] in {"auth_observed","auth_observed_v2"}]
++        auth_indices = [i for i, event in enumerate(checked) if (event["event_type"] in {"auth_observed","auth_observed_v2"} or event["event_type"].startswith("update_"))]
+         drop = set(auth_indices[:-100])
+         checked = [event for i, event in enumerate(checked) if i not in drop]
+         encoded = [json.dumps(event, sort_keys=True, separators=(",", ":")) for event in checked]
+@@ -375,7 +377,7 @@ class FlightRecorder:
+             or sum(len(line.encode("utf-8")) + 1 for line in encoded) > MAX_LOG_BYTES
+         ):
+             optional = next((i for i, event in enumerate(checked)
+-                             if event["event_type"] in {"auth_observed","auth_observed_v2"}), None)
++                             if (event["event_type"] in {"auth_observed","auth_observed_v2"} or event["event_type"].startswith("update_"))), None)
+             if optional is not None:
+                 del encoded[optional]
+                 del checked[optional]
+@@ -612,13 +614,15 @@ class FlightRecorder:
+                     present={event['event_type'] for event in self._load(self.pending_path)
+                              if (batch_id is None or event.get('batch_id')==batch_id)
+                              and (session_id is None or event.get('session_id')==session_id)}
+-            if not present & {'auth_observed','auth_observed_v2'}:return 0
++            if not present & {'auth_observed','auth_observed_v2'} and not any(x.startswith('update_') for x in present):return 0
+             caps=self.client.flight_event_capabilities()
+             if not isinstance(caps,dict) or caps.get('schema_version')!=SCHEMA_VERSION:return 0
+             for version,name in ((1,'auth_observed_v1'),(2,'auth_observed_v2')):
+                 event_type='auth_observed' if version==1 else 'auth_observed_v2'
+                 if event_type in present and caps.get(name) is True:
+                     total+=self.flush(batch_id=batch_id,session_id=session_id,_auth_only=True,_auth_version=version)
++            if caps.get("ota_update_v1") is True:
++                total+=self.flush(batch_id=batch_id,session_id=session_id,_auth_only=True,_auth_version=3)
+         except Exception:return total
+         return total
+ 
+@@ -672,7 +676,7 @@ class FlightRecorder:
+                         and (session_id is None or event.get("session_id") == session_id)
+                     ]
+                     scoped = [event for event in scoped
+-                              if (event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed") if _auth_only else event.get("event_type") not in {"auth_observed","auth_observed_v2"})]
++                              if ((event.get("event_type") == "update_observed" if _auth_version==3 else event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed")) if _auth_only else (event.get("event_type") not in {"auth_observed","auth_observed_v2"} and not event.get("event_type", "").startswith("update_")))]
+                     if not scoped:
+                         return 0
+                     if required_event_id is not None:
+diff --git a/src/dradar/launcher.py b/src/dradar/launcher.py
+index 246d7eb..67d22db 100644
+--- a/src/dradar/launcher.py
++++ b/src/dradar/launcher.py
+@@ -1,43 +1,98 @@
+-"""Stable console-script launcher for signed zipapp candidates."""
+-
++"""Stable entry point: bounded discovery, safe activation, one verified handoff."""
+ from __future__ import annotations
+-
+ import os
++import subprocess
+ import sys
+-
+ from .local_config import HOME
+-from .ota.integration import _run_windows_candidate, load_trusted_keys, ota_root
+-from .ota.state import InvalidTransition, UpdateController
++from .ota.integration import (_run_windows_candidate, load_trusted_keys, ota_root,
++                              activate_prepared_update, runloop_safe_point)
++from .ota.state import UpdateController, UpdateLock
++from .ota.activity import active_invocations, register_invocation
++from .ota.discovery import discover_update, start_periodic_discovery
++
++
++def _activate_if_idle(root):
++    if not active_invocations(root):
++        activate_prepared_update(runloop_safe_point(home=HOME), home=HOME)
+ 
+ 
+ def main() -> int:
+-    keys = load_trusted_keys(HOME)
+-    if keys:
+-        controller = UpdateController(ota_root(HOME), trusted_keys=keys)
++    from .ota import discovery
++    discovery.LAUNCH_METHOD = "launcher"
++    # Only bypasses discovery in an already verified child/self-test. It never
++    # authorizes a pathname or bypasses verification of a downloaded artifact.
++    self_test = os.environ.pop("DRADAR_OTA_SELF_TEST", None) == "1"
++    if os.environ.pop("DRADAR_OTA_DISPATCH", None) == "1":
++        discovery.LAUNCH_METHOD = "verified_child"
++        if self_test and sys.argv[1:] == ["--version"]:
++            from .cli import main as bundled_main
++            return bundled_main()
++        # The child owns an independent activity lease as well: if the outer
++        # launcher crashes, its still-running child must continue blocking OTA.
++        with UpdateLock(ota_root(HOME) / "launch.lock", timeout_seconds=1):
++            child_activity = register_invocation(ota_root(HOME))
++            child_activity.__enter__()
+         try:
+-            with controller.transaction():
+-                controller.recover_on_launcher_start()
+-            artifact = controller.launch_artifact()
++            from .cli import main as bundled_main
++            return bundled_main()
++        finally:
++            child_activity.__exit__(None, None, None)
++    root = ota_root(HOME)
++    if root.is_symlink() or (root.exists() and not root.is_dir()):
++        from .cli import main as bundled_main
++        return bundled_main()
++    discover_update(HOME)
++    activity = None
++    artifact = None
++    try:
++        with UpdateLock(root / "launch.lock", timeout_seconds=0):
++            keys = load_trusted_keys(HOME)
++            if keys and not active_invocations(root):
++                controller = UpdateController(root, trusted_keys=keys)
++                with controller.transaction():
++                    controller.recover_on_launcher_start()
++                _activate_if_idle(root)
++            activity = register_invocation(root)
++            activity.__enter__()
++            if keys:
++                try:
++                    artifact = UpdateController(root, trusted_keys=keys).launch_artifact()
++                except (OSError, ValueError, RuntimeError):
++                    artifact = None
++    except (OSError, ValueError, RuntimeError):
++        # Do not start unregistered work that a concurrent updater might miss.
++        # Registration retries briefly via the same launch gate, no networking.
++        with UpdateLock(root / "launch.lock", timeout_seconds=1):
++            if activity is None:
++                activity = register_invocation(root)
++                activity.__enter__()
++    periodic_stop = start_periodic_discovery(HOME)
++    try:
++        if artifact is not None:
++            if os.name == "nt":
++                return _run_windows_candidate(artifact.read_bytes(), sys.argv[1:])
++            fd = artifact.duplicate_fd()
+             try:
+-                if os.name != "nt":
+-                    fd = artifact.duplicate_fd()
+-                    os.set_inheritable(fd, True)
+-                    os.execv(
+-                        sys.executable,
+-                        [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
+-                    )
+-                return _run_windows_candidate(  # pragma: no cover - Windows CI
+-                    artifact.read_bytes(), sys.argv[1:]
+-                )
++                return subprocess.run(
++                    [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
++                    pass_fds=(fd,), check=False,
++                    env={**os.environ, "DRADAR_OTA_DISPATCH": "1"},
++                ).returncode
+             finally:
+-                artifact.close()
+-        except (InvalidTransition, OSError, ValueError):
+-            # Missing/corrupt/offline OTA state never makes the installed CLI
+-            # unavailable. Signed pointer validation already failed closed.
++                os.close(fd)
++        from .cli import main as bundled_main
++        return bundled_main()
++    finally:
++        periodic_stop.set()
++        if artifact is not None:
++            artifact.close()
++        if activity is not None:
++            activity.__exit__(None, None, None)
++        try:
++            with UpdateLock(root / "launch.lock", timeout_seconds=0):
++                _activate_if_idle(root)
++        except (OSError, ValueError, RuntimeError):
+             pass
+-    from .cli import main as bundled_main
+-
+-    return bundled_main()
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/src/dradar/ota/activity.py b/src/dradar/ota/activity.py
+new file mode 100644
+index 0000000..1401365
+--- /dev/null
++++ b/src/dradar/ota/activity.py
+@@ -0,0 +1,36 @@
++"""Per-invocation liveness locks; callers serialize registration and activation."""
++from __future__ import annotations
++import os
++import uuid
++from pathlib import Path
++from .state import UpdateLock
++
++
++def active_invocations(root: Path) -> bool:
++    directory = root / "invocations"
++    if directory.is_symlink():
++        return True
++    if not directory.exists():
++        return False
++    for path in directory.iterdir():
++        if path.is_symlink() or not path.is_file():
++            return True
++        try:
++            with UpdateLock(path, timeout_seconds=0):
++                pass
++        except OSError:
++            return True
++        except RuntimeError:
++            return True
++        # Caller holds launch.lock, so registration cannot race stale cleanup.
++        path.unlink(missing_ok=True)
++    return False
++
++
++def register_invocation(root: Path):
++    directory = root / "invocations"
++    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
++    if directory.is_symlink():
++        raise OSError("unsafe activity directory")
++    return UpdateLock(directory / f"{os.getpid()}-{uuid.uuid4().hex}.lock",
++                      timeout_seconds=0)
+diff --git a/src/dradar/ota/discovery.py b/src/dradar/ota/discovery.py
+new file mode 100644
+index 0000000..73b1e81
+--- /dev/null
++++ b/src/dradar/ota/discovery.py
+@@ -0,0 +1,173 @@
++"""Bounded signed discovery, separate from activation and model execution."""
++from __future__ import annotations
++
++import base64
++import json
++import time
++from pathlib import Path
++from typing import Callable
++
++import httpx
++
++from .. import __version__
++from ..flight_recorder import FlightRecorder
++from .integration import COMPATIBILITY, ota_root, update_status
++from .manifest import PlatformTarget, RolloutContext, verify_signed_manifest
++from .runtime import UpdateRuntime
++from .state import UpdateLock, UpdateState, _atomic_json
++
++LAUNCH_METHOD = "unknown"
++
++STABLE_URL = "https://updates.codexradar.com/channels/stable/current.json"
++# Existing production public trust root. Never use a key supplied by a manifest.
++TRUSTED_KEYS = {
++    "dradar-ota-prod-2026-09-03-01": base64.b64decode(
++        "cNKyezPQwWVFv7rQua/e4mmQKho0OmgQvrLyR/R2otI="
++    ),
++}
++CHECK_INTERVAL = 900.0
++FAILURE_INTERVAL = 300.0
++TOTAL_BUDGET = 8.0
++MANIFEST_LIMIT = 128 * 1024
++
++
++class DeadlineClient:
++    """Bound each stream and its whole lifetime, including trickle responses."""
++    def __init__(self, client, deadline: float, clock: Callable[[], float]):
++        self.client, self.deadline, self.clock = client, deadline, clock
++
++    def stream(self, method, url, **kwargs):
++        from contextlib import contextmanager
++
++        @contextmanager
++        def bounded():
++            remaining = self.deadline - self.clock()
++            if remaining <= 0:
++                raise TimeoutError("OTA discovery budget exhausted")
++            import threading
++            # Also close the dedicated discovery transport if headers or a
++            # compressed decoder withhold body chunks. Socket inactivity remains
++            # bounded, so cancellation cannot leave an unbounded blocking read.
++            cancel = getattr(self.client, "close", lambda: None)
++            watchdog = threading.Timer(remaining, cancel)
++            watchdog.daemon = True
++            watchdog.start()
++            try:
++                with self.client.stream(method, url, timeout=min(3.0, remaining),
++                                        headers={"Accept-Encoding": "identity"}, **kwargs) as response:
++                    outer = self
++                    class Response:
++                        def raise_for_status(self):
++                            response.raise_for_status()
++                            if getattr(response, "headers", {}).get("content-encoding", "identity") != "identity":
++                                raise ValueError("unexpected OTA content encoding")
++                        def iter_bytes(self, chunk_size=65536):
++                            for chunk in response.iter_bytes(None):
++                                if outer.clock() >= outer.deadline:
++                                    raise TimeoutError("OTA discovery budget exhausted")
++                                yield chunk
++                    yield Response()
++            finally:
++                watchdog.cancel()
++        return bounded()
++
++
++def discover_update(home: Path, *, client=None, clock=time.monotonic,
++                    wall_time=time.time, trusted_keys=None) -> str:
++    """Prepare at most one verified update. Never activate or run a candidate.
++
++    Injection arguments are local test seams; production URL is fixed.
++    All failures leave the running bundle available and return a bounded code.
++    """
++    keys = TRUSTED_KEYS if trusted_keys is None else trusted_keys
++    root = ota_root(home)
++    if root.is_symlink():
++        return "unsafe_state"
++    try:
++        with UpdateLock(root / "discovery.lock", timeout_seconds=0):
++            stamp = root / "discovery.json"
++            if stamp.is_symlink():
++                return "unsafe_state"
++            try:
++                previous = json.loads(stamp.read_text()) if stamp.exists() else {}
++                next_at = float(previous.get("next_check_at", 0))
++                if wall_time() <= next_at <= wall_time() + CHECK_INTERVAL:
++                    return "cached"
++            except (OSError, ValueError, TypeError):
++                return "unsafe_state"
++            # Persist retry throttle before networking, including crash cases.
++            _atomic_json(stamp, {"next_check_at": wall_time() + FAILURE_INTERVAL})
++            runtime = UpdateRuntime(root, recorder=FlightRecorder(home),
++                                    download_client=None)
++            state = runtime.controller.state()
++            if state and state.get("state") in {
++                UpdateState.WAITING_SAFE_POINT.value, UpdateState.STAGED.value,
++                UpdateState.ACTIVATED.value, UpdateState.SELF_TESTING.value,
++            }:
++                return "pending"
++            owns_client = client is None
++            if owns_client:
++                client = httpx.Client(follow_redirects=False)
++            try:
++                transport = DeadlineClient(client, clock() + TOTAL_BUDGET, clock)
++                with transport.stream("GET", STABLE_URL, follow_redirects=False) as response:
++                    response.raise_for_status()
++                    data = bytearray()
++                    for chunk in response.iter_bytes():
++                        data.extend(chunk)
++                        if len(data) > MANIFEST_LIMIT:
++                            raise ValueError("manifest too large")
++                verify_signed_manifest(bytes(data), keys)
++                status = update_status(home)
++                runtime.download_client = transport
++                decision = runtime.prepare(
++                    bytes(data), trusted_keys=keys,
++                    current_version=status["current_version"] or __version__,
++                    committed_sequence=status["current_sequence"] or 0,
++                    compatibility=COMPATIBILITY,
++                    rollout=RolloutContext(subject=runtime.audit.recorder.client_id),
++                    target=PlatformTarget.current(),
++                )
++                result = "prepared" if decision.eligible else decision.reason
++                _atomic_json(stamp, {"next_check_at": wall_time() + CHECK_INTERVAL,
++                                     "result": result})
++                return result
++            finally:
++                runtime.audit.recorder.flush()
++                if owns_client:
++                    client.close()
++    except Exception:
++        # Never leak URLs, proxy settings or remote errors into user output.
++        return "unavailable"
++
++
++def start_periodic_discovery(home: Path):
++    """Stage only while work runs; daemon never controls a runner or activation."""
++    import threading
++    stop = threading.Event()
++    def loop():
++        while not stop.wait(60):
++            discover_update(home)
++    thread = threading.Thread(target=loop, name="dradar-ota-discovery", daemon=True)
++    thread.start()
++    return stop
++
++
++def runtime_observation(home: Path) -> dict:
++    """Report a current local snapshot, never replay pre-login event history."""
++    status = update_status(home)
++    result = {"update_enabled": LAUNCH_METHOD != "unknown", "launch_method": LAUNCH_METHOD}
++    state = status.get("state")
++    if state in {item.value for item in UpdateState}:
++        result["update_state"] = state
++    sequence = status.get("current_sequence")
++    # A staged candidate is distinct from the running version in heartbeat.
++    try:
++        record = UpdateRuntime(ota_root(home), recorder=FlightRecorder(home), download_client=None).controller.state()
++        if record and isinstance(record.get("release"), dict):
++            sequence = record["release"].get("sequence", sequence)
++    except Exception:
++        pass
++    if type(sequence) is int and sequence > 0:
++        result["update_sequence"] = sequence
++    return result
+diff --git a/src/dradar/ota/integration.py b/src/dradar/ota/integration.py
+index 7c855ac..54f7056 100644
+--- a/src/dradar/ota/integration.py
++++ b/src/dradar/ota/integration.py
+@@ -79,6 +79,9 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+ 
+ def load_trusted_keys(home: Path = HOME) -> dict[str, bytes]:
+     document = _read_json(ota_root(home) / TRUSTED_KEYS_FILE)
++    if document is None and not os.path.lexists(ota_root(home) / TRUSTED_KEYS_FILE):
++        from .discovery import TRUSTED_KEYS
++        return dict(TRUSTED_KEYS)
+     if not document or document.get("schema_version") != 1:
+         return {}
+     raw = document.get("keys")
+@@ -134,7 +137,9 @@ def pending_upload_count(home: Path = HOME) -> int:
+ 
+     try:
+         path = home / "pending_uploads.json"
+-        if not path.is_file() or path.is_symlink():
++        if path.is_symlink():
++            return 1
++        if not path.is_file():
+             return 0
+         entries = json.loads(path.read_text(encoding="utf-8"))
+     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+@@ -343,12 +348,13 @@ def _self_test(candidate) -> bool:
+             result = subprocess.run(
+                 [sys.executable, f"/dev/fd/{fd}", "--version"],
+                 pass_fds=(fd,),
++                env={**os.environ, "DRADAR_OTA_DISPATCH": "1", "DRADAR_OTA_SELF_TEST": "1"},
+                 capture_output=True,
+                 timeout=30,
+                 check=False,
+             )
+         else:  # pragma: no cover - exercised on Windows CI
+-            return _run_windows_candidate(candidate.read_bytes(), ["--version"]) == 0
++            return _run_windows_candidate(candidate.read_bytes(), ["--version"], self_test=True) == 0
+         return result.returncode == 0
+     except (OSError, subprocess.TimeoutExpired):
+         return False
+@@ -430,6 +436,7 @@ def _run_windows_candidate(
+     data: bytes,
+     arguments: list[str],
+     *,
++    self_test: bool = False,
+     locked_candidate: Callable[[bytes], Any] | None = None,
+     runner: Callable[..., Any] = subprocess.run,
+ ) -> int:
+@@ -440,6 +447,8 @@ def _run_windows_candidate(
+         result = runner(
+             [sys.executable, str(path), *arguments],
+             check=False,
++            env={**os.environ, "DRADAR_OTA_DISPATCH": "1", "DRADAR_OTA_SELF_TEST": "1" if self_test else "0"},
++            **({"timeout": 30} if self_test else {}),
+         )
+     return int(result.returncode)
+ 
+@@ -455,11 +464,10 @@ def activate_prepared_update(
+     if not keys or pending_activation_state(home) is not UpdateState.WAITING_SAFE_POINT:
+         return None
+     recorder = FlightRecorder(home)
+-    with httpx.Client(timeout=60.0) as client:
+-        runtime = UpdateRuntime(
+-            ota_root(home), recorder=recorder, download_client=client
+-        )
+-        runtime.controller.set_trusted_keys(keys)
+-        result = runtime.activate_and_self_test(snapshot, _self_test)
++    # Activation consumes an already verified local artifact; no HTTP client
++    # or proxy configuration is required at this safety boundary.
++    runtime = UpdateRuntime(ota_root(home), recorder=recorder, download_client=None)
++    runtime.controller.set_trusted_keys(keys)
++    result = runtime.activate_and_self_test(snapshot, _self_test)
+     recorder.flush()
+     return result
+diff --git a/src/dradar/runloop.py b/src/dradar/runloop.py
+index d2c81e8..10768f0 100644
+--- a/src/dradar/runloop.py
++++ b/src/dradar/runloop.py
+@@ -132,23 +132,13 @@ from .taskpacks import TaskPackError, ensure_benchmark_task_pack
+ def _try_ota_idle_activation(*, supervisor_idle: bool, refill_accepting: bool) -> None:
+     """Activate a prepared candidate only after all model/upload work drained."""
+ 
+-    from .ota.integration import activate_prepared_update, runloop_safe_point
+-
+-    snapshot = runloop_safe_point(
+-        home=HOME,
+-        active_assignments=0,
+-        checkouts_inflight=0,
+-        uploads_inflight=0,
+-        refill_accepting_new=refill_accepting,
+-        worker_supervisor_idle=supervisor_idle,
+-    )
+-    try:
+-        result = activate_prepared_update(snapshot, home=HOME)
+-    except Exception as exc:  # noqa: BLE001 - running version must survive OTA failure
+-        print(f"signed CLI update remained on the current version ({type(exc).__name__})")
+-        return
+-    if result is not None:
+-        print(f"signed CLI update: {result.value}; it will be used next launch")
++    from .ota.discovery import discover_update
++    # The outer launcher holds invocation liveness until work has returned.
++    # Discover/prepare here; only that launcher may activate after all holders
++    # have exited. Refill or child paths do not create a parallel updater.
++    if supervisor_idle and not refill_accepting:
++        discover_update(HOME)
++
+ 
+ 
+ # Quota is the user-facing campaign limit. Keep a deliberately high internal
+diff --git a/src/dradar/telemetry.py b/src/dradar/telemetry.py
+index c64b028..8b8a944 100644
+--- a/src/dradar/telemetry.py
++++ b/src/dradar/telemetry.py
+@@ -308,6 +308,17 @@ class RunnerTelemetry:
+                 # Legacy/super-account heartbeat may be the first place the
+                 # server assigns a batch. Bind before flushing pending events.
+                 self.bind_batch(response["batch_id"])
++            # Optional OTA snapshot stays in this authenticated session scope.
++            # It is not a replay of pre-login download history.
++            try:
++                from .ota.discovery import runtime_observation
++                from .local_config import HOME
++                observation = runtime_observation(HOME)
++                if observation != getattr(self, "_last_ota_observation", None):
++                    self.record_event("update_observed", component="ota", attributes=observation)
++                    self._last_ota_observation = observation
++            except Exception:
++                pass
+             self.record_event("heartbeat_acknowledged", component="heartbeat")
+             self._last_flight_events_acked = self._flush_flight_events(
+                 required_event_id=required_event_id,
+diff --git a/tests/test_ota_discovery.py b/tests/test_ota_discovery.py
+new file mode 100644
+index 0000000..ffd19ec
+--- /dev/null
++++ b/tests/test_ota_discovery.py
+@@ -0,0 +1,233 @@
++import json
++import time
++from contextlib import contextmanager
++from pathlib import Path
++
++import httpx
++import pytest
++
++from dradar.ota import discovery
++from dradar.ota.activity import active_invocations, register_invocation
++from dradar.ota.state import UpdateLock
++from test_ota_runtime import signed_release, TRUSTED_KEYS, BODY
++
++
++def transport(document, calls, fail=False):
++    def handle(request):
++        calls.append(str(request.url))
++        if fail:
++            raise httpx.ConnectError('fixture only',request=request)
++        if str(request.url)==discovery.STABLE_URL:
++            return httpx.Response(200,json=document)
++        return httpx.Response(200,content=BODY)
++    return httpx.Client(transport=httpx.MockTransport(handle))
++
++
++def test_discovery_downloads_verified_candidate_without_activation(tmp_path):
++    doc,keys=signed_release()[:2]
++    calls=[]
++    with transport(doc,calls) as client:
++        assert discovery.discover_update(tmp_path,client=client,trusted_keys=keys)=='prepared'
++        assert discovery.discover_update(tmp_path,client=client,trusted_keys=keys)=='cached'
++    assert len(calls)==2
++    assert not (tmp_path/'ota/current.json').exists()
++    assert json.loads((tmp_path/'ota/update-state.json').read_text())['state']=='waiting_safe_point'
++
++
++def test_offline_keeps_current_bundle_and_throttles(tmp_path):
++    calls=[]
++    with transport({},calls,fail=True) as client:
++        assert discovery.discover_update(tmp_path,client=client)=='unavailable'
++        assert discovery.discover_update(tmp_path,client=client)=='cached'
++    assert calls==[discovery.STABLE_URL]
++    assert not (tmp_path/'ota/current.json').exists()
++
++
++def test_untrusted_manifest_never_downloads_code(tmp_path):
++    doc,keys=signed_release()[:2];calls=[]
++    with transport(doc,calls) as client:
++        assert discovery.discover_update(tmp_path,client=client)=='unavailable'
++    assert calls==[discovery.STABLE_URL]
++
++
++def test_concurrent_discovery_does_not_send_request(tmp_path):
++    calls=[]
++    with UpdateLock(tmp_path/'ota/discovery.lock'):
++        with transport({},calls) as client:
++            assert discovery.discover_update(tmp_path,client=client)=='unavailable'
++    assert not calls
++
++
++def test_activity_liveness_and_crash_style_release(tmp_path):
++    with UpdateLock(tmp_path/'launch.lock'):
++        lease=register_invocation(tmp_path);lease.__enter__()
++        assert active_invocations(tmp_path)
++        lease.__exit__(None,None,None)
++        assert not active_invocations(tmp_path)
++
++
++def test_deadline_rejects_slow_chunks():
++    tick=[0]
++    class Response:
++        def raise_for_status(self):pass
++        def iter_bytes(self,n):
++            tick[0]=10
++            yield b'late'
++    class Client:
++        @contextmanager
++        def stream(self,*a,**k):yield Response()
++    client=discovery.DeadlineClient(Client(),3,lambda:tick[0])
++    with client.stream('GET','https://fixture.invalid') as response:
++        with pytest.raises((TimeoutError,httpx.HTTPError)):list(response.iter_bytes())
++
++
++def test_launcher_auto_discovery_real_zip_single_handoff(tmp_path,monkeypatch):
++    import io,zipfile,hashlib,sys
++    from dradar import launcher
++    from dradar.ota import integration
++    from test_ota_runtime import sign_document
++    out=io.BytesIO()
++    with zipfile.ZipFile(out,'w') as z:
++        z.writestr('__main__.py', 'import os,sys\nassert os.environ.get("DRADAR_OTA_DISPATCH")=="1"\nprint("candidate-once")\n')
++    body=out.getvalue();doc,keys=signed_release()
++    doc.pop('signature')
++    for item in doc['artifacts']:
++        item['size']=len(body);item['sha256']=hashlib.sha256(body).hexdigest()
++    doc=sign_document(doc);calls=[]
++    def handler(request):
++        calls.append(str(request.url))
++        return httpx.Response(200,json=doc) if str(request.url)==discovery.STABLE_URL else httpx.Response(200,content=body)
++    monkeypatch.setattr(launcher,'HOME',tmp_path)
++    monkeypatch.setattr(discovery,'TRUSTED_KEYS',keys)
++    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
++        monkeypatch.setattr(launcher,'discover_update',lambda home:discovery.discover_update(home,client=client,trusted_keys=keys))
++        monkeypatch.setattr(sys,'argv',['dradar','--version'])
++        assert launcher.main()==0
++    assert len(calls)==2
++    assert json.loads((tmp_path/'ota/update-state.json').read_text())['state']=='committed'
++    assert not active_invocations(tmp_path/'ota')
++
++
++def test_launcher_dispatch_does_not_discover(tmp_path,monkeypatch):
++    from dradar import launcher,cli
++    monkeypatch.setattr(launcher,'HOME',tmp_path)
++    monkeypatch.setenv('DRADAR_OTA_DISPATCH','1')
++    monkeypatch.setattr(launcher,'discover_update',lambda *_:pytest.fail('recursive discovery'))
++    monkeypatch.setattr(cli,'main',lambda:17)
++    assert launcher.main()==17
++
++
++def test_launcher_does_not_activate_while_another_invocation_is_alive(tmp_path,monkeypatch):
++    from dradar import launcher,cli
++    monkeypatch.setattr(launcher,'HOME',tmp_path)
++    monkeypatch.setattr(launcher,'discover_update',lambda *_:'pending')
++    monkeypatch.setattr(launcher,'activate_prepared_update',lambda *a,**k:pytest.fail('active work switched'))
++    monkeypatch.setattr(cli,'main',lambda:0)
++    with register_invocation(tmp_path/'ota'):
++        assert launcher.main()==0
++
++
++def test_unsafe_pending_upload_blocks_activation(tmp_path):
++    from dradar.ota.integration import runloop_safe_point
++    (tmp_path/'pending_uploads.json').symlink_to(tmp_path/'missing')
++    assert not runloop_safe_point(home=tmp_path).ready
++
++
++def test_real_new_pyz_entry_uses_dispatch_once(tmp_path,monkeypatch):
++    import io,zipfile,hashlib,sys
++    from dradar import launcher
++    from test_ota_runtime import sign_document
++    source=Path(__file__).parents[1]/'src'
++    content=io.BytesIO()
++    with zipfile.ZipFile(content,'w') as z:
++        for f in (source/'dradar').rglob('*'):
++            if f.is_file() and '__pycache__' not in f.parts:
++                relative=str(f.relative_to(source))
++                if relative=='dradar/cli.py':
++                    z.writestr(relative,'def main():\n    print("real-new-entry-once")\n    return 0\n')
++                else:z.write(f,relative)
++        z.writestr('__main__.py','from dradar.launcher import main\nraise SystemExit(main())\n')
++    body=content.getvalue();doc,keys=signed_release();doc.pop('signature')
++    for item in doc['artifacts']:
++        item['size']=len(body);item['sha256']=hashlib.sha256(body).hexdigest()
++    doc=sign_document(doc);calls=[]
++    def handle(request):
++        calls.append(str(request.url))
++        return httpx.Response(200,json=doc) if str(request.url)==discovery.STABLE_URL else httpx.Response(200,content=body)
++    monkeypatch.setattr(launcher,'HOME',tmp_path)
++    monkeypatch.setenv('DRADAR_HOME',str(tmp_path))
++    monkeypatch.setattr(discovery,'TRUSTED_KEYS',keys)
++    monkeypatch.setattr(sys,'argv',['dradar','--version'])
++    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
++        monkeypatch.setattr(launcher,'discover_update',lambda home:discovery.discover_update(home,client=client,trusted_keys=keys))
++        assert launcher.main()==0
++        assert launcher.main()==0
++    assert len(calls)==2
++
++
++def test_launcher_unsafe_ota_root_preserves_bundled_cli(tmp_path,monkeypatch):
++    from dradar import launcher,cli
++    target=tmp_path/'target';target.mkdir();(tmp_path/'ota').symlink_to(target)
++    monkeypatch.setattr(launcher,'HOME',tmp_path)
++    monkeypatch.setattr(launcher,'discover_update',lambda *_:pytest.fail('unsafe root discovery'))
++    monkeypatch.setattr(cli,'main',lambda:12)
++    assert launcher.main()==12
++    assert list(target.iterdir())==[]
++
++
++def test_other_process_liveness_blocks_activation(tmp_path):
++    import subprocess,sys,os
++    root=tmp_path/'ota'
++    program='from pathlib import Path\nfrom dradar.ota.activity import register_invocation\nimport sys\nwith register_invocation(Path(sys.argv[1])):\n print("ready",flush=True)\n sys.stdin.readline()\n'
++    env={**os.environ,'PYTHONPATH':str(Path(__file__).parents[1]/'src')}
++    child=subprocess.Popen([sys.executable,'-c',program,str(root)],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
++    try:
++        assert child.stdout.readline().strip()=='ready'
++        with UpdateLock(root/'launch.lock'):assert active_invocations(root)
++        child.communicate('\n',timeout=5)
++        with UpdateLock(root/'launch.lock'):assert not active_invocations(root)
++    finally:
++        if child.poll() is None:child.terminate();child.wait(timeout=5)
++
++
++def test_real_http_trickle_is_interrupted_at_network_chunk_boundary():
++    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
++    import threading
++    class Handler(BaseHTTPRequestHandler):
++        def log_message(self,*args):pass
++        def do_GET(self):
++            self.send_response(200);self.send_header('Content-Length','100');self.end_headers()
++            try:
++                for _ in range(100):
++                    self.wfile.write(b'x');self.wfile.flush();time.sleep(.03)
++            except (BrokenPipeError,ConnectionResetError):pass
++    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
++    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
++    try:
++        with httpx.Client(trust_env=False) as client:
++            start=time.monotonic();bounded=discovery.DeadlineClient(client,start+.15,time.monotonic)
++            with bounded.stream('GET',f'http://127.0.0.1:{server.server_port}') as response:
++                with pytest.raises((TimeoutError,httpx.HTTPError)):list(response.iter_bytes())
++            assert time.monotonic()-start < .6
++    finally:server.shutdown();server.server_close()
++
++
++def test_real_http_trickled_headers_cannot_extend_budget():
++    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
++    import threading
++    class Handler(BaseHTTPRequestHandler):
++        def log_message(self,*args):pass
++        def do_GET(self):
++            try:
++                for char in b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx":
++                    self.wfile.write(bytes([char]));self.wfile.flush();time.sleep(.03)
++            except (BrokenPipeError,ConnectionResetError):pass
++    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
++    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
++    try:
++        with httpx.Client(trust_env=False) as client:
++            start=time.monotonic();bounded=discovery.DeadlineClient(client,start+.15,time.monotonic)
++            with pytest.raises((TimeoutError,httpx.HTTPError)):
++                with bounded.stream('GET',f'http://127.0.0.1:{server.server_port}') as response:list(response.iter_bytes())
++            assert time.monotonic()-start < .6
++    finally:server.shutdown();server.server_close()
+diff --git a/tests/test_ota_flight_optional.py b/tests/test_ota_flight_optional.py
+new file mode 100644
+index 0000000..fa4e7ac
+--- /dev/null
++++ b/tests/test_ota_flight_optional.py
+@@ -0,0 +1,30 @@
++from dradar.flight_recorder import FlightRecorder,SCHEMA_VERSION
++
++
++class Client:
++    def __init__(self,support=False,fail=False):self.support=support;self.fail=fail;self.batches=[]
++    def flight_event_capabilities(self):return {'schema_version':SCHEMA_VERSION,'ota_update_v1':self.support}
++    def flight_events(self,events):
++        if self.fail and events[0]['event_type']=='update_observed':raise OSError('optional unavailable')
++        self.batches.append(events)
++        return {'acknowledged_event_ids':[e['event_id'] for e in events]}
++
++
++def test_ota_optional_never_poison_worker_registration(tmp_path):
++    client=Client();recorder=FlightRecorder(tmp_path,client)
++    recorder.record('update_observed',component='ota',attributes={'update_enabled':True,'launch_method':'launcher'})
++    recorder.record('update_failed',component='ota',reason_code='update_download_failed')
++    recorder.record('worker_registered',component='provider',attributes={'provider':'codex'})
++    assert recorder.flush()==1
++    assert recorder.flush_auth()==0
++    client.support=True
++    assert recorder.flush_auth()==1
++    assert [[e['event_type'] for e in b] for b in client.batches]==[['worker_registered'],['update_observed']]
++    assert recorder._load(recorder.pending_path)[0]['event_type']=='update_failed'
++
++
++def test_unscoped_history_is_not_rebound_to_authenticated_session(tmp_path):
++    client=Client(True);recorder=FlightRecorder(tmp_path,client)
++    recorder.record('update_observed',component='ota',attributes={'update_enabled':True,'launch_method':'launcher'})
++    assert recorder.flush_auth(batch_id='a'*32,session_id='b'*32)==0
++    assert not client.batches
+diff --git a/tests/test_ota_integration.py b/tests/test_ota_integration.py
+index 674d686..bda1356 100644
+--- a/tests/test_ota_integration.py
++++ b/tests/test_ota_integration.py
+@@ -112,8 +112,9 @@ def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
+             events.append("handle-close")
+             candidate.unlink()
+ 
+-    def runner(command, *, check):
++    def runner(command, *, check, env):
+         assert check is False
++        assert env["DRADAR_OTA_DISPATCH"] == "1"
+         assert events == ["handle-open"]
+         assert command[1] == str(candidate)
+         assert candidate.read_bytes() == b"verified candidate"
+diff --git a/tests/test_ota_release_tool.py b/tests/test_ota_release_tool.py
+index 78b9473..a37c70b 100644
+--- a/tests/test_ota_release_tool.py
++++ b/tests/test_ota_release_tool.py
+@@ -39,6 +39,7 @@ def _source(tmp_path: Path, version: str = "0.5.177") -> Path:
+         "    return 0\n",
+         encoding="utf-8",
+     )
++    (package / "launcher.py").write_text("from .cli import main\n", encoding="utf-8")
+     return root
+ 
+ 
+diff --git a/tests/test_telemetry.py b/tests/test_telemetry.py
+index 2c21ad2..e4cebd7 100644
+--- a/tests/test_telemetry.py
++++ b/tests/test_telemetry.py
+@@ -177,9 +177,10 @@ def test_worker_registration_isolated_from_persisted_plan_and_session_pending(tm
+     )
+ 
+     pending = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
+-    assert {event["event_id"] for event in pending} == {
++    assert {event["event_id"] for event in pending if event["event_type"] != "update_observed"} == {
+         old_null["event_id"], old_plan["event_id"],
+     }
++    assert all(event["event_type"] != "update_observed" for event in uploaded)
+ 
+ 
+ def test_server_notices_are_bounded_validated_and_printed_once(capsys):
