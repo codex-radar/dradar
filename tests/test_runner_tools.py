@@ -1285,7 +1285,9 @@ def _antigravity_assignment_for_trial():
 def _prepare_fake_antigravity(monkeypatch, tmp_path):
     @contextmanager
     def fake_session(_work_dir):
-        yield tmp_path / "antigravity-auth"
+        credential_root = tmp_path / "antigravity-auth"
+        credential_root.mkdir(exist_ok=True)
+        yield credential_root
 
     @contextmanager
     def passthrough_overlay(_assignment, tasks_root, _work_dir, _job_name):
@@ -1358,7 +1360,7 @@ def test_run_trial_stops_live_codex_quota_error_loop(tmp_path, monkeypatch):
     terminated = []
     cleaned = []
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
 
@@ -1486,7 +1488,7 @@ def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
     captured = {}
     cleaned = []
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
 
@@ -2154,7 +2156,7 @@ def test_registry_io_timeout_is_a_build_failure_with_bounded_diagnostic():
 
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
     captured = {}
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
     class FakePopen:
@@ -2380,7 +2382,7 @@ def test_run_trial_overrides_stale_server_pin_before_start(
 
     monkeypatch.setattr(runner_mod, "resolve_latest_codex_cli_version", resolve)
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["version"] = assignment["agent_version"]
         captured["job_name"] = job_name
         return ["pier", "run", job_name]
@@ -2621,3 +2623,44 @@ def test_dsh_utf16_patch_is_normalized_only_after_git_validation(tmp_path):
     assert _normalize_utf16_patch(normalized) is False
     from dradar.artifact_staging import ensure_staged_patch
     assert ensure_staged_patch(tmp_path).data == diff.encode("utf-8")
+
+
+def test_managed_codex_profile_uses_private_consumer_without_native_auth(tmp_path, monkeypatch):
+    _stub_pier(monkeypatch)
+    (tmp_path / 'abs-module-cache-flags').mkdir()
+    home=tmp_path/'home';home.mkdir()
+    monkeypatch.setattr(runner_mod, 'codex_auth_path', lambda: (_ for _ in ()).throw(AssertionError('ordinary auth accessed')))
+    assignment=_assignment('codex') | {'auth_runtime':'codex-managed-at-v1', 'agent_version':'0.154.0'}
+    cmd=build_pier_command(assignment,tmp_path,tmp_path/'jobs','managed-job',home,managed_auth_config=tmp_path/'selection.json')
+    assert any(part.endswith('.pier_codex_managed:CodexManaged') for part in cmd)
+    assert not any('CODEX_AUTH_JSON_PATH' in part or 'CODEX_FORCE_AUTH_JSON' in part for part in cmd)
+    packages=list(home.glob('_dradar_managed_auth_*'))
+    assert len(packages)==1 and (packages[0]/'auth_managed.py').is_file()
+    assert (packages[0]/'codex_managed_bridge.cjs').is_file()
+
+
+def test_managed_codex_profile_requires_assignment_opt_in(tmp_path, monkeypatch):
+    import pytest
+    _stub_pier(monkeypatch)
+    (tmp_path/'abs-module-cache-flags').mkdir()
+    with pytest.raises(runner_mod.RunnerError,match='explicit compatible assignment'):
+        build_pier_command(_assignment('codex'),tmp_path,tmp_path/'jobs','j',tmp_path/'home',managed_auth_config=tmp_path/'selection.json')
+
+
+@pytest.mark.parametrize('bind_succeeds', [True, False])
+def test_managed_runner_permit_follows_successful_owner_bind(tmp_path, monkeypatch, bind_succeeds):
+    _fake_pier(monkeypatch,tmp_path)
+    monkeypatch.setattr(runner_mod,'_wait_for_worker_registration',lambda *a,**k: {'profile':'codex_managed_at'})
+    monkeypatch.setattr(runner_mod,'resolve_latest_codex_cli_version',lambda *a,**k: pytest.fail('dynamic version resolved'))
+    def bind(event):
+        assert not list(tmp_path.glob('*.managed-start.json'))
+        if not bind_succeeds:
+            raise RuntimeError('fixture owner rejected')
+    assignment=_assignment('codex') | {'auth_runtime':'codex-managed-at-v1'}
+    if bind_succeeds:
+        run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
+        assert len(list(tmp_path.glob('*.managed-start.json')))==1
+    else:
+        with pytest.raises(RuntimeError,match='fixture owner rejected'):
+            run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
+        assert not list(tmp_path.glob('*.managed-start.json'))

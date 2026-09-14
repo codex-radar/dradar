@@ -313,17 +313,40 @@ def plan_environment_issue(
                 "当前版本还不能准备这次运行所需的工具环境；请升级 DRadar 后重试。",
                 "upgrade_cli", requires_user_action=True,
             )
+        if any(item.get("auth_runtime") not in (None, "codex-managed-at-v1")
+               or (item.get("auth_runtime") == "codex-managed-at-v1"
+                   and (item.get("provider") or DEFAULT_CODEX_PROVIDER) != DEFAULT_CODEX_PROVIDER)
+               for item in assignments if isinstance(item, dict)):
+            return _plan_issue(harness, "current_tool_unsupported",
+                "这次任务的认证模式与provider不匹配或尚不支持；不能回退普通认证。",
+                "upgrade_cli", requires_user_action=True)
+        openai_assignments = [item for item in assignments if isinstance(item, dict)
+                              and (item.get("provider") or DEFAULT_CODEX_PROVIDER) == DEFAULT_CODEX_PROVIDER]
+        needs_managed = any(item.get("auth_runtime") == "codex-managed-at-v1" for item in openai_assignments)
+        needs_native_openai = (not assignments or any(item.get("auth_runtime") != "codex-managed-at-v1" for item in openai_assignments))
+        needs_native_codex = needs_native_openai or DEEPSEEK_PROVIDER in providers
+        managed_ready = False
+        if needs_managed:
+            from .managed_auth_selection import readiness as managed_readiness
+            _auth_mode, managed_ready = managed_readiness()
+            if not managed_ready:
+                return _plan_issue(harness, "managed_auth_unavailable",
+                    "受控登录源不可用；请执行 dradar provider codex-managed status 检查或恢复。",
+                    "authenticate_current_tool", requires_user_action=True)
+        if needs_native_openai:
+            from .managed_auth_selection import selection_requested
+            if selection_requested():
+                return _plan_issue(harness, "auth_runtime_mismatch",
+                    "已有OpenAI任务绑定普通认证；请显式选择兼容模式完成它，不能自动改绑受控源。",
+                    "authenticate_current_tool", requires_user_action=True)
         codex = runner._resolve_user_tool("codex")
-        if not codex:
+        if needs_native_codex and not codex:
             return _plan_issue(
                 harness, "codex_not_installed",
                 "当前运行工具尚未安装；请先完成安装，再重试。",
                 "setup_current_tool", requires_user_action=True,
             )
-        if (
-            DEFAULT_CODEX_PROVIDER in providers
-            and not runner.codex_auth_path().is_file()
-        ):
+        if needs_native_openai and not runner.codex_auth_path().is_file():
             return _plan_issue(
                 harness, "codex_not_authenticated",
                 "当前运行工具尚未登录；请完成登录后重试。",
@@ -713,7 +736,9 @@ def cmd_doctor(args) -> int:
     # rabbit hole). Only nag about specifics when NEITHER is ready.
     codex = shutil.which("codex")
     auth = runner.codex_auth_path()
-    codex_ready = bool(codex) and auth.is_file()
+    from .managed_auth_selection import readiness as managed_readiness
+    auth_mode, managed_ready = managed_readiness()
+    codex_ready = managed_ready if auth_mode == "managed" else bool(codex) and auth.is_file()
     claude_requested = claude_only or (
         selected_agent is None and claude_subscription_path().exists()
     )
@@ -948,12 +973,14 @@ def cmd_doctor(args) -> int:
         if deepseek_key_ready:
             _check("DeepSeek V4 Flash / Pro / Vision — DSH Minimal agent ready", True)
     elif codex_ready:
-        _check("codex — agent ready", True)
+        _check("codex managed source — locally ready" if managed_ready else "codex — agent ready", True)
     elif claude_ready and not codex_only:
         _check("Claude Code subscription — agent ready", True)
     else:
         _check("codex CLI", bool(codex), _CODEX_HINTS[plat])
-        _check("codex auth.json", auth.is_file(), "run: codex login")
+        _check("managed Codex source" if auth_mode == "managed" else "codex auth.json",
+               managed_ready if auth_mode == "managed" else auth.is_file(),
+               "run: dradar provider codex-managed status" if auth_mode == "managed" else "run: codex login")
         if not codex_only:
             _check("Claude Code subscription slot", False,
                    "run: dradar provider setup claude")

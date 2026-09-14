@@ -2028,6 +2028,15 @@ def advertised_capabilities(
     # configured task package requires the new distribution path, allowing a
     # CLI-first rolling upgrade while old servers harmlessly ignore it.
     capabilities = [TASK_PACKAGE_SYNC_CAPABILITY]
+    from .managed_auth_selection import load_selection, CAPABILITY as managed_capability
+    from .auth_refresh import RefreshUnavailable
+    try:
+        if load_selection(environ) is not None:
+            capabilities.append(managed_capability)
+            from .managed_auth_selection import trial_platform_ready, TRIAL_CAPABILITY
+            if trial_platform_ready(environ):capabilities.append(TRIAL_CAPABILITY)
+    except (OSError, ValueError, TypeError, RefreshUnavailable):
+        pass
     if deepseek_catalog_error() is None:
         capabilities.extend((
             DEEPSEEK_CAPABILITY,

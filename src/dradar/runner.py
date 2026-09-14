@@ -34,6 +34,7 @@ from .artifact_boundary import (
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
 from . import egress, image_cache
+from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_API_KEY_ENVS,
@@ -708,6 +709,23 @@ def _ensure_codex_agent_module(home: Path) -> Path:
     )
 
 
+def _ensure_codex_managed_module(home: Path) -> tuple[str, Path]:
+    _ensure_worker_event_module(home)
+    resources = importlib.resources.files("dradar")
+    names = ("auth_access", "auth_authority", "auth_refresh", "auth_managed",
+             "auth_transaction", "auth_host_session", "auth_codex_rpc",
+             "credential_files", "pier_credential_delivery", "pier_codex_managed", "auth_observation")
+    contents = {name: resources.joinpath(name + ".py").read_bytes() for name in names}
+    bridge_data = resources.joinpath("codex_managed_bridge.cjs").read_bytes()
+    digest = hashlib.sha256(b"".join(name.encode() + contents[name] for name in names) + bridge_data).hexdigest()[:12]
+    package = "_dradar_managed_auth_" + digest
+    _materialize_shared_file(home / package / "__init__.py", b"")
+    for name, data in contents.items():
+        _materialize_shared_file(home / package / (name + ".py"), data)
+    bridge = _materialize_shared_file(home / package / "codex_managed_bridge.cjs", bridge_data)
+    return package, bridge
+
+
 def _ensure_claude_agent_module(home: Path) -> Path:
     source = importlib.resources.files("dradar").joinpath("pier_claude.py")
     usage_source = importlib.resources.files("dradar").joinpath("claude_usage.py")
@@ -739,6 +757,18 @@ def _ensure_runtime_safety_module(home: Path) -> Path:
     )
 
 
+def _ensure_credential_delivery_module(home: Path) -> None:
+    for source_name, target_name in (
+        ("pier_credential_delivery.py", "_dradar_pier_credential_delivery.py"),
+        ("credential_files.py", "_dradar_credential_files.py"),
+    ):
+        try:
+            content = importlib.resources.files("dradar").joinpath(source_name).read_bytes()
+        except (FileNotFoundError, OSError) as exc:
+            raise RunnerError("Pier credential delivery helper is missing; reinstall or upgrade dradar") from exc
+        _materialize_shared_file(home / target_name, content)
+
+
 def _ensure_worker_event_module(home: Path) -> Path:
     """Copy the tiny Pier->CLI lifecycle sidecar helper into the run dir."""
     _materialize_shared_file(
@@ -749,6 +779,7 @@ def _ensure_worker_event_module(home: Path) -> Path:
         home / "_dradar_artifact_boundary_win.py",
         importlib.resources.files("dradar").joinpath("artifact_boundary_win.py").read_bytes(),
     )
+    _ensure_credential_delivery_module(home)
     try:
         source = (
             importlib.resources.files("dradar")
@@ -1335,6 +1366,21 @@ def _agent_timeout_multiplier(assignment: dict, task_path: Path) -> float:
     return math.ceil(raw * 1000) / 1000
 
 
+def _auth_source_hooks() -> dict[str, Callable]:
+    """Built-in source hooks; kept late-bound for embedding and compatibility."""
+    return {
+        "codex_auth_path": codex_auth_path,
+        "claude_subscription_session": claude_subscription_session,
+        "grok_subscription_session": grok_subscription_session,
+        "kimi_subscription_session": kimi_subscription_session,
+        "antigravity_subscription_session": antigravity_subscription_session,
+        "codebuddy_subscription_session": codebuddy_subscription_session,
+        "create_deepseek_auth_json": create_deepseek_auth_json,
+        "create_deepseek_api_key_file": create_deepseek_api_key_file,
+        "create_zcode_api_key_file": create_zcode_api_key_file,
+    }
+
+
 def build_pier_command(
     assignment: dict,
     tasks_root: Path,
@@ -1344,6 +1390,7 @@ def build_pier_command(
     dev_agent: str | None = None,
     provider_auth_path: Path | None = None,
     provider_cli_path: Path | None = None,
+    managed_auth_config: Path | None = None,
     environment_build_timeout_multiplier: float | None = (
         DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER
     ),
@@ -1401,6 +1448,13 @@ def build_pier_command(
                 "pier not found on PATH (run: uv tool install datacurve-pier)"
             )
         pier_command = [pier]
+    managed = managed_auth_config is not None
+    if managed and (agent != "codex" or provider != DEFAULT_CODEX_PROVIDER
+                    or assignment.get("auth_runtime") != "codex-managed-at-v1"):
+        raise RunnerError("managed runtime requires an explicit compatible assignment")
+    if managed and assignment.get("auth_cohort_id"):
+        from .managed_auth_selection import trial_platform_ready
+        if not trial_platform_ready():raise RunnerError("managed trial requires verified macOS arm64 and local Linux arm64 Docker")
     deepseek_catalog = None
     if provider == DEEPSEEK_PROVIDER:
         _validate_deepseek_assignment(assignment)
@@ -1408,8 +1462,12 @@ def build_pier_command(
         _ensure_deepseek_agent_module(home)
         agent_args = ["--agent-import-path", DEEPSEEK_AGENT_IMPORT_PATH]
     elif agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
-        _ensure_codex_agent_module(home)
-        agent_args = ["--agent-import-path", CODEX_AGENT_IMPORT_PATH]
+        if managed:
+            managed_package, managed_bridge = _ensure_codex_managed_module(home)
+            agent_args = ["--agent-import-path", managed_package + ".pier_codex_managed:CodexManaged"]
+        else:
+            _ensure_codex_agent_module(home)
+            agent_args = ["--agent-import-path", CODEX_AGENT_IMPORT_PATH]
     elif agent == CLAUDE_AGENT:
         _validate_claude_assignment(assignment)
         _ensure_claude_agent_module(home)
@@ -1417,17 +1475,14 @@ def build_pier_command(
     elif agent == GROK_AGENT:
         _validate_grok_assignment(assignment)
         _ensure_grok_agent_module(home)
-        _ensure_shared_oauth_environment_module(home)
         agent_args = ["--agent-import-path", GROK_AGENT_IMPORT_PATH]
     elif agent == KIMI_AGENT:
         _validate_kimi_assignment(assignment)
         _ensure_kimi_agent_module(home)
-        _ensure_shared_oauth_environment_module(home)
         agent_args = ["--agent-import-path", KIMI_AGENT_IMPORT_PATH]
     elif agent == ANTIGRAVITY_AGENT:
         _validate_antigravity_assignment(assignment)
         _ensure_antigravity_agent_module(home)
-        _ensure_shared_oauth_environment_module(home)
         agent_args = ["--agent-import-path", ANTIGRAVITY_AGENT_IMPORT_PATH]
     elif agent == ZCODE_AGENT:
         _validate_zcode_assignment(assignment)
@@ -1454,14 +1509,6 @@ def build_pier_command(
         "--disable-verification",
         "--yes",
     ]
-    if agent in (GROK_AGENT, KIMI_AGENT, ANTIGRAVITY_AGENT):
-        if provider_auth_path is None:
-            raise RunnerError("subscription OAuth credential is unavailable")
-        cmd += [
-            "--environment-import-path", SHARED_OAUTH_ENV_IMPORT_PATH,
-            "--ek", "shared_oauth_mounts_json="
-            + _shared_oauth_mounts_json(agent, provider_auth_path),
-        ]
     multiplier = _agent_timeout_multiplier(assignment, task_path)
     if not math.isclose(multiplier, 1.0):
         cmd += ["--agent-timeout-multiplier", f"{multiplier:.6f}"]
@@ -1484,8 +1531,8 @@ def build_pier_command(
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         cmd += ["--ae", f"{var}=trial@dradar.invalid"]
     if agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
-        auth = codex_auth_path()
-        if not auth.is_file():
+        auth = None if managed else (provider_auth_path or codex_auth_path())
+        if not managed and not auth.is_file():
             raise RunnerError(f"codex auth not found: {auth} (run `codex login` first)")
         allowlist = _ensure_allowlist(home)
         submission_prompt = _ensure_codex_submission_prompt(
@@ -1496,7 +1543,6 @@ def build_pier_command(
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"config_toml_file={allowlist}",
             "--ak", f"prompt_template_path={submission_prompt}",
-            "--ae", f"CODEX_AUTH_JSON_PATH={auth}",
         ]
         # The caller must resolve npm's stable tag to an exact version before
         # every task start. Pier bakes `npm install -g @openai/codex@...` into
@@ -1510,6 +1556,12 @@ def build_pier_command(
                 "a verified exact stable Codex CLI version is required before "
                 "starting the task container"
             )
+        if managed:
+            if version != "0.154.0":
+                raise RunnerError("managed runtime requires Codex 0.154.0")
+            cmd += ["--ak", f"managed_config_file={managed_auth_config}",
+                    "--ak", f"managed_bridge_file={managed_bridge}",
+                    "--ak", f"managed_package={managed_package}"]
         cmd += ["--ak", f"version={version}"]
     elif agent == "codex" and provider == DEEPSEEK_PROVIDER:
         if provider_auth_path is None or not provider_auth_path.is_file():
@@ -1533,7 +1585,6 @@ def build_pier_command(
             "--ak", f"config_toml_file={config_path}",
             "--ak", f"model_catalog_json_file={deepseek_catalog}",
             "--ak", f"prompt_template_path={submission_prompt}",
-            "--ae", f"CODEX_AUTH_JSON_PATH={provider_auth_path}",
             "--ak", f"version={_deepseek_codex_version(assignment)}",
         ]
     elif agent == "codex":
@@ -1547,15 +1598,10 @@ def build_pier_command(
                 "Claude Code subscription OAuth is unavailable; run "
                 "`dradar provider setup claude` in your own interactive Terminal"
             )
-        credential_argument = (
-            "oauth_config_file" if provider_auth_path.name == ".credentials.json"
-            else "oauth_token_file"
-        )
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"version={CLAUDE_CLI_VERSION}",
-            "--ak", f"{credential_argument}={provider_auth_path}",
             "--ak", f"disallowed_tools={CLAUDE_DISALLOWED_TOOLS}",
             "--ae", "API_TIMEOUT_MS=3000000",
             "--ae", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000",
@@ -1573,7 +1619,6 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"api_key_file={provider_auth_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={DSH_VERSION}",
             "--ak", f"artifact_assignment_id={assignment['assignment_id']}",
@@ -1597,8 +1642,6 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"auth_json_file={provider_auth_path}",
-            "--ak", "shared_oauth=true",
             "--ak", f"grok_cli_file={provider_cli_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={GROK_CLI_VERSION}",
@@ -1620,8 +1663,6 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"auth_json_file={provider_auth_path}",
-            "--ak", "shared_oauth=true",
             "--ak", f"kimi_cli_file={provider_cli_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={KIMI_CLI_VERSION}",
@@ -1638,8 +1679,6 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"auth_home_dir={provider_auth_path}",
-            "--ak", "shared_oauth=true",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={ANTIGRAVITY_CLI_VERSION}",
         ]
@@ -1668,7 +1707,6 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"api_key_file={provider_auth_path}",
             "--ak", f"zcode_cli_file={provider_cli_path}",
             "--ak", f"session_timeout_sec={_zcode_session_timeout_sec(assignment)}",
             "--ak", f"prompt_template_path={submission_prompt}",
@@ -1686,10 +1724,24 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"auth_dir={provider_auth_path}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={CODEBUDDY_CLI_VERSION}",
         ]
+    try:
+        credential_source = (
+            auth if agent == "codex" and provider == DEFAULT_CODEX_PROVIDER
+            else provider_auth_path
+        )
+        binding = None if managed else AUTH_REGISTRY.bind_existing(agent, provider, credential_source)
+        if binding is not None:
+            cmd += binding.pier_args()
+            if binding.capabilities.shares_native_store:
+                _ensure_shared_oauth_environment_module(home)
+                cmd += binding.environment_args(
+                    SHARED_OAUTH_ENV_IMPORT_PATH, _shared_oauth_mounts_json,
+                )
+    except ContainerAuthError as exc:
+        raise RunnerError(str(exc)) from exc
     return cmd
 
 
@@ -4017,11 +4069,29 @@ def run_trial(
     worker_event_source: Callable[[], object | None] | None = None,
     environment_build_timeout_multiplier: float | None = None,
     build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
+    on_auth_observed: Callable[[dict], None] | None = None,
+    managed_auth_config: Path | None = None,
 ) -> TrialArtifacts:
     try:
         preflight_artifact_platform(work_dir)
     except UnsafeArtifact as exc:
         raise RunnerError(PLATFORM_PREFLIGHT_MESSAGE) from exc
+    if assignment.get("auth_runtime") not in (None, "codex-managed-at-v1"):
+        raise RunnerError("unsupported authentication runtime")
+    effective_agent = dev_agent or assignment["agent"]
+    openai_codex = (effective_agent == "codex" and assignment.get("agent") == "codex"
+                    and (assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER) == DEFAULT_CODEX_PROVIDER)
+    if openai_codex:
+        from .managed_auth_selection import selection_path, selection_requested
+        if selection_requested():
+            if assignment.get("auth_runtime") != "codex-managed-at-v1":
+                raise RunnerError("managed runtime requires an explicit compatible assignment")
+            if managed_auth_config is None:
+                managed_auth_config = selection_path()
+    if assignment.get("auth_runtime") == "codex-managed-at-v1" and managed_auth_config is None:
+        raise RunnerError("managed assignment requires explicit local custody selection")
+    if managed_auth_config is not None and on_worker_registered is None:
+        raise RunnerError("managed runtime requires the ownership registration callback")
     effective_assignment = assignment
     codex_cli_version = None
     kimi_cli_version = None
@@ -4032,6 +4102,10 @@ def run_trial(
     codebuddy_cli_version = None
     codex_provider = None
     effective_agent = dev_agent or assignment["agent"]
+    if managed_auth_config is not None and (effective_agent != "codex"
+            or assignment_codex_provider(assignment) not in (None, DEFAULT_CODEX_PROVIDER)
+            or assignment.get("auth_runtime") != "codex-managed-at-v1"):
+        raise RunnerError("managed runtime requires an explicit compatible assignment")
     environment_build_timeout_multiplier = resolve_environment_build_timeout_multiplier(
         environment_build_timeout_multiplier,
     )
@@ -4058,6 +4132,8 @@ def run_trial(
                 "verified latest stable DeepSeek Codex CLI: "
                 f"{codex_cli_version}"
             )
+        elif managed_auth_config is not None:
+            codex_cli_version = "0.154.0"
         else:
             # Resolve before creating the job, extending the lease, or starting
             # Pier. A registry outage therefore consumes no model quota and leaves
@@ -4212,47 +4288,7 @@ def run_trial(
     )
 
     try:
-        if codex_provider == DEEPSEEK_PROVIDER:
-            try:
-                provider_auth_path = create_deepseek_auth_json(work_dir)
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == CLAUDE_AGENT:
-            try:
-                provider_auth_path = provider_stack.enter_context(
-                    claude_subscription_session(work_dir)
-                )
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == DSH_AGENT:
-            try:
-                provider_auth_path = create_deepseek_api_key_file(work_dir)
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == GROK_AGENT:
-            try:
-                provider_cli_path = provider_cli_path or _validated_grok_cli_path()
-                provider_auth_path = provider_stack.enter_context(
-                    grok_subscription_session(work_dir)
-                )
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == KIMI_AGENT:
-            try:
-                provider_cli_path = provider_cli_path or _validated_kimi_cli_path()
-                provider_auth_path = provider_stack.enter_context(
-                    kimi_subscription_session(work_dir)
-                )
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == ANTIGRAVITY_AGENT:
-            try:
-                provider_auth_path = provider_stack.enter_context(
-                    antigravity_subscription_session(work_dir)
-                )
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
-        elif effective_agent == ZCODE_AGENT:
+        if effective_agent == ZCODE_AGENT:
             try:
                 provider_cli_path, zcode_cli_version = _validated_zcode_cli_path(
                     model=effective_assignment["model"],
@@ -4263,35 +4299,37 @@ def run_trial(
                     "_zcode_cli_version_observed": True,
                 }
                 print(f"verified ZCode CLI version: {zcode_cli_version}")
-                zcode_cli_sha256 = hashlib.sha256(
-                    provider_cli_path.read_bytes()
-                ).hexdigest()
-                provider_auth_path = create_zcode_api_key_file(work_dir)
+                zcode_cli_sha256 = hashlib.sha256(provider_cli_path.read_bytes()).hexdigest()
             except (OSError, ValueError) as exc:
                 raise RunnerError(str(exc)) from exc
-        elif effective_agent == CODEBUDDY_AGENT:
-            try:
-                provider_auth_path = provider_stack.enter_context(
-                    codebuddy_subscription_session(work_dir)
-                )
-            except (OSError, ValueError) as exc:
-                raise RunnerError(str(exc)) from exc
+        try:
+            auth_binding = None if managed_auth_config is not None else provider_stack.enter_context(AUTH_REGISTRY.session(
+                AuthRequest(effective_agent, codex_provider, work_dir),
+                _auth_source_hooks(),
+            ))
+            if auth_binding is not None:
+                provider_auth_path = auth_binding.source
+                if on_auth_observed is not None:
+                    delivery = auth_binding.capabilities.delivery
+                    if delivery not in {"file-copy", "shared-directory", "process-token"}:
+                        delivery = "unknown"
+                    try:
+                        on_auth_observed({"provider": effective_agent,
+                            "auth_stage": "selection", "auth_status": "confirmed",
+                            "auth_delivery": delivery})
+                        on_auth_observed({"provider": effective_agent,
+                            "auth_stage": "adoption", "auth_status": "unknown",
+                            "auth_delivery": delivery})
+                    except Exception:
+                        pass
+        except (OSError, ValueError) as exc:
+            raise RunnerError(str(exc)) from exc
         provider_kwargs = (
             {
                 "provider_auth_path": provider_auth_path,
-                **(
-                    {"provider_cli_path": provider_cli_path}
-                    if effective_agent in (GROK_AGENT, KIMI_AGENT, ZCODE_AGENT) else {}
-                ),
+                **({"provider_cli_path": provider_cli_path} if provider_cli_path is not None else {}),
             }
-            if (
-                codex_provider == DEEPSEEK_PROVIDER
-                or effective_agent in (
-                    CLAUDE_AGENT, GROK_AGENT, KIMI_AGENT, ANTIGRAVITY_AGENT,
-                    ZCODE_AGENT, DSH_AGENT, CODEBUDDY_AGENT,
-                )
-            )
-            else {}
+            if auth_binding is not None else {}
         )
         baseline_request_path = work_dir / (job_name + ".baseline-request.json")
         baseline_request_path.unlink(missing_ok=True)
@@ -4329,6 +4367,8 @@ def run_trial(
                 )
             )
         build_options = dict(provider_kwargs)
+        if managed_auth_config is not None:
+            build_options["managed_auth_config"] = managed_auth_config
         # Keep the default path compatible with small embedders/test doubles
         # that still implement the historical positional builder signature;
         # build_pier_command itself carries the production default. Explicit
@@ -4372,6 +4412,25 @@ def run_trial(
         worker_event_path = work_dir / f"{job_name}.worker-events.jsonl"
         worker_event_path.unlink(missing_ok=True)
         env[WORKER_EVENT_FILE_ENV] = str(worker_event_path)
+        managed_permit = work_dir / (job_name + ".managed-start.json")
+        env.pop("DRADAR_MANAGED_START_PERMIT", None)
+        env.pop("DRADAR_MANAGED_STATUS_FILE", None)
+        env.pop("DRADAR_MANAGED_EVENT_FILE", None)
+        env.pop("DRADAR_MANAGED_COHORT_ID", None)
+        managed_observation_reader = None
+        if managed_auth_config is not None:
+            managed_permit.unlink(missing_ok=True)
+            env["DRADAR_MANAGED_START_PERMIT"] = str(managed_permit)
+            managed_status = work_dir / (job_name + ".managed-status.json")
+            managed_status.unlink(missing_ok=True)
+            env["DRADAR_MANAGED_STATUS_FILE"] = str(managed_status)
+            if assignment.get('auth_cohort_id'):
+                from .auth_observation import ObservationReader
+                observation_path=work_dir/(job_name+'.auth-observations.jsonl')
+                observation_path.unlink(missing_ok=True)
+                env['DRADAR_MANAGED_EVENT_FILE']=str(observation_path)
+                env['DRADAR_MANAGED_COHORT_ID']=assignment['auth_cohort_id']
+                managed_observation_reader=ObservationReader(observation_path,on_auth_observed,assignment)
         env.pop(BASELINE_REQUEST_ENV, None)
         if baseline_request_path.is_file():
             env[BASELINE_REQUEST_ENV] = str(baseline_request_path)
@@ -4438,12 +4497,15 @@ def run_trial(
                     )
                     if on_worker_registered is not None:
                         on_worker_registered(event)
+                    if managed_auth_config is not None:
+                        _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}')
                 # Start the local watchdog only after server ownership bind and
                 # the structured worker event. No model runtime is charged to
                 # image build/provider bootstrap.
                 started = time.time()
                 next_beat = started + HEARTBEAT_SEC
                 while True:
+                    if managed_observation_reader is not None:managed_observation_reader.drain()
                     try:
                         proc.wait(timeout=min(30, HEARTBEAT_SEC))
                         break
@@ -4534,22 +4596,12 @@ def run_trial(
                     "artifacts"
                 )
     finally:
-        if provider_auth_path is not None:
-            if (
-                codex_provider == DEEPSEEK_PROVIDER
-                or effective_agent in (DSH_AGENT, ZCODE_AGENT)
-            ):
-                try:
-                    provider_auth_path.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    raise RunnerError(
-                        f"could not remove temporary provider credential file "
-                        f"{provider_auth_path}: {exc}"
-                    ) from exc
+        if "managed_observation_reader" in locals() and managed_observation_reader is not None:
+            managed_observation_reader.drain()
         try:
-            provider_stack.close()
+            # Pass failures/cancellation through to the provider's native
+            # persistence policy; close() would incorrectly report success.
+            provider_stack.__exit__(*sys.exc_info())
         except (OSError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
     if started is None:

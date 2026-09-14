@@ -34,6 +34,7 @@ from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
 from .image_cache import cmd_config_set, cmd_config_show
 from .leases import cmd_leases, cmd_release
 from .provider_config import cmd_provider_setup, cmd_provider_status
+from .managed_auth_selection import cmd_managed_auth
 from .ota.integration import cmd_update_doctor, cmd_update_prepare, cmd_update_status
 from .run_plans import cmd_progress_plan, cmd_run_plan, cmd_stop_plan
 from .runloop import (
@@ -433,6 +434,20 @@ def main(argv: list[str] | None = None) -> int:
         "provider", help="configure local credentials for an optional model provider")
     provider_sub = p_provider.add_subparsers(
         dest="provider_command", required=True)
+    p_managed = provider_sub.add_parser("codex-managed", help="explicitly manage a dedicated Codex authentication source")
+    managed_sub = p_managed.add_subparsers(dest="managed_auth_command", required=True)
+    for action in ("login", "status", "use-native", "recover", "revoke"):
+        action_help = {
+            "login": "create and select a fresh dedicated login (downloads the pinned official runtime if needed)",
+            "status": "read local readiness without OAuth, quota or model requests",
+            "use-native": "use ordinary credentials for future tasks; retain managed recovery material",
+            "recover": "recover a pending transaction forward without OAuth",
+            "revoke": "locally revoke this managed source; does not revoke provider OAuth",
+        }
+        command = managed_sub.add_parser(action, help=action_help[action])
+        if action == "login":
+            command.add_argument("--codex-bin", type=Path, help="verified Codex 0.154.0 native executable")
+        command.set_defaults(func=cmd_managed_auth)
     p_provider_setup = provider_sub.add_parser(
         "setup", help="securely configure a provider credential or OAuth session")
     p_provider_setup.add_argument(

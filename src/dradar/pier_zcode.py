@@ -26,6 +26,13 @@ from pier.models.agent.network import NetworkAllowlist
 from pier.models.trajectories import Agent, FinalMetrics, Step, Trajectory
 from pier.utils.trajectory_metrics import populate_context_from_final_metrics
 try:
+    from _dradar_pier_credential_delivery import inject_private_files
+except ModuleNotFoundError as exc:
+    if exc.name != "_dradar_pier_credential_delivery":
+        raise
+    from dradar.pier_credential_delivery import inject_private_files
+
+try:
     from _dradar_worker_events import emit_worker_registered, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import emit_worker_registered, verify_task_baseline
@@ -1253,7 +1260,7 @@ class ZCodeBigModel(BaseInstalledAgent):
             await environment.upload_file(self._zcode_cli_file, remote_cli)
             await environment.upload_file(local_runner, remote_runner)
             await environment.upload_file(local_instruction, instruction_path)
-            await environment.upload_file(self._api_key_file, remote_key)
+            await inject_private_files(self, environment, [(self._api_key_file, remote_key)])
             targets = " ".join(
                 shlex.quote(item)
                 for item in (remote_cli, remote_runner, instruction_path, remote_key)

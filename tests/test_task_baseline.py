@@ -160,6 +160,8 @@ def test_codex_model_starts_only_after_full_commit_evidence(source, monkeypatch)
         assert json.loads(request.with_suffix(".resolved.json").read_text())["resolved_commit"] == full
     mocked = AsyncMock(side_effect=model)
     monkeypatch.setattr(Codex, "run", mocked)
+    # This baseline-only test deliberately bypasses the real auth constructor.
+    monkeypatch.setattr(Codex, "_resolve_auth_json_path", lambda self: None)
     asyncio.run(object.__new__(CodexRegistered).run("ordinary fixture task", LocalEnvironment(repo), None))
     mocked.assert_awaited_once()
 
