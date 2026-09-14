@@ -46,6 +46,8 @@ class CodexManaged(Codex):
                  managed_package: str = 'dradar', **kwargs):
         if managed_package != 'dradar' and not re.fullmatch(r'_dradar_managed_auth_[a-f0-9]{12}', managed_package):
             raise ValueError('managed package invalid')
+        self._observation_sink = None
+        self._observed_states = set()
         self._managed_package = managed_package
         self._managed_config_file = Path(managed_config_file)
         self._managed_bridge_file = Path(managed_bridge_file)
@@ -109,6 +111,24 @@ class CodexManaged(Codex):
                 or value.get('native_acceptance') not in ('confirmed', 'unknown')
                 or value.get('request_used') != 'unknown'):
             raise RuntimeError('managed status invalid')
+        sink=self._observation_sink
+        if sink is not None:
+            generation=value.get('generation')
+            if generation and value.get('native_acceptance')=='confirmed' and ('adoption',generation) not in self._observed_states:
+                self._observed_states.add(('adoption',generation))
+                sink.emit('adoption','confirmed',generation=generation)
+                sink.emit('request','unknown',generation=generation)
+            lifecycle=value.get('lifecycle',[])
+            if isinstance(lifecycle,list) and len(lifecycle)<=2:
+                for item in lifecycle:
+                    if not isinstance(item,dict) or set(item)!={'state','at','generation','native_closed'}:continue
+                    if not isinstance(item['at'],str) or not isinstance(item['state'],str) or type(item['native_closed']) is not bool:continue
+                    if not isinstance(item['generation'],str) or not re.fullmatch(r'[a-f0-9]{32}',item['generation']):continue
+                    identity=(item['state'],item['at'],item['generation'],item['native_closed'])
+                    if identity in self._observed_states:continue
+                    if item['state']=='running' or item['native_closed'] is True:
+                        self._observed_states.add(identity)
+                        sink.emit('execution','confirmed',generation=item['generation'],observed_at=item['at'],auth_action='end' if item['native_closed'] is True else 'start')
         destination = os.environ.get('DRADAR_MANAGED_STATUS_FILE')
         if destination:
             # Retain only finite control metadata, never native response bodies.
@@ -130,6 +150,7 @@ class CodexManaged(Codex):
             'generation': material.revision, 'access_token': material.token,
             'account_id': account_id, 'expires_at': material.expires_at})
         await self._publish(environment, root, 'current.json', {'generation': material.revision}, replace=True)
+        if self._observation_sink is not None:self._observation_sink.emit("delivery","confirmed",generation=material.revision)
 
     @with_prompt_template
     async def run(self, instruction, environment, context):
@@ -137,6 +158,13 @@ class CodexManaged(Codex):
             raise ValueError('model required')
         await verify_task_baseline(environment)
         session = self._session()
+        observation_path=os.environ.get('DRADAR_MANAGED_EVENT_FILE')
+        cohort=os.environ.get('DRADAR_MANAGED_COHORT_ID','')
+        if observation_path and re.fullmatch(r'[a-f0-9]{32}',cohort):
+            self._observation_sink=self._module('auth_observation').ObservationSink(observation_path,session,cohort)
+            session.observe=self._observation_sink.session_observation
+            session.observe_v2=True
+            self._observation_sink.emit('selection','confirmed')
         root = '/tmp/dradar-managed-' + uuid.uuid4().hex
         env = self.build_process_env({'CODEX_HOME': root + '/codex-home'})
         for key in ('OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_AUTH_JSON_PATH', 'CODEX_FORCE_AUTH_JSON'):
@@ -235,6 +263,9 @@ class CodexManaged(Codex):
                 except Exception:
                     if not had_failure:
                         raise
+
+                finally:
+                    if self._observation_sink is not None:self._observation_sink.coverage()
 
     @private_post_run
     def populate_context_post_run(self, context):

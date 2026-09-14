@@ -12,6 +12,7 @@ let nextId = 1, currentAccount, updateBusy = false;
 const pending = new Map(), completed = new Map(), waiters = new Map();
 let buffer = Buffer.alloc(0);
 let lastHeartbeat, lastHeartbeatAt = Date.now();
+let nativeClosed = false, lastState = "failed", lifecycle = [];
 function hostAlive() {
   const heartbeat = readPrivate(path.join(root, 'heartbeat.json'));
   if (typeof heartbeat.sequence !== 'string' || !/^[a-f0-9]{32}$/.test(heartbeat.sequence)) throw new Error('heartbeat_invalid');
@@ -50,8 +51,13 @@ function writeMetadata(name, value) {
   fs.renameSync(temporary, path.join(root, name));
 }
 function status(state) {
+  lastState = state;
+  if (state === 'running' && !lifecycle.some(e => e.state === 'running'))
+    lifecycle.push({ state: 'running', at: new Date().toISOString(), generation: adopted, native_closed: false });
+  if (nativeClosed && !lifecycle.some(e => e.native_closed))
+    lifecycle.push({ state, at: new Date().toISOString(), generation: adopted, native_closed: true });
   writeMetadata('status.json', { schema: 'dradar.managed_consumer.v1', state,
-    generation: adopted || null, native_acceptance: adopted ? 'confirmed' : 'unknown', request_used: 'unknown' });
+    generation: adopted || null, native_closed: nativeClosed, lifecycle, native_acceptance: adopted ? 'confirmed' : 'unknown', request_used: 'unknown' });
   process.stdout.write(JSON.stringify({ type: 'managed_runtime', state }) + '\n');
 }
 function generation() {
@@ -165,6 +171,7 @@ async function main() {
   child.stderr.on('data', () => {}); // Never copy auth/provider error bodies to logs.
   child.on('error', () => shutdown(1));
   child.on('exit', () => { if (!exiting) shutdown(1); });
+  child.on('close', () => { nativeClosed = true; try { status(lastState); } catch (_) {} });
   await rpc('initialize', { clientInfo: { name: 'dradar_managed', version: '1' }, capabilities: { experimentalApi: true } });
   send({ method: 'initialized', params: {} });
   await applyGeneration(initial);

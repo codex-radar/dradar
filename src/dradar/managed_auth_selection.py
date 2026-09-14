@@ -135,3 +135,25 @@ def cmd_managed_auth(args):
         code = str(error) if isinstance(error, RefreshUnavailable) else 'managed_local_input_invalid'
         _print_message('受控认证操作未完成：' + code + '。请检查固定程序/本地状态；未自动切换账号或模式。')
         return 1
+
+TRIAL_CAPABILITY = 'codex-managed-trial-observation-v2'
+
+def trial_platform_ready(environ=None):
+    """Bounded read-only topology check; never discovers or refreshes credentials."""
+    import platform,shutil,subprocess
+    env=dict(os.environ if environ is None else environ)
+    if (platform.system(),platform.machine())!=('Darwin','arm64'):return False
+    docker=shutil.which('docker',path=env.get('PATH'))
+    if docker is None:return False
+    context=env.get('DOCKER_CONTEXT','').strip()
+    endpoint=env.get('DOCKER_HOST','').strip() if not context else ''
+    try:
+        if not endpoint:
+            args=[docker,'context','inspect']+([context] if context else [])+['--format','{{.Endpoints.docker.Host}}']
+            result=subprocess.run(args,env=env,capture_output=True,text=True,timeout=5)
+            if result.returncode:return False
+            endpoint=result.stdout.strip()
+        if not endpoint.startswith('unix://'):return False
+        result=subprocess.run([docker,'info','--format','{{.OSType}}/{{.Architecture}}'],env=env,capture_output=True,text=True,timeout=5)
+        return result.returncode==0 and result.stdout.strip() in {'linux/aarch64','linux/arm64'}
+    except (OSError,subprocess.TimeoutExpired):return False

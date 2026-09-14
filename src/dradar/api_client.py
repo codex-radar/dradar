@@ -539,12 +539,12 @@ class ApiClient:
         path = self._benchmark_path("/api/v1/assignment")
         return self._get(self._query_path(path, "inventory", "true"))
 
-    def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None):
-        from .managed_auth_selection import load_selection, selection_requested, PROFILE, CAPABILITY
+    def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None, assignment_id=None):
+        from .managed_auth_selection import load_selection, selection_requested, PROFILE, CAPABILITY, TRIAL_CAPABILITY, trial_platform_ready
         from .auth_refresh import RefreshUnavailable
         if not selection_requested():
             return None
-        params = {key: value for key, value in {"task_id":task_id,"model":model,"effort":effort}.items() if value is not None}
+        params = {key: value for key, value in {"task_id":task_id,"model":model,"effort":effort,"assignment_id":assignment_id}.items() if value is not None}
         try:
             result = self._check(self._request("GET", "/api/v1/runner/auth-runtime-capabilities", params=params, timeout=3.0, retry_rate_limit=False))
         except ApiError:
@@ -555,6 +555,8 @@ class ApiClient:
         # A server-confirmed non-Codex cell keeps its own provider contract.
         if params and result.get("applicable") is False:
             return None
+        if TRIAL_CAPABILITY not in self.capabilities or not trial_platform_ready():
+            raise ApiError("当前平台或 Docker 拓扑未获灰度准入，受控操作未继续。", status_code=409, code="managed_trial_platform_unavailable")
         try:
             selected = load_selection()
         except (OSError, ValueError, TypeError, RefreshUnavailable):
@@ -573,14 +575,14 @@ class ApiClient:
         active = data.get("active")
         if active is None:
             active = [data.get("assignment")] if data.get("assignment") else []
-        negotiate = False
+        continuation_ids = []
         for item in active:
             if item.get("agent") == "codex" and item.get("provider") in (None, "openai"):
                 if item.get("auth_runtime") != PROFILE:
                     raise ApiError("已有任务绑定普通认证；请显式选择兼容模式完成它，或释放后重新领取。", status_code=409, code="auth_runtime_mismatch")
-                negotiate = True
-        if negotiate:
-            self._negotiate_managed_auth_runtime()
+                continuation_ids.append(item.get("assignment_id"))
+        for assignment_id in continuation_ids:
+            self._negotiate_managed_auth_runtime(assignment_id=assignment_id)
 
     def claim_assignment(
         self,
@@ -764,6 +766,10 @@ class ApiClient:
         return self._post(
             "/api/v1/runner/flight-events", json={"events": events}, timeout=3.0,
         )
+
+    def auth_flight_events(self, events):
+        """Optional diagnostics get one bounded attempt, never core retry policy."""
+        return self._check(self._request('POST','/api/v1/runner/flight-events',json={'events':events},timeout=3.0,retry_rate_limit=False))
 
     def mark_stopped(
         self,

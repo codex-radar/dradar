@@ -31,6 +31,7 @@ class HostAccessSession:
 
     check_session_contract: Callable[[], None] | None = field(default=None, repr=False)
     renew_rejected: Callable[[], None] | None = field(default=None, repr=False)
+    observe_v2: bool = field(default=False, repr=False)
     _principal: str = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -49,11 +50,11 @@ class HostAccessSession:
         material = self._material()
         return AccessState(material.revision, material.usable())
 
-    def _observe(self, stage: str, status: str) -> None:
+    def _observe(self, stage: str, status: str, **metadata) -> None:
         if self.observe is not None:
             try:
                 self.observe({'provider': self.authority.provider, 'auth_stage': stage,
-                              'auth_status': status, 'auth_delivery': 'host-at'})
+                              'auth_status': status, 'auth_delivery': 'host-at', **metadata})
             except Exception:
                 pass
 
@@ -66,7 +67,17 @@ class HostAccessSession:
             return AccessState(current.revision, current.usable and current.revision != rejected_revision)
         if rejected_revision is not None and self.renew_rejected is None:
             raise RefreshUnavailable('rejected_renewal_unsupported')
-        result = gate.ensure(state, self.renew if rejected_revision is None else self.renew_rejected,
+        def renew_once():
+            selected=self.renew if rejected_revision is None else self.renew_rejected
+            if not self.observe_v2:return selected()
+            transaction=uuid.uuid4().hex
+            self._observe('refresh','waiting',auth_action='start',auth_transaction_id=transaction)
+            try:selected()
+            except BaseException:
+                self._observe('refresh','unknown',auth_action='end',auth_transaction_id=transaction)
+                raise
+            else:self._observe('refresh','confirmed',auth_action='end',auth_transaction_id=transaction)
+        result = gate.ensure(state, renew_once,
                              before_renew=self.check_renewal_contract)
         material = self._material()
         # An external replacement between the locked read and projection must

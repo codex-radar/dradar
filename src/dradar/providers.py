@@ -2033,6 +2033,8 @@ def advertised_capabilities(
     try:
         if load_selection(environ) is not None:
             capabilities.append(managed_capability)
+            from .managed_auth_selection import trial_platform_ready, TRIAL_CAPABILITY
+            if trial_platform_ready(environ):capabilities.append(TRIAL_CAPABILITY)
     except (OSError, ValueError, TypeError, RefreshUnavailable):
         pass
     if deepseek_catalog_error() is None:

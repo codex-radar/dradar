@@ -7,12 +7,13 @@ from dradar.api_client import ApiClient, ApiError
 def client(monkeypatch, response, *, selected=True):
     monkeypatch.setattr(selection,'load_selection',lambda: object() if selected else None)
     monkeypatch.setattr(selection,'selection_requested',lambda:selected)
+    monkeypatch.setattr(selection,'trial_platform_ready',lambda:True)
     calls=[]
     def request(req):
         calls.append((req.method,req.url.path,req.content))
         if req.method=='GET':return response
         return httpx.Response(200,json={'assignment':{'auth_runtime':selection.PROFILE}})
-    api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),capabilities=[selection.CAPABILITY])
+    api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),capabilities=[selection.CAPABILITY,selection.TRIAL_CAPABILITY])
     return api,calls
 
 

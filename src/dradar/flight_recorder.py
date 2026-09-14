@@ -89,7 +89,7 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
 
 
 EVENT_TYPES = frozenset({
-    "auth_observed",
+    "auth_observed", "auth_observed_v2",
     "session_started", "session_closed", "phase_changed",
     "claim_requested", "claim_accepted", "claim_failed",
     "assignment_checked_out", "assignment_stopped",
@@ -121,6 +121,7 @@ EVENT_KEYS = frozenset({
 })
 ATTRIBUTE_KEYS = frozenset({
     "auth_stage", "auth_status", "auth_delivery",
+    "execution_id", "owner_epoch", "auth_chain_tag", "auth_generation_tag", "auth_transaction_id", "auth_action", "auth_seq", "auth_events_emitted", "auth_events_dropped",
     "attempt", "elapsed_ms", "force", "http_status", "offline_replay",
     "outcome", "phase", "previous_phase", "provider", "release_count",
     "target_workers", "was_running", "worker_slot",
@@ -163,7 +164,17 @@ UPDATE_STATES = frozenset({
     "rollback_pending", "rolled_back", "failed",
 })
 ATTRIBUTE_RULES = {
-    "auth_stage": (str, {"selection", "refresh", "delivery", "adoption", "request", "recovery"}, None),
+    "execution_id": (str, "hex32", None),
+    "owner_epoch": (int, 0, 2_147_483_647),
+    "auth_chain_tag": (str, "hex32", None),
+    "auth_generation_tag": (str, "hex32", None),
+    "auth_transaction_id": (str, "hex32", None),
+    "auth_action": (str, {"start", "end", "ready", "waiting"}, None),
+    "auth_seq": (int, 1, 2_147_483_647),
+    "auth_events_emitted": (int, 0, 2_147_483_647),
+    "auth_events_dropped": (int, 0, 2_147_483_647),
+
+    "auth_stage": (str, {"selection", "refresh", "delivery", "adoption", "request", "recovery", "execution", "coverage"}, None),
     "auth_status": (str, {"unknown", "confirmed", "rejected", "waiting", "unsupported"}, None),
     "auth_delivery": (str, {"unknown", "file-copy", "shared-directory", "process-token", "host-at"}, None),
     "attempt": (int, 1, 100),
@@ -215,6 +226,9 @@ def _safe_attributes(attributes: dict[str, Any] | None) -> dict[str, Any]:
         elif expected is int:
             if type(value) is not int or not allowed_or_min <= value <= maximum:
                 raise ValueError(f"flight-event attribute {key} is out of range")
+        elif allowed_or_min == "hex32":
+            _optional_id(value, field=key)
+            if value is None:raise ValueError('missing observation id')
         elif type(value) is not str or value not in allowed_or_min:
             raise ValueError(f"flight-event attribute {key} is not an allowed value")
         safe[key] = value
@@ -259,12 +273,16 @@ def validate_event(value: Any) -> dict[str, Any]:
         raise ValueError("flight event reason_code is not an allowed value")
     attributes = _safe_attributes(value.get("attributes"))
     auth_keys = {key for key in attributes if key.startswith("auth_")}
-    if value.get("event_type") == "auth_observed":
+    if value.get("event_type") in {"auth_observed","auth_observed_v2"}:
         if (not {"auth_stage", "auth_status", "provider"} <= set(attributes)
                 or value.get("component") != "provider"):
             raise ValueError("authentication evidence requires fixed metadata")
     elif auth_keys:
         raise ValueError("authentication metadata requires its optional event")
+    v2_keys={"execution_id","owner_epoch","auth_chain_tag","auth_generation_tag","auth_transaction_id","auth_action","auth_seq","auth_events_emitted","auth_events_dropped"}
+    if value.get('event_type')=='auth_observed_v2':
+        if not {'execution_id','owner_epoch','attempt','auth_seq'}<=set(attributes):raise ValueError('missing v2 identity')
+    elif set(attributes)&v2_keys:raise ValueError('v2 metadata requires negotiated v2 event')
     canonical = dict(value)
     canonical["attributes"] = attributes
     if len(json.dumps(canonical, separators=(",", ":")).encode("utf-8")) > MAX_EVENT_BYTES:
@@ -348,7 +366,7 @@ class FlightRecorder:
     def _write(path: Path, events: list[dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         checked = [validate_event(event) for event in events]
-        auth_indices = [i for i, event in enumerate(checked) if event["event_type"] == "auth_observed"]
+        auth_indices = [i for i, event in enumerate(checked) if event["event_type"] in {"auth_observed","auth_observed_v2"}]
         drop = set(auth_indices[:-100])
         checked = [event for i, event in enumerate(checked) if i not in drop]
         encoded = [json.dumps(event, sort_keys=True, separators=(",", ":")) for event in checked]
@@ -357,7 +375,7 @@ class FlightRecorder:
             or sum(len(line.encode("utf-8")) + 1 for line in encoded) > MAX_LOG_BYTES
         ):
             optional = next((i for i, event in enumerate(checked)
-                             if event["event_type"] == "auth_observed"), None)
+                             if event["event_type"] in {"auth_observed","auth_observed_v2"}), None)
             if optional is not None:
                 del encoded[optional]
                 del checked[optional]
@@ -543,6 +561,7 @@ class FlightRecorder:
         request_id: str | None = None,
         reason_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+        occurred_at: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             with _exclusive_file_lock(self.lock_path):
@@ -551,7 +570,7 @@ class FlightRecorder:
                     "schema_version": SCHEMA_VERSION,
                     "event_id": uuid.uuid4().hex,
                     "client_id": self.client_id,
-                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "occurred_at": occurred_at or datetime.now(timezone.utc).isoformat(),
                     "seq": self._seq,
                     "event_type": event_type,
                     "component": component,
@@ -583,30 +602,25 @@ class FlightRecorder:
         except (OSError, ValueError):
             return None
 
-    def flush_auth(self, *, batch_id: str | None = None, session_id: str | None = None) -> int:
-        """Optional auth evidence has its own negotiated, never-mixed batch.
-
-        Re-negotiate each optional flush so a server downgrade is not hidden by
-        a persistent capability cache. Even a stale/rolling server's rejection
-        cannot disable core flight events or poison worker registration.
-        """
-        if self.client is None:
-            return 0
+    def flush_auth(self, *, batch_id=None, session_id=None):
+        """Each optional schema is negotiated and flushed independently of core."""
+        if self.client is None:return 0
+        total=0
         try:
             with self._lock:
                 with _exclusive_file_lock(self.lock_path):
-                    if not any(event.get("event_type") == "auth_observed"
-                               and (batch_id is None or event.get("batch_id") == batch_id)
-                               and (session_id is None or event.get("session_id") == session_id)
-                               for event in self._load(self.pending_path)):
-                        return 0
-            caps = self.client.flight_event_capabilities()
-            if (not isinstance(caps, dict) or caps.get("schema_version") != SCHEMA_VERSION
-                    or caps.get("auth_observed_v1") is not True):
-                return 0
-            return self.flush(batch_id=batch_id, session_id=session_id, _auth_only=True)
-        except Exception:
-            return 0
+                    present={event['event_type'] for event in self._load(self.pending_path)
+                             if (batch_id is None or event.get('batch_id')==batch_id)
+                             and (session_id is None or event.get('session_id')==session_id)}
+            if not present & {'auth_observed','auth_observed_v2'}:return 0
+            caps=self.client.flight_event_capabilities()
+            if not isinstance(caps,dict) or caps.get('schema_version')!=SCHEMA_VERSION:return 0
+            for version,name in ((1,'auth_observed_v1'),(2,'auth_observed_v2')):
+                event_type='auth_observed' if version==1 else 'auth_observed_v2'
+                if event_type in present and caps.get(name) is True:
+                    total+=self.flush(batch_id=batch_id,session_id=session_id,_auth_only=True,_auth_version=version)
+        except Exception:return total
+        return total
 
     def flush(
         self,
@@ -615,6 +629,7 @@ class FlightRecorder:
         session_id: str | None = None,
         required_event_id: str | None = None,
         _auth_only: bool = False,
+        _auth_version: int = 1,
     ) -> int:
         """Upload pending events, optionally restricted to one lifecycle scope.
 
@@ -657,7 +672,7 @@ class FlightRecorder:
                         and (session_id is None or event.get("session_id") == session_id)
                     ]
                     scoped = [event for event in scoped
-                              if (event.get("event_type") == "auth_observed") == _auth_only]
+                              if (event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed") if _auth_only else event.get("event_type") not in {"auth_observed","auth_observed_v2"})]
                     if not scoped:
                         return 0
                     if required_event_id is not None:
@@ -686,7 +701,8 @@ class FlightRecorder:
                 record_failure("local_storage_error", 0)
                 return 0
             try:
-                response = self.client.flight_events(batch)
+                sender=getattr(self.client,"auth_flight_events",self.client.flight_events) if _auth_only else self.client.flight_events
+                response = sender(batch)
             except Exception as exc:
                 status = getattr(exc, "status_code", None)
                 reason = (
