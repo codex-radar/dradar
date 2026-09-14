@@ -112,8 +112,11 @@ def acquire_run_lock(home: Path) -> None:
             import fcntl
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        fh.seek(0)
-        holder = fh.read().strip() or "unknown PID"
+        try:
+            fh.seek(0)
+            holder = fh.read().strip() or "unknown PID"
+        except Exception:
+            holder = "unknown PID"
         fh.close()
         sys.exit(
             f"another dradar run is already active on this machine ({holder}).\n"

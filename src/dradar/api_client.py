@@ -173,12 +173,15 @@ class ApiClient:
         self.batch_id = normalize_batch_id(batch_id)
 
     def _request(
-        self, method: str, path: str, *, retry_rate_limit: bool = True, **kw,
+        self, method: str, path: str, *, retry_rate_limit: bool = True, retry_transport: bool = True, **kw,
     ) -> httpx.Response:
         for attempt in range(_RATE_LIMIT_RETRIES + 1):
             try:
                 response = self._client.request(method, path, **kw)
             except httpx.HTTPError as exc:  # transport-level: connect/timeout/etc.
+                if retry_transport and attempt < 3 and method in {"GET", "HEAD"}:
+                    self._sleep(1.0 * (attempt + 1))
+                    continue
                 raise ApiError(f"cannot reach {self.server}: {exc}") from exc
             if (
                 response.status_code != 429
@@ -546,7 +549,7 @@ class ApiClient:
             return None
         params = {key: value for key, value in {"task_id":task_id,"model":model,"effort":effort,"assignment_id":assignment_id}.items() if value is not None}
         try:
-            result = self._check(self._request("GET", "/api/v1/runner/auth-runtime-capabilities", params=params, timeout=3.0, retry_rate_limit=False))
+            result = self._check(self._request("GET", "/api/v1/runner/auth-runtime-capabilities", params=params, timeout=3.0, retry_rate_limit=False, retry_transport=False))
         except ApiError:
             raise ApiError("服务端尚未确认受控模式支持；请检查服务端支持或本地模式，没有自动降级。", status_code=409, code="auth_runtime_unavailable") from None
         if (not isinstance(result, dict) or result.get("schema") != "dradar.auth-runtime.v1"
@@ -780,7 +783,7 @@ class ApiClient:
     def flight_event_capabilities(self) -> dict[str, Any]:
         """Optional, bounded negotiation; callers tolerate old servers."""
         return self._check(self._request("GET", "/api/v1/runner/flight-event-capabilities",
-                                         timeout=1.0, retry_rate_limit=False))
+                                         timeout=1.0, retry_rate_limit=False, retry_transport=False))
 
     def flight_events(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Idempotently upload privacy-allowlisted lifecycle events."""

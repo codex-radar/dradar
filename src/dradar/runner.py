@@ -266,27 +266,27 @@ cd /app
 mkdir -p /logs/artifacts
 base_ref='__DRADAR_BASE_COMMIT__'
 if [ -n "$base_ref" ]; then
-  base=$(git rev-parse --verify "${base_ref}^{commit}")
+  base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
 else
-  base=$(git rev-list --max-parents=0 HEAD | tail -1)
+  base=$(git -c safe.directory="$PWD" rev-list --max-parents=0 HEAD | tail -1)
 fi
-git diff --binary "$base" HEAD > /logs/artifacts/model.patch
+git -c safe.directory="$PWD" diff --binary "$base" HEAD > /logs/artifacts/model.patch
 """
 
 # Antigravity frequently finishes with a valid implementation still staged or
 # uncommitted even though the prompt asks it to commit.  The published task
 # hook only compares the starting commit with HEAD, silently turning that work
 # into an empty patch.  Use a provider-owned hook that snapshots the complete
-# final worktree. ``git add -N`` makes new, non-ignored files visible to
-# ``git diff`` without staging their contents or creating a commit.
+# final worktree. ``git -c safe.directory="$PWD" add -N`` makes new, non-ignored files visible to
+# ``git -c safe.directory="$PWD" diff`` without staging their contents or creating a commit.
 ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
 set -eu
 cd /app
 mkdir -p /logs/artifacts
 base_ref='__DRADAR_BASE_COMMIT__'
-base=$(git rev-parse --verify "${base_ref}^{commit}")
-git add -N -- .
-git diff --binary "$base" -- > /logs/artifacts/model.patch
+base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
+git -c safe.directory="$PWD" add -N -- .
+git -c safe.directory="$PWD" diff --binary "$base" -- > /logs/artifacts/model.patch
 """
 
 # Claude Code: deny the web tools (and keep pier's default EnterPlanMode deny).
@@ -3524,7 +3524,7 @@ def _dsh_tasks_overlay(
             )
             if not isinstance(base_commit, str) or (
                 base_commit
-                and re.fullmatch(r"[0-9a-f]{40}", base_commit) is None
+                and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is None
             ):
                 raise RunnerError(
                     "DSH task has an invalid metadata.base_commit_hash"
@@ -3535,6 +3535,7 @@ def _dsh_tasks_overlay(
                     "__DRADAR_BASE_COMMIT__", base_commit
                 ),
                 encoding="utf-8",
+                newline="\n",
             )
             hook.chmod(0o755)
         yield overlay_root
@@ -3667,7 +3668,7 @@ def _artifact_tasks_overlay(
                 "build_origin_proof": build_origin_proof,
             }))
             baseline_request_path.chmod(0o600)
-        hook.write_text(collector, encoding="utf-8")
+        hook.write_text(collector, encoding="utf-8", newline="\n")
         hook.chmod(0o755)
         yield overlay_root
 
@@ -3705,7 +3706,7 @@ def _antigravity_tasks_overlay(
     base_commit = task_config.get("metadata", {}).get("base_commit_hash")
     valid_commit = (
         isinstance(base_commit, str)
-        and re.fullmatch(r"[0-9a-f]{40}", base_commit) is not None
+        and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is not None
     )
     # Pompeii's reviewed task pack creates a fixed local tag rather than a
     # portable 40-byte commit id.  Keep the shell substitution fail-closed:
@@ -3734,6 +3735,7 @@ def _antigravity_tasks_overlay(
                 "__DRADAR_BASE_COMMIT__", base_commit
             ),
             encoding="utf-8",
+            newline="\n",
         )
         hook.chmod(0o755)
         yield overlay_root
