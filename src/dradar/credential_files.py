@@ -7,6 +7,7 @@ import math
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 MAX_CREDENTIAL_BYTES = 256 * 1024
@@ -114,3 +115,28 @@ def claude_config_payload(content: bytes) -> dict:
     ):
         raise ValueError("a complete Claude subscription OAuth configuration is required; API credentials are not accepted")
     return {"claudeAiOauth": oauth}
+
+
+CLAUDE_EXPIRY_MARGIN_SECONDS = 300
+CLAUDE_RENEWAL_GUIDANCE = (
+    "Renew the original login with the official Claude CLI, then re-import it with "
+    "`dradar provider setup claude --claude-config-dir <source-directory>` and "
+    "run `dradar provider status claude`. No automatic renewal was performed."
+)
+
+
+class ClaudeCredentialExpired(ValueError):
+    """A structurally valid native login is not safe to start new work with."""
+
+
+def require_fresh_claude_config(payload: dict, *, now: float | None = None) -> None:
+    """Read-only start gate; expiry is milliseconds in the official format.
+
+    Five minutes reserves a small startup/clock-skew window, not a guarantee
+    that authentication or refresh will succeed throughout a model session.
+    Call only after structural validation, never when collecting completed work.
+    """
+    remaining = payload["claudeAiOauth"]["expiresAt"] / 1000 - (time.time() if now is None else now)
+    if remaining <= CLAUDE_EXPIRY_MARGIN_SECONDS:
+        state = "expired" if remaining <= 0 else "expires within five minutes"
+        raise ClaudeCredentialExpired("Claude native OAuth " + state + ". " + CLAUDE_RENEWAL_GUIDANCE)

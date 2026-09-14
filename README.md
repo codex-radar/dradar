@@ -226,6 +226,21 @@ dradar provider setup claude --claude-config-dir /private/official-claude-config
 认证文件也不会进入上传目录。导入配置被明确选择后，不会自动回退到旧 setup-token 或
 遗留的按量 API/云后端认证。可用 `CLAUDE_CLI_PATH` 明确选择现有官方 CLI。
 
+原生 OAuth 在开始新任务前必须还有超过五分钟有效期；已过期或临近到期会阻止
+已知 Claude 任务的领取、补题及容器启动。未限定 Harness 的混合批次中，外部新增且不在初始列表的任务
+仍有 checkout 前检查盲区；容器启动前会再次检查。五分钟只覆盖短启动窗口，不保证整题认证成功。导入仍保留完整
+配置和 refresh token，但导入成功不代表可运行。此检查不自动续签，也不发送模型请求。
+遇到到期提示，请由原凭据所有者在原配置目录运行官方登录恢复原账号（Unix 示例：
+`CLAUDE_CONFIG_DIR=/private/official-claude-config claude auth login --claudeai`；可能需要浏览器确认），
+确认官方已更新该目录的 `.credentials.json`，再执行上述导入命令，
+用 `dradar provider status claude` 检查本地时效。恢复失败时保持停止，不改用其他账号或 API key。
+如果自己的 Claude 补题计划已进入 faulted，先确认使用该计划原有的 `DRADAR_HOME` 和
+`DRADAR_REFILL_PLAN_SCOPE`，恢复后在同一作用域运行 `dradar refill stop` 清除该旧计划，再重启原命令。
+不要在其他用户或其他补题计划的环境中执行；无法确认作用域时，交由原计划启动者处理。
+macOS 官方登录通常写入 Keychain；只有 Keychain 登录而没有上述文件时，不能直接用于此文件导入模式。
+`--live` 会调用模型，不能当作无消耗续签检查。旧 setup-token 不含可检查的 expiresAt，
+本地检查只能验证格式，无法据此保证令牌仍被官方接受。
+
 当前运行合同固定为 Claude Code `2.1.251`，前端展示两张模型卡片：
 
 | 模型卡片 | 原生 effort 格子 |
