@@ -68,7 +68,8 @@ def test_worker_command_reuses_direct_zipapp(monkeypatch, tmp_path):
 @pytest.mark.skipif(os.name == "nt", reason="POSIX verified-fd launch")
 def test_worker_command_preserves_verified_zipapp_fd(monkeypatch, tmp_path):
     artifact = tmp_path / "candidate.pyz"
-    artifact.write_bytes(b"signed-candidate")
+    with zipfile.ZipFile(artifact, "w") as bundle:
+        bundle.writestr("__main__.py", "raise SystemExit(0)\n")
     with artifact.open("rb") as handle:
         entrypoint = f"/dev/fd/{handle.fileno()}"
         monkeypatch.setattr(sys, "argv", [entrypoint])

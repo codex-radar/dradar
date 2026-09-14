@@ -59,7 +59,7 @@ SCHEMA_VERSION = 1
 # state schema.  A controller with no value here predates per-request runtime
 # selection and would keep spawning pools from its own stale installation.
 # Version 7 also keeps explicit worker counts free of legacy capacity probes.
-CONTROLLER_PROTOCOL_VERSION = 7
+CONTROLLER_PROTOCOL_VERSION = 8
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -437,16 +437,13 @@ def _ensure_controller(home: Path = HOME) -> dict:
 
         launch_id = uuid.uuid4().hex
         log_path = _root(home) / LOG_DIR / CONTROLLER_LOG
-        log_handle = open(log_path, "a", encoding="utf-8")
         env = os.environ.copy()
         env[_LAUNCH_ID_ENV] = launch_id
-        command = [
-            sys.executable, "-m", "dradar.cli", "fleet", "serve", "--internal",
-        ]
+        from .child_entrypoint import command as child_command, popen_options
+        command = [*child_command(), "fleet", "serve", "--internal"]
         kwargs: dict = {
             "env": env,
             "stdin": subprocess.DEVNULL,
-            "stdout": log_handle,
             "stderr": subprocess.STDOUT,
             "close_fds": True,
         }
@@ -456,6 +453,9 @@ def _ensure_controller(home: Path = HOME) -> dict:
             )
         else:
             kwargs["start_new_session"] = True
+        kwargs.update(popen_options(env))
+        log_handle = open(log_path, "a", encoding="utf-8")
+        kwargs["stdout"] = log_handle
         try:
             process = subprocess.Popen(command, **kwargs)
         finally:
@@ -811,12 +811,12 @@ def _spawn_pool(
 ) -> tuple[subprocess.Popen, object]:
     controller_id = str(state["controller_id"])
     log_path = _root(home) / LOG_DIR / f"batch-{batch_id}.log"
-    log_handle = open(log_path, "a", encoding="utf-8")
     executable = runtime_executable or sys.executable
     if not os.path.isabs(executable) or not Path(executable).is_file():
         raise FleetError("invalid DRadar runtime for the new local run")
+    from .child_entrypoint import command as child_command, popen_options
     command = [
-        executable, "-m", "dradar.cli", "resume", "-y",
+        *child_command(executable), "resume", "-y",
         "--batch-id", batch_id, "--workers", str(workers), "--fleet-pool",
     ]
     if credentials_file:
@@ -845,7 +845,6 @@ def _spawn_pool(
     kwargs: dict = {
         "env": env,
         "stdin": subprocess.DEVNULL,
-        "stdout": log_handle,
         "stderr": subprocess.STDOUT,
     }
     # Keep the historical machine-lock file description alive in every pool
@@ -854,14 +853,14 @@ def _spawn_pool(
     from . import machine
 
     lock_handle = machine._lock_handle
-    if lock_handle is not None:
-        os.set_inheritable(lock_handle.fileno(), True)
-        if os.name == "nt":  # pragma: no cover - Windows handle inheritance
-            kwargs["close_fds"] = False
-        else:
-            kwargs["pass_fds"] = (lock_handle.fileno(),)
+    extra_fds = (lock_handle.fileno(),) if lock_handle is not None else ()
+    for descriptor in extra_fds:
+        os.set_inheritable(descriptor, True)
+    kwargs.update(popen_options(env, extra_fds=extra_fds))
     if os.name == "nt":  # pragma: no cover
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    log_handle = open(log_path, "a", encoding="utf-8")
+    kwargs["stdout"] = log_handle
     try:
         process = subprocess.Popen(command, **kwargs)
     except BaseException:

@@ -1,0 +1,58 @@
+name: Fleet verified OTA inheritance
+on:
+  pull_request:
+    paths:
+      - 'src/dradar/child_entrypoint.py'
+      - 'src/dradar/fleet.py'
+      - 'src/dradar/launcher.py'
+      - 'src/dradar/runloop.py'
+      - 'src/dradar/ota/**'
+      - 'tests/test_child_entrypoint.py'
+      - 'tests/test_fleet_ota_process.py'
+      - 'tests/fleet_ota_probe.py'
+      - '.github/workflows/test-fleet-ota.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fleet-ota:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install runtime and tests
+        run: python -m pip install . pytest
+      - name: Obtain immutable released 203 installation fixture
+        shell: python
+        run: |
+          import hashlib
+          from pathlib import Path
+          import urllib.request
+          url = 'https://updates.codexradar.com/releases/stable/s0000000024/v0.5.203/dradar-0.5.203-s0000000024-f6e173114b38-linux-x86_64.pyz'
+          body = urllib.request.urlopen(url, timeout=30).read()
+          assert hashlib.sha256(body).hexdigest() == '33116fa2701abf3efa68f3cd4212c7a78b990fa63210e7b8be463dc23302ed6d'
+          Path('evidence').mkdir(exist_ok=True)
+          Path('evidence/installed203.pyz').write_bytes(body)
+      - name: Exercise actual descendant processes and failure paths without models
+        env:
+          DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-ota-home
+        run: python -m pytest -q tests/test_child_entrypoint.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_workers.py tests/test_ota_integration.py tests/test_mixed_go.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fleet-ota-${{ matrix.os }}-${{ matrix.python }}
+          path: |
+            evidence/native-tests/**/*.json
+            evidence/native-tests/**/*.log
+            evidence/native-tests/**/pool-exit
+          retention-days: 7

@@ -30,7 +30,6 @@ import sys
 import tempfile
 import time
 import uuid
-import zipfile
 
 from . import (
     __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
@@ -4871,38 +4870,13 @@ def _worker_command(args) -> list[str]:
 
 
 def _worker_entrypoint() -> list[str]:
-    """Reuse the running OTA zipapp instead of assuming an installed package."""
-    argv0 = sys.argv[0]
-    fd_match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", argv0)
-    if os.name != "nt" and fd_match is not None:
-        try:
-            os.fstat(int(fd_match.group(1)))
-        except OSError:
-            pass
-        else:
-            return [sys.executable, argv0]
-    candidate = Path(argv0)
-    try:
-        if candidate.is_file() and zipfile.is_zipfile(candidate):
-            return [sys.executable, str(candidate.resolve())]
-    except OSError:
-        pass
-    return [sys.executable, "-m", "dradar.cli"]
+    from .child_entrypoint import command
+    return command()
 
 
 def _worker_entrypoint_pass_fds() -> tuple[int, ...]:
-    """Keep the launcher's verified artifact descriptor open in POSIX children."""
-    if os.name == "nt":
-        return ()
-    match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", sys.argv[0])
-    if match is None:
-        return ()
-    descriptor = int(match.group(1))
-    try:
-        os.fstat(descriptor)
-    except OSError:
-        return ()
-    return (descriptor,)
+    from .child_entrypoint import pass_fds
+    return pass_fds()
 
 
 def _signal_workers(processes: list[subprocess.Popen]) -> None:
@@ -5747,7 +5721,9 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         )
         if boundary_path is not None:
             env[_ASSIGNMENT_BOUNDARY_ENV] = str(boundary_path)
-        process = subprocess.Popen(worker_command, env=env, **popen_kwargs)
+        from .child_entrypoint import popen_options
+        child_kwargs = {**popen_kwargs, **popen_options(env)}
+        process = subprocess.Popen(worker_command, env=env, **child_kwargs)
         processes.append(process)
         active_processes[slot] = process
         print(f"  worker {slot}/{count}: pid {process.pid}")
