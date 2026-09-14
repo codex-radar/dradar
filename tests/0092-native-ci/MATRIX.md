@@ -8,3 +8,5 @@ Additional probe: actual unsupported host, inactive managed commands with networ
 Per-job upper bound: 12 minutes; expected 5–10 minutes after queue. Existing macOS arm64 host/Linux arm64 Docker evidence reused; no repeat full QA or real credentials. Contents read only, no secrets/environment/deploy/signing; separate tools branch, immutable product checkout.
 
 Incremental run: Windows probe only. Original 54 tests on each OS and Linux probe are reused. Retain real cp1252 stdout failure as a separate known defect; capture command text only to finish state/no-auth/dependency contract. Product SHA unchanged.
+
+Encoding fix native regression: product 2d95655b492303124fad4d07bcc6a95cb67f341a; Linux+Windows only two real redirected cp1252/UTF8 tests plus original UNCAPTURED native probe. Reuse previous54 each. No product-wide stdout reconfiguration; original failing run retained.

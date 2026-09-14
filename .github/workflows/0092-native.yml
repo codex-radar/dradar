@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: 3d4e2a868cfa31a39368d473e7a31ddcd8134821
+          ref: 2d95655b492303124fad4d07bcc6a95cb67f341a
           path: candidate
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -50,8 +50,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
           DRADAR_NO_WORKER: '1'
         run: |
-          test "$(git rev-parse HEAD)" = "3d4e2a868cfa31a39368d473e7a31ddcd8134821"
+          test "$(git rev-parse HEAD)" = "2d95655b492303124fad4d07bcc6a95cb67f341a"
           test -z "$(git status --porcelain)"
           "$QA_PYTHON" --version
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+          "$QA_PYTHON" -m pytest tests/test_managed_auth_output.py -q --tb=short
           "$QA_PYTHON" ../tools/tests/0092-native-ci/probe.py
