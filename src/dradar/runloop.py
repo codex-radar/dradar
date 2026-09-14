@@ -2964,6 +2964,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
                     on_started=bind_owner,
                     on_worker_registered=bind_owner,
+                    **({"on_auth_observed": lambda attributes: _record_flight_event(
+                        telemetry, "auth_observed", component="provider",
+                        assignment_id=assignment["assignment_id"], attributes=attributes,
+                    )} if telemetry is not None else {}),
                     environment_build_timeout_multiplier=(
                         getattr(
                             args, "_environment_build_timeout_multiplier", None,

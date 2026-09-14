@@ -497,6 +497,7 @@ class ApiClient:
         legacy `assignment`/`resumed` (first active lease) for older clients."""
         path = self._benchmark_path("/api/v1/assignment")
         data = self._get(self._query_path(path, "batch_id", self.batch_id))
+        self._check_managed_assignments(data)
         if self.batch_id is None:
             return data
         # Compatibility guard during a rolling server deployment: if an old
@@ -538,6 +539,49 @@ class ApiClient:
         path = self._benchmark_path("/api/v1/assignment")
         return self._get(self._query_path(path, "inventory", "true"))
 
+    def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None):
+        from .managed_auth_selection import load_selection, selection_requested, PROFILE, CAPABILITY
+        from .auth_refresh import RefreshUnavailable
+        if not selection_requested():
+            return None
+        params = {key: value for key, value in {"task_id":task_id,"model":model,"effort":effort}.items() if value is not None}
+        try:
+            result = self._check(self._request("GET", "/api/v1/runner/auth-runtime-capabilities", params=params, timeout=3.0, retry_rate_limit=False))
+        except ApiError:
+            raise ApiError("服务端尚未确认受控模式支持；请检查服务端支持或本地模式，没有自动降级。", status_code=409, code="auth_runtime_unavailable") from None
+        if (not isinstance(result, dict) or result.get("schema") != "dradar.auth-runtime.v1"
+                or not isinstance(result.get("profiles"), list)):
+            raise ApiError("服务端认证能力格式未知，受控操作未继续。", status_code=409, code="auth_runtime_unavailable")
+        # A server-confirmed non-Codex cell keeps its own provider contract.
+        if params and result.get("applicable") is False:
+            return None
+        try:
+            selected = load_selection()
+        except (OSError, ValueError, TypeError, RefreshUnavailable):
+            selected = None
+        if selected is None or CAPABILITY not in self.capabilities:
+            raise ApiError("受控登录源不可用；请检查状态或恢复，没有自动切换账号。", status_code=409, code="managed_auth_unavailable")
+        expected = {"id":PROFILE,"capability":CAPABILITY,"agent":"codex","provider":"openai","agent_version":"0.154.0"}
+        if sum(item == expected for item in result["profiles"]) != 1:
+            raise ApiError("服务端未提供匹配的受控运行模式，受控操作未继续。", status_code=409, code="auth_runtime_unavailable")
+        return PROFILE
+
+    def _check_managed_assignments(self, data):
+        from .managed_auth_selection import selection_requested, PROFILE
+        if not selection_requested():
+            return
+        active = data.get("active")
+        if active is None:
+            active = [data.get("assignment")] if data.get("assignment") else []
+        negotiate = False
+        for item in active:
+            if item.get("agent") == "codex" and item.get("provider") in (None, "openai"):
+                if item.get("auth_runtime") != PROFILE:
+                    raise ApiError("已有任务绑定普通认证；请显式选择兼容模式完成它，或释放后重新领取。", status_code=409, code="auth_runtime_mismatch")
+                negotiate = True
+        if negotiate:
+            self._negotiate_managed_auth_runtime()
+
     def claim_assignment(
         self,
         task_id: str,
@@ -549,7 +593,10 @@ class ApiClient:
     ) -> dict[str, Any]:
         """Returns {assignment: dict, resumed: False}. Raises ApiError (409) if
         the cell went stale or the volunteer is already at the concurrent cap."""
+        profile = self._negotiate_managed_auth_runtime(task_id=task_id, model=model, effort=effort)
         data = {"task_id": task_id, "model": model, "effort": effort}
+        if profile is not None:
+            data["auth_runtime"] = profile
         if self.benchmark_id:
             data["benchmark_id"] = self.benchmark_id
         if self.batch_id:
@@ -625,6 +672,9 @@ class ApiClient:
         rather than let a heartbeat failure abort a real trial. 404 on
         servers that predate this endpoint or on a menu-style lease
         that never had a short window to extend in the first place."""
+        from .managed_auth_selection import selection_requested
+        if selection_requested():
+            self.get_assignment()
         return self._post(
             "/api/v1/assignment/started",
             data={"assignment_id": assignment_id, "session_id": session_id or "",
@@ -644,6 +694,9 @@ class ApiClient:
         re-checking-out a cell that already failed locally in that session.
         404 on servers that predate the endpoint (caller falls back to the
         legacy whole-batch flow)."""
+        from .managed_auth_selection import selection_requested
+        if selection_requested():
+            self.get_assignment()
         excluded = sorted(set(exclude_assignment_ids or ()))
         data = {"exclude_assignment_ids": ",".join(excluded),
                 "session_id": session_id or ""}
@@ -700,6 +753,11 @@ class ApiClient:
     def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         return self._post("/api/v1/runner/close", json=payload, timeout=3.0)
+
+    def flight_event_capabilities(self) -> dict[str, Any]:
+        """Optional, bounded negotiation; callers tolerate old servers."""
+        return self._check(self._request("GET", "/api/v1/runner/flight-event-capabilities",
+                                         timeout=1.0, retry_rate_limit=False))
 
     def flight_events(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Idempotently upload privacy-allowlisted lifecycle events."""
