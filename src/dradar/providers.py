@@ -1389,13 +1389,18 @@ def claude_subscription_path(home: Path | None = None) -> Path:
     return config if config.exists() or config.is_symlink() else claude_oauth_path(home)
 
 
-def claude_subscription_error(home: Path | None = None) -> str | None:
+def claude_subscription_error(home: Path | None = None, *, check_expiry: bool = True) -> str | None:
     path = claude_subscription_path(home)
     if path == claude_oauth_path(home):
         return claude_oauth_error(path)
-    from .credential_files import claude_config_payload, read_private_credential
+    from .credential_files import (claude_config_payload, read_private_credential,
+                                   require_fresh_claude_config, ClaudeCredentialExpired)
     try:
-        claude_config_payload(read_private_credential(path))
+        payload = claude_config_payload(read_private_credential(path))
+        if check_expiry:
+            require_fresh_claude_config(payload)
+    except ClaudeCredentialExpired as exc:
+        return str(exc)
     except (OSError, ValueError):
         return "Claude native OAuth configuration is unsafe or incomplete"
     return None
@@ -1488,7 +1493,7 @@ def claude_subscription_session(directory: Path, *, home: Path | None = None):
         raise ValueError(issue + "; run `dradar provider setup claude` first")
     directory.mkdir(parents=True, exist_ok=True)
     yield canonical
-    issue = claude_subscription_error(home)
+    issue = claude_subscription_error(home, check_expiry=False)
     if issue is not None:
         raise ValueError("Claude OAuth credential became unsafe: " + issue)
 

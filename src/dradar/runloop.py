@@ -64,6 +64,8 @@ from .providers import (
     ANTIGRAVITY_RUN_CONFIG_VERSION,
     ANTIGRAVITY_RUNTIME_PROFILE,
     CLAUDE_AGENT,
+    CLAUDE_MODELS,
+    claude_subscription_error,
     CLAUDE_CLI_VERSION,
     CLAUDE_RUN_CONFIG_VERSION,
     CLAUDE_RUNTIME_PROFILE,
@@ -954,6 +956,11 @@ def _allow_claim_after_empty_submission(
     client: ApiClient, cell: dict, *, automatic: bool,
     conservative_missing_runtime: bool = False,
 ) -> bool:
+    if cell.get("agent") == CLAUDE_AGENT or cell.get("model") in CLAUDE_MODELS:
+        issue = claude_subscription_error()
+        if issue:
+            print("Claude work was not claimed: " + issue)
+            return False
     if not empty_submission_circuit.open_for_claim(
         HOME, cell, __version__,
         account_scope=getattr(client, "account_scope", None),
@@ -4393,6 +4400,11 @@ def _redact_provider_preflight_issue(issue: str) -> str:
 def _preflight_scoped_provider(args) -> None:
     """Fail before telemetry/session creation when a paid lane is unusable."""
 
+    if getattr(args, "refill_harness", None) == CLAUDE_AGENT:
+        issue = claude_subscription_error()
+        if issue:
+            sys.exit("Claude preflight failed before assignment checkout: " + issue)
+        return
     if getattr(args, "refill_harness", None) != ANTIGRAVITY_AGENT:
         return
     issue = prepare_antigravity_auth()
@@ -6330,6 +6342,7 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         active[0].get("deep_swe_commit"), tasks_root, args.allow_task_drift,
     )
     results, failed_ids = [], set()
+    completed_ids = set()
     local_empty_blocked_ids = _empty_submission_blocked_ids(active, client)
     batch_assignment_ids = {
         item["assignment_id"] for item in active if item.get("assignment_id")
@@ -6349,8 +6362,30 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         if degraded_exclusions is None:
             results.append("degraded-pool-inventory-failed")
             break
+        if getattr(args, "refill_harness", None) == CLAUDE_AGENT:
+            issue = claude_subscription_error()
+            if issue:
+                print("Claude checkout stopped before starting another task: " + issue)
+                results.append("provider-preflight-failed")
+                break
+        claude_exclusions = set()
+        claude_ids = {
+            item["assignment_id"] for item in active
+            if item.get("assignment_id") and item["assignment_id"] not in completed_ids and (
+                item.get("agent") == CLAUDE_AGENT or item.get("model") in CLAUDE_MODELS
+            )
+        }
+        if claude_ids:
+            issue = claude_subscription_error()
+            if issue:
+                # Exclude only this lane: the initial active inventory can
+                # include completed Claude tasks alongside other providers.
+                claude_exclusions = claude_ids
+                if "provider-preflight-failed" not in results:
+                    print("Claude tasks excluded before checkout: " + issue)
+                    results.append("provider-preflight-failed")
         checkout_exclusions = (
-            failed_ids | degraded_exclusions
+            failed_ids | degraded_exclusions | claude_exclusions
             | local_empty_blocked_ids
             | (
                 _pending_assignment_ids_for_client(
@@ -6485,6 +6520,7 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                   "the cell just reopens for someone else and nothing is counted.")
         outcome = _run_and_submit(
             client, assignment, tasks_root, args, local_commit, telemetry=telemetry)
+        completed_ids.add(assignment["assignment_id"])
         boundary_recorded = _record_assignment_boundary(args, assignment, outcome)
         if telemetry:
             if outcome == "cleanup-unconfirmed":

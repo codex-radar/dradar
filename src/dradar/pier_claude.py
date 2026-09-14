@@ -21,11 +21,11 @@ from pier.environments.base import BaseEnvironment
 from pier.models.agent.context import AgentContext
 from pier.models.trial.paths import EnvironmentPaths
 try:
-    from _dradar_credential_files import claude_config_payload, read_private_credential, is_claude_metered_auth
+    from _dradar_credential_files import claude_config_payload, read_private_credential, is_claude_metered_auth, require_fresh_claude_config
 except ModuleNotFoundError as exc:
     if exc.name != "_dradar_credential_files":
         raise
-    from dradar.credential_files import claude_config_payload, read_private_credential, is_claude_metered_auth
+    from dradar.credential_files import claude_config_payload, read_private_credential, is_claude_metered_auth, require_fresh_claude_config
 try:
     from _dradar_pier_credential_delivery import inject_private_files
 except ModuleNotFoundError as exc:
@@ -63,6 +63,7 @@ class ClaudeCodeSubscription(ClaudeCode):
         self._remote_config_root = None
         if oauth_config_file:
             payload = claude_config_payload(read_private_credential(Path(oauth_config_file)))
+            require_fresh_claude_config(payload)
             self._oauth_config = json.dumps(payload, separators=(",", ":")).encode()
         else:
             self._oauth_token_path = Path(oauth_token_file)
@@ -120,6 +121,7 @@ class ClaudeCodeSubscription(ClaudeCode):
         )
 
     async def _prepare_native_config(self, environment):
+        require_fresh_claude_config(claude_config_payload(self._oauth_config))
         # Upstream places CLAUDE_CONFIG_DIR inside /logs/agent. Never put an
         # OAuth JSON there, even temporarily: failed cleanup must stay private.
         root = "/tmp/dradar-claude-auth-" + uuid.uuid4().hex

@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from .api_client import ApiError
 from .providers import (
+    CLAUDE_AGENT, CLAUDE_MODELS, claude_subscription_error,
     REFILL_HARNESS_PROVIDERS,
     normalize_refill_harness,
     validate_refill_scope,
@@ -892,6 +893,12 @@ def refill_once(home: Path, client) -> dict:
         for cell in suggestions:
             if claimed >= wanted:
                 break
+            if cell.get("agent") == CLAUDE_AGENT or cell.get("model") in CLAUDE_MODELS:
+                issue = claude_subscription_error(home)
+                if issue:
+                    plan["status"] = FAULTED_STATE
+                    plan["stop_reason"] = issue
+                    break
             estimate = _estimate_pct(
                 cell, plan["quota_tier"], plan.get("tier_windows_usd"))
             if quota_cap is not None:
