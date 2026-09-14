@@ -103,3 +103,48 @@ def test_real_windows_failed_self_test_rolls_back_to_bundled(tmp_path):
     assert runtime.prepare(document,trusted_keys=keys,current_version='0.5.203',committed_sequence=0,compatibility=compatibility(),rollout=RolloutContext(subject='native-fixture'),target=PlatformTarget('windows','x86_64')).eligible
     assert runtime.activate_and_self_test(SafePointSnapshot(),_self_test)==UpdateState.ROLLED_BACK
     assert json.loads((tmp_path/'ota/current.json').read_text())['legacy_fallback'] is True
+
+
+def test_real_windows_failed_self_test_preserves_committed_lkg(tmp_path):
+    import hashlib, io, json, zipfile
+    from dradar.flight_recorder import FlightRecorder
+    from dradar.ota.integration import _self_test
+    from dradar.ota.runtime import UpdateRuntime
+    from dradar.ota.state import SafePointSnapshot, UpdateState
+    from dradar.ota.manifest import PlatformTarget, RolloutContext
+    from test_ota_runtime import signed_release, sign_document, Client, Response, compatibility
+
+    root = tmp_path / 'ota'
+    def candidate(sequence, version, exit_code):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w') as archive:
+            archive.writestr('__main__.py', f'raise SystemExit({exit_code})\n')
+        body = stream.getvalue()
+        document, keys = signed_release()
+        document.pop('signature')
+        document.update(sequence=sequence, version=version, release_id=f'native-{sequence}')
+        for item in document['artifacts']:
+            item.update(size=len(body), sha256=hashlib.sha256(body).hexdigest())
+        runtime = UpdateRuntime(root, recorder=FlightRecorder(tmp_path), download_client=Client(Response([body])))
+        decision = runtime.prepare(sign_document(document), trusted_keys=keys,
+            current_version='0.5.203' if sequence == 600 else '0.6.0',
+            committed_sequence=0 if sequence == 600 else 600,
+            compatibility=compatibility(), rollout=RolloutContext(subject='native-lkg'),
+            target=PlatformTarget('windows', 'x86_64'))
+        assert decision.eligible
+        return runtime
+
+    good = candidate(600, '0.6.0', 0)
+    assert good.activate_and_self_test(SafePointSnapshot(), _self_test) == UpdateState.COMMITTED
+    previous = json.loads((root / 'current.json').read_text())
+    assert previous['sequence'] == 600 and '\\' not in previous['artifact']
+    saved = {name: (root / name).read_bytes() for name in ('current.json', 'last-known-good.json')}
+    artifact = root / previous['artifact']
+    original = artifact.read_bytes()
+    bad = candidate(601, '0.6.1', 9)
+    assert bad.activate_and_self_test(SafePointSnapshot(), _self_test) == UpdateState.ROLLED_BACK
+    for name, content in saved.items():
+        assert (root / name).read_bytes() == content
+    assert artifact.read_bytes() == original
+    with bad.controller.launch_artifact() as verified:
+        assert verified.read_bytes() == original

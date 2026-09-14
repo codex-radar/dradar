@@ -592,6 +592,19 @@ index 7c855ac..54f7056 100644
 +    result = runtime.activate_and_self_test(snapshot, _self_test)
      recorder.flush()
      return result
+diff --git a/src/dradar/ota/state.py b/src/dradar/ota/state.py
+index de583a4..9e0fe89 100644
+--- a/src/dradar/ota/state.py
++++ b/src/dradar/ota/state.py
+@@ -625,7 +625,7 @@ class UpdateController:
+             release_id=manifest.release_id,
+             version=manifest.version,
+             sequence=manifest.sequence,
+-            artifact=str(destination.relative_to(self.root)),
++            artifact=destination.relative_to(self.root).as_posix(),
+         )
+         pending = {
+             "schema_version": 1,
 diff --git a/src/dradar/runloop.py b/src/dradar/runloop.py
 index d2c81e8..10768f0 100644
 --- a/src/dradar/runloop.py
@@ -651,7 +664,7 @@ index c64b028..8b8a944 100644
                  required_event_id=required_event_id,
 diff --git a/tests/test_ota_discovery.py b/tests/test_ota_discovery.py
 new file mode 100644
-index 0000000..ffd19ec
+index 0000000..b0d5892
 --- /dev/null
 +++ b/tests/test_ota_discovery.py
 @@ -0,0 +1,233 @@
@@ -799,7 +812,7 @@ index 0000000..ffd19ec
 +    with zipfile.ZipFile(content,'w') as z:
 +        for f in (source/'dradar').rglob('*'):
 +            if f.is_file() and '__pycache__' not in f.parts:
-+                relative=str(f.relative_to(source))
++                relative=f.relative_to(source).as_posix()
 +                if relative=='dradar/cli.py':
 +                    z.writestr(relative,'def main():\n    print("real-new-entry-once")\n    return 0\n')
 +                else:z.write(f,relative)
@@ -925,10 +938,25 @@ index 0000000..fa4e7ac
 +    assert recorder.flush_auth(batch_id='a'*32,session_id='b'*32)==0
 +    assert not client.batches
 diff --git a/tests/test_ota_integration.py b/tests/test_ota_integration.py
-index 674d686..bda1356 100644
+index 674d686..d2fc168 100644
 --- a/tests/test_ota_integration.py
 +++ b/tests/test_ota_integration.py
-@@ -112,8 +112,9 @@ def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
+@@ -1,4 +1,5 @@
+ import inspect
++import os
+ import json
+ from contextlib import contextmanager
+ from types import SimpleNamespace
+@@ -66,7 +67,7 @@ def test_trusted_key_round_trip_is_private(tmp_path):
+     store_trusted_keys({"release-root": key}, tmp_path)
+     path = tmp_path / "ota" / "trusted-keys.json"
+     assert load_trusted_keys(tmp_path) == {"release-root": key}
+-    if path.stat().st_mode & 0o077:
++    if os.name == "posix" and path.stat().st_mode & 0o077:
+         pytest.fail("trusted key file is not private")
+ 
+ 
+@@ -112,8 +113,9 @@ def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
              events.append("handle-close")
              candidate.unlink()
  
@@ -951,6 +979,77 @@ index 78b9473..a37c70b 100644
      return root
  
  
+diff --git a/tests/test_ota_runtime.py b/tests/test_ota_runtime.py
+index 17d9ce2..a1a57d3 100644
+--- a/tests/test_ota_runtime.py
++++ b/tests/test_ota_runtime.py
+@@ -133,7 +133,7 @@ def seed_lkg(root):
+         "release_id": release_id,
+         "version": "0.5.175",
+         "sequence": 599,
+-        "artifact": str(path.relative_to(root)),
++        "artifact": path.relative_to(root).as_posix(),
+     }
+     manifest = sign_document(
+         {
+diff --git a/tests/test_ota_state.py b/tests/test_ota_state.py
+index 1c00245..6e2de04 100644
+--- a/tests/test_ota_state.py
++++ b/tests/test_ota_state.py
+@@ -100,7 +100,7 @@ def _install_signed_record(controller, manifest, artifact, body):
+         "release_id": manifest.release_id,
+         "version": manifest.version,
+         "sequence": manifest.sequence,
+-        "artifact": str(destination.relative_to(controller.root)),
++        "artifact": destination.relative_to(controller.root).as_posix(),
+     }
+     _atomic_json(
+         destination.parent / "release-record.json",
+@@ -327,7 +327,7 @@ def test_launcher_rejects_symlink_current_even_when_target_stays_inside_root(tmp
+         "release_id": "candidate",
+         "version": "0.6.0",
+         "sequence": 600,
+-        "artifact": str(linked.relative_to(controller.root)),
++        "artifact": linked.relative_to(controller.root).as_posix(),
+     }
+     _atomic_json(controller.current_path, current)
+ 
+@@ -377,7 +377,7 @@ def test_launcher_never_accepts_an_arbitrary_regular_file_without_signed_record(
+             "release_id": "forged",
+             "version": "99.0.0",
+             "sequence": 999,
+-            "artifact": str(arbitrary.relative_to(controller.root)),
++            "artifact": arbitrary.relative_to(controller.root).as_posix(),
+         },
+     )
+ 
+@@ -438,7 +438,7 @@ def test_committed_pointer_rejects_forged_unsigned_lkg_baseline(tmp_path):
+             "release_id": "forged",
+             "version": "99.0.0",
+             "sequence": 999,
+-            "artifact": str(forged.relative_to(controller.root)),
++            "artifact": forged.relative_to(controller.root).as_posix(),
+         },
+     )
+ 
+@@ -675,7 +675,7 @@ def test_unknown_persisted_state_fails_closed_and_preserves_rollback_baseline(
+         "release_id": "dradar-0.5.175",
+         "version": "0.5.175",
+         "sequence": 599,
+-        "artifact": str(artifact.relative_to(controller.root)),
++        "artifact": artifact.relative_to(controller.root).as_posix(),
+     }
+     _atomic_json(controller.current_path, known_good)
+     _atomic_json(controller.last_known_good_path, known_good)
+@@ -709,7 +709,7 @@ def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
+         "release_id": "dradar-0.5.175",
+         "version": "0.5.175",
+         "sequence": 599,
+-        "artifact": str(artifact.relative_to(controller.root)),
++        "artifact": artifact.relative_to(controller.root).as_posix(),
+     }
+     _atomic_json(controller.current_path, known_good)
+     _atomic_json(controller.last_known_good_path, known_good)
 diff --git a/tests/test_telemetry.py b/tests/test_telemetry.py
 index 2c21ad2..e4cebd7 100644
 --- a/tests/test_telemetry.py
