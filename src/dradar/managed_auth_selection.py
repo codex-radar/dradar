@@ -64,6 +64,16 @@ def readiness():
         return 'managed', False
 
 
+def _print_message(message: str) -> None:
+    """Keep fixed diagnostics usable on legacy Windows redirected streams."""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        # Do not change global stream configuration or write UTF-8 bytes into
+        # a stream whose consumer expects a legacy encoding.
+        print(message.encode('ascii', 'backslashreplace').decode('ascii'))
+
+
 def _cmd_managed_auth(args):
     command = args.managed_auth_command
     path = selection_path()
@@ -72,7 +82,7 @@ def _cmd_managed_auth(args):
         if path.is_symlink():
             raise RefreshUnavailable('managed_selection_invalid')
         path.unlink(missing_ok=True)
-        print('已选择普通官方凭据兼容模式。仅影响后续任务，在途任务不切换。受控源及恢复材料保留；未撤销提供方 OAuth。')
+        _print_message('已选择普通官方凭据兼容模式。仅影响后续任务，在途任务不切换。受控源及恢复材料保留；未撤销提供方 OAuth。')
         return
     if command == 'login':
         root = (local_config.HOME / 'managed-auth' / 'store').resolve()
@@ -89,7 +99,7 @@ def _cmd_managed_auth(args):
         atomic_private_credential(path, json.dumps({'schema':'dradar.managed_selection.v1',
             'store_root':str(root), 'authority_path':str(authority.path),
             'executable':str(pinned)}).encode())
-        print('受控登录源已建立并选择；仅在服务端支持该模式时领取运行。')
+        _print_message('受控登录源已建立并选择；仅在服务端支持该模式时领取运行。')
         return
     # Status must preserve the difference between unselected and invalid.
     try:
@@ -97,23 +107,23 @@ def _cmd_managed_auth(args):
     except (OSError, ValueError, RefreshUnavailable):
         if command != 'status':
             raise
-        print('受控源不可用：请检查登录状态；存在待恢复事务时先执行 recover。')
+        _print_message('受控源不可用：请检查登录状态；存在待恢复事务时先执行 recover。')
         return 1
     if selected is None:
-        print('当前使用普通官方凭据兼容模式。')
+        _print_message('当前使用普通官方凭据兼容模式。')
         return
     _, store, authority, executable = selected
     if command == 'recover':
         store.recover(authority, executable)
-        print('已完成本地前向恢复；未请求 OAuth 或模型。')
+        _print_message('已完成本地前向恢复；未请求 OAuth 或模型。')
         return
     if command == 'revoke':
         atomic_private_credential(authority.path.parent / 'revoked.json', b'{"state":"locally-revoked"}')
-        print('已禁止该受控源的新会话和后续续签，恢复材料保留。在途 AT 未保证立即失效；此操作不等于提供方 OAuth 撤销。')
+        _print_message('已禁止该受控源的新会话和后续续签，恢复材料保留。在途 AT 未保证立即失效；此操作不等于提供方 OAuth 撤销。')
         return
     material = project_access('codex', authority.read(), local_key=store._key())
     if command == 'status':
-        print('受控源已选择；' + ('AT 当前可用。' if material.usable() else '启动前需要宿主续签。'))
+        _print_message('受控源已选择；' + ('AT 当前可用。' if material.usable() else '启动前需要宿主续签。'))
         return
     raise ValueError('unsupported managed authentication command')
 
@@ -123,5 +133,5 @@ def cmd_managed_auth(args):
         return _cmd_managed_auth(args)
     except (OSError, ValueError, TypeError, RefreshUnavailable) as error:
         code = str(error) if isinstance(error, RefreshUnavailable) else 'managed_local_input_invalid'
-        print('受控认证操作未完成：' + code + '。请检查固定程序/本地状态；未自动切换账号或模式。')
+        _print_message('受控认证操作未完成：' + code + '。请检查固定程序/本地状态；未自动切换账号或模式。')
         return 1
