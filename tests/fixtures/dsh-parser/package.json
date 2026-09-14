@@ -1,0 +1,8 @@
+{
+  "name": "dradar-dsh-parser-contract",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "commander": "15.0.0"
+  }
+}

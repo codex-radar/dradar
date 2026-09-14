@@ -4659,9 +4659,25 @@ def run_trial(
             )
     dsh_artifact_binding = None
     if effective_agent == DSH_AGENT:
-        dsh_artifact_binding = _verify_dsh_artifact_binding(
-            trial_dir, effective_assignment,
-        )
+        try:
+            dsh_artifact_binding = _verify_dsh_artifact_binding(
+                trial_dir, effective_assignment,
+            )
+        except RunnerError as binding_error:
+            # Failed startup may never write an identity sidecar. Still refuse
+            # upload, but preserve the execution failure that explains its absence.
+            if terminal_error is not None:
+                raise terminal_error from binding_error
+            result_exception = _result_exception_text(result)
+            if proc.returncode or result_exception:
+                diagnostic = image_cache.redact_docker_diagnostic(
+                    result_exception or tail, limit=2000,
+                )
+                raise RunnerError(
+                    f"DSH execution failed (Pier exit {proc.returncode}).\n"
+                    f"{diagnostic}\n{binding_error}"
+                ) from binding_error
+            raise
     if not patch.is_file():
         if terminal_error is not None:
             raise terminal_error

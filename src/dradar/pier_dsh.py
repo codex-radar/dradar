@@ -654,6 +654,8 @@ class DshMinimal(BaseInstalledAgent):
             # Convert the raw key to DSH's 0600 credential document. DSH reads
             # it without placing the key in its environment, then the pinned
             # runner unlinks it before creating or resuming the agent.
+            # DSH's launcher consumes the first --; the headless parser needs
+            # the second so leading dashes in the task remain literal text.
             command = (
                 "set -euo pipefail; "
                 "cleanup_dsh_credentials() { "
@@ -667,7 +669,7 @@ class DshMinimal(BaseInstalledAgent):
                 f"rm -f {shlex.quote(remote_api_key)}; "
                 "cd /app; "
                 f"dsh --profile headless --patch {shlex.quote(remote_patch)} "
-                f"{shlex.quote(instruction)} 2>&1 </dev/null | "
+                f"-- -- {shlex.quote(instruction)} 2>&1 </dev/null | "
                 f"tee {shlex.quote(stream)}"
             )
             await self.exec_as_agent(
