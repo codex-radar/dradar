@@ -10,7 +10,7 @@ def denied(*a,**k):calls.append(True);raise AssertionError('external/auth/proces
 socket.socket.connect=denied;socket.create_connection=denied
 from dradar import cli,managed_auth_selection as selection,auth_managed,managed_auth_install,runner
 assert str(Path(cli.__file__).resolve()).startswith(str((root/'src').resolve()))
-subprocess.run=denied;subprocess.Popen=denied
+subprocess.run=denied;subprocess.Popen.__init__=denied
 managed_auth_install.urllib.request.urlopen=denied;auth_managed._login=denied
 from argparse import Namespace
 for action in ('status','recover','revoke','use-native'):

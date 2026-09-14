@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -54,5 +54,4 @@ jobs:
           test -z "$(git status --porcelain)"
           "$QA_PYTHON" --version
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
-          "$QA_PYTHON" -m pytest tests/test_managed_auth_output.py -q --tb=short
           "$QA_PYTHON" ../tools/tests/0092-native-ci/probe.py

@@ -10,3 +10,5 @@ Per-job upper bound: 12 minutes; expected 5–10 minutes after queue. Existing m
 Incremental run: Windows probe only. Original 54 tests on each OS and Linux probe are reused. Retain real cp1252 stdout failure as a separate known defect; capture command text only to finish state/no-auth/dependency contract. Product SHA unchanged.
 
 Encoding fix native regression: product 2d95655b492303124fad4d07bcc6a95cb67f341a; Linux+Windows only two real redirected cp1252/UTF8 tests plus original UNCAPTURED native probe. Reuse previous54 each. No product-wide stdout reconfiguration; original failing run retained.
+
+Final probe-only Windows delta: retain Popen as a class and trap its constructor, so asyncio.windows_utils can subclass it. Prior failure was fixture TypeError at class declaration, no attempted process launch. Product2d95655 unchanged; 2 output tests on each OS already passed.
