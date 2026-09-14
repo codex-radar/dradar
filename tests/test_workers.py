@@ -654,6 +654,52 @@ def test_isolated_builder_preflight_fails_before_batch_or_worker_session(
     assert "exit=1" in output
 
 
+def test_builder_preflight_failure_reaches_fleet_without_text_guessing(
+    monkeypatch, tmp_path,
+):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    diagnostic = runloop.image_cache.TrialBuilderPreflight(
+        False, 7, "base_image_metadata", "registry_timeout", "auth provider misleading words",
+    )
+    monkeypatch.setattr(runloop.image_cache, "preflight_trial_builder", lambda *_a, **_k: diagnostic)
+    monkeypatch.setattr(runloop, "_prepare_batch", lambda *_a, **_k:
+                        pytest.fail("must stop before claiming or checking out"))
+    fleet._prepare_dirs(tmp_path)
+    batch = "12345678123456781234567812345678"
+    path = fleet._pool_startup_path(tmp_path, batch)
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch)
+    monkeypatch.setenv(fleet.POOL_STARTUP_FILE_ENV, str(path))
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_a: True)
+    monkeypatch.setattr(fleet, "acquire_pool_lock", lambda *_a: None)
+    monkeypatch.setattr(fleet, "start_pool_watchdog", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda *_a, **_k: None)
+
+    assert runloop.cmd_go(_args(workers=2, batch_id=batch, fleet_pool=True, resume=True)) == 78
+    event = fleet._read_json(path)
+    assert event["error_code"] == "local_environment_not_ready"
+    assert event["diagnostic"]["stage"] == "base_image_metadata"
+    assert event["diagnostic"]["failure_code"] == "registry_timeout"
+    assert event["diagnostic"]["returncode"] == 7
+
+
+def test_unacknowledged_pool_exit_does_not_invent_a_task_state_change(monkeypatch):
+    monkeypatch.setattr(runloop, "_run_worker_pool", lambda _args: 1)
+    reports = []
+    monkeypatch.setattr(fleet, "publish_pool_startup_failure",
+                        lambda *_a, **kwargs: reports.append(kwargs) or True)
+    batch = "12345678123456781234567812345678"
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch)
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_a: True)
+    monkeypatch.setattr(fleet, "acquire_pool_lock", lambda *_a: None)
+    monkeypatch.setattr(fleet, "start_pool_watchdog", lambda *_a: None)
+    assert runloop.cmd_go(_args(workers=2, fleet_pool=True, batch_id=batch, resume=True)) == 1
+    assert reports[0]["error_code"] == "local_runner_never_ready"
+    assert "状态在本机准备期间发生了变化" not in reports[0]["user_message"]
+
+
 def test_pool_children_inherit_the_preflighted_https_mirror_snapshot(monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=2)
     monkeypatch.setattr(

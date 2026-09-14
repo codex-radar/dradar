@@ -1030,8 +1030,9 @@ def test_conditional_timeout_reserves_failure_before_interrupting_parent(
         fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
 
 
+@pytest.mark.parametrize("refresh_before_exit", [True, False])
 def test_structured_startup_failure_survives_parent_exit(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, refresh_before_exit,
 ):
     fleet._prepare_dirs(tmp_path)
     controller_id = "controller-1"
@@ -1072,7 +1073,8 @@ def test_structured_startup_failure_survives_parent_exit(
         error_code="task_environment_update_failed",
         user_message="这台设备未能准备题目环境；已有文件没有被修改。",
     )
-    fleet._refresh_pool_startups(tmp_path, state, processes)
+    if refresh_before_exit:
+        fleet._refresh_pool_startups(tmp_path, state, processes)
     fleet._settle_pool(tmp_path, state, processes, logs, BATCH_A, 1)
 
     item = state["batches"][BATCH_A]
@@ -1082,6 +1084,55 @@ def test_structured_startup_failure_survives_parent_exit(
     assert stopped == [
         ("plan-a", "local startup failed (task_environment_update_failed)"),
     ]
+
+
+@pytest.fixture
+def startup_target(tmp_path, monkeypatch):
+    fleet._prepare_dirs(tmp_path)
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, BATCH_A)
+    path = fleet._pool_startup_path(tmp_path, BATCH_A)
+    monkeypatch.setenv(fleet.POOL_STARTUP_FILE_ENV, str(path))
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+    return path
+
+
+@pytest.mark.parametrize("first", ["ready", "failed"])
+def test_startup_first_terminal_event_is_not_overwritten(tmp_path, startup_target, first):
+    if first == "ready":
+        fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+    else:
+        fleet.publish_pool_startup_failure(tmp_path, BATCH_A,
+                                          error_code="specific_failure", user_message="specific cause")
+    before = startup_target.read_bytes()
+    assert not fleet.publish_pool_startup_failure(
+        tmp_path, BATCH_A, error_code="local_start_failed", user_message="generic fallback",
+    )
+    if first == "ready":
+        fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+    else:
+        with pytest.raises(fleet.FleetError):
+            fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+    assert startup_target.read_bytes() == before
+
+
+@pytest.mark.parametrize("changed", ["pid", "controller_id", "batch_id"])
+@pytest.mark.parametrize("terminal", ["ready", "failed"])
+def test_startup_writers_cannot_replace_another_pool_generation(
+    tmp_path, startup_target, changed, terminal,
+):
+    event = {"schema_version": 1, "controller_id": "controller-1", "batch_id": BATCH_A,
+             "pid": os.getpid(), "status": "pending"}
+    event[changed] = os.getpid() + 100 if changed == "pid" else "another-generation"
+    fleet._atomic_json(startup_target, event)
+    before = startup_target.read_bytes()
+    with pytest.raises(fleet.FleetError):
+        if terminal == "ready":
+            fleet.publish_pool_startup_ready(tmp_path, BATCH_A)
+        else:
+            fleet.publish_pool_startup_failure(tmp_path, BATCH_A,
+                                              error_code="stale", user_message="stale")
+    assert startup_target.read_bytes() == before
 
 
 def test_environment_build_exit_is_persisted_as_retryable_needs_attention(
@@ -1141,6 +1192,11 @@ def test_refill_pool_command_keeps_exact_batch_and_total_cap(tmp_path, monkeypat
     monkeypatch.setattr(fleet.subprocess, "Popen", popen)
     monkeypatch.setattr("dradar.machine._lock_handle", None)
     state = {"controller_id": "controller-1"}
+    startup_path = fleet._pool_startup_path(tmp_path, BATCH_A)
+    fleet._atomic_json(startup_path, {
+        "schema_version": 1, "controller_id": "previous-controller",
+        "batch_id": BATCH_A, "pid": 123, "status": "failed",
+    })
 
     _process, log = fleet._spawn_pool(
         tmp_path, state, BATCH_A, 2,
@@ -1151,6 +1207,10 @@ def test_refill_pool_command_keeps_exact_batch_and_total_cap(tmp_path, monkeypat
         refill_effort="high",
     )
     log.close()
+    event = fleet._read_json(startup_path)
+    assert event["status"] == "pending"
+    assert event["controller_id"] == state["controller_id"]
+    assert event["pid"] == _process.pid
 
     command = captured["command"]
     assert command[command.index("--batch-id") + 1] == BATCH_A
