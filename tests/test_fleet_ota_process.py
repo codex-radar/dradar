@@ -115,6 +115,8 @@ def test_real_fleet_descendants_retain_payload_after_parent_exits(tmp_path, mode
                 if mode == 'ota':
                     assert 'installed203' not in identity['origin']
         assert len({r['pid'] for r in reports}) == 4
+        for pid in {r['pid'] for r in reports}:
+            wait_file(tmp_path / f'{pid}.exited')
         if mode == 'ota':
             assert json.loads((home / 'ota/current.json').read_text())['version'] == '0.5.206'
             from dradar.ota.activity import active_invocations
@@ -134,6 +136,10 @@ def test_real_fleet_descendants_retain_payload_after_parent_exits(tmp_path, mode
         state = home / 'fleet/state.json'
         if state.exists():
             pid = json.loads(state.read_text()).get('pid')
-            if pid:
+            if pid and not (tmp_path / f'{pid}.exited').exists():
                 try: os.kill(pid, 15)
-                except ProcessLookupError: pass
+                except OSError as exc:
+                    if os.name != 'nt' and not isinstance(exc, ProcessLookupError):
+                        raise
+                    if os.name == 'nt' and getattr(exc, 'winerror', None) != 87:
+                        raise

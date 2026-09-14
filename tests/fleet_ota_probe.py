@@ -3,6 +3,7 @@
 Installed via sitecustomize. Imports still resolve naturally from argv[0] and
 PYTHONPATH, so a fallback to installed203 is visible in every process report.
 """
+import atexit
 import hashlib
 import importlib.abc
 import importlib.machinery
@@ -14,6 +15,8 @@ import time
 from types import SimpleNamespace
 
 ROOT = Path(os.environ['FLEET_PROBE_ROOT'])
+# Registered before launcher handle finalizers; this marker runs after them.
+atexit.register(lambda: (ROOT / f'{os.getpid()}.exited').touch())
 BATCH = '550e8400e29b41d4a716446655440000'
 
 
@@ -26,7 +29,13 @@ def record(role):
               'activity': active_invocations(fleet.HOME / 'ota')}
     for module in (fleet, runloop):
         source = module.__loader__.get_source(module.__name__)
-        result[module.__name__] = {'origin': module.__file__, 'sha256': hashlib.sha256(source.encode()).hexdigest()}
+        normalized = source.replace('\r\n', '\n').replace('\r', '\n')
+        result[module.__name__] = {
+            'origin': module.__file__,
+            'sha256': hashlib.sha256(normalized.encode()).hexdigest(),
+            'raw_source_sha256': hashlib.sha256(source.encode()).hexdigest(),
+            'normalization': 'universal-newlines',
+        }
     (ROOT / (role + '.json')).write_text(json.dumps(result, indent=2))
 
 

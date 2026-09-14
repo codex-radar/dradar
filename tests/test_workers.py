@@ -61,7 +61,20 @@ def test_worker_command_reuses_direct_zipapp(monkeypatch, tmp_path):
 
     command = runloop._worker_command(_args())
 
-    assert command[:2] == [sys.executable, str(artifact.resolve())]
+    assert command[0] == sys.executable
+    if os.name == "nt":
+        # Native descendants own a replacement-denying copy with identical
+        # bytes, so the original temporary name is not their entrypoint.
+        from pathlib import Path
+        from dradar.child_entrypoint import popen_options
+        assert Path(command[1]).read_bytes() == artifact.read_bytes()
+        assert Path(command[1]) != artifact.resolve()
+        env = dict(os.environ)
+        options = popen_options(env)
+        assert options["startupinfo"].lpAttributeList["handle_list"]
+        assert env["DRADAR_OTA_DISPATCH"] == "1"
+    else:
+        assert command[1] == str(artifact.resolve())
     assert "-m" not in command[:3]
 
 

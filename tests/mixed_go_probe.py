@@ -47,3 +47,20 @@ if os.environ.get('PROBE_SPAWN_FAIL'):
             raise OSError('injected worker spawn failure')
         return original_popen(command, *args, **kwargs)
     r.subprocess.Popen = fail_spawn
+
+# Deterministic race injection: the selected child cannot make its first
+# inventory read until its sibling has drained the exact batch on the server.
+# This does not change the response or extend simulated model duration.
+if os.environ.get('PROBE_LATE_CHILD_INDEX') == os.environ.get('DRADAR_WORKER_INDEX') and os.environ.get('DRADAR_WORKER_INDEX'):
+    class LateClient(ApiClient):
+        waited = False
+        def get_assignment(self):
+            if not self.waited:
+                deadline = time.monotonic() + 15
+                while not self._get('/fixture/drained?batch_id=' + str(self.batch_id)).get('drained'):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('fixture late-child barrier timed out')
+                    time.sleep(0.02)
+                self.waited = True
+            return super().get_assignment()
+    r._client = lambda cfg, **kw: LateClient(server, 'fixture', capabilities=())
