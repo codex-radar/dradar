@@ -5078,6 +5078,17 @@ def _record_worker_precheckout_failure(code: str) -> bool:
     """Classify a known safe pre-checkout gate without claiming paid work."""
     if code not in _PRECHECKOUT_FAILURE_REASON_CODES:
         return False
+    path = _worker_activity_path()
+    if path is not None:
+        try:
+            state = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return False
+        # Only the parent's initial placeholder proves no checkout occurred.
+        # A terminal startup notice must not erase checkout, acknowledged
+        # return, unknown state, or an already-specific precheckout failure.
+        if state not in {"preparing", "preparing:worker-entrypoint-failed"}:
+            return False
     return _write_worker_activity_state(f"preparing:{code}")
 
 
