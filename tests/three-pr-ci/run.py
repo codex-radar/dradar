@@ -11,7 +11,7 @@ import tarfile
 
 ROOT = Path.cwd()
 BASE = 'f417b8ee115533772cb9a8be0244b99958b105af'
-SOURCE = 'f5b082a0e4c48723c5f49c254b7d1b6a7d7258e8'
+SOURCE = '7dd03da47838614e759be1c8a7d6e69b7b8ea35d'
 FILES = ['tests/test_pr_integration_boundaries.py', 'tests/test_antigravity_subscription.py', 'tests/test_runner_tools.py', 'tests/test_api_client.py', 'tests/test_egress.py', 'tests/test_machine.py', 'tests/test_image_cache.py']
 BASE_TESTS = [
  'tests/test_runner_tools.py::test_artifact_task_overlay_adapts_verifier_collect_without_mutation',
@@ -45,26 +45,13 @@ identity['ci_head']=subprocess.check_output(['git','rev-parse','HEAD'],text=True
 identity['shell_receipt']=receipt.stdout.strip()
 print('TOOL_IDENTITY '+json.dumps(identity),flush=True)
 (results/'identity.json').write_text(json.dumps(identity,indent=2))
-if os.name == 'nt':
- base_dir=ROOT/'native-base'
- base_dir.mkdir()
- archive=subprocess.check_output(['git','archive',BASE])
- with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-  tar.extractall(base_dir,filter='data')
- base_env=dict(env,PYTHONPATH=str(base_dir/'src'))
- baseline=subprocess.run([sys.executable,'-m','pytest',*BASE_TESTS,'-q','--tb=short'],cwd=base_dir,env=base_env,capture_output=True,text=True)
- print('BASELINE_EXIT '+str(baseline.returncode)+'\n'+baseline.stdout+'\n'+baseline.stderr,flush=True)
- (results/'baseline.log').write_text(baseline.stdout+'\n'+baseline.stderr,encoding='utf-8')
- (results/'baseline.json').write_text(json.dumps({'base':BASE,'exit':baseline.returncode,'tests':BASE_TESTS}))
- # The baseline failure is recorded evidence, not a green candidate check.
- assert baseline.returncode in (0,1), 'baseline did not execute its tests'
 env['PYTHONPATH']=str(ROOT/'src')
-candidate=subprocess.run([sys.executable,'-m','pytest',*FILES,'-q','--tb=short','--basetemp',str(results/'pytest')],env=env,capture_output=True,text=True)
+candidate=subprocess.run([sys.executable,'-m','pytest','tests/test_egress.py','-k','private_windows_acl or compose_uses_pinned_image or runtime_proxy_token_moves','-q','--tb=short','--basetemp',str(results/'pytest')],env=env,capture_output=True,text=True)
 print('CANDIDATE_EXIT '+str(candidate.returncode)+'\n'+candidate.stdout+'\n'+candidate.stderr,flush=True)
 (results/'candidate.log').write_text(candidate.stdout+'\n'+candidate.stderr,encoding='utf-8')
 if os.name == 'nt':
  for path in sorted((results/'pytest').rglob('docker-compose-egress-proxy.json')):
-  acl_script = "$a=Get-Acl -LiteralPath $env:DRADAR_QA_ACL_FILE; @{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; rules=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])|ForEach-Object {@{sid=$_.IdentityReference.Value;type=$_.AccessControlType.ToString();rights=[int64]$_.FileSystemRights}})}|ConvertTo-Json -Depth 4 -Compress"
+  acl_script = "$a=Get-Acl -LiteralPath $env:DRADAR_QA_ACL_FILE; @{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; expected_owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; rules=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])|ForEach-Object {@{sid=$_.IdentityReference.Value;type=$_.AccessControlType.ToString();rights=[int64]$_.FileSystemRights}})}|ConvertTo-Json -Depth 4 -Compress"
   acl=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',acl_script],env=dict(env,DRADAR_QA_ACL_FILE=str(path)),capture_output=True,text=True,check=True)
   print('DACL '+str(path.relative_to(results))+' '+acl.stdout.strip(),flush=True)
 sys.exit(candidate.returncode)

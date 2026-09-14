@@ -1,4 +1,4 @@
-name: Three PR native integration
+name: Three PR OWNER_RIGHTS supplement
 on:
   push:
     branches: [codex/0088-three-pr-ci]
@@ -33,7 +33,7 @@ jobs:
           fi
           echo "QA_PYTHON=$QA_PYTHON" >> "$GITHUB_ENV"
           uv pip install --python "$QA_PYTHON" --require-hashes -r tests/three-pr-ci/requirements.lock
-      - name: Baseline evidence and candidate gate
+      - name: Two ACL cases and SID boundary gate
         shell: bash
         run: |
           "$QA_PYTHON" --version
