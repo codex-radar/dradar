@@ -37,6 +37,7 @@ from .providers import (
     KIMI_CLI_VERSION,
     ZCODE_AGENT,
     ZCODE_CLI_VERSION,
+    bundled_adapter_error,
     prepare_antigravity_auth,
     antigravity_auth_path,
     claude_cli_path,
@@ -233,6 +234,15 @@ def _plan_issue(
     }
 
 
+_BUNDLED_ADAPTERS = {
+    CLAUDE_AGENT: "pier_claude.py",
+    ANTIGRAVITY_AGENT: "pier_antigravity.py",
+    "dsh-minimal": "pier_dsh.py",
+    ZCODE_AGENT: "pier_zcode.py",
+    CODEBUDDY_AGENT: "pier_codebuddy.py",
+}
+
+
 def plan_environment_issue(
     plan: dict, *, allow_docker_install: bool = False,
 ) -> dict | None:
@@ -244,6 +254,13 @@ def plan_environment_issue(
     """
     harness = str(plan.get("harness") or "").lower()
     harness = {"dsh": "dsh-minimal"}.get(harness, harness)
+    adapter = _BUNDLED_ADAPTERS.get(harness)
+    if adapter and bundled_adapter_error(adapter):
+        return _plan_issue(
+            harness, "bundled_adapter_missing",
+            "DRadar 运行组件缺失；请升级或重新安装后重试。",
+            "upgrade_cli", requires_user_action=True,
+        )
     existing_docker = shutil.which("docker")
     recovery = (
         docker_runtime.Recovery(
@@ -652,6 +669,11 @@ def cmd_doctor(args) -> int:
               f"{dependencies}; WSL2 remains the established fallback")
     hints = _DOCKER_HINTS[plat]
     all_ok = True
+    adapter = _BUNDLED_ADAPTERS.get(selected_agent)
+    if adapter:
+        adapter_issue = bundled_adapter_error(adapter)
+        all_ok &= _check("Bundled provider adapter", adapter_issue is None,
+                         adapter_issue or "")
 
     # OTA diagnostics are local and read-only. A legacy install is healthy:
     # it keeps running the installed version until a trusted baseline exists.

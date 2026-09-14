@@ -7,6 +7,8 @@ Codex assignment continues to mean the original OpenAI/ChatGPT path.
 from __future__ import annotations
 
 import hashlib
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 import json
 import os
 import re
@@ -416,13 +418,13 @@ def validate_refill_scope(
     return agent, normalized_model, normalized_effort
 
 
-def deepseek_catalog_path() -> Path:
+def deepseek_catalog_path() -> Traversable:
     """Return the immutable DeepSeek Codex catalog bundled in the wheel."""
 
-    return Path(__file__).with_name(DEEPSEEK_CATALOG_FILENAME)
+    return files("dradar").joinpath(DEEPSEEK_CATALOG_FILENAME)
 
 
-def deepseek_catalog_error(path: Path | None = None) -> str | None:
+def deepseek_catalog_error(path: Traversable | None = None) -> str | None:
     """Return a fail-closed diagnostic for a missing or modified catalog."""
 
     catalog = deepseek_catalog_path() if path is None else path
@@ -2018,6 +2020,16 @@ def grok_subscription_session(directory: Path, *, home: Path | None = None):
         raise ValueError("Grok returned an invalid refreshed OAuth credential: " + issue)
 
 
+def bundled_adapter_error(filename: str) -> str | None:
+    """Check bundled adapters through the source/wheel/zip resource loader."""
+    try:
+        if files("dradar").joinpath(filename).is_file():
+            return None
+    except (OSError, ValueError):
+        pass
+    return f"Bundled {filename} is missing; reinstall or upgrade dradar"
+
+
 def advertised_capabilities(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
@@ -2052,7 +2064,7 @@ def advertised_capabilities(
     # hidden until the key is actually ready.
     if (
         deepseek_api_key(environ) is not None
-        and Path(__file__).with_name("pier_dsh.py").is_file()
+        and bundled_adapter_error("pier_dsh.py") is None
     ):
         capabilities.extend((
             DSH_FLASH_CAPABILITY,
@@ -2068,14 +2080,14 @@ def advertised_capabilities(
         capabilities.append(GROK_CAPABILITY)
     if (
         claude_subscription_error() is None
-        and Path(__file__).with_name("pier_claude.py").is_file()
+        and bundled_adapter_error("pier_claude.py") is None
     ):
         capabilities.append(CLAUDE_CAPABILITY)
     if kimi_cli_path(environ) and kimi_auth_error() is None:
         capabilities.append(KIMI_CAPABILITY)
     if (
         prepare_antigravity_auth() is None
-        and Path(__file__).with_name("pier_antigravity.py").is_file()
+        and bundled_adapter_error("pier_antigravity.py") is None
     ):
         # Each Gemini product advertises only after its complete low/medium/
         # high group was live-verified during setup; an account without 3.8
@@ -2096,7 +2108,7 @@ def advertised_capabilities(
     if (
         zcode_api_key(environ) is not None
         and zcode_cli_error(environ=environ) is None
-        and Path(__file__).with_name("pier_zcode.py").is_file()
+        and bundled_adapter_error("pier_zcode.py") is None
     ):
         capabilities.append(ZCODE_CAPABILITY)
     codebuddy_cli = codebuddy_executable(environ)
@@ -2109,7 +2121,7 @@ def advertised_capabilities(
         and codebuddy_cli_issue is None
         and codebuddy_credentials_ready
         and codebuddy_runtime_image_error() is None
-        and Path(__file__).with_name("pier_codebuddy.py").is_file()
+        and bundled_adapter_error("pier_codebuddy.py") is None
     ):
         capabilities.append(CODEBUDDY_CAPABILITY)
     return tuple(capabilities)
