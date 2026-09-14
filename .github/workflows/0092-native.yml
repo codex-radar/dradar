@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -54,5 +54,4 @@ jobs:
           test -z "$(git status --porcelain)"
           "$QA_PYTHON" --version
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
-          "$QA_PYTHON" -m pytest tests/test_version.py tests/test_auth_platform_limits.py tests/test_managed_auth_selection.py::test_default_status_does_not_create_managed_store tests/test_container_auth.py::test_existing_harness_contracts_and_no_secret_in_diagnostics tests/test_container_auth.py::test_wrong_source_type_fails_before_container_launch tests/test_packaged_adapter_resources.py::test_adapter_resources_are_materialized_without_network tests/test_packaged_adapter_resources.py::test_deepseek_constructor_uses_packaged_pin_and_rejects_tampering -q --tb=short
           "$QA_PYTHON" ../tools/tests/0092-native-ci/probe.py

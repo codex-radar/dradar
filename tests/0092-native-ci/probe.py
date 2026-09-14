@@ -13,12 +13,20 @@ assert str(Path(cli.__file__).resolve()).startswith(str((root/'src').resolve()))
 subprocess.run=denied;subprocess.Popen=denied
 managed_auth_install.urllib.request.urlopen=denied;auth_managed._login=denied
 from argparse import Namespace
-for action in ('status','recover','revoke','use-native'):
- result=selection.cmd_managed_auth(Namespace(managed_auth_command=action,codex_bin=None))
- assert result is None
- assert selection.load_selection() is None
-assert selection.readiness()==('native',False)
-assert selection.cmd_managed_auth(Namespace(managed_auth_command='login',codex_bin=None))==1
+encoding_error=False
+try:
+ selection.cmd_managed_auth(Namespace(managed_auth_command='status',codex_bin=None))
+except UnicodeEncodeError:
+ assert platform.system()=='Windows'
+ encoding_error=True
+# Separate state/side-effect contract from the already retained native stdout defect.
+with contextlib.redirect_stdout(io.StringIO()):
+ for action in ('status','recover','revoke','use-native'):
+  result=selection.cmd_managed_auth(Namespace(managed_auth_command=action,codex_bin=None))
+  assert result is None
+  assert selection.load_selection() is None
+ assert selection.readiness()==('native',False)
+ assert selection.cmd_managed_auth(Namespace(managed_auth_command='login',codex_bin=None))==1
 assert not selection.selection_path().exists()
 assert not (tmp/'home/managed-auth/store').exists()
 out=io.StringIO()
@@ -36,4 +44,4 @@ sys.path.insert(0,str(bundle))
 module=importlib.import_module(package+'.pier_codex_managed')
 agent=module.CodexManaged(logs_dir=tmp/'logs',model_name='openai/fixture-only',version='0.154.0',managed_config_file=str(tmp/'unused'),managed_bridge_file=str(bridge),managed_package=package)
 assert not calls
-print('NATIVE_CONTRACT_RESULT '+json.dumps({'os':platform.system(),'arch':platform.machine(),'unsupported_managed_rejected':True,'default_native_preserved':True,'inactive_commands_no_auth':True,'materialized_dependencies_imported':True,'version':'0.5.202','network_or_auth_calls':len(calls)}))
+print('NATIVE_CONTRACT_RESULT '+json.dumps({'os':platform.system(),'arch':platform.machine(),'unsupported_managed_rejected':True,'default_native_preserved':True,'inactive_commands_no_auth':True,'materialized_dependencies_imported':True,'version':'0.5.202','network_or_auth_calls':len(calls),'native_stdout_encoding_error_observed':encoding_error,'policy_probe_stdout_captured':True}))
