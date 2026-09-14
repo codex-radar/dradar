@@ -613,7 +613,7 @@ $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
   @{sid=$_.IdentityReference.Value; type=$_.AccessControlType.ToString(); rights=[int64]$_.FileSystemRights}
 })
-@{owner=$owner; rules=$rules} | ConvertTo-Json -Depth 4 -Compress
+@{owner=$owner; expected_owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; rules=$rules} | ConvertTo-Json -Depth 4 -Compress
 """
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -621,7 +621,37 @@ $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.Security
         capture_output=True, text=True, check=True,
     )
     acl = json.loads(result.stdout)
-    allowed = {acl["owner"], "S-1-5-18", "S-1-5-32-544"}
+    _assert_private_windows_acl(acl)
+
+
+def _assert_private_windows_acl(acl):
+    # OWNER_RIGHTS is the current object's owner, not Creator Owner or a
+    # wildcard SID. Verify that ownership itself matches the test process.
+    expected_owner = acl.get("expected_owner")
+    assert isinstance(expected_owner, str) and expected_owner.startswith("S-1-"), acl
+    assert acl.get("owner") == expected_owner, acl
+    allowed = {expected_owner, "S-1-3-4", "S-1-5-18", "S-1-5-32-544"}
     assert acl["rules"], "empty DACL does not establish private access"
     assert all(rule["sid"] in allowed or rule["type"] != "Allow" or rule["rights"] == 0
                for rule in acl["rules"]), acl
+
+
+@pytest.mark.parametrize("sid", ["S-1-5-21-1-2-3-1001", "S-1-3-4", "S-1-5-18", "S-1-5-32-544"])
+def test_private_windows_acl_accepts_owner_principals(sid):
+    owner = "S-1-5-21-1-2-3-1001"
+    _assert_private_windows_acl({"owner": owner, "expected_owner": owner,
+        "rules": [{"sid": sid, "type": "Allow", "rights": 2032127}]})
+
+
+@pytest.mark.parametrize("sid", ["S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-3-0", "S-1-3-40", "S-1-5-21-1-2-3-9999", "unknown"])
+def test_private_windows_acl_rejects_other_principals(sid):
+    owner = "S-1-5-21-1-2-3-1001"
+    with pytest.raises(AssertionError):
+        _assert_private_windows_acl({"owner": owner, "expected_owner": owner,
+            "rules": [{"sid": sid, "type": "Allow", "rights": 1}]})
+
+
+@pytest.mark.parametrize("owner,rules", [("S-1-5-21-1-2-3-9999", [{"sid": "S-1-3-4", "type": "Allow", "rights": 2032127}]), ("S-1-5-21-1-2-3-1001", [])])
+def test_private_windows_acl_rejects_wrong_owner_or_empty_rules(owner, rules):
+    with pytest.raises(AssertionError):
+        _assert_private_windows_acl({"owner": owner, "expected_owner": "S-1-5-21-1-2-3-1001", "rules": rules})
