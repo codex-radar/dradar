@@ -34,6 +34,9 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                          commit='c8013b268335e06233514a7b4e07dc3e6e605af4', tree='b' * 40,
                          target=('windows' if os.name == 'nt' else 'macos' if sys.platform == 'darwin' else 'linux', 'arm64' if platform.machine().lower() in {'arm64', 'aarch64'} else 'x86_64'))
     state = {'active': [], 'claims': [], 'checkouts': [], 'completed': [], 'sessions': {}, 'overlap': False, 'peak': 0}
+    require_overlap = workers > 1 and scenario in {'complete', 'late-child'} and not os.environ.get('PROBE_BASELINE_ROOT')
+    state['model_ready_batches'] = []
+    state['model_overlap'] = False
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -61,6 +64,15 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                     if scenario == 'partial-claim' and len(state['claims']) == 3:
                         state['active'].remove(a)
                         status, result = 503, {'detail': 'injected claim failure'}
+                elif path.path == '/fixture/model-ready':
+                    row = next(a for a in state['active'] if a['assignment_id'] == data['assignment_id'])
+                    assert row.get('started_at'), row
+                    if row['batch_id'] not in state['model_ready_batches']:
+                        state['model_ready_batches'].append(row['batch_id'])
+                    state['model_overlap'] = set(state['model_ready_batches']) == set(BATCHES)
+                    result = {'ready': state['model_overlap']}
+                elif path.path == '/fixture/overlap-ready':
+                    result = {'ready': state['model_overlap']}
                 elif path.path == '/fixture/drained':
                     batch = query.get('batch_id', [None])[0]
                     result = {'drained': not any(a['batch_id'] == batch for a in state['active'])}
@@ -95,6 +107,7 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                     else:
                         result = {'assignment': None}
                 elif path.path == '/fixture/complete':
+                    assert not require_overlap or state['model_overlap'], 'completion before both batch models reached the barrier'
                     state['completed'].append(data['assignment_id'])
                     state['active'] = [a for a in state['active'] if a['assignment_id'] != data['assignment_id']]
                     result = {'ok': True}
@@ -115,6 +128,8 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
     shutil.copyfile(ROOT / 'tests/mixed_go_probe.py', fixture / 'sitecustomize.py')
     env = {k:v for k,v in os.environ.items() if not k.startswith('DRADAR_') and 'proxy' not in k.lower()}
     env.update(PYTHONPATH=str(fixture), DRADAR_HOME=str(tmp_path / 'home'), PROBE_ARTIFACT=str(artifact), PROBE_SERVER=f'http://127.0.0.1:{httpd.server_port}')
+    if require_overlap:
+        env['PROBE_OVERLAP_BARRIER'] = '1'
     if scenario == 'late-child':
         env['PROBE_LATE_CHILD_INDEX'] = '3'
     if scenario == 'spawn-fail':
@@ -148,6 +163,9 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
         assert sorted(state['completed']) == ['1', '2']
         assert not state['active']
         return
+    if require_overlap:
+        assert state['model_overlap'], state
+        assert set(state['model_ready_batches']) == set(BATCHES), state
     assert len(state['claims']) == 4
     assert sorted(state['completed']) == ['1', '2', '3', '4']
     if os.environ.get('PROBE_BASELINE_ROOT'):

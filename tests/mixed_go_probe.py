@@ -34,8 +34,16 @@ launcher.discover_update = discovery.discover_update = lambda *a, **kw: None
 launcher.start_periodic_discovery = lambda *a, **kw: SimpleNamespace(set=lambda: None)
 
 def model(client, assignment, *a, **kw):
-    # Keep both harnesses in flight long enough to prove overlap.
-    time.sleep(0.4)
+    if os.environ.get('PROBE_OVERLAP_BARRIER') == '1':
+        # Neither batch may finish until a model from each has actually entered
+        # this fixture. Slow interpreter startup cannot erase the overlap.
+        result = client._post('/fixture/model-ready', data={'assignment_id': assignment['assignment_id']})
+        deadline = time.monotonic() + 15
+        while not result.get('ready'):
+            if time.monotonic() >= deadline:
+                raise RuntimeError('fixture cross-batch readiness barrier timed out')
+            time.sleep(0.02)
+            result = client._get('/fixture/overlap-ready')
     client._post('/fixture/complete', data={'assignment_id': assignment['assignment_id']})
     return 'submitted'
 r._run_and_submit = model
