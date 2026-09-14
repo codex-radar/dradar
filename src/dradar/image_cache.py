@@ -703,6 +703,8 @@ def prepare_trial_builder(
     concurrent tasks.  No credential or task worktree is placed in that cache.
     """
     mode = normalize_build_cache_mode(mode)
+    if os.environ.get("DRADAR_ISOLATE_BUILDER", "").strip().lower() in {"0", "false", "no", "off"}:
+        return TrialBuilderLease(None, False, "已配置使用本地 Docker 守护进程共享构建空间；未执行独立构建缓存清理")
     runtime = runtime or {}
     safe, note = _builder_proxy_is_safe(runtime)
     if not safe:

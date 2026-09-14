@@ -179,6 +179,9 @@ class ApiClient:
             try:
                 response = self._client.request(method, path, **kw)
             except httpx.HTTPError as exc:  # transport-level: connect/timeout/etc.
+                if attempt < 3 and method in {"GET", "HEAD"}:
+                    self._sleep(1.0 * (attempt + 1))
+                    continue
                 raise ApiError(f"cannot reach {self.server}: {exc}") from exc
             if (
                 response.status_code != 429

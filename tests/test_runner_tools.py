@@ -742,9 +742,10 @@ def test_artifact_task_overlay_adapts_verifier_collect_without_mutation(
     ) as selected:
         assert selected != tasks
         hook = selected / task_id / "pre_artifacts.sh"
+        assert b"\r\n" not in hook.read_bytes()
         assert hook.stat().st_mode & 0o111
         assert f"base_ref='{base_commit}'" in hook.read_text()
-        assert "git diff --binary" in hook.read_text()
+        assert 'git -c safe.directory="$PWD" diff --binary' in hook.read_text()
         assert not (task / "pre_artifacts.sh").exists()
 
     assert not any((tmp_path / "work").iterdir())
