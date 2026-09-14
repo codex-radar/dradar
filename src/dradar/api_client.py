@@ -539,7 +539,7 @@ class ApiClient:
         path = self._benchmark_path("/api/v1/assignment")
         return self._get(self._query_path(path, "inventory", "true"))
 
-    def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None, assignment_id=None):
+    def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None, assignment_id=None, expected_cohort_id=None):
         from .managed_auth_selection import load_selection, selection_requested, PROFILE, CAPABILITY, TRIAL_CAPABILITY, trial_platform_ready
         from .auth_refresh import RefreshUnavailable
         if not selection_requested():
@@ -563,10 +563,22 @@ class ApiClient:
             selected = None
         if selected is None or CAPABILITY not in self.capabilities:
             raise ApiError("受控登录源不可用；请检查状态或恢复，没有自动切换账号。", status_code=409, code="managed_auth_unavailable")
-        expected = {"id":PROFILE,"capability":CAPABILITY,"agent":"codex","provider":"openai","agent_version":"0.154.0"}
+        expected = {"id":PROFILE,"capability":TRIAL_CAPABILITY,"agent":"codex","provider":"openai","agent_version":"0.154.0"}
         if sum(item == expected for item in result["profiles"]) != 1:
             raise ApiError("服务端未提供匹配的受控运行模式，受控操作未继续。", status_code=409, code="auth_runtime_unavailable")
+        if assignment_id is not None:
+            binding=result.get('binding')
+            if (not isinstance(binding,dict) or set(binding)!={'schema','assignment_id','auth_cohort_id','auth_runtime'}
+                    or binding.get('schema')!='dradar.managed_trial_binding.v1'
+                    or binding.get('assignment_id')!=assignment_id or binding.get('auth_runtime')!=PROFILE
+                    or not self._managed_cohort_id(binding.get('auth_cohort_id'))
+                    or (expected_cohort_id is not None and binding['auth_cohort_id']!=expected_cohort_id)):
+                raise ApiError('Server did not confirm the exact managed trial binding.',status_code=409,code='auth_runtime_mismatch')
         return PROFILE
+
+    @staticmethod
+    def _managed_cohort_id(value):
+        return isinstance(value,str) and len(value)==32 and all(c in '0123456789abcdef' for c in value)
 
     def _check_managed_assignments(self, data):
         from .managed_auth_selection import selection_requested, PROFILE
@@ -580,9 +592,11 @@ class ApiClient:
             if item.get("agent") == "codex" and item.get("provider") in (None, "openai"):
                 if item.get("auth_runtime") != PROFILE:
                     raise ApiError("已有任务绑定普通认证；请显式选择兼容模式完成它，或释放后重新领取。", status_code=409, code="auth_runtime_mismatch")
-                continuation_ids.append(item.get("assignment_id"))
-        for assignment_id in continuation_ids:
-            self._negotiate_managed_auth_runtime(assignment_id=assignment_id)
+                if not self._managed_cohort_id(item.get('auth_cohort_id')) or not self._managed_cohort_id(item.get('assignment_id')):
+                    raise ApiError('Managed assignment lacks a valid cohort binding.',status_code=409,code='auth_runtime_mismatch')
+                continuation_ids.append((item['assignment_id'],item['auth_cohort_id']))
+        for assignment_id,cohort_id in continuation_ids:
+            self._negotiate_managed_auth_runtime(assignment_id=assignment_id,expected_cohort_id=cohort_id)
 
     def claim_assignment(
         self,
@@ -607,7 +621,14 @@ class ApiClient:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
             data["tier"] = tier
-        return self._post("/api/v1/assignment/claim", data=data)
+        result=self._post("/api/v1/assignment/claim", data=data)
+        if profile is not None:
+            assignment=result.get('assignment') if isinstance(result,dict) else None
+            if (not isinstance(assignment,dict) or assignment.get('auth_runtime')!=profile
+                    or not self._managed_cohort_id(assignment.get('assignment_id'))
+                    or not self._managed_cohort_id(assignment.get('auth_cohort_id'))):
+                raise ApiError('Server returned an unbound managed assignment; execution was not started.',status_code=409,code='auth_runtime_mismatch')
+        return result
 
     def configure_refill_campaign(
         self,
