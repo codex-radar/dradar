@@ -163,7 +163,7 @@ def _entry(assignment: dict) -> tuple[str, dict] | None:
     if assignment_id is None:
         return None
     metadata = {}
-    for name in ("task_id", "model", "effort"):
+    for name in ("task_id", "model", "effort", "batch_id"):
         value = assignment.get(name)
         if isinstance(value, str) and 0 < len(value) <= 256:
             metadata[name] = value
@@ -208,6 +208,25 @@ def _report(state: dict, active_ids: set[str]) -> BoundaryReport:
         unexpected_ids=frozenset(active - expected_ids),
         outcomes=outcomes,
     )
+
+
+def admitted_batches(path: Path) -> list[str]:
+    """Recover the exact batch identities of an unfinished shared boundary.
+
+    Older ledgers without batch metadata keep their existing conservative
+    reconciliation; this does not guess identities or forget missing work.
+    """
+    if not path.exists():
+        return []
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if state is None:
+                raise BoundaryError("assignment boundary state is missing or invalid")
+            values = [entry.get("batch_id") for entry in state["expected"].values()]
+            if not values or not all(isinstance(value, str) and value for value in values):
+                return []
+            return list(dict.fromkeys(values))
 
 
 def prepare(
