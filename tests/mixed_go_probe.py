@@ -34,8 +34,16 @@ launcher.discover_update = discovery.discover_update = lambda *a, **kw: None
 launcher.start_periodic_discovery = lambda *a, **kw: SimpleNamespace(set=lambda: None)
 
 def model(client, assignment, *a, **kw):
-    # Keep both harnesses in flight long enough to prove overlap.
-    time.sleep(0.4)
+    if os.environ.get('PROBE_OVERLAP_BARRIER') == '1':
+        # Neither batch may finish until a model from each has actually entered
+        # this fixture. Slow interpreter startup cannot erase the overlap.
+        result = client._post('/fixture/model-ready', data={'assignment_id': assignment['assignment_id']})
+        deadline = time.monotonic() + 15
+        while not result.get('ready'):
+            if time.monotonic() >= deadline:
+                raise RuntimeError('fixture cross-batch readiness barrier timed out')
+            time.sleep(0.02)
+            result = client._get('/fixture/overlap-ready')
     client._post('/fixture/complete', data={'assignment_id': assignment['assignment_id']})
     return 'submitted'
 r._run_and_submit = model
@@ -47,3 +55,20 @@ if os.environ.get('PROBE_SPAWN_FAIL'):
             raise OSError('injected worker spawn failure')
         return original_popen(command, *args, **kwargs)
     r.subprocess.Popen = fail_spawn
+
+# Deterministic race injection: the selected child cannot make its first
+# inventory read until its sibling has drained the exact batch on the server.
+# This does not change the response or extend simulated model duration.
+if os.environ.get('PROBE_LATE_CHILD_INDEX') == os.environ.get('DRADAR_WORKER_INDEX') and os.environ.get('DRADAR_WORKER_INDEX'):
+    class LateClient(ApiClient):
+        waited = False
+        def get_assignment(self):
+            if not self.waited:
+                deadline = time.monotonic() + 15
+                while not self._get('/fixture/drained?batch_id=' + str(self.batch_id)).get('drained'):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('fixture late-child barrier timed out')
+                    time.sleep(0.02)
+                self.waited = True
+            return super().get_assignment()
+    r._client = lambda cfg, **kw: LateClient(server, 'fixture', capabilities=())

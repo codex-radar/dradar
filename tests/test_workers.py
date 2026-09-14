@@ -61,14 +61,28 @@ def test_worker_command_reuses_direct_zipapp(monkeypatch, tmp_path):
 
     command = runloop._worker_command(_args())
 
-    assert command[:2] == [sys.executable, str(artifact.resolve())]
+    assert command[0] == sys.executable
+    if os.name == "nt":
+        # Native descendants own a replacement-denying copy with identical
+        # bytes, so the original temporary name is not their entrypoint.
+        from pathlib import Path
+        from dradar.child_entrypoint import popen_options
+        assert Path(command[1]).read_bytes() == artifact.read_bytes()
+        assert Path(command[1]) != artifact.resolve()
+        env = dict(os.environ)
+        options = popen_options(env)
+        assert options["startupinfo"].lpAttributeList["handle_list"]
+        assert env["DRADAR_OTA_DISPATCH"] == "1"
+    else:
+        assert command[1] == str(artifact.resolve())
     assert "-m" not in command[:3]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX verified-fd launch")
 def test_worker_command_preserves_verified_zipapp_fd(monkeypatch, tmp_path):
     artifact = tmp_path / "candidate.pyz"
-    artifact.write_bytes(b"signed-candidate")
+    with zipfile.ZipFile(artifact, "w") as bundle:
+        bundle.writestr("__main__.py", "raise SystemExit(0)\n")
     with artifact.open("rb") as handle:
         entrypoint = f"/dev/fd/{handle.fileno()}"
         monkeypatch.setattr(sys, "argv", [entrypoint])

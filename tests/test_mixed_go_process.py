@@ -20,8 +20,10 @@ ROOT = Path(__file__).parents[1]
 
 
 @pytest.mark.parametrize("workers", [1, 4])
-@pytest.mark.parametrize("scenario", ["complete", "partial-claim", "spawn-fail"])
+@pytest.mark.parametrize("scenario", ["complete", "partial-claim", "spawn-fail", "late-child"])
 def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path, scenario, workers):
+    if scenario == 'late-child' and workers == 1:
+        pytest.skip('late sibling requires multiple workers')
     if os.environ.get('PROBE_BASELINE_ROOT') and (workers != 4 or scenario != 'complete'):
         pytest.skip('baseline control is the reported four-worker case')
     spec = importlib.util.spec_from_file_location('build_0105', ROOT / 'scripts/ota_release.py')
@@ -32,6 +34,9 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                          commit='c8013b268335e06233514a7b4e07dc3e6e605af4', tree='b' * 40,
                          target=('windows' if os.name == 'nt' else 'macos' if sys.platform == 'darwin' else 'linux', 'arm64' if platform.machine().lower() in {'arm64', 'aarch64'} else 'x86_64'))
     state = {'active': [], 'claims': [], 'checkouts': [], 'completed': [], 'sessions': {}, 'overlap': False, 'peak': 0}
+    require_overlap = workers > 1 and scenario in {'complete', 'late-child'} and not os.environ.get('PROBE_BASELINE_ROOT')
+    state['model_ready_batches'] = []
+    state['model_overlap'] = False
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -59,13 +64,25 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                     if scenario == 'partial-claim' and len(state['claims']) == 3:
                         state['active'].remove(a)
                         status, result = 503, {'detail': 'injected claim failure'}
+                elif path.path == '/fixture/model-ready':
+                    row = next(a for a in state['active'] if a['assignment_id'] == data['assignment_id'])
+                    assert row.get('started_at'), row
+                    if row['batch_id'] not in state['model_ready_batches']:
+                        state['model_ready_batches'].append(row['batch_id'])
+                    state['model_overlap'] = set(state['model_ready_batches']) == set(BATCHES)
+                    result = {'ready': state['model_overlap']}
+                elif path.path == '/fixture/overlap-ready':
+                    result = {'ready': state['model_overlap']}
+                elif path.path == '/fixture/drained':
+                    batch = query.get('batch_id', [None])[0]
+                    result = {'drained': not any(a['batch_id'] == batch for a in state['active'])}
                 elif path.path == '/api/v1/assignment':
                     batch = query.get('batch_id', [None])[0]
                     default = state['active'][-1]['batch_id'] if state['active'] else None
                     rows = [dict(a) for a in state['active'] if a['batch_id'] == (batch or default)]
                     result = {'active': rows, 'free_pick': True}
                     if batch and not rows:
-                        status, result = 404, {'detail': {'code': 'claim_batch_not_found', 'message': 'active claim batch not found'}}
+                        status, result = 404, {'code': 'claim_batch_not_found', 'detail': 'active batch not found'}
                 elif path.path == '/api/v1/runner/heartbeat':
                     state['sessions'][data['session_id']] = data
                     result = {'accepted': True}
@@ -90,6 +107,7 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                     else:
                         result = {'assignment': None}
                 elif path.path == '/fixture/complete':
+                    assert not require_overlap or state['model_overlap'], 'completion before both batch models reached the barrier'
                     state['completed'].append(data['assignment_id'])
                     state['active'] = [a for a in state['active'] if a['assignment_id'] != data['assignment_id']]
                     result = {'ok': True}
@@ -110,6 +128,10 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
     shutil.copyfile(ROOT / 'tests/mixed_go_probe.py', fixture / 'sitecustomize.py')
     env = {k:v for k,v in os.environ.items() if not k.startswith('DRADAR_') and 'proxy' not in k.lower()}
     env.update(PYTHONPATH=str(fixture), DRADAR_HOME=str(tmp_path / 'home'), PROBE_ARTIFACT=str(artifact), PROBE_SERVER=f'http://127.0.0.1:{httpd.server_port}')
+    if require_overlap:
+        env['PROBE_OVERLAP_BARRIER'] = '1'
+    if scenario == 'late-child':
+        env['PROBE_LATE_CHILD_INDEX'] = '3'
     if scenario == 'spawn-fail':
         env['PROBE_SPAWN_FAIL'] = '1'
     argv = [sys.executable, str(artifact), 'go', '-y', '--workers', str(workers), '--keep']
@@ -135,12 +157,15 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
         httpd.shutdown()
         httpd.server_close()
     assert result.returncode == 0, result.stdout + result.stderr
-    assert state['peak'] <= (workers if scenario == 'complete' else 2)
+    assert state['peak'] <= (workers if scenario in {'complete', 'late-child'} else 2)
     if scenario == 'partial-claim':
         assert len(state['claims']) == 3  # resume never repeats a claim POST
         assert sorted(state['completed']) == ['1', '2']
         assert not state['active']
         return
+    if require_overlap:
+        assert state['model_overlap'], state
+        assert set(state['model_ready_batches']) == set(BATCHES), state
     assert len(state['claims']) == 4
     assert sorted(state['completed']) == ['1', '2', '3', '4']
     if os.environ.get('PROBE_BASELINE_ROOT'):
@@ -148,7 +173,7 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
         assert not state['overlap'], state
     else:
         assert all(a['scope'] == a['batch'] for a in state['checkouts'])
-        assert state['overlap'] == (workers > 1 and scenario == 'complete'), state
+        assert state['overlap'] == (workers > 1 and scenario in {'complete', 'late-child'}), state
     if os.environ.get('PROBE_REPORT'):
         Path(os.environ['PROBE_REPORT']).write_text(json.dumps({'artifact_sha256': hashlib.sha256(artifact.read_bytes()).hexdigest(), 'fixture_note': 'Unsigned test build with synthetic tree metadata; no release artifact or provider run', 'state': state, 'stdout': result.stdout, 'stderr': result.stderr}, indent=2))
     assert not state['active']

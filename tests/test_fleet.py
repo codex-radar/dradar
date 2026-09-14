@@ -183,6 +183,7 @@ def test_provider_runtime_environment_rejects_secrets_and_unknown_keys(tmp_path)
     assert selected == {"CODEBUDDY_CLI_PATH": str(executable)}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not Windows ACLs")
 def test_provider_runtime_environment_carries_only_private_codebuddy_home(tmp_path):
     private = tmp_path / "private-codebuddy"
     private.mkdir(mode=0o700)
@@ -197,6 +198,7 @@ def test_provider_runtime_environment_carries_only_private_codebuddy_home(tmp_pa
     }) == {}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not Windows ACLs")
 def test_provider_runtime_environment_carries_only_private_kimi_credential(
     tmp_path,
 ):
@@ -1016,7 +1018,7 @@ def test_conditional_timeout_reserves_failure_before_interrupting_parent(
     assert event["error_code"] == "local_start_timeout"
     assert response["stopping"] == [BATCH_A]
     assert response["condition_changed"] == []
-    assert process.signals == [signal.SIGINT]
+    assert process.signals == [signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT]
     assert state["batches"][BATCH_A]["status"] == "stopping"
 
     monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, controller_id)
@@ -1229,7 +1231,7 @@ def test_plan_token_stays_in_private_file_not_fleet_argv_env_or_state(
     )
     persisted = fleet._state_path(tmp_path).read_text()
     assert token not in persisted
-    assert str(credentials) in persisted
+    assert json.loads(persisted)["batches"][BATCH_A]["credentials_file"] == str(credentials)
 
 
 def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(

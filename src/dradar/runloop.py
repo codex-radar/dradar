@@ -30,7 +30,6 @@ import sys
 import tempfile
 import time
 import uuid
-import zipfile
 
 from . import (
     __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
@@ -4871,38 +4870,13 @@ def _worker_command(args) -> list[str]:
 
 
 def _worker_entrypoint() -> list[str]:
-    """Reuse the running OTA zipapp instead of assuming an installed package."""
-    argv0 = sys.argv[0]
-    fd_match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", argv0)
-    if os.name != "nt" and fd_match is not None:
-        try:
-            os.fstat(int(fd_match.group(1)))
-        except OSError:
-            pass
-        else:
-            return [sys.executable, argv0]
-    candidate = Path(argv0)
-    try:
-        if candidate.is_file() and zipfile.is_zipfile(candidate):
-            return [sys.executable, str(candidate.resolve())]
-    except OSError:
-        pass
-    return [sys.executable, "-m", "dradar.cli"]
+    from .child_entrypoint import command
+    return command()
 
 
 def _worker_entrypoint_pass_fds() -> tuple[int, ...]:
-    """Keep the launcher's verified artifact descriptor open in POSIX children."""
-    if os.name == "nt":
-        return ()
-    match = re.fullmatch(r"/dev/fd/([1-9][0-9]*)", sys.argv[0])
-    if match is None:
-        return ()
-    descriptor = int(match.group(1))
-    try:
-        os.fstat(descriptor)
-    except OSError:
-        return ()
-    return (descriptor,)
+    from .child_entrypoint import pass_fds
+    return pass_fds()
 
 
 def _signal_workers(processes: list[subprocess.Popen]) -> None:
@@ -5747,7 +5721,9 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         )
         if boundary_path is not None:
             env[_ASSIGNMENT_BOUNDARY_ENV] = str(boundary_path)
-        process = subprocess.Popen(worker_command, env=env, **popen_kwargs)
+        from .child_entrypoint import popen_options
+        child_kwargs = {**popen_kwargs, **popen_options(env)}
+        process = subprocess.Popen(worker_command, env=env, **child_kwargs)
         processes.append(process)
         active_processes[slot] = process
         print(f"  worker {slot}/{count}: pid {process.pid}")
@@ -6327,6 +6303,7 @@ def _acquire_batch(
     *,
     allow_new_claims: bool = True,
     allow_empty_exact_campaign: bool = False,
+    allow_empty_supervised_batch: bool = False,
 ) -> tuple[list[dict], bool]:
     """The volunteer's held batch, plus whether this is a free-pick instance.
     Free-pick: the batch is whatever they claimed on the web. Menu mode
@@ -6336,7 +6313,13 @@ def _acquire_batch(
     try:
         data = client.get_assignment()
     except ApiError as exc:
-        if allow_empty_exact_campaign and exc.status_code == 404:
+        if allow_empty_supervised_batch and _explicit_batch_finished(client, exc):
+            # Another admitted child can finish this exact batch before this
+            # child reaches its initial read. This is not proof of success:
+            # the parent still reconciles every expected assignment outcome.
+            print("admitted worker batch is no longer active; parent will verify its outcomes")
+            data = {"active": [], "free_pick": True}
+        elif allow_empty_exact_campaign and exc.status_code == 404:
             # A run-plan continuation may legitimately have no live assignment
             # between its selected seed batch and the next server-budgeted
             # claim.  Only the exact scoped caller opts into this interpretation;
@@ -7201,12 +7184,34 @@ def _wait_for_scoped_refill_work(
             ) from exc
 
 
+def _has_inherited_batch_admission(args, client: ApiClient) -> bool:
+    """Only a supervised exact child may defer empty-batch proof to its parent."""
+    inherited = os.environ.get(_ASSIGNMENT_BOUNDARY_ENV)
+    batch_id = getattr(client, "batch_id", None)
+    if not (
+        getattr(args, "worker_child", False)
+        and getattr(args, "resume", False)
+        and getattr(args, "parallel", False)
+        and not getattr(args, "refill", False)
+        and batch_id
+        and batch_id == getattr(args, "batch_id", None)
+        and inherited
+        and _assignment_boundary_path(args) == Path(inherited)
+    ):
+        return False
+    try:
+        return batch_id in assignment_boundary.admitted_batches(Path(inherited))
+    except (assignment_boundary.BoundaryError, OSError, ValueError):
+        return False
+
+
 def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     """Claim/configure once, shared by the serial and supervised run paths."""
     allow_new_claims = getattr(args, "allow_new_claims", True)
     wants_refill = getattr(args, "refill", False)
     active, free_pick = _acquire_batch(
         client, args.yes, allow_new_claims=allow_new_claims,
+        allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
         allow_empty_exact_campaign=(
             bool(getattr(args, "fleet_pool", False))
             and bool(wants_refill)

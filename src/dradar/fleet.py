@@ -59,7 +59,8 @@ SCHEMA_VERSION = 1
 # state schema.  A controller with no value here predates per-request runtime
 # selection and would keep spawning pools from its own stale installation.
 # Version 7 also keeps explicit worker counts free of legacy capacity probes.
-CONTROLLER_PROTOCOL_VERSION = 7
+# Version 8 carries verified payloads and readable Windows lease identity.
+CONTROLLER_PROTOCOL_VERSION = 8
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -234,9 +235,40 @@ def _locked(path: Path, *, blocking: bool = True) -> Iterator[object]:
         handle.close()
 
 
+def _windows_pid_alive(pid: int) -> bool:
+    """Query a process handle without sending console events or signals."""
+    import ctypes
+    from ctypes import wintypes
+
+    if pid > 0xFFFFFFFF:
+        return False
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel.OpenProcess
+    open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    open_process.restype = wintypes.HANDLE
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    wait.restype = wintypes.DWORD
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    handle = open_process(0x00100000, False, pid)  # SYNCHRONIZE only
+    if not handle:
+        # Access denied cannot prove death. Controller nonce + held lease are
+        # still required independently, so this never proves PID identity.
+        return ctypes.get_last_error() == 5
+    try:
+        result = wait(handle, 0)
+        return result != 0  # WAIT_OBJECT_0 alone proves process exit
+    finally:
+        close(handle)
+
+
 def _pid_alive(pid: object) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -266,26 +298,36 @@ def _controller_lease(home: Path, controller_id: str) -> Iterator[None]:
     with _locked(path, blocking=False) as handle:
         handle.seek(0)
         handle.truncate()
-        json.dump({
+        identity = {
             "schema_version": SCHEMA_VERSION,
             "controller_id": controller_id,
             "pid": os.getpid(),
             "started_at": _now(),
-        }, handle)
+        }
+        json.dump(identity, handle)
         handle.write("\n")
         handle.flush()
         if os.name != "nt":
             os.fsync(handle.fileno())
+        else:
+            # Keep the SAME byte-zero lock for legacy mutual exclusion. Its
+            # bytes are mandatory-locked on Windows, so put readable identity
+            # in a sidecar while still holding that original lock.
+            _atomic_json(path.with_suffix(".identity.json"), identity)
         yield
 
 
 def _controller_lease_matches(home: Path, controller_id: object) -> bool:
     path = _root(home) / CONTROLLER_LOCK_FILE
-    recorded = _read_json(path)
+    identity_path = path.with_suffix(".identity.json") if os.name == "nt" else path
+    recorded = _read_json(identity_path)
+    state = _read_json(_state_path(home))
     return bool(
         isinstance(controller_id, str)
         and recorded
         and recorded.get("controller_id") == controller_id
+        and state
+        and recorded.get("pid") == state.get("pid")
         and _lock_is_held(path)
     )
 
@@ -412,6 +454,16 @@ def _retire_incompatible_idle_controller(
     raise FleetControllerUpdatePending()
 
 
+def _reject_unidentified_windows_controller(home: Path, state: dict | None) -> None:
+    # Legacy controllers have no readable identity sidecar. Never interpret
+    # that blind spot as an idle machine, retire an unproven PID, or admit a
+    # new batch alongside a still-held legacy lock.
+    if (os.name == "nt"
+            and _lock_is_held(_root(home) / CONTROLLER_LOCK_FILE)
+            and not _controller_lease_matches(home, (state or {}).get("controller_id"))):
+        raise FleetControllerUpdatePending()
+
+
 def prepare_new_batch_runtime(home: Path = HOME) -> None:
     """Fail closed before server admission if an old live pool must drain.
 
@@ -423,6 +475,7 @@ def prepare_new_batch_runtime(home: Path = HOME) -> None:
     _prepare_dirs(home)
     with _locked(_root(home) / START_LOCK_FILE):
         state = _read_json(_state_path(home))
+        _reject_unidentified_windows_controller(home, state)
         if not controller_is_active(home) or _controller_protocol_matches(state):
             return
         _retire_incompatible_idle_controller(home, state or {})
@@ -432,21 +485,19 @@ def _ensure_controller(home: Path = HOME) -> dict:
     _prepare_dirs(home)
     with _locked(_root(home) / START_LOCK_FILE):
         state = _read_json(_state_path(home))
+        _reject_unidentified_windows_controller(home, state)
         if controller_is_active(home):
             return state or {}
 
         launch_id = uuid.uuid4().hex
         log_path = _root(home) / LOG_DIR / CONTROLLER_LOG
-        log_handle = open(log_path, "a", encoding="utf-8")
         env = os.environ.copy()
         env[_LAUNCH_ID_ENV] = launch_id
-        command = [
-            sys.executable, "-m", "dradar.cli", "fleet", "serve", "--internal",
-        ]
+        from .child_entrypoint import command as child_command, popen_options
+        command = [*child_command(), "fleet", "serve", "--internal"]
         kwargs: dict = {
             "env": env,
             "stdin": subprocess.DEVNULL,
-            "stdout": log_handle,
             "stderr": subprocess.STDOUT,
             "close_fds": True,
         }
@@ -456,6 +507,9 @@ def _ensure_controller(home: Path = HOME) -> dict:
             )
         else:
             kwargs["start_new_session"] = True
+        kwargs.update(popen_options(env))
+        log_handle = open(log_path, "a", encoding="utf-8")
+        kwargs["stdout"] = log_handle
         try:
             process = subprocess.Popen(command, **kwargs)
         finally:
@@ -811,12 +865,12 @@ def _spawn_pool(
 ) -> tuple[subprocess.Popen, object]:
     controller_id = str(state["controller_id"])
     log_path = _root(home) / LOG_DIR / f"batch-{batch_id}.log"
-    log_handle = open(log_path, "a", encoding="utf-8")
     executable = runtime_executable or sys.executable
     if not os.path.isabs(executable) or not Path(executable).is_file():
         raise FleetError("invalid DRadar runtime for the new local run")
+    from .child_entrypoint import command as child_command, popen_options
     command = [
-        executable, "-m", "dradar.cli", "resume", "-y",
+        *child_command(executable), "resume", "-y",
         "--batch-id", batch_id, "--workers", str(workers), "--fleet-pool",
     ]
     if credentials_file:
@@ -845,7 +899,6 @@ def _spawn_pool(
     kwargs: dict = {
         "env": env,
         "stdin": subprocess.DEVNULL,
-        "stdout": log_handle,
         "stderr": subprocess.STDOUT,
     }
     # Keep the historical machine-lock file description alive in every pool
@@ -854,14 +907,14 @@ def _spawn_pool(
     from . import machine
 
     lock_handle = machine._lock_handle
-    if lock_handle is not None:
-        os.set_inheritable(lock_handle.fileno(), True)
-        if os.name == "nt":  # pragma: no cover - Windows handle inheritance
-            kwargs["close_fds"] = False
-        else:
-            kwargs["pass_fds"] = (lock_handle.fileno(),)
+    extra_fds = (lock_handle.fileno(),) if lock_handle is not None else ()
+    for descriptor in extra_fds:
+        os.set_inheritable(descriptor, True)
+    kwargs.update(popen_options(env, extra_fds=extra_fds))
     if os.name == "nt":  # pragma: no cover
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    log_handle = open(log_path, "a", encoding="utf-8")
+    kwargs["stdout"] = log_handle
     try:
         process = subprocess.Popen(command, **kwargs)
     except BaseException:

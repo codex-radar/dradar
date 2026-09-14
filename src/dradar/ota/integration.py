@@ -362,6 +362,9 @@ def _self_test(candidate) -> bool:
         os.close(fd)
 
 
+_windows_candidate_fds: dict[str, int] = {}
+
+
 @contextmanager
 def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
     """Materialize bytes under a handle that denies writes/delete/rename."""
@@ -415,8 +418,10 @@ def _locked_windows_candidate(data: bytes) -> Iterator[Path]:
                 raise OSError("short write to locked OTA candidate")
             view = view[written:]
         os.fsync(fd)
+        _windows_candidate_fds[str(path)] = fd
         yield path
     finally:
+        _windows_candidate_fds.pop(str(path), None)
         os.close(fd)
         _cleanup_windows_candidate(path, move_file_ex)
 

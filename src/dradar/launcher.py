@@ -18,6 +18,8 @@ def _activate_if_idle(root):
 
 def main() -> int:
     from .ota import discovery
+    from .child_entrypoint import retain_inherited_windows_payload
+    retain_inherited_windows_payload()
     discovery.LAUNCH_METHOD = "launcher"
     # Only bypasses discovery in an already verified child/self-test. It never
     # authorizes a pathname or bypasses verification of a downloaded artifact.
