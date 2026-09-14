@@ -28,8 +28,10 @@ for key in list(env):
   env.pop(key)
 git = Path(shutil.which('git')).resolve()
 if os.name == 'nt':
- shell = git.parent.parent/'usr'/'bin'/'sh.exe'
- assert shell.is_file(), (git,shell)
+ roots = [root for root in git.parents
+          if (root/'cmd'/'git.exe').is_file() and (root/'usr'/'bin'/'sh.exe').is_file()]
+ assert len(roots) == 1, (git, roots)
+ shell = roots[0]/'usr'/'bin'/'sh.exe'
  env['PATH'] = str(shell.parent)+os.pathsep+env['PATH']
  assert Path(shutil.which('sh',path=env['PATH'])).resolve() == shell.resolve()
 else:
