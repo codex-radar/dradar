@@ -2616,3 +2616,11 @@ def test_dsh_utf16_patch_is_normalized_only_after_git_validation(tmp_path):
     assert _normalize_utf16_patch(normalized) is False
     from dradar.artifact_staging import ensure_staged_patch
     assert ensure_staged_patch(tmp_path).data == diff.encode("utf-8")
+
+
+def test_pre_artifacts_scripts_configure_git_safe_directory():
+    assert "git config --global --add safe.directory /app" in runner_mod.DSH_PRE_ARTIFACTS_SCRIPT
+    assert "git config --global --add safe.directory '*'" in runner_mod.DSH_PRE_ARTIFACTS_SCRIPT
+    assert "git config --global --add safe.directory /app" in runner_mod.ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT
+    assert "git config --global --add safe.directory '*'" in runner_mod.ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT
+

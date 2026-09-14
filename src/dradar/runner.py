@@ -261,6 +261,8 @@ BETA_SUBSCRIPTION_AGENTS = frozenset({
 # narrow, deterministic collector without mutating the shared task checkout.
 DSH_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
 set -eu
+git config --global --add safe.directory /app 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 cd /app
 mkdir -p /logs/artifacts
 base_ref='__DRADAR_BASE_COMMIT__'
@@ -280,6 +282,8 @@ git diff --binary "$base" HEAD > /logs/artifacts/model.patch
 # ``git diff`` without staging their contents or creating a commit.
 ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
 set -eu
+git config --global --add safe.directory /app 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 cd /app
 mkdir -p /logs/artifacts
 base_ref='__DRADAR_BASE_COMMIT__'
