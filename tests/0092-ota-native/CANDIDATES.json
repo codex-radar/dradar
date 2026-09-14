@@ -1,8 +1,8 @@
 {
   "cli": {
     "base": "3f6b0f4e96be9e3f00549dbc362110695a88fa2d",
-    "tree": "31e356899dd708f7b7d18c9e1d996edd5743e039",
-    "patch_sha256": "78bd44738388e9ff1f571babd4f3a9fcd294a8a6b61a8b63ca5382ad843d3252",
+    "tree": "d9f1222eff76fb5abde70b2733f64a41f581e8fc",
+    "patch_sha256": "a07e26cd202d5b11ccc7336d5c805edd5c40e0f8261d1737996b51203021e06d",
     "files": {
       "docs/automatic-updates.md": "3e98752f65041db38807ea3c1067a6a998cba1d68899c015346744be7caff193",
       "pyproject.toml": "cee8c2a2ec6a01415fbfa8c5aae6da979b2aecb9152d48deed56bdb869c2e43f",
@@ -12,7 +12,9 @@
       "src/dradar/launcher.py": "f14e46567c0b5667dc61cf7b00271f769bb3b96f6cc87ebf64b5a0050c278b0a",
       "src/dradar/ota/activity.py": "a94f2a63a389622f57c4eb40748288b7dce225a4dd4644af67b2d0681901971b",
       "src/dradar/ota/discovery.py": "dbe5849f0ea54bfcdecb9d0172f5bce8e4e2bc93472ce2462a50670e370dd586",
+      "src/dradar/ota/download.py": "d747320c15d668dee4f47630fd67c72651c148673daaf588b0dad41490e11c7d",
       "src/dradar/ota/integration.py": "7414f5015810dc9b10cc1c1cda93e219762d7e1f1b08e538947f84222b059b52",
+      "src/dradar/ota/runtime.py": "9adcf029bd38039bc75d7a79d785aed7250a8dc844f59a5876571105e3372b2e",
       "src/dradar/ota/state.py": "8ebca271ddf8742b23dc5e6a2c3713b89e4de4b06c13f776f68fb17c2365fedd",
       "src/dradar/runloop.py": "c0fae3fc2be6033141da766a1973f52e047c14941f52d90c4e70bc4aa2b07707",
       "src/dradar/telemetry.py": "f5d102778d5144554c9af616574e8e5ef0e54e1906ade3e01aa1cd2de1bff22c",
@@ -20,7 +22,7 @@
       "tests/test_ota_flight_optional.py": "7212fe70129ef622b819b555a858d68825d8241f0fabb4c1b73709ac0af4634e",
       "tests/test_ota_integration.py": "bdc24d671d70d0d8853280bb3916e54beaf197bcb63fd888f182c3b814e97fd6",
       "tests/test_ota_release_tool.py": "ba52eb174905ff6acdb7c3fed69262c2d05c421bb9706056c23b754f40e89f0a",
-      "tests/test_ota_runtime.py": "c3c295936f36a7ce372fc52f546325b314bfdfac10c3ed30caa2eea94abc537c",
+      "tests/test_ota_runtime.py": "d829ccaca5a22bc2d09b40971e066ffded9731276063c2ae94ad56174a960531",
       "tests/test_ota_state.py": "3162f0fe571698571febec1dd796e6b3dbe15b43fe287905d4e22fc4c81c3b7c",
       "tests/test_telemetry.py": "23f70810a1154f4b37624de286c5753309a50701ac7466d576237f6ce50a5597"
     },
@@ -38,6 +40,11 @@
     ],
     "changed_from_R3": [
       "tests/test_ota_discovery.py"
+    ],
+    "changed_from_diagnostic": [
+      "src/dradar/ota/download.py",
+      "src/dradar/ota/runtime.py",
+      "tests/test_ota_runtime.py"
     ]
   },
   "server": {

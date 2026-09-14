@@ -518,6 +518,19 @@ index 0000000..73b1e81
 +    if type(sequence) is int and sequence > 0:
 +        result["update_sequence"] = sequence
 +    return result
+diff --git a/src/dradar/ota/download.py b/src/dradar/ota/download.py
+index fbba4ee..6e10105 100644
+--- a/src/dradar/ota/download.py
++++ b/src/dradar/ota/download.py
+@@ -610,7 +610,7 @@ def stage_verified_artifact(
+         try:
+             source_fd = os.open(
+                 source,
+-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
++                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+             )
+         except OSError as exc:
+             raise ManifestError("staged source artifact is unsafe") from exc
 diff --git a/src/dradar/ota/integration.py b/src/dradar/ota/integration.py
 index 7c855ac..54f7056 100644
 --- a/src/dradar/ota/integration.py
@@ -592,6 +605,20 @@ index 7c855ac..54f7056 100644
 +    result = runtime.activate_and_self_test(snapshot, _self_test)
      recorder.flush()
      return result
+diff --git a/src/dradar/ota/runtime.py b/src/dradar/ota/runtime.py
+index 52f0c55..25930f0 100644
+--- a/src/dradar/ota/runtime.py
++++ b/src/dradar/ota/runtime.py
+@@ -248,8 +248,8 @@ class UpdateRuntime:
+                 )
+             self.controller.activate(snapshot)
+             self.controller.begin_self_test()
+-            candidate = self.controller.staged_artifact()
+             try:
++                candidate = self.controller.staged_artifact()
+                 passed = self_test(candidate) is True
+             except (KeyboardInterrupt, SystemExit):
+                 self.controller.request_rollback("update_self_test_failed")
 diff --git a/src/dradar/ota/state.py b/src/dradar/ota/state.py
 index de583a4..9e0fe89 100644
 --- a/src/dradar/ota/state.py
@@ -1026,7 +1053,7 @@ index 78b9473..a37c70b 100644
  
  
 diff --git a/tests/test_ota_runtime.py b/tests/test_ota_runtime.py
-index 17d9ce2..a1a57d3 100644
+index 17d9ce2..be70a4d 100644
 --- a/tests/test_ota_runtime.py
 +++ b/tests/test_ota_runtime.py
 @@ -133,7 +133,7 @@ def seed_lkg(root):
@@ -1038,6 +1065,50 @@ index 17d9ce2..a1a57d3 100644
      }
      manifest = sign_document(
          {
+@@ -639,3 +639,43 @@ def test_windows_arm_withdrawal_keeps_previous_release_without_download(tmp_path
+     assert decision.reason == 'platform_artifact_unavailable'
+     assert all((root/name).read_bytes() == value for name,value in before.items())
+     assert {p.name for p in (root/'releases').iterdir()} == {pointer['release_id']}
++
++
++@pytest.mark.parametrize("corrupt", [False, True])
++def test_binary_staged_artifact_reopened_by_fresh_runtime(tmp_path, corrupt):
++    import io, zipfile
++    stream = io.BytesIO()
++    with zipfile.ZipFile(stream, "w") as archive:
++        archive.writestr("binary.dat", bytes(range(256)) + b"\r\n\x1a\r\n")
++    body = stream.getvalue()
++    root = tmp_path / "ota"
++    previous = seed_lkg(root)
++    document, keys = signed_release()
++    document.pop("signature")
++    for item in document["artifacts"]:
++        item.update(size=len(body), sha256=hashlib.sha256(body).hexdigest())
++    runtime = UpdateRuntime(root, recorder=FlightRecorder(tmp_path), download_client=Client(Response([body])))
++    assert runtime.prepare(sign_document(document), trusted_keys=keys,
++        current_version="0.5.175", committed_sequence=599,
++        compatibility=compatibility(), rollout=RolloutContext(subject="binary-reopen"),
++        target=PlatformTarget("windows", "x86_64")).eligible
++    pointer = runtime.controller.state()["release"]
++    runtime.controller._close_staged_artifact()
++    if corrupt:
++        (root / pointer["artifact"]).write_bytes(b"x" * len(body))
++    fresh = UpdateRuntime(root, recorder=FlightRecorder(tmp_path), download_client=None)
++    fresh.controller.set_trusted_keys(keys)
++    calls = []
++    def self_test(candidate):
++        calls.append(candidate.read_bytes())
++        return True
++    result = fresh.activate_and_self_test(SafePointSnapshot(), self_test)
++    assert result == (UpdateState.ROLLED_BACK if corrupt else UpdateState.COMMITTED)
++    if corrupt:
++        assert not calls
++        assert json.loads((root / "current.json").read_text()) == previous
++        assert json.loads((root / "last-known-good.json").read_text()) == previous
++    else:
++        assert calls == [body]
++        with fresh.controller.launch_artifact() as candidate:
++            assert candidate.read_bytes() == body
 diff --git a/tests/test_ota_state.py b/tests/test_ota_state.py
 index 1c00245..6e2de04 100644
 --- a/tests/test_ota_state.py
