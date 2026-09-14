@@ -277,6 +277,9 @@ def docker_registry_mirrors() -> tuple[str, ...]:
             raise DockerUnavailable(redact_docker_diagnostic(detail, limit=300))
         try:
             values = json.loads(proc.stdout.strip() or "[]")
+            # Docker may serialize an unset mirror list as null.
+            if values is None:
+                values = []
         except json.JSONDecodeError as exc:
             raise DockerUnavailable(
                 "Docker returned malformed registry mirror metadata"

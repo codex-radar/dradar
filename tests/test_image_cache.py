@@ -1131,3 +1131,60 @@ def test_plan_cleanup_keeps_ledger_when_inspect_fails(monkeypatch, tmp_path: Pat
     assert plan.docker_available is False
     # The ledger is intact: no record was pruned.
     assert set(image_cache.load(tmp_path)) == set(records)
+
+
+@pytest.mark.parametrize("source", ["daemon", "inherited"])
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("[]", ()),
+    ('["https://mirror.example/", "https://mirror.example", "https://other.example/"]',
+     ("https://mirror.example", "https://other.example")),
+    (json.dumps([f"https://mirror{i}.example" for i in range(8)]),
+     tuple(f"https://mirror{i}.example" for i in range(8))),
+])
+def test_registry_mirror_snapshot_valid_values(monkeypatch, source, raw, expected):
+    monkeypatch.delenv(image_cache.BUILDER_MIRRORS_ENV, raising=False)
+    def fake_docker(args, **kwargs):
+        assert source == "daemon"
+        assert args == ["info", "--format", "{{json .RegistryConfig.Mirrors}}"]
+        return subprocess.CompletedProcess(args, 0, raw, "")
+    monkeypatch.setattr(image_cache, "_run_docker", fake_docker)
+    if source == "inherited":
+        monkeypatch.setenv(image_cache.BUILDER_MIRRORS_ENV, raw)
+    assert image_cache.docker_registry_mirrors() == expected
+
+
+@pytest.mark.parametrize("raw", ["null", " \n null \t", "[]"])
+def test_daemon_empty_registry_mirrors(monkeypatch, raw):
+    monkeypatch.delenv(image_cache.BUILDER_MIRRORS_ENV, raising=False)
+    monkeypatch.setattr(image_cache, "_run_docker", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, raw, ""))
+    assert image_cache.docker_registry_mirrors() == ()
+
+
+@pytest.mark.parametrize("source", ["daemon", "inherited"])
+@pytest.mark.parametrize("raw", [
+    "{", "{}", "false", "0", '"https://mirror.example"', "[null]",
+    '["https://user:secret@mirror.example"]', '["https://mirror.example?token=secret"]',
+    '["http://mirror.example"]',
+    json.dumps(["https://mirror.example"] * 9),
+])
+def test_registry_mirror_snapshot_rejects_invalid_values(monkeypatch, source, raw):
+    monkeypatch.delenv(image_cache.BUILDER_MIRRORS_ENV, raising=False)
+    def fake_docker(*args, **kwargs):
+        assert source == "daemon"
+        return subprocess.CompletedProcess(args, 0, raw, "")
+    monkeypatch.setattr(image_cache, "_run_docker", fake_docker)
+    if source == "inherited":
+        monkeypatch.setenv(image_cache.BUILDER_MIRRORS_ENV, raw)
+    with pytest.raises(image_cache.DockerUnavailable) as exc:
+        image_cache.docker_registry_mirrors()
+    assert "secret" not in str(exc.value)
+
+
+@pytest.mark.parametrize("raw", ["null", " \n null \t", "", "   "])
+def test_inherited_empty_snapshot_remains_strict(monkeypatch, raw):
+    monkeypatch.setenv(image_cache.BUILDER_MIRRORS_ENV, raw)
+    monkeypatch.setattr(image_cache, "_run_docker", lambda *a, **k:
+                        pytest.fail("invalid inherited snapshot must not query Docker"))
+    with pytest.raises(image_cache.DockerUnavailable):
+        image_cache.docker_registry_mirrors()
