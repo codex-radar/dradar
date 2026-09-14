@@ -132,23 +132,13 @@ from .taskpacks import TaskPackError, ensure_benchmark_task_pack
 def _try_ota_idle_activation(*, supervisor_idle: bool, refill_accepting: bool) -> None:
     """Activate a prepared candidate only after all model/upload work drained."""
 
-    from .ota.integration import activate_prepared_update, runloop_safe_point
+    from .ota.discovery import discover_update
+    # The outer launcher holds invocation liveness until work has returned.
+    # Discover/prepare here; only that launcher may activate after all holders
+    # have exited. Refill or child paths do not create a parallel updater.
+    if supervisor_idle and not refill_accepting:
+        discover_update(HOME)
 
-    snapshot = runloop_safe_point(
-        home=HOME,
-        active_assignments=0,
-        checkouts_inflight=0,
-        uploads_inflight=0,
-        refill_accepting_new=refill_accepting,
-        worker_supervisor_idle=supervisor_idle,
-    )
-    try:
-        result = activate_prepared_update(snapshot, home=HOME)
-    except Exception as exc:  # noqa: BLE001 - running version must survive OTA failure
-        print(f"signed CLI update remained on the current version ({type(exc).__name__})")
-        return
-    if result is not None:
-        print(f"signed CLI update: {result.value}; it will be used next launch")
 
 
 # Quota is the user-facing campaign limit. Keep a deliberately high internal

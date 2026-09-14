@@ -79,6 +79,9 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def load_trusted_keys(home: Path = HOME) -> dict[str, bytes]:
     document = _read_json(ota_root(home) / TRUSTED_KEYS_FILE)
+    if document is None and not os.path.lexists(ota_root(home) / TRUSTED_KEYS_FILE):
+        from .discovery import TRUSTED_KEYS
+        return dict(TRUSTED_KEYS)
     if not document or document.get("schema_version") != 1:
         return {}
     raw = document.get("keys")
@@ -134,7 +137,9 @@ def pending_upload_count(home: Path = HOME) -> int:
 
     try:
         path = home / "pending_uploads.json"
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink():
+            return 1
+        if not path.is_file():
             return 0
         entries = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -343,12 +348,13 @@ def _self_test(candidate) -> bool:
             result = subprocess.run(
                 [sys.executable, f"/dev/fd/{fd}", "--version"],
                 pass_fds=(fd,),
+                env={**os.environ, "DRADAR_OTA_DISPATCH": "1", "DRADAR_OTA_SELF_TEST": "1"},
                 capture_output=True,
                 timeout=30,
                 check=False,
             )
         else:  # pragma: no cover - exercised on Windows CI
-            return _run_windows_candidate(candidate.read_bytes(), ["--version"]) == 0
+            return _run_windows_candidate(candidate.read_bytes(), ["--version"], self_test=True) == 0
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -430,6 +436,7 @@ def _run_windows_candidate(
     data: bytes,
     arguments: list[str],
     *,
+    self_test: bool = False,
     locked_candidate: Callable[[bytes], Any] | None = None,
     runner: Callable[..., Any] = subprocess.run,
 ) -> int:
@@ -440,6 +447,8 @@ def _run_windows_candidate(
         result = runner(
             [sys.executable, str(path), *arguments],
             check=False,
+            env={**os.environ, "DRADAR_OTA_DISPATCH": "1", "DRADAR_OTA_SELF_TEST": "1" if self_test else "0"},
+            **({"timeout": 30} if self_test else {}),
         )
     return int(result.returncode)
 
@@ -455,11 +464,10 @@ def activate_prepared_update(
     if not keys or pending_activation_state(home) is not UpdateState.WAITING_SAFE_POINT:
         return None
     recorder = FlightRecorder(home)
-    with httpx.Client(timeout=60.0) as client:
-        runtime = UpdateRuntime(
-            ota_root(home), recorder=recorder, download_client=client
-        )
-        runtime.controller.set_trusted_keys(keys)
-        result = runtime.activate_and_self_test(snapshot, _self_test)
+    # Activation consumes an already verified local artifact; no HTTP client
+    # or proxy configuration is required at this safety boundary.
+    runtime = UpdateRuntime(ota_root(home), recorder=recorder, download_client=None)
+    runtime.controller.set_trusted_keys(keys)
+    result = runtime.activate_and_self_test(snapshot, _self_test)
     recorder.flush()
     return result

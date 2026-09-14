@@ -177,9 +177,10 @@ def test_worker_registration_isolated_from_persisted_plan_and_session_pending(tm
     )
 
     pending = telemetry.flight_recorder._load(telemetry.flight_recorder.pending_path)
-    assert {event["event_id"] for event in pending} == {
+    assert {event["event_id"] for event in pending if event["event_type"] != "update_observed"} == {
         old_null["event_id"], old_plan["event_id"],
     }
+    assert all(event["event_type"] != "update_observed" for event in uploaded)
 
 
 def test_server_notices_are_bounded_validated_and_printed_once(capsys):

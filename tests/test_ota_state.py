@@ -100,7 +100,7 @@ def _install_signed_record(controller, manifest, artifact, body):
         "release_id": manifest.release_id,
         "version": manifest.version,
         "sequence": manifest.sequence,
-        "artifact": str(destination.relative_to(controller.root)),
+        "artifact": destination.relative_to(controller.root).as_posix(),
     }
     _atomic_json(
         destination.parent / "release-record.json",
@@ -327,7 +327,7 @@ def test_launcher_rejects_symlink_current_even_when_target_stays_inside_root(tmp
         "release_id": "candidate",
         "version": "0.6.0",
         "sequence": 600,
-        "artifact": str(linked.relative_to(controller.root)),
+        "artifact": linked.relative_to(controller.root).as_posix(),
     }
     _atomic_json(controller.current_path, current)
 
@@ -377,7 +377,7 @@ def test_launcher_never_accepts_an_arbitrary_regular_file_without_signed_record(
             "release_id": "forged",
             "version": "99.0.0",
             "sequence": 999,
-            "artifact": str(arbitrary.relative_to(controller.root)),
+            "artifact": arbitrary.relative_to(controller.root).as_posix(),
         },
     )
 
@@ -438,7 +438,7 @@ def test_committed_pointer_rejects_forged_unsigned_lkg_baseline(tmp_path):
             "release_id": "forged",
             "version": "99.0.0",
             "sequence": 999,
-            "artifact": str(forged.relative_to(controller.root)),
+            "artifact": forged.relative_to(controller.root).as_posix(),
         },
     )
 
@@ -675,7 +675,7 @@ def test_unknown_persisted_state_fails_closed_and_preserves_rollback_baseline(
         "release_id": "dradar-0.5.175",
         "version": "0.5.175",
         "sequence": 599,
-        "artifact": str(artifact.relative_to(controller.root)),
+        "artifact": artifact.relative_to(controller.root).as_posix(),
     }
     _atomic_json(controller.current_path, known_good)
     _atomic_json(controller.last_known_good_path, known_good)
@@ -709,7 +709,7 @@ def test_damaged_state_json_is_audited_and_does_not_destroy_rollback_baseline(
         "release_id": "dradar-0.5.175",
         "version": "0.5.175",
         "sequence": 599,
-        "artifact": str(artifact.relative_to(controller.root)),
+        "artifact": artifact.relative_to(controller.root).as_posix(),
     }
     _atomic_json(controller.current_path, known_good)
     _atomic_json(controller.last_known_good_path, known_good)

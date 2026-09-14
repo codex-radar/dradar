@@ -610,7 +610,7 @@ def stage_verified_artifact(
         try:
             source_fd = os.open(
                 source,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
             )
         except OSError as exc:
             raise ManifestError("staged source artifact is unsafe") from exc

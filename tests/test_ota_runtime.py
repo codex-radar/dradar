@@ -133,7 +133,7 @@ def seed_lkg(root):
         "release_id": release_id,
         "version": "0.5.175",
         "sequence": 599,
-        "artifact": str(path.relative_to(root)),
+        "artifact": path.relative_to(root).as_posix(),
     }
     manifest = sign_document(
         {
@@ -639,3 +639,43 @@ def test_windows_arm_withdrawal_keeps_previous_release_without_download(tmp_path
     assert decision.reason == 'platform_artifact_unavailable'
     assert all((root/name).read_bytes() == value for name,value in before.items())
     assert {p.name for p in (root/'releases').iterdir()} == {pointer['release_id']}
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_binary_staged_artifact_reopened_by_fresh_runtime(tmp_path, corrupt):
+    import io, zipfile
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("binary.dat", bytes(range(256)) + b"\r\n\x1a\r\n")
+    body = stream.getvalue()
+    root = tmp_path / "ota"
+    previous = seed_lkg(root)
+    document, keys = signed_release()
+    document.pop("signature")
+    for item in document["artifacts"]:
+        item.update(size=len(body), sha256=hashlib.sha256(body).hexdigest())
+    runtime = UpdateRuntime(root, recorder=FlightRecorder(tmp_path), download_client=Client(Response([body])))
+    assert runtime.prepare(sign_document(document), trusted_keys=keys,
+        current_version="0.5.175", committed_sequence=599,
+        compatibility=compatibility(), rollout=RolloutContext(subject="binary-reopen"),
+        target=PlatformTarget("windows", "x86_64")).eligible
+    pointer = runtime.controller.state()["release"]
+    runtime.controller._close_staged_artifact()
+    if corrupt:
+        (root / pointer["artifact"]).write_bytes(b"x" * len(body))
+    fresh = UpdateRuntime(root, recorder=FlightRecorder(tmp_path), download_client=None)
+    fresh.controller.set_trusted_keys(keys)
+    calls = []
+    def self_test(candidate):
+        calls.append(candidate.read_bytes())
+        return True
+    result = fresh.activate_and_self_test(SafePointSnapshot(), self_test)
+    assert result == (UpdateState.ROLLED_BACK if corrupt else UpdateState.COMMITTED)
+    if corrupt:
+        assert not calls
+        assert json.loads((root / "current.json").read_text()) == previous
+        assert json.loads((root / "last-known-good.json").read_text()) == previous
+    else:
+        assert calls == [body]
+        with fresh.controller.launch_artifact() as candidate:
+            assert candidate.read_bytes() == body
