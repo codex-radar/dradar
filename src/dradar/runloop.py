@@ -19,6 +19,7 @@ from .artifact_boundary import (
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
 
+import copy
 import json
 import os
 import re
@@ -1067,9 +1068,10 @@ def _claim_picks(
 ) -> list[dict]:
     """`dradar go --pick task:model:effort` (repeatable): claim exact cells by
     ID instead of picking from the web or auto-suggesting."""
+    cells = [_parse_pick(spec) for spec in specs]
     claimed = []
     try:
-        for task_id, model, effort in (_parse_pick(s) for s in specs):
+        for task_id, model, effort in cells:
             a = _claim_cell(
                 client, task_id, model, effort, automatic=automatic,
             )
@@ -1077,6 +1079,12 @@ def _claim_picks(
                 claimed.append(a)
     except _ConcurrentCapHit as exc:
         print(f"  stopping — {exc}")
+    except (ApiError, KeyboardInterrupt, EOFError):
+        if claimed:
+            print("selection stopped after partial claims; no claim was retried. Held batches:")
+            for batch_id in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {batch_id or 'unknown — inspect dradar leases'}")
+        raise
     return claimed
 
 
@@ -3980,6 +3988,17 @@ def _prepare_assignment_boundary(
         except ApiError as exc:
             _exit_for(exc)
     try:
+        saved_path = assignment_boundary.state_path(
+            HOME, benchmark_id,
+            getattr(client, "batch_id", None) if getattr(args, "fleet_pool", False) else None,
+        )
+        batches = assignment_boundary.admitted_batches(saved_path)
+        if len(batches) > 1:
+            # Exact resume still executes only its requested batch. The shared
+            # ledger must see its siblings too, including after a spawn failure.
+            # Retain the requested inventory so an out-of-campaign batch
+            # cannot be hidden by the sibling union and pass admission.
+            active = active + _BatchInventory(client, batches).get_assignment()["active"]
         path = assignment_boundary.prepare(
             HOME,
             benchmark_id,
@@ -3995,7 +4014,7 @@ def _prepare_assignment_boundary(
             expected_ids=getattr(args, "expect_assignment", None),
             forget_existing=getattr(args, "forget_assignment_boundary", False),
         )
-    except (assignment_boundary.BoundaryError, OSError) as exc:
+    except (assignment_boundary.BoundaryError, ApiError, ValueError, OSError) as exc:
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
             "Inspect `dradar leases`; use --forget-assignment-boundary only "
@@ -4031,7 +4050,13 @@ def _finish_assignment_boundary(
     if path is None:
         return True
     try:
+        batches = assignment_boundary.admitted_batches(path)
+        if len(batches) > 1:
+            client = _BatchInventory(client, batches)
         active = list(_active_by_id(client).values())
+    except (assignment_boundary.BoundaryError, ValueError, OSError) as exc:
+        print(f"could not verify the saved batch identities ({exc}); boundary retained")
+        return False
     except ApiError as exc:
         if _explicit_batch_finished(client, exc):
             # Exact-batch reads intentionally become 404 after the final
@@ -4763,7 +4788,7 @@ def cmd_go(args) -> int:
         )
         if not getattr(args, "parallel", False) and not fleet_pool:
             _maintain_image_cache(client, cfg, phase="after run")
-        if not _finish_invocation_assignment_boundary(
+        if not getattr(args, "_mixed_pool_owns_boundary", False) and not _finish_invocation_assignment_boundary(
             args, client, _assignment_boundary_path(args),
         ):
             rc = 1
@@ -5262,155 +5287,219 @@ def _pool_degraded_exclusions(client: ApiClient) -> set[str] | None:
     }
 
 
-def _run_worker_pool(args) -> int:
+class _BatchInventory:
+    """Read only the authoritative batches admitted by this invocation.
+
+    Unscoped /assignment is a default-batch view, not a union. Each shallow
+    client copy shares the HTTP transport but keeps its immutable batch scope.
+    Only the parent uses this aggregate; workers always use one exact batch.
+    """
+
+    def __init__(self, client, batch_ids):
+        self.client = client.client if isinstance(client, _BatchInventory) else client
+        self.clients = {}
+        self.batch_id = None
+        for batch_id in batch_ids:
+            scoped = copy.copy(self.client)
+            scoped.set_batch_id(batch_id)
+            self.clients[batch_id] = scoped
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+    def get_assignment(self):
+        active = []
+        for scoped in self.clients.values():
+            try:
+                data = scoped.get_assignment()
+            except ApiError as exc:
+                if _explicit_batch_finished(scoped, exc):
+                    continue
+                raise
+            active.extend(data.get("active") or [])
+        return {"active": active, "free_pick": True}
+
+
+def _prepared_batch_ids(active):
+    ids = list(dict.fromkeys(a.get("batch_id") for a in active))
+    if len(ids) <= 1:
+        return []
+    if any(normalize_batch_id(value) is None for value in ids):
+        raise SystemExit(
+            "multiple batches lack authoritative batch IDs; no worker started. "
+            "Inspect `dradar leases` and resume each exact batch."
+        )
+    return ids
+
+
+def _run_worker_pool(args, *, prepared=None) -> int:
     """Prepare one batch, then supervise several ordinary resume processes."""
-    configured_abort_file = _pool_abort_path()
-    if configured_abort_file is not None and configured_abort_file.is_file():
-        print(
-            f"worker pool is circuit-broken: {_pool_abort_reason() or 'account stop'}; "
-            "not claiming or starting model workers"
-        )
-        return 0
-    cfg = client = None
-    fleet_pool = bool(getattr(args, "fleet_pool", False))
-    if fleet_pool:
-        from . import fleet
-    if args.workers == "auto":
-        from .capacity import AUTO_WORKER_CAP, inspect_capacity, print_report
+    if prepared is not None:
+        cfg, client, active = prepared
+        if not args.yes:
+            answer = input(
+                f"start {len(active)} held tasks across their exact batches "
+                f"with {args.workers} local worker(s)? [y/N] "
+            ).strip().lower()
+            if answer not in ("y", "yes"):
+                print("not started; held tasks remain available for exact-batch resume")
+                return 1
+        args.yes = True
+        fleet_pool = False
+        flight = None
+        configured_abort_file = _pool_abort_path()
+        tasks_root = _selected_tasks_root(cfg)
+        maximum = target = int(getattr(args, "workers", 1))
+        target_file = _pool_target_file(args)
+        registry_mirrors = ()
+    else:
+        configured_abort_file = _pool_abort_path()
+        if configured_abort_file is not None and configured_abort_file.is_file():
+            print(
+                f"worker pool is circuit-broken: {_pool_abort_reason() or 'account stop'}; "
+                "not claiming or starting model workers"
+            )
+            return 0
+        cfg = client = None
+        fleet_pool = bool(getattr(args, "fleet_pool", False))
+        if fleet_pool:
+            from . import fleet
+        if args.workers == "auto":
+            from .capacity import AUTO_WORKER_CAP, inspect_capacity, print_report
 
-        cfg = _run_config(args)
-        cfg["benchmark"] = (
-            getattr(args, "benchmark", None)
-            or cfg.get("benchmark")
-            or DEFAULT_BENCHMARK
+            cfg = _run_config(args)
+            cfg["benchmark"] = (
+                getattr(args, "benchmark", None)
+                or cfg.get("benchmark")
+                or DEFAULT_BENCHMARK
+            )
+            client = _client(cfg, auto_register=True)
+            _scope_client_to_batch(client, getattr(args, "batch_id", None))
+            requested_options = [
+                value for value in (
+                    getattr(args, "refill_to", None), getattr(args, "auto", None),
+                    AUTO_WORKER_CAP if getattr(args, "refill", False) else None,
+                ) if value is not None
+            ]
+            requested = max(requested_options) if requested_options else None
+            if requested is not None and getattr(args, "max_tasks", None) is not None:
+                requested = min(requested, args.max_tasks)
+            try:
+                report = inspect_capacity(client, requested_tasks=requested)
+            except ApiError as exc:
+                _exit_for(exc)
+            print_report(report)
+            args.workers = report.recommended_workers
+            _align_refill_target_with_workers(args)
+            # ``auto`` did not know the final pool size when _run_config first
+            # resolved defaults. Re-evaluate now so a multi-worker pool shares
+            # immutable BuildKit layers unless the user/config explicitly chose a
+            # different policy.
+            _refresh_build_cache_mode(args, cfg)
+        if not args.yes:
+            answer = input(
+                f"start {args.workers} local workers? They share this machine's "
+                "CPU/RAM and may use model quota concurrently. [y/N] "
+            ).strip().lower()
+            if answer not in ("y", "yes"):
+                print("not started; no new tasks were claimed")
+                return 1
+        args.yes = True
+
+        if cfg is None or client is None:
+            cfg = _run_config(args)
+            cfg["benchmark"] = (
+                getattr(args, "benchmark", None)
+                or cfg.get("benchmark")
+                or DEFAULT_BENCHMARK
+            )
+            client = _client(cfg, auto_register=True)
+            _scope_client_to_batch(client, getattr(args, "batch_id", None))
+        tasks_root = _selected_tasks_root(cfg)
+        flight = FlightRecorder(HOME, client) if fleet_pool else None
+
+        def record_probe_event(event_type: str, elapsed_ms: int) -> None:
+            if flight is None:
+                return
+            flight.try_record(
+                event_type,
+                component="cli",
+                batch_id=args.batch_id,
+                attributes={"elapsed_ms": elapsed_ms, "phase": "preparing"},
+            )
+            # The supervisor has no runner session ID, but its preparation events
+            # are still bound to this exact batch.  Keep stale plans/accounts out
+            # of the server's atomic flight-event upload.
+            flight.flush(batch_id=args.batch_id)
+
+        if fleet_pool:
+            args.allow_new_claims = bool(getattr(args, "refill", False))
+        else:
+            acquire_run_lock(HOME)
+            sweep_orphan_compose(HOME, True)
+            args.allow_new_claims = _maintain_image_cache(
+                client, cfg, phase="before worker pool",
+            )
+        preparation = (
+            fleet.preparation_lock(HOME) if fleet_pool else nullcontext()
         )
-        client = _client(cfg, auto_register=True)
-        _scope_client_to_batch(client, getattr(args, "batch_id", None))
-        requested_options = [
-            value for value in (
-                getattr(args, "refill_to", None), getattr(args, "auto", None),
-                AUTO_WORKER_CAP if getattr(args, "refill", False) else None,
-            ) if value is not None
-        ]
-        requested = max(requested_options) if requested_options else None
-        if requested is not None and getattr(args, "max_tasks", None) is not None:
-            requested = min(requested, args.max_tasks)
         try:
-            report = inspect_capacity(client, requested_tasks=requested)
-        except ApiError as exc:
-            _exit_for(exc)
-        print_report(report)
-        args.workers = report.recommended_workers
-        _align_refill_target_with_workers(args)
-        # ``auto`` did not know the final pool size when _run_config first
-        # resolved defaults. Re-evaluate now so a multi-worker pool shares
-        # immutable BuildKit layers unless the user/config explicitly chose a
-        # different policy.
-        _refresh_build_cache_mode(args, cfg)
-    if not args.yes:
-        answer = input(
-            f"start {args.workers} local workers? They share this machine's "
-            "CPU/RAM and may use model quota concurrently. [y/N] "
-        ).strip().lower()
-        if answer not in ("y", "yes"):
-            print("not started; no new tasks were claimed")
-            return 1
-    args.yes = True
-
-    if cfg is None or client is None:
-        cfg = _run_config(args)
-        cfg["benchmark"] = (
-            getattr(args, "benchmark", None)
-            or cfg.get("benchmark")
-            or DEFAULT_BENCHMARK
-        )
-        client = _client(cfg, auto_register=True)
-        _scope_client_to_batch(client, getattr(args, "batch_id", None))
-    tasks_root = _selected_tasks_root(cfg)
-    flight = FlightRecorder(HOME, client) if fleet_pool else None
-
-    def record_probe_event(event_type: str, elapsed_ms: int) -> None:
-        if flight is None:
-            return
-        flight.try_record(
-            event_type,
-            component="cli",
-            batch_id=args.batch_id,
-            attributes={"elapsed_ms": elapsed_ms, "phase": "preparing"},
-        )
-        # The supervisor has no runner session ID, but its preparation events
-        # are still bound to this exact batch.  Keep stale plans/accounts out
-        # of the server's atomic flight-event upload.
-        flight.flush(batch_id=args.batch_id)
-
-    if fleet_pool:
-        args.allow_new_claims = bool(getattr(args, "refill", False))
-    else:
-        acquire_run_lock(HOME)
-        sweep_orphan_compose(HOME, True)
-        args.allow_new_claims = _maintain_image_cache(
-            client, cfg, phase="before worker pool",
-        )
-    preparation = (
-        fleet.preparation_lock(HOME) if fleet_pool else nullcontext()
-    )
-    try:
-        with preparation:
-            if cfg["benchmark"] != DEFAULT_BENCHMARK:
-                try:
-                    ensure_benchmark_task_pack(client, cfg["benchmark"], tasks_root)
-                except TaskPackError as exc:
-                    raise RunnerError(str(exc)) from exc
-            _ensure_selected_tasks_root(tasks_root, cfg["benchmark"])
-            ensure_pier()
-            _ensure_egress_runtime(
-                event_sink=record_probe_event if fleet_pool else None,
+            with preparation:
+                if cfg["benchmark"] != DEFAULT_BENCHMARK:
+                    try:
+                        ensure_benchmark_task_pack(client, cfg["benchmark"], tasks_root)
+                    except TaskPackError as exc:
+                        raise RunnerError(str(exc)) from exc
+                _ensure_selected_tasks_root(tasks_root, cfg["benchmark"])
+                ensure_pier()
+                _ensure_egress_runtime(
+                    event_sink=record_probe_event if fleet_pool else None,
+                )
+        except RunnerError as exc:
+            _report_failure_quietly(
+                client, None, phase="startup",
+                failure_kind=classify_exception_message(str(exc)) or "runner_failed",
+                failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+                or "startup-failed",
             )
-    except RunnerError as exc:
-        _report_failure_quietly(
-            client, None, phase="startup",
-            failure_kind=classify_exception_message(str(exc)) or "runner_failed",
-            failure_code=(exc.failure_diagnostic or {}).get("failure_code")
-            or "startup-failed",
-        )
-        sys.exit(str(exc))
-    if fleet_pool:
-        _mark_pending_scope_required(client)
-        _retry_pending_uploads(client, batch_id=args.batch_id)
-    else:
-        _mark_pending_scope_required(client)
-        _retry_pending_uploads(client)
+            sys.exit(str(exc))
+        if fleet_pool:
+            _mark_pending_scope_required(client)
+            _retry_pending_uploads(client, batch_id=args.batch_id)
+        else:
+            _mark_pending_scope_required(client)
+            _retry_pending_uploads(client)
 
-    maximum = args.workers
-    target_file = _pool_target_file(args)
-    target = _read_pool_target(target_file, default=maximum, maximum=maximum)
-    registry_mirrors: tuple[str, ...] = ()
-    if target > 1:
-        builder_preflight = image_cache.preflight_trial_builder(HOME)
-        if not builder_preflight.ok:
+        maximum = args.workers
+        target_file = _pool_target_file(args)
+        target = _read_pool_target(target_file, default=maximum, maximum=maximum)
+        registry_mirrors: tuple[str, ...] = ()
+        if target > 1:
+            builder_preflight = image_cache.preflight_trial_builder(HOME)
+            if not builder_preflight.ok:
+                print(
+                    "isolated BuildKit preflight failed before worker sessions or "
+                    "task checkout: "
+                    f"stage={builder_preflight.stage} "
+                    f"failure={builder_preflight.failure_code or 'unknown'} "
+                    f"exit={builder_preflight.returncode}"
+                )
+                if builder_preflight.detail:
+                    print(builder_preflight.detail)
+                print(
+                    "no worker was started; check Docker registry access or its "
+                    "credential-free HTTPS mirror, then run `dradar resume`"
+                )
+                return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+            registry_mirrors = builder_preflight.registry_mirrors
             print(
-                "isolated BuildKit preflight failed before worker sessions or "
-                "task checkout: "
-                f"stage={builder_preflight.stage} "
-                f"failure={builder_preflight.failure_code or 'unknown'} "
-                f"exit={builder_preflight.returncode}"
+                "isolated BuildKit preflight passed before parallel checkout"
+                + (
+                    f" ({len(registry_mirrors)} HTTPS mirror(s) inherited)"
+                    if registry_mirrors else " (direct Docker Hub path)"
+                )
             )
-            if builder_preflight.detail:
-                print(builder_preflight.detail)
-            print(
-                "no worker was started; check Docker registry access or its "
-                "credential-free HTTPS mirror, then run `dradar resume`"
-            )
-            return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
-        registry_mirrors = builder_preflight.registry_mirrors
-        print(
-            "isolated BuildKit preflight passed before parallel checkout"
-            + (
-                f" ({len(registry_mirrors)} HTTPS mirror(s) inherited)"
-                if registry_mirrors else " (direct Docker Hub path)"
-            )
-        )
-    active, _free_pick = _prepare_batch(args, client)
+        active, _free_pick = _prepare_batch(args, client)
     if _scoped_fleet_refill(args):
         pending_now = _pending_uploads_for_client_batch(client, args.batch_id)
         ready_now = (
@@ -5423,8 +5512,21 @@ def _run_worker_pool(args) -> int:
             )
     if not active:
         return 0
+    batch_ids = _prepared_batch_ids(active)
+    mixed = bool(batch_ids)
+    if mixed:
+        if fleet_pool or getattr(args, "refill", False):
+            raise SystemExit("multiple batches cannot share an exact Fleet/refill scope; inspect dradar leases")
+        if getattr(args, "batch_id", None):
+            raise SystemExit("claim response crossed the requested batch; no worker started")
+        client = _BatchInventory(client, batch_ids)
+        print(f"running {len(batch_ids)} exact batches with a total limit of {target} worker(s)")
+        if target < len(batch_ids):
+            print("batch count exceeds the worker limit; remaining batches queue for a free slot")
+        for batch_id in batch_ids:
+            print(f"  admitted batch {batch_id}; recover with dradar resume --batch-id {batch_id}")
     worker_tasks_root = tasks_root
-    if active[0].get("deep_swe_commit"):
+    if not mixed and active[0].get("deep_swe_commit"):
         worker_tasks_root, _worker_task_commit = _version_pinned_tasks_root(
             active[0].get("deep_swe_commit"), tasks_root,
             args.allow_task_drift,
@@ -5434,6 +5536,8 @@ def _run_worker_pool(args) -> int:
         boundary_path = _prepare_assignment_boundary(
             args, client, cfg["benchmark"], active,
         )
+    if mixed and boundary_path is not None:
+        assignment_boundary.add_expected(boundary_path, active)
     ready_now = (
         _pool_ready_work_count(client)
         if _scoped_fleet_refill(args) else len(active)
@@ -5577,7 +5681,30 @@ def _run_worker_pool(args) -> int:
         for path in worker_activity_files.values():
             path.unlink(missing_ok=True)
 
+    slot_batches = {}
+    batch_cursor = 0
+    batch_available = {
+        batch_id: sum(a.get("batch_id") == batch_id for a in active)
+        for batch_id in batch_ids
+    }
+
     def spawn_worker(slot: int) -> None:
+        nonlocal batch_cursor
+        worker_command = command
+        if mixed:
+            selected = None
+            for offset in range(len(batch_ids)):
+                index = (batch_cursor + offset) % len(batch_ids)
+                batch_id = batch_ids[index]
+                if batch_available.get(batch_id, 0) > 0:
+                    selected = batch_id
+                    batch_cursor = (index + 1) % len(batch_ids)
+                    break
+            if selected is None:
+                raise OSError("no verified batch inventory for replacement worker")
+            batch_available[selected] -= 1
+            slot_batches[slot] = selected
+            worker_command = [*command, "--batch-id", selected]
         activity_file = worker_activity_files.setdefault(
             slot,
             worker_activity_prefix.with_name(
@@ -5604,7 +5731,10 @@ def _run_worker_pool(args) -> int:
             sorted(returned_assignment_ids), separators=(",", ":"),
         )
         env[_POOL_WORKER_ACTIVITY_ENV] = str(activity_file)
-        env[_PINNED_TASKS_ROOT_ENV] = str(worker_tasks_root)
+        if not mixed:
+            env[_PINNED_TASKS_ROOT_ENV] = str(worker_tasks_root)
+        else:
+            env.pop(_PINNED_TASKS_ROOT_ENV, None)
         # The parent has already evaluated provider readiness and used this
         # exact capability set for its successful batch inventory request.
         # Children inherit that snapshot instead of concurrently probing
@@ -5617,7 +5747,7 @@ def _run_worker_pool(args) -> int:
         )
         if boundary_path is not None:
             env[_ASSIGNMENT_BOUNDARY_ENV] = str(boundary_path)
-        process = subprocess.Popen(command, env=env, **popen_kwargs)
+        process = subprocess.Popen(worker_command, env=env, **popen_kwargs)
         processes.append(process)
         active_processes[slot] = process
         print(f"  worker {slot}/{count}: pid {process.pid}")
@@ -5811,7 +5941,7 @@ def _run_worker_pool(args) -> int:
                     vacant_attempts.pop(slot, None)
                     retry_not_before.pop(slot, None)
 
-            if not active_processes and not _pool_backfill_v2_enabled():
+            if not mixed and not active_processes and not _pool_backfill_v2_enabled():
                 break
             new_target = _read_pool_target(
                 target_file, default=target, maximum=maximum,
@@ -5873,13 +6003,39 @@ def _run_worker_pool(args) -> int:
             if (not backfill_disabled
                     and len(active_processes) < target
                     and current_time >= next_backfill_check):
-                ready = _pool_ready_work_count(
-                    client, claimed_after=failure_cutoff,
-                    desired_workers=(
-                        None if _scoped_fleet_refill(args) else target
-                    ),
-                    returned_assignment_ids=returned_assignment_ids,
-                )
+                if mixed:
+                    batch_available = {}
+                    for batch_id, scoped in client.clients.items():
+                        available = _pool_ready_work_count(
+                            scoped, claimed_after=failure_cutoff,
+                            returned_assignment_ids=returned_assignment_ids,
+                        )
+                        if available is None:
+                            batch_available = {}
+                            break
+                        # Waiting inventory already excludes checked-out
+                        # work. Reserve only children whose first checkout
+                        # has not been proven, never count running work twice.
+                        reserved = 0
+                        for slot in active_processes:
+                            if slot_batches.get(slot) != batch_id:
+                                continue
+                            try:
+                                activity = worker_activity_files[slot].read_text(encoding="utf-8")
+                            except (OSError, KeyError):
+                                activity = "preparing"
+                            if not activity or activity.startswith("preparing"):
+                                reserved += 1
+                        batch_available[batch_id] = max(0, available - reserved)
+                    ready = sum(batch_available.values()) if batch_available else None
+                else:
+                    ready = _pool_ready_work_count(
+                        client, claimed_after=failure_cutoff,
+                        desired_workers=(
+                            None if _scoped_fleet_refill(args) else target
+                        ),
+                        returned_assignment_ids=returned_assignment_ids,
+                    )
                 next_backfill_check = (
                     current_time + (
                         _POOL_BACKFILL_ERROR_RETRY_SECONDS
@@ -7153,6 +7309,13 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
     active, free_pick = _prepare_batch(args, client)
     if not active:
         return 0
+    if (not getattr(args, "worker_child", False)
+            and not getattr(args, "fleet_pool", False)
+            and _prepared_batch_ids(active)):
+        # Keep the same run.lock and selection; never claim a second time.
+        args.workers = int(getattr(args, "workers", 1))
+        args._mixed_pool_owns_boundary = True
+        return _run_worker_pool(args, prepared=(cfg, client, active))
     boundary_path = _assignment_boundary_path(args)
     if cfg.get("benchmark"):
         boundary_path = _prepare_assignment_boundary(
