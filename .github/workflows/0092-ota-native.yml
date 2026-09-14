@@ -42,4 +42,4 @@ jobs:
         run: |
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
           "$QA_PYTHON" ../tools/tests/0092-ota-native/verify_candidate.py .
-          "$QA_PYTHON" -m pytest -q tests/test_ota_discovery.py tests/test_ota_runtime.py tests/test_ota_state.py tests/test_ota_integration.py tests/test_ota_multiprocess.py ../tools/tests/0092-ota-native/test_windows_native.py
+          "$QA_PYTHON" ../tools/tests/0092-ota-native/run_native.py .
