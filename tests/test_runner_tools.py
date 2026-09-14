@@ -1539,6 +1539,41 @@ def test_run_trial_missing_patch_raises(tmp_path, monkeypatch):
         run_trial(_assignment("codex"), tmp_path, tmp_path)
 
 
+@pytest.mark.parametrize("rc, message", [
+    (1, "Command failed (exit 1): unknown option '- Update'"),
+    (0, "Command failed (exit 7): synthetic DSH execution failure"),
+    (7, ""),
+])
+def test_run_trial_dsh_missing_sidecar_preserves_execution_failure(
+    tmp_path, monkeypatch, rc, message,
+):
+    task_id = "synthetic-dsh-task"
+    task = tmp_path / task_id
+    task.mkdir()
+    (task / "task.toml").write_text('[agent]\nnetwork_mode = "no-network"\n')
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    _fake_pier(monkeypatch, tmp_path, rc=rc, result={
+        "exception_info": ({
+            "exception_type": "NonZeroAgentExitCodeError",
+            "exception_message": message + "\nAuthorization: Bearer private-sentinel",
+        } if message else None),
+    })
+    assignment = {
+        "assignment_id": "a1", "task_id": task_id,
+        "agent": runner_mod.DSH_AGENT, "provider": runner_mod.DEEPSEEK_PROVIDER,
+        "model": "dsh-deepseek-v4-flash", "effort": "high",
+        "agent_version": runner_mod.DSH_VERSION,
+    }
+    with pytest.raises(RunnerError) as caught:
+        run_trial(assignment, tmp_path, tmp_path)
+    error = str(caught.value)
+    assert error.startswith(f"DSH execution failed (Pier exit {rc})")
+    assert message in error
+    assert "sidecar is missing" in error
+    assert "refusing to upload" in error
+    assert "private-sentinel" not in error
+
+
 def test_run_trial_dsh_normalizes_pier_zero_when_agent_failed(
     tmp_path, monkeypatch,
 ):
