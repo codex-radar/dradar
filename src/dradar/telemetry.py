@@ -379,6 +379,18 @@ class RunnerTelemetry:
     def _loop(self) -> None:
         while not self._stop.is_set():
             interval = self._send_once()
+            # Optional auth upload uses a separate recorder instance, so its
+            # network wait never owns the core recorder's in-process lock.
+            # File updates still share the existing cross-process file lock.
+            if self.flight_recorder is not None and not self._stop.is_set():
+                with self._lock:
+                    auth_batch = self._batch_id
+                if auth_batch:
+                    try:
+                        optional = FlightRecorder(self.flight_recorder.home, self.client)
+                        optional.flush_auth(batch_id=auth_batch, session_id=self.session_id)
+                    except Exception:
+                        pass
             if self._jitter:
                 interval *= random.uniform(0.9, 1.1)
             self._wake.wait(interval)

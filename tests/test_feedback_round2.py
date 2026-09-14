@@ -131,7 +131,7 @@ def _flaky_pier(monkeypatch, work_dir, fail_times, log_line, make_patch=True):
     marker in the log), then succeeds."""
     captured = {"job_names": [], "calls": 0}
 
-    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None):
+    def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_names"].append(job_name)
         return ["pier", "run", job_name]
 

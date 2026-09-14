@@ -16,6 +16,8 @@ import json
 import os
 import shlex
 import stat
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -76,10 +78,41 @@ def _validated_shared_mounts(raw: object) -> list[dict[str, Any]]:
     return result
 
 
+
+def _shared_daemon_endpoint() -> str:
+    """Resolve the endpoint used by Docker CLI without starting a container."""
+    context = os.environ.get("DOCKER_CONTEXT", "").strip()
+    if not context and os.environ.get("DOCKER_HOST", "").strip():
+        return os.environ["DOCKER_HOST"].strip()
+    docker = shutil.which("docker")
+    if not docker:
+        raise ValueError("shared OAuth daemon locality is unknown")
+    args = [docker, "context", "inspect"]
+    if context:
+        args.append(context)
+    args += ["--format", "{{.Endpoints.docker.Host}}"]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("shared OAuth daemon locality is unknown") from None
+    endpoint = (result.stdout or "").strip()
+    if result.returncode or not endpoint or len(endpoint) > 4096 or "\n" in endpoint:
+        raise ValueError("shared OAuth daemon locality is unknown")
+    return endpoint
+
+
+def _require_local_shared_daemon() -> None:
+    endpoint = _shared_daemon_endpoint()
+    # A network endpoint may represent a remote host even when it uses a
+    # loopback tunnel. Never interpret client paths as that daemon's paths.
+    if not (endpoint.startswith("unix:///") or endpoint.startswith("npipe:////./pipe/")):
+        raise ValueError("shared OAuth requires a local Docker socket; remote daemon needs access-token delivery")
+
 class SharedOAuthDockerEnvironment(DockerEnvironment):
     """Preserve Pier's defaults and append only DRadar OAuth bind mounts."""
 
     def __init__(self, *args: Any, shared_oauth_mounts_json: object, **kwargs: Any):
+        _require_local_shared_daemon()
         super().__init__(*args, **kwargs)
         mounts = _validated_shared_mounts(shared_oauth_mounts_json)
         existing = list(self._mounts_json or [])

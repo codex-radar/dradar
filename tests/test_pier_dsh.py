@@ -43,6 +43,8 @@ class FakeEnvironment:
     async def exec(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
         command = str(kwargs.get("command", ""))
+        if command.endswith("; id -u") or command == "id -u":
+            return SimpleNamespace(return_code=0, stdout="1000\n", stderr="")
         if self.fail_dsh and "dsh --profile headless" in command:
             return SimpleNamespace(return_code=7, stdout="", stderr="quota")
         return SimpleNamespace(return_code=0, stdout="", stderr="")

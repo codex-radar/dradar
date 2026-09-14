@@ -261,3 +261,38 @@ def test_non_antigravity_shared_oauth_exec_does_not_reconcile(
 
     assert len(calls) == 1
     assert calls[0]["command"] == "kimi --auto"
+
+
+@pytest.fixture(autouse=True)
+def local_daemon_fixture(monkeypatch):
+    monkeypatch.setattr("dradar.pier_shared_oauth_docker._shared_daemon_endpoint", lambda: "unix:///fake/docker.sock")
+
+@pytest.mark.parametrize("endpoint", ["ssh://remote", "tcp://127.0.0.1:2375", "https://remote", "", "invalid"])
+def test_remote_daemon_never_receives_client_credential_bind(monkeypatch, endpoint):
+    from dradar import pier_shared_oauth_docker as module
+    monkeypatch.setattr(module, "_shared_daemon_endpoint", lambda: endpoint)
+    with pytest.raises(ValueError, match="remote daemon"):
+        module._require_local_shared_daemon()
+
+from dradar.pier_shared_oauth_docker import _shared_daemon_endpoint as _resolve_daemon_endpoint
+
+def test_explicit_context_overrides_docker_host(monkeypatch):
+    from dradar import pier_shared_oauth_docker as module
+    monkeypatch.setenv('DOCKER_CONTEXT','remote-context')
+    monkeypatch.setenv('DOCKER_HOST','unix:///misleading.sock')
+    monkeypatch.setattr(module.shutil,'which',lambda _: '/fake/docker')
+    calls=[]
+    def run(args,**kwargs):
+        calls.append(args)
+        return types.SimpleNamespace(returncode=0,stdout='ssh://remote\n')
+    monkeypatch.setattr(module.subprocess,'run',run)
+    assert _resolve_daemon_endpoint()=='ssh://remote'
+    assert calls[0][:4]==['/fake/docker','context','inspect','remote-context']
+
+def test_unknown_context_does_not_fall_back_to_local(monkeypatch):
+    from dradar import pier_shared_oauth_docker as module
+    monkeypatch.delenv('DOCKER_HOST',raising=False)
+    monkeypatch.delenv('DOCKER_CONTEXT',raising=False)
+    monkeypatch.setattr(module.shutil,'which',lambda _: '/fake/docker')
+    monkeypatch.setattr(module.subprocess,'run',lambda *a,**k:types.SimpleNamespace(returncode=1,stdout=''))
+    with pytest.raises(ValueError,match='unknown'): _resolve_daemon_endpoint()

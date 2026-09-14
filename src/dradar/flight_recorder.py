@@ -89,6 +89,7 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
 
 
 EVENT_TYPES = frozenset({
+    "auth_observed",
     "session_started", "session_closed", "phase_changed",
     "claim_requested", "claim_accepted", "claim_failed",
     "assignment_checked_out", "assignment_stopped",
@@ -119,6 +120,7 @@ EVENT_KEYS = frozenset({
     "assignment_id", "request_id", "reason_code", "attributes",
 })
 ATTRIBUTE_KEYS = frozenset({
+    "auth_stage", "auth_status", "auth_delivery",
     "attempt", "elapsed_ms", "force", "http_status", "offline_replay",
     "outcome", "phase", "previous_phase", "provider", "release_count",
     "target_workers", "was_running", "worker_slot",
@@ -161,6 +163,9 @@ UPDATE_STATES = frozenset({
     "rollback_pending", "rolled_back", "failed",
 })
 ATTRIBUTE_RULES = {
+    "auth_stage": (str, {"selection", "refresh", "delivery", "adoption", "request", "recovery"}, None),
+    "auth_status": (str, {"unknown", "confirmed", "rejected", "waiting", "unsupported"}, None),
+    "auth_delivery": (str, {"unknown", "file-copy", "shared-directory", "process-token", "host-at"}, None),
     "attempt": (int, 1, 100),
     "elapsed_ms": (int, 0, 2_147_483_647),
     "force": (bool, None, None),
@@ -253,6 +258,13 @@ def validate_event(value: Any) -> dict[str, Any]:
     if reason_code is not None and reason_code not in REASON_CODES:
         raise ValueError("flight event reason_code is not an allowed value")
     attributes = _safe_attributes(value.get("attributes"))
+    auth_keys = {key for key in attributes if key.startswith("auth_")}
+    if value.get("event_type") == "auth_observed":
+        if (not {"auth_stage", "auth_status", "provider"} <= set(attributes)
+                or value.get("component") != "provider"):
+            raise ValueError("authentication evidence requires fixed metadata")
+    elif auth_keys:
+        raise ValueError("authentication metadata requires its optional event")
     canonical = dict(value)
     canonical["attributes"] = attributes
     if len(json.dumps(canonical, separators=(",", ":")).encode("utf-8")) > MAX_EVENT_BYTES:
@@ -335,15 +347,24 @@ class FlightRecorder:
     @staticmethod
     def _write(path: Path, events: list[dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        encoded = [
-            json.dumps(validate_event(event), sort_keys=True, separators=(",", ":"))
-            for event in events
-        ]
+        checked = [validate_event(event) for event in events]
+        auth_indices = [i for i, event in enumerate(checked) if event["event_type"] == "auth_observed"]
+        drop = set(auth_indices[:-100])
+        checked = [event for i, event in enumerate(checked) if i not in drop]
+        encoded = [json.dumps(event, sort_keys=True, separators=(",", ":")) for event in checked]
         while encoded and (
             len(encoded) > MAX_LOG_EVENTS
             or sum(len(line.encode("utf-8")) + 1 for line in encoded) > MAX_LOG_BYTES
         ):
-            del encoded[: max(1, len(encoded) // 4)]
+            optional = next((i for i, event in enumerate(checked)
+                             if event["event_type"] == "auth_observed"), None)
+            if optional is not None:
+                del encoded[optional]
+                del checked[optional]
+            else:
+                count = max(1, len(encoded) // 4)
+                del encoded[:count]
+                del checked[:count]
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}")
         temporary.write_text("".join(line + "\n" for line in encoded), encoding="utf-8")
         os.chmod(temporary, 0o600)
@@ -562,12 +583,38 @@ class FlightRecorder:
         except (OSError, ValueError):
             return None
 
+    def flush_auth(self, *, batch_id: str | None = None, session_id: str | None = None) -> int:
+        """Optional auth evidence has its own negotiated, never-mixed batch.
+
+        Re-negotiate each optional flush so a server downgrade is not hidden by
+        a persistent capability cache. Even a stale/rolling server's rejection
+        cannot disable core flight events or poison worker registration.
+        """
+        if self.client is None:
+            return 0
+        try:
+            with self._lock:
+                with _exclusive_file_lock(self.lock_path):
+                    if not any(event.get("event_type") == "auth_observed"
+                               and (batch_id is None or event.get("batch_id") == batch_id)
+                               and (session_id is None or event.get("session_id") == session_id)
+                               for event in self._load(self.pending_path)):
+                        return 0
+            caps = self.client.flight_event_capabilities()
+            if (not isinstance(caps, dict) or caps.get("schema_version") != SCHEMA_VERSION
+                    or caps.get("auth_observed_v1") is not True):
+                return 0
+            return self.flush(batch_id=batch_id, session_id=session_id, _auth_only=True)
+        except Exception:
+            return 0
+
     def flush(
         self,
         *,
         batch_id: str | None = None,
         session_id: str | None = None,
         required_event_id: str | None = None,
+        _auth_only: bool = False,
     ) -> int:
         """Upload pending events, optionally restricted to one lifecycle scope.
 
@@ -597,6 +644,7 @@ class FlightRecorder:
             session_id is not None or required_event_id is not None
         ):
             return 0
+        record_failure = (lambda *args, **kwargs: None) if _auth_only else self._record_flush_failure
         with self._lock:
             try:
                 with _exclusive_file_lock(self.lock_path):
@@ -608,6 +656,8 @@ class FlightRecorder:
                         if (batch_id is None or event.get("batch_id") == batch_id)
                         and (session_id is None or event.get("session_id") == session_id)
                     ]
+                    scoped = [event for event in scoped
+                              if (event.get("event_type") == "auth_observed") == _auth_only]
                     if not scoped:
                         return 0
                     if required_event_id is not None:
@@ -633,7 +683,7 @@ class FlightRecorder:
                 # Flight evidence is best effort.  A locked/read-only home
                 # must never turn a heartbeat into a worker crash; strict
                 # worker registration will fail closed when no receipt exists.
-                self._record_flush_failure("local_storage_error", 0)
+                record_failure("local_storage_error", 0)
                 return 0
             try:
                 response = self.client.flight_events(batch)
@@ -644,10 +694,10 @@ class FlightRecorder:
                     "http_error" if type(status) is int else
                     "transport_error"
                 )
-                self._record_flush_failure(
+                record_failure(
                     reason, len(pending), http_status=status,
                 )
-                if status == 404:
+                if status == 404 and not _auth_only:
                     self._remote_disabled = True
                 return 0
             sent_ids = {event["event_id"] for event in batch}
@@ -659,13 +709,13 @@ class FlightRecorder:
                 # malformed response must never delete durable pending data or
                 # satisfy the strict worker-registration handshake.
                 if not isinstance(raw_acknowledged, list):
-                    self._record_flush_failure("invalid_response", len(pending))
+                    record_failure("invalid_response", len(pending))
                     return 0
                 if any(
                     not self._valid_event_id(event_id)
                     for event_id in raw_acknowledged
                 ):
-                    self._record_flush_failure("invalid_response", len(pending))
+                    record_failure("invalid_response", len(pending))
                     return 0
                 acknowledged = {
                     event_id for event_id in raw_acknowledged
@@ -674,10 +724,10 @@ class FlightRecorder:
             except (AttributeError, TypeError):
                 # A malformed response is not evidence of acceptance.  Keep
                 # the durable pending event and let a later retry reconcile it.
-                self._record_flush_failure("invalid_response", len(pending))
+                record_failure("invalid_response", len(pending))
                 return 0
             if not acknowledged:
-                self._record_flush_failure(
+                record_failure(
                     "unacknowledged_response", len(pending),
                 )
                 return 0
@@ -696,7 +746,7 @@ class FlightRecorder:
                         ],
                     )
             except OSError:
-                self._record_flush_failure(
+                record_failure(
                     "local_storage_error", len(pending),
                 )
                 return 0
@@ -704,7 +754,8 @@ class FlightRecorder:
             # also persist receipts so a sibling process can prove that its
             # exact worker_registered event was accepted.
             self._last_acknowledged_event_ids.update(acknowledged)
-            self._record_flush_success()
+            if not _auth_only:
+                self._record_flush_success()
             return len(acknowledged)
 
     @property
