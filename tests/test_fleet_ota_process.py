@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import zipfile
 
 import pytest
@@ -18,13 +19,15 @@ from dradar.flight_recorder import FlightRecorder
 from test_ota_runtime import signed_release, sign_document, Client, Response
 
 ROOT = Path(__file__).parents[1]
+# Expect the independently checked source declaration, never child output.
+EXPECTED_VERSION = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']
 
 
 def build(path):
     spec = importlib.util.spec_from_file_location('build_fleet_probe', ROOT / 'scripts/ota_release.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._build_zipapp(ROOT, path, version='0.5.206', sequence=27,
+    module._build_zipapp(ROOT, path, version=EXPECTED_VERSION, sequence=27,
                          commit='c8013b268335e06233514a7b4e07dc3e6e605af4',
                          tree='0' * 40, target=('linux', 'x86_64'))
 
@@ -33,7 +36,7 @@ def stage(home, artifact):
     body = artifact.read_bytes()
     doc, keys = signed_release()
     doc.pop('signature')
-    doc.update(version='0.5.206', sequence=27, release_id='fleet-local-candidate')
+    doc.update(version=EXPECTED_VERSION, sequence=27, release_id='fleet-local-candidate')
     for item in doc['artifacts']:
         item.update(filename=f"candidate-{item['os']}-{item['arch']}.pyz", size=len(body), sha256=hashlib.sha256(body).hexdigest())
     doc = sign_document(doc)
@@ -42,7 +45,7 @@ def stage(home, artifact):
     assert runtime.prepare(doc, trusted_keys=keys, current_version='0.5.203', committed_sequence=0,
                            compatibility=COMPATIBILITY, rollout=RolloutContext(subject='fixture')).eligible
     runtime.activate_and_self_test(SafePointSnapshot(), _self_test)
-    assert json.loads((home / 'ota/current.json').read_text())['version'] == '0.5.206'
+    assert json.loads((home / 'ota/current.json').read_text())['version'] == EXPECTED_VERSION
 
 
 def wait_file(path):
@@ -105,7 +108,7 @@ def test_real_fleet_descendants_retain_payload_after_parent_exits(tmp_path, mode
         roles = ['parent', 'coordinator', 'coordinator-after-parent', 'pool', 'worker']
         reports = [json.loads((tmp_path / (role + '.json')).read_text()) for role in roles]
         for report in reports:
-            assert report['version'] == '0.5.206'
+            assert report['version'] == EXPECTED_VERSION
             assert report['pythonpath'] == env['PYTHONPATH']
             if mode == 'ota':
                 assert report['activity'] is True
@@ -118,7 +121,7 @@ def test_real_fleet_descendants_retain_payload_after_parent_exits(tmp_path, mode
         for pid in {r['pid'] for r in reports}:
             wait_file(tmp_path / f'{pid}.exited')
         if mode == 'ota':
-            assert json.loads((home / 'ota/current.json').read_text())['version'] == '0.5.206'
+            assert json.loads((home / 'ota/current.json').read_text())['version'] == EXPECTED_VERSION
             from dradar.ota.activity import active_invocations
             from dradar.ota.state import UpdateLock
             deadline = time.monotonic() + 10
