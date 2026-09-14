@@ -422,3 +422,10 @@ class RunnerTelemetry:
             assignment_id=self._active_assignment_id,
         )
         self._flush_flight_events()
+        # Drain terminal optional evidence after core close, using the separate
+        # bounded/no-retry sender. Failure never changes the task outcome.
+        if self.flight_recorder is not None and self._batch_id:
+            try:
+                FlightRecorder(self.flight_recorder.home,self.client).flush_auth(batch_id=self._batch_id,session_id=self.session_id)
+            except Exception:
+                pass

@@ -2953,7 +2953,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             telemetry.flush()
 
+    def auth_observed(attributes):
+        values=dict(attributes)
+        at=values.pop('_occurred_at',None)
+        event='auth_observed_v2' if 'execution_id' in values else 'auth_observed'
+        return _record_flight_event(telemetry,event,component='provider',assignment_id=assignment['assignment_id'],attributes=values,**({'occurred_at':at} if at is not None else {}))
+
     for attempt in (1, 2):
+        assignment["_runner_attempt"]=attempt
         try:
             try:
                 if telemetry is not None:
@@ -2964,10 +2971,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
                     on_started=bind_owner,
                     on_worker_registered=bind_owner,
-                    **({"on_auth_observed": lambda attributes: _record_flight_event(
-                        telemetry, "auth_observed", component="provider",
-                        assignment_id=assignment["assignment_id"], attributes=attributes,
-                    )} if telemetry is not None else {}),
+                    **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
                     environment_build_timeout_multiplier=(
                         getattr(
                             args, "_environment_build_timeout_multiplier", None,

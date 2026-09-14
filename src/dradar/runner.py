@@ -714,7 +714,7 @@ def _ensure_codex_managed_module(home: Path) -> tuple[str, Path]:
     resources = importlib.resources.files("dradar")
     names = ("auth_access", "auth_authority", "auth_refresh", "auth_managed",
              "auth_transaction", "auth_host_session", "auth_codex_rpc",
-             "credential_files", "pier_credential_delivery", "pier_codex_managed")
+             "credential_files", "pier_credential_delivery", "pier_codex_managed", "auth_observation")
     contents = {name: resources.joinpath(name + ".py").read_bytes() for name in names}
     bridge_data = resources.joinpath("codex_managed_bridge.cjs").read_bytes()
     digest = hashlib.sha256(b"".join(name.encode() + contents[name] for name in names) + bridge_data).hexdigest()[:12]
@@ -1452,6 +1452,9 @@ def build_pier_command(
     if managed and (agent != "codex" or provider != DEFAULT_CODEX_PROVIDER
                     or assignment.get("auth_runtime") != "codex-managed-at-v1"):
         raise RunnerError("managed runtime requires an explicit compatible assignment")
+    if managed and assignment.get("auth_cohort_id"):
+        from .managed_auth_selection import trial_platform_ready
+        if not trial_platform_ready():raise RunnerError("managed trial requires verified macOS arm64 and local Linux arm64 Docker")
     deepseek_catalog = None
     if provider == DEEPSEEK_PROVIDER:
         _validate_deepseek_assignment(assignment)
@@ -4410,12 +4413,22 @@ def run_trial(
         managed_permit = work_dir / (job_name + ".managed-start.json")
         env.pop("DRADAR_MANAGED_START_PERMIT", None)
         env.pop("DRADAR_MANAGED_STATUS_FILE", None)
+        env.pop("DRADAR_MANAGED_EVENT_FILE", None)
+        env.pop("DRADAR_MANAGED_COHORT_ID", None)
+        managed_observation_reader = None
         if managed_auth_config is not None:
             managed_permit.unlink(missing_ok=True)
             env["DRADAR_MANAGED_START_PERMIT"] = str(managed_permit)
             managed_status = work_dir / (job_name + ".managed-status.json")
             managed_status.unlink(missing_ok=True)
             env["DRADAR_MANAGED_STATUS_FILE"] = str(managed_status)
+            if assignment.get('auth_cohort_id'):
+                from .auth_observation import ObservationReader
+                observation_path=work_dir/(job_name+'.auth-observations.jsonl')
+                observation_path.unlink(missing_ok=True)
+                env['DRADAR_MANAGED_EVENT_FILE']=str(observation_path)
+                env['DRADAR_MANAGED_COHORT_ID']=assignment['auth_cohort_id']
+                managed_observation_reader=ObservationReader(observation_path,on_auth_observed,assignment)
         env.pop(BASELINE_REQUEST_ENV, None)
         if baseline_request_path.is_file():
             env[BASELINE_REQUEST_ENV] = str(baseline_request_path)
@@ -4490,6 +4503,7 @@ def run_trial(
                 started = time.time()
                 next_beat = started + HEARTBEAT_SEC
                 while True:
+                    if managed_observation_reader is not None:managed_observation_reader.drain()
                     try:
                         proc.wait(timeout=min(30, HEARTBEAT_SEC))
                         break
@@ -4580,6 +4594,8 @@ def run_trial(
                     "artifacts"
                 )
     finally:
+        if "managed_observation_reader" in locals() and managed_observation_reader is not None:
+            managed_observation_reader.drain()
         try:
             # Pass failures/cancellation through to the provider's native
             # persistence policy; close() would incorrectly report success.
