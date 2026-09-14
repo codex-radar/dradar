@@ -177,8 +177,9 @@ class UpdateLock(AbstractContextManager["UpdateLock"]):
     def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-        if os.fstat(fd).st_size == 0:
-            os.write(fd, b"\0")
+        # Byte-range locks may extend past EOF. Never initialize the byte
+        # before owning it: another holder can be rewriting its metadata and
+        # Windows then correctly rejects this contender's unowned write.
         deadline = time.monotonic() + self.timeout_seconds
         while True:
             try:
