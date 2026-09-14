@@ -1,0 +1,58 @@
+name: '#0092 bounded native contracts cli'
+on:
+  push:
+    branches: [codex/0092-cli-native-qa]
+    paths: ['.github/workflows/0092-native.yml', 'tests/0092-native-ci/**']
+permissions:
+  contents: read
+concurrency:
+  group: dradar-0092-cli-native-qa
+  cancel-in-progress: false
+jobs:
+  contract:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          path: tools
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: 3d4e2a868cfa31a39368d473e7a31ddcd8134821
+          path: candidate
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Install hash-locked test dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.12 .qa-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/Scripts/python.exe"
+          else
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/bin/python"
+          fi
+          echo "QA_PYTHON=$QA_PYTHON" >> "$GITHUB_ENV"
+          echo "DRADAR_HOME=$RUNNER_TEMP/dradar-0092-home" >> "$GITHUB_ENV"
+          uv pip install --python "$QA_PYTHON" --require-hashes -r tools/tests/0092-native-ci/requirements.lock
+      - name: Verify exact candidate and run bounded contracts
+        shell: bash
+        working-directory: candidate
+        env:
+          PYTHONPATH: src
+          PYTHONDONTWRITEBYTECODE: '1'
+          DRADAR_NO_WORKER: '1'
+        run: |
+          test "$(git rev-parse HEAD)" = "3d4e2a868cfa31a39368d473e7a31ddcd8134821"
+          test -z "$(git status --porcelain)"
+          "$QA_PYTHON" --version
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+          "$QA_PYTHON" -m pytest tests/test_version.py tests/test_auth_platform_limits.py tests/test_managed_auth_selection.py::test_default_status_does_not_create_managed_store tests/test_container_auth.py::test_existing_harness_contracts_and_no_secret_in_diagnostics tests/test_container_auth.py::test_wrong_source_type_fails_before_container_launch tests/test_packaged_adapter_resources.py::test_adapter_resources_are_materialized_without_network tests/test_packaged_adapter_resources.py::test_deepseek_constructor_uses_packaged_pin_and_rejects_tampering -q --tb=short
+          "$QA_PYTHON" ../tools/tests/0092-native-ci/probe.py
