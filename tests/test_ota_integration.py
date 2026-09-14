@@ -1,4 +1,5 @@
 import inspect
+import os
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -66,7 +67,7 @@ def test_trusted_key_round_trip_is_private(tmp_path):
     store_trusted_keys({"release-root": key}, tmp_path)
     path = tmp_path / "ota" / "trusted-keys.json"
     assert load_trusted_keys(tmp_path) == {"release-root": key}
-    if path.stat().st_mode & 0o077:
+    if os.name == "posix" and path.stat().st_mode & 0o077:
         pytest.fail("trusted key file is not private")
 
 
@@ -112,8 +113,9 @@ def test_windows_candidate_handle_lives_through_child_and_then_cleans(tmp_path):
             events.append("handle-close")
             candidate.unlink()
 
-    def runner(command, *, check):
+    def runner(command, *, check, env):
         assert check is False
+        assert env["DRADAR_OTA_DISPATCH"] == "1"
         assert events == ["handle-open"]
         assert command[1] == str(candidate)
         assert candidate.read_bytes() == b"verified candidate"

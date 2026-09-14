@@ -101,7 +101,7 @@ EVENT_TYPES = frozenset({
     "release_requested", "release_completed", "release_failed",
     "upload_started", "upload_completed", "upload_failed",
     "request_started", "request_completed", "request_failed",
-    "update_policy_rejected", "update_detected", "update_downloaded",
+    "update_observed", "update_policy_rejected", "update_detected", "update_downloaded",
     "update_verified", "update_staged", "update_waiting_safe_point",
     "update_paused", "update_activated", "update_self_testing",
     "update_committed", "update_rollback_pending", "update_rolled_back",
@@ -125,7 +125,7 @@ ATTRIBUTE_KEYS = frozenset({
     "attempt", "elapsed_ms", "force", "http_status", "offline_replay",
     "outcome", "phase", "previous_phase", "provider", "release_count",
     "target_workers", "was_running", "worker_slot",
-    "update_eligible", "update_sequence", "update_state",
+    "update_eligible", "update_sequence", "update_state", "update_enabled", "launch_method",
 })
 REASON_CODES = frozenset({
     "api_error", "transport_error", "completed", "paused", "interrupted",
@@ -190,6 +190,8 @@ ATTRIBUTE_RULES = {
     "target_workers": (int, 1, 40),
     "was_running": (bool, None, None),
     "worker_slot": (int, 1, 40),
+    "update_enabled": (bool, None, None),
+    "launch_method": (str, {"launcher", "verified_child", "unknown"}, None),
     "update_eligible": (bool, None, None),
     "update_sequence": (int, 1, 2_147_483_647),
     "update_state": (str, UPDATE_STATES, None),
@@ -366,7 +368,7 @@ class FlightRecorder:
     def _write(path: Path, events: list[dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         checked = [validate_event(event) for event in events]
-        auth_indices = [i for i, event in enumerate(checked) if event["event_type"] in {"auth_observed","auth_observed_v2"}]
+        auth_indices = [i for i, event in enumerate(checked) if (event["event_type"] in {"auth_observed","auth_observed_v2"} or event["event_type"].startswith("update_"))]
         drop = set(auth_indices[:-100])
         checked = [event for i, event in enumerate(checked) if i not in drop]
         encoded = [json.dumps(event, sort_keys=True, separators=(",", ":")) for event in checked]
@@ -375,7 +377,7 @@ class FlightRecorder:
             or sum(len(line.encode("utf-8")) + 1 for line in encoded) > MAX_LOG_BYTES
         ):
             optional = next((i for i, event in enumerate(checked)
-                             if event["event_type"] in {"auth_observed","auth_observed_v2"}), None)
+                             if (event["event_type"] in {"auth_observed","auth_observed_v2"} or event["event_type"].startswith("update_"))), None)
             if optional is not None:
                 del encoded[optional]
                 del checked[optional]
@@ -612,13 +614,15 @@ class FlightRecorder:
                     present={event['event_type'] for event in self._load(self.pending_path)
                              if (batch_id is None or event.get('batch_id')==batch_id)
                              and (session_id is None or event.get('session_id')==session_id)}
-            if not present & {'auth_observed','auth_observed_v2'}:return 0
+            if not present & {'auth_observed','auth_observed_v2'} and not any(x.startswith('update_') for x in present):return 0
             caps=self.client.flight_event_capabilities()
             if not isinstance(caps,dict) or caps.get('schema_version')!=SCHEMA_VERSION:return 0
             for version,name in ((1,'auth_observed_v1'),(2,'auth_observed_v2')):
                 event_type='auth_observed' if version==1 else 'auth_observed_v2'
                 if event_type in present and caps.get(name) is True:
                     total+=self.flush(batch_id=batch_id,session_id=session_id,_auth_only=True,_auth_version=version)
+            if caps.get("ota_update_v1") is True:
+                total+=self.flush(batch_id=batch_id,session_id=session_id,_auth_only=True,_auth_version=3)
         except Exception:return total
         return total
 
@@ -672,7 +676,7 @@ class FlightRecorder:
                         and (session_id is None or event.get("session_id") == session_id)
                     ]
                     scoped = [event for event in scoped
-                              if (event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed") if _auth_only else event.get("event_type") not in {"auth_observed","auth_observed_v2"})]
+                              if ((event.get("event_type") == "update_observed" if _auth_version==3 else event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed")) if _auth_only else (event.get("event_type") not in {"auth_observed","auth_observed_v2"} and not event.get("event_type", "").startswith("update_")))]
                     if not scoped:
                         return 0
                     if required_event_id is not None:

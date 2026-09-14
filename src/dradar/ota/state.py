@@ -625,7 +625,7 @@ class UpdateController:
             release_id=manifest.release_id,
             version=manifest.version,
             sequence=manifest.sequence,
-            artifact=str(destination.relative_to(self.root)),
+            artifact=destination.relative_to(self.root).as_posix(),
         )
         pending = {
             "schema_version": 1,

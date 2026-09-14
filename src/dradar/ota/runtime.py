@@ -248,8 +248,8 @@ class UpdateRuntime:
                 )
             self.controller.activate(snapshot)
             self.controller.begin_self_test()
-            candidate = self.controller.staged_artifact()
             try:
+                candidate = self.controller.staged_artifact()
                 passed = self_test(candidate) is True
             except (KeyboardInterrupt, SystemExit):
                 self.controller.request_rollback("update_self_test_failed")

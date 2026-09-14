@@ -366,7 +366,7 @@ def _build_zipapp(
             ("dradar/_ota_build.json", _canonical(metadata) + b"\n"),
             (
                 "__main__.py",
-                b"from dradar.cli import main\nraise SystemExit(main())\n",
+                b"from dradar.launcher import main\nraise SystemExit(main())\n",
             ),
         ]
     )

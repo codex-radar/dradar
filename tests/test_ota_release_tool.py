@@ -39,6 +39,7 @@ def _source(tmp_path: Path, version: str = "0.5.177") -> Path:
         "    return 0\n",
         encoding="utf-8",
     )
+    (package / "launcher.py").write_text("from .cli import main\n", encoding="utf-8")
     return root
 
 

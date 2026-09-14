@@ -308,6 +308,17 @@ class RunnerTelemetry:
                 # Legacy/super-account heartbeat may be the first place the
                 # server assigns a batch. Bind before flushing pending events.
                 self.bind_batch(response["batch_id"])
+            # Optional OTA snapshot stays in this authenticated session scope.
+            # It is not a replay of pre-login download history.
+            try:
+                from .ota.discovery import runtime_observation
+                from .local_config import HOME
+                observation = runtime_observation(HOME)
+                if observation != getattr(self, "_last_ota_observation", None):
+                    self.record_event("update_observed", component="ota", attributes=observation)
+                    self._last_ota_observation = observation
+            except Exception:
+                pass
             self.record_event("heartbeat_acknowledged", component="heartbeat")
             self._last_flight_events_acked = self._flush_flight_events(
                 required_event_id=required_event_id,
