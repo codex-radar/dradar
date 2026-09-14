@@ -1,0 +1,40 @@
+name: Three PR native integration
+on:
+  push:
+    branches: [codex/0088-three-pr-ci]
+    paths: ['.github/workflows/three-pr-native.yml']
+permissions:
+  contents: read
+jobs:
+  regression:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Locked dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.12 .qa-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/Scripts/python.exe"
+          else
+            QA_PYTHON="$GITHUB_WORKSPACE/.qa-venv/bin/python"
+          fi
+          echo "QA_PYTHON=$QA_PYTHON" >> "$GITHUB_ENV"
+          uv pip install --python "$QA_PYTHON" --require-hashes -r tests/three-pr-ci/requirements.lock
+      - name: Baseline evidence and candidate gate
+        shell: bash
+        run: |
+          "$QA_PYTHON" --version
+          "$QA_PYTHON" tests/three-pr-ci/run.py
