@@ -33,8 +33,7 @@ def runtime(tmp_path):
     build(source, artifact)
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
-    # Keep fixture evidence visible to upload-artifact (hidden files are excluded).
-    dradar_home = home / 'dradar-state'
+    dradar_home = home / '.dradar'
     dradar_home.mkdir(mode=0o700)
     task_repo = tmp_path / 'existing-user-repo'
     task_repo.mkdir()
