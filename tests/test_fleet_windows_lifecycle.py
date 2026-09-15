@@ -204,3 +204,48 @@ except PermissionError:
         if child.poll() is None:
             child.terminate()
             child.wait(timeout=10)
+
+
+@pytest.mark.parametrize('timeout', [False, True])
+def test_runtime_inspection_native_windows_normal_and_tree_timeout(tmp_path, monkeypatch, timeout):
+    """Run real helper/descendant PIDs through Windows taskkill, without models."""
+    from dradar import child_entrypoint
+    identity = tmp_path / 'inspection-pids.json'
+    script = '''
+import json,os,subprocess,sys,time
+from pathlib import Path
+path,mode=sys.argv[1:3]
+child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)' if mode=='timeout' else 'pass'])
+Path(path).write_text(json.dumps({'helper':os.getpid(),'child':child.pid}))
+child.wait()
+print(json.dumps({'ok':True,'result':[1,[],{'account_limit':4}]}))
+'''
+    monkeypatch.setattr(child_entrypoint, 'command',
+                        lambda *_: [sys.executable, '-c', script, str(identity), 'timeout' if timeout else 'normal'])
+    monkeypatch.setattr(child_entrypoint, 'popen_options', lambda env: {})
+    monkeypatch.setattr(fleet, 'REQUEST_TIMEOUT_SECONDS', 8)
+    # An unrelated local fixture must remain alive throughout cleanup.
+    unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    try:
+        call = lambda: fleet._resolve_workers_in_runtime(
+            1, '1' * 32, {'batches': {}}, None, sys.executable, {})
+        if timeout:
+            with pytest.raises(fleet.FleetError, match='could not inspect'):
+                call()
+        else:
+            assert call() == (1, [], {'account_limit': 4})
+        pids = json.loads(identity.read_text())
+        deadline = time.monotonic() + 2
+        while any(fleet._pid_alive(pid) for pid in pids.values()) and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert not any(fleet._pid_alive(pid) for pid in pids.values())
+        assert unrelated.poll() is None
+    finally:
+        if identity.exists():
+            taskkill = str(Path(os.environ['SystemRoot']) / 'System32/taskkill.exe')
+            for pid in json.loads(identity.read_text()).values():
+                if fleet._pid_alive(pid):
+                    subprocess.run([taskkill, '/PID', str(pid), '/T', '/F'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        unrelated.terminate()
+        unrelated.wait(timeout=5)

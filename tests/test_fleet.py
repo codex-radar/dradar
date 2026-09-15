@@ -87,7 +87,7 @@ def test_fleet_add_is_idempotent_for_one_batch(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(
-        fleet, "_resolve_workers",
+        fleet, "_resolve_workers_in_runtime",
         lambda *_args: (2, [], {"account_limit": 5, "held_tasks": 2}),
     )
 
@@ -140,7 +140,7 @@ def test_later_harness_pool_uses_only_its_requesting_agent_executable_paths(
             return None
 
     monkeypatch.setattr(
-        fleet, "_resolve_workers", lambda *_args: (1, [], {"account_limit": 5}),
+        fleet, "_resolve_workers_in_runtime", lambda *_args: (1, [], {"account_limit": 5}),
     )
 
     def spawn(*_args, **kwargs):
@@ -245,7 +245,7 @@ def test_fleet_tracks_separate_honeypot_batches_and_total_workers(
 
     worker_targets = iter((2, 3))
     monkeypatch.setattr(
-        fleet, "_resolve_workers",
+        fleet, "_resolve_workers_in_runtime",
         lambda *_args: (next(worker_targets), [], {"account_limit": 5}),
     )
     pids = iter((111, 222))
@@ -314,7 +314,7 @@ def test_new_batch_waits_for_active_legacy_controller_without_interrupting(
         fleet.prepare_new_batch_runtime(tmp_path)
 
 
-@pytest.mark.parametrize("old_protocol", (None, 6))
+@pytest.mark.parametrize("old_protocol", (None, 6, 8))
 def test_idle_legacy_controller_is_rotated_without_user_decision(
     tmp_path, monkeypatch, old_protocol,
 ):
@@ -1204,7 +1204,7 @@ def test_plan_token_stays_in_private_file_not_fleet_argv_env_or_state(
     state = fleet._initial_state("controller-1", None)
     state["status"] = "active"
     monkeypatch.setattr(
-        fleet, "_resolve_workers",
+        fleet, "_resolve_workers_in_runtime",
         lambda *_args: (2, [], {"account_limit": 4}),
     )
     monkeypatch.setattr(
@@ -1259,7 +1259,7 @@ def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
         def poll(self):
             return None
 
-    def resolve(_workers, _batch_id, _state, credentials_file):
+    def resolve(_workers, _batch_id, _state, credentials_file, *_runtime):
         captured["resolved_credentials"] = credentials_file
         return 2, [], {"account_limit": 4}
 
@@ -1267,7 +1267,7 @@ def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
         captured["spawned_credentials"] = kwargs["credentials_file"]
         return Process(), io.StringIO()
 
-    monkeypatch.setattr(fleet, "_resolve_workers", resolve)
+    monkeypatch.setattr(fleet, "_resolve_workers_in_runtime", resolve)
     monkeypatch.setattr(fleet, "_spawn_pool", spawn)
     fleet._handle_request(
         tmp_path,
