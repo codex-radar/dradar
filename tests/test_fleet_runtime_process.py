@@ -89,9 +89,10 @@ def runtime(tmp_path):
     if os.name == 'nt':
         env.update({key: os.environ[key] for key in ('SystemRoot', 'TEMP', 'TMP') if key in os.environ})
         env['USERPROFILE'] = str(home)
+    coordinator_log = (tmp_path / 'coordinator.log').open('w', encoding='utf-8')
     coordinator = subprocess.Popen([sys.executable, str(artifact), 'fleet', 'serve', '--internal'],
         env={**env, 'DRADAR_FLEET_LAUNCH_ID': 'runtime-fixture'},
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=coordinator_log, stderr=subprocess.STDOUT)
     state_path = dradar_home / 'fleet/state.json'
     deadline = time.monotonic() + 10
     while not state_path.exists():
@@ -116,11 +117,34 @@ def runtime(tmp_path):
     try:
         yield add, observations, dradar_home, bindings, env, artifact
     finally:
-        coordinator.terminate()
-        coordinator.wait(timeout=10)
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        try:
+            before_cleanup = {'coordinator_returncode': coordinator.poll(),
+                              'observations': list(observations),
+                              'recorded_at': time.time()}
+            try:
+                # Copy complete process evidence out of the hidden home for CI uploads.
+                logs = dradar_home / 'fleet/logs'
+                pool_logs = {}
+                if logs.exists():
+                    for log in logs.glob('*.log'):
+                        pool_logs[log.name] = log.read_text(encoding='utf-8', errors='replace')
+                before_cleanup['pool_logs'] = pool_logs
+                if state_path.exists():
+                    before_cleanup['state'] = json.loads(state_path.read_text())
+            except (OSError, ValueError) as exc:
+                before_cleanup['capture_error'] = repr(exc)
+            try:
+                (tmp_path / 'lifecycle.json').write_text(json.dumps(before_cleanup, indent=2))
+            except OSError:
+                pass
+        finally:
+            if coordinator.poll() is None:
+                coordinator.terminate()
+            coordinator.wait(timeout=10)
+            coordinator_log.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
         assert (task_repo / 'keep.txt').read_text() == 'unchanged'
         assert not (task_repo / 'tasks').exists()
         assert not any('/claim' in row[0] or '/checkout' in row[0] for row in observations)
