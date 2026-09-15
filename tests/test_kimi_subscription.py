@@ -741,6 +741,7 @@ def test_kimi_wire_usage_sums_request_records_without_cache_overlap() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -828,6 +829,7 @@ def test_kimi_wire_usage_fails_closed_on_replay_conflict_and_bad_terminal() -> N
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -894,6 +896,7 @@ def test_kimi_wire_groups_retries_and_accepts_multiturn_equal_millis() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -962,6 +965,7 @@ def test_kimi_replays_real_cliffy_429_retry_fixture() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -998,6 +1002,7 @@ def test_kimi_oauth_wire_uses_alias_identity_and_keeps_untimed_tokens() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -1071,6 +1076,7 @@ def test_kimi_oauth_wire_reconciles_session_scoped_compaction_usage() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -1155,6 +1161,7 @@ def test_kimi_retry_reconciliation_whitelists_connection_errors() -> None:
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),
@@ -1196,6 +1203,7 @@ def test_kimi_retry_reconciliation_rejects_count_coincidence_and_forgery() -> No
     ]
     namespace = {
         "Any": Any, "datetime": datetime, "timezone": timezone,
+        "KIMI_RUNTIME_MODELS": {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"},
         "deque": deque,
     }
     exec(compile(ast.Module(body=helpers, type_ignores=[]), "pier_kimi.py", "exec"),

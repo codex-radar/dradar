@@ -2063,6 +2063,9 @@ def _upload_trial_checked(
             "cache_creation_tokens", "subscription_reported_cost_usd",
             "subscription_reported_cost_basis", "resume_attempts",
             "thinking_tokens", "provider_runtime_model", "terminal_status",
+            "thinking_effort_verified", "verified_thinking_effort",
+            "model_identity_basis", "requested_runtime_model",
+            "observed_model", "observed_model_status",
             "terminal_recovery",
         ):
             source_key = "sessions" if key == "agent_session_usage" else key
@@ -3431,8 +3434,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             })
     if assignment.get("agent") == KIMI_AGENT:
         meta.update({
-            "model_config_version": KIMI_RUN_CONFIG_VERSION,
-            "model_runtime_profile": KIMI_RUNTIME_PROFILE,
+            "model_config_version": ("kimi-code-k28-preview-web-disabled-v1"
+                if assignment.get("model") == "kimi-k2.8-preview" else KIMI_RUN_CONFIG_VERSION),
+            "model_runtime_profile": ("pier-kimi-code-k28-preview-web-disabled-v1"
+                if assignment.get("model") == "kimi-k2.8-preview" else KIMI_RUNTIME_PROFILE),
             "subscription_oauth": True,
             "subscription_concurrency": (
                 telemetry.target_workers if telemetry is not None else 1
