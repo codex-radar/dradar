@@ -26,8 +26,8 @@ from .capacity import cmd_capacity
 from .cells import cmd_cells
 from .doctor import cmd_doctor
 from .fleet import (
-    cmd_fleet_add, cmd_fleet_serve, cmd_fleet_status, cmd_fleet_stop,
-    cmd_fleet_watch,
+    cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
+    cmd_fleet_stop, cmd_fleet_watch,
 )
 from .flight_recorder import cmd_diagnostics
 from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
@@ -261,12 +261,15 @@ def main(argv: list[str] | None = None) -> int:
     p_fleet_serve = fleet_sub.add_parser("serve", help=argparse.SUPPRESS)
     p_fleet_serve.add_argument("--internal", action="store_true", help=argparse.SUPPRESS)
     p_fleet_serve.set_defaults(func=cmd_fleet_serve)
+    p_fleet_inspect = fleet_sub.add_parser("inspect-runtime", help=argparse.SUPPRESS)
+    p_fleet_inspect.add_argument("--internal", action="store_true", help=argparse.SUPPRESS)
+    p_fleet_inspect.set_defaults(func=cmd_fleet_inspect_runtime)
     # argparse otherwise renders a literal ``==SUPPRESS==`` entry for hidden
     # subcommands. Keep the internal parser reachable without advertising it
     # to users or copied Agent runbooks.
     fleet_sub._choices_actions = [
         action for action in fleet_sub._choices_actions
-        if action.dest != "serve"
+        if action.dest not in {"serve", "inspect-runtime"}
     ]
 
     p_cells = sub.add_parser(

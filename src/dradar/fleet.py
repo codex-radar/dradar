@@ -60,7 +60,8 @@ SCHEMA_VERSION = 1
 # selection and would keep spawning pools from its own stale installation.
 # Version 7 also keeps explicit worker counts free of legacy capacity probes.
 # Version 8 carries verified payloads and readable Windows lease identity.
-CONTROLLER_PROTOCOL_VERSION = 8
+# Version 9 preflights each new pool in its own validated runtime environment.
+CONTROLLER_PROTOCOL_VERSION = 9
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -705,6 +706,124 @@ def _resolve_workers(
     return workers, warnings, metadata
 
 
+def _pool_environment(runtime_environment: Mapping[str, str] | None) -> dict[str, str]:
+    """Identical provider bindings for preflight and pool; never mutate the host."""
+    env = os.environ.copy()
+    for key in POOL_RUNTIME_ENV_KEYS:
+        env.pop(key, None)
+    env.update(dict(runtime_environment or {}))
+    return env
+
+
+def _kill_runtime_inspection(process: subprocess.Popen) -> None:
+    """Only the new inspection's tree is ours; never target existing pools."""
+    if os.name == "nt":  # pragma: no cover - native Windows process contract
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        taskkill = str(Path(system_root) / "System32" / "taskkill.exe")
+        try:
+            result = subprocess.run(
+                [taskkill, "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=3,
+            )
+            if result.returncode:
+                raise FleetError("runtime inspection process-tree cleanup unconfirmed")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=1)
+    else:
+        # start_new_session makes PGID == this exact helper PID. Killing only
+        # the leader could orphan an in-flight provider/Docker probe.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            process.wait(timeout=1)
+
+
+def _resolve_workers_in_runtime(
+    requested: int | str, batch_id: str, state: dict,
+    credentials_file: str | None, runtime_executable: str,
+    runtime_environment: Mapping[str, str],
+) -> tuple[int, list[str], dict]:
+    # Provider probes still include process-global libraries and auth helpers.
+    # A short-lived child isolates them without temporarily changing os.environ
+    # in the long-running coordinator. Reuse the verified running payload.
+    if not os.path.isabs(runtime_executable) or not Path(runtime_executable).is_file():
+        raise FleetError("invalid DRadar runtime for the new local run")
+    from .child_entrypoint import command, popen_options
+    env = _pool_environment(runtime_environment)
+    options = popen_options(env)
+    if os.name == "nt":  # pragma: no cover - native Windows process contract
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    try:
+        process = subprocess.Popen(
+            [*command(runtime_executable), "fleet", "inspect-runtime", "--internal"],
+            text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=env, **options,
+        )
+    except OSError as exc:
+        raise FleetError("could not inspect the new local run's runtime") from exc
+    try:
+        stdout, _ = process.communicate(
+            input=json.dumps({
+                "workers": requested, "batch_id": batch_id,
+                "state": {"batches": {
+                    key: {"workers": item.get("workers"), "status": item.get("status")}
+                    for key, item in _active_batches(state).items()
+                }},
+                "credentials_file": credentials_file,
+            }),
+            timeout=REQUEST_TIMEOUT_SECONDS - 5,
+        )
+    except BaseException as exc:
+        try:
+            _kill_runtime_inspection(process)
+        except (OSError, subprocess.TimeoutExpired) as cleanup_exc:
+            raise FleetError("runtime inspection process-tree cleanup unconfirmed") from cleanup_exc
+        if isinstance(exc, (OSError, subprocess.TimeoutExpired)):
+            raise FleetError("could not inspect the new local run's runtime") from exc
+        raise
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.stdout is not None:
+            process.stdout.close()
+    try:
+        result = json.loads(stdout)
+        if not isinstance(result, dict):
+            raise ValueError("invalid inspection result")
+        if not result.get("ok"):
+            raise FleetError(result.get("error") or "runtime inspection failed")
+        workers, warnings, capacity = result["result"]
+        if process.returncode or not isinstance(workers, int):
+            raise ValueError("invalid inspection result")
+        return workers, warnings, capacity
+    except (ValueError, KeyError, TypeError) as exc:
+        raise FleetError("invalid runtime inspection response") from exc
+
+
+def cmd_fleet_inspect_runtime(args) -> int:
+    """Internal read-only capacity probe; receives no capability claims."""
+    if not args.internal:
+        return 2
+    try:
+        payload = json.load(sys.stdin)
+        result = _resolve_workers(
+            payload["workers"], payload["batch_id"], payload["state"],
+            payload.get("credentials_file"),
+        )
+    except (FleetError, ValueError, KeyError, TypeError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
+    print(json.dumps({"ok": True, "result": result}))
+    return 0
+
+
 def _pool_lock_path(home: Path, batch_id: str) -> Path:
     return _root(home) / POOL_LOCK_DIR / f"{batch_id}.lock"
 
@@ -883,10 +1002,7 @@ def _spawn_pool(
             "--refill-model", str(refill_model),
             "--refill-effort", str(refill_effort),
         ))
-    env = os.environ.copy()
-    for key in POOL_RUNTIME_ENV_KEYS:
-        env.pop(key, None)
-    env.update(dict(runtime_environment or {}))
+    env = _pool_environment(runtime_environment)
     env[CONTROLLER_ID_ENV] = controller_id
     env[POOL_BATCH_ENV] = batch_id
     startup_path = _pool_startup_path(home, batch_id)
@@ -1148,10 +1264,6 @@ def _handle_request(
                         "Fleet refill requires exact --refill-harness, "
                         "--refill-model, and --refill-effort scope"
                     )
-            workers, warnings, capacity = _resolve_workers(
-                request.get("workers", "auto"), batch_id, state,
-                credentials_file,
-            )
             runtime_executable = request.get("runtime_executable")
             if not isinstance(runtime_executable, str):
                 raise FleetError("invalid DRadar runtime for the new local run")
@@ -1190,6 +1302,10 @@ def _handle_request(
                     ):
                         raise FleetError("invalid provider runtime paths for the new local run")
                 runtime_environment[key] = value
+            workers, warnings, capacity = _resolve_workers_in_runtime(
+                request.get("workers", "auto"), batch_id, state,
+                credentials_file, runtime_executable, runtime_environment,
+            )
             process, log_handle = _spawn_pool(
                 home, state, batch_id, workers,
                 refill=refill,

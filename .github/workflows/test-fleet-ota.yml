@@ -11,6 +11,7 @@ on:
       - 'src/dradar/ota/**'
       - 'tests/test_child_entrypoint.py'
       - 'tests/test_fleet_ota_process.py'
+      - 'tests/test_fleet_runtime_process.py'
       - 'tests/test_fleet_windows_lifecycle.py'
       - 'tests/test_late_worker.py'
       - 'tests/mixed_go_probe.py'
@@ -56,11 +57,30 @@ jobs:
         env:
           DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-ota-home
           PYTHONUTF8: '1'
-        run: python -m pytest -q tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+        run: python -m pytest -q tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+      - name: Bounded Windows 3.11 concurrent-lane diagnostic
+        if: always() && matrix.os == 'windows-latest' && matrix.python == '3.11'
+        shell: python
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          import subprocess, sys
+          failed = False
+          for attempt in range(1, 6):
+              result = subprocess.run([
+                  sys.executable, '-m', 'pytest', '-q',
+                  'tests/test_fleet_runtime_process.py::test_concurrent_lanes_do_not_share_binding',
+                  f'--basetemp=evidence/native-tests/concurrent-repeat-{attempt}',
+              ], timeout=90)
+              if result.returncode:
+                  failed = True
+                  break
+          raise SystemExit(1 if failed else 0)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fleet-ota-${{ matrix.os }}-${{ matrix.python }}
+          include-hidden-files: true
           path: |
             evidence/native-tests/**/*.json
             evidence/native-tests/**/*.log
