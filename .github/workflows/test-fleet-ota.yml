@@ -2,6 +2,11 @@ name: Fleet verified OTA inheritance
 on:
   pull_request:
     paths:
+      - 'src/dradar/grok_probe.py'
+      - 'src/dradar/pier_grok.py'
+      - 'src/dradar/providers.py'
+      - 'tests/test_grok_probe.py'
+      - 'scripts/verify_grok_docker_auth.py'
       - 'src/dradar/child_entrypoint.py'
       - 'src/dradar/fleet.py'
       - 'src/dradar/launcher.py'
@@ -57,7 +62,7 @@ jobs:
         env:
           DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-ota-home
           PYTHONUTF8: '1'
-        run: python -m pytest -q tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+        run: python -m pytest -q tests/test_grok_probe.py tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
       - name: Bounded Windows 3.11 concurrent-lane diagnostic
         if: always() && matrix.os == 'windows-latest' && matrix.python == '3.11'
         shell: python
@@ -85,4 +90,44 @@ jobs:
             evidence/native-tests/**/*.json
             evidence/native-tests/**/*.log
             evidence/native-tests/**/pool-exit
+          retention-days: 7
+
+  grok-linux-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install runtime and adapter test dependencies
+        run: python -m pip install '.[dev]'
+      - name: Grok focused regression with inert credentials
+        env:
+          DRADAR_HOME: ${{ runner.temp }}/dradar-grok-test-home
+        run: python -m pytest -q tests/test_grok_probe.py tests/test_grok_subscription.py tests/test_grok_recovery.py tests/test_shared_oauth_docker.py tests/test_worker_start_gate.py tests/test_worker_start_native.py tests/test_provider_config.py
+      - name: Official pinned Grok Linux x64 in an internal Docker network
+        shell: python
+        run: |
+          import json, subprocess, sys
+          from pathlib import Path
+          image = 'docker.io/library/node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5'
+          info = json.loads(subprocess.check_output(['docker', 'info', '--format', '{{json .}}'], text=True))
+          assert info['OSType'] == 'linux' and info['Architecture'] in ('x86_64', 'amd64')
+          subprocess.run(['docker', 'pull', image], check=True, timeout=180)
+          identifier = subprocess.check_output(['docker', 'image', 'inspect', image, '--format', '{{.Id}}'], text=True).strip()
+          subprocess.run([sys.executable, 'scripts/verify_grok_docker_auth.py',
+                          '--fixture-image', identifier, '--output', 'evidence/grok-linux-x64'],
+                         check=True, timeout=900)
+          report = json.loads(Path('evidence/grok-linux-x64/results.json').read_text())
+          assert report['passed'] and report['daemon_arch'] == 'x86_64'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grok-linux-x64-native
+          path: |
+            evidence/grok-linux-x64/results.json
+            evidence/grok-linux-x64/hits.jsonl
           retention-days: 7

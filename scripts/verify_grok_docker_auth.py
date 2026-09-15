@@ -85,6 +85,37 @@ def main():
     }
     command, arch = g.local_daemon(env)
     spec_image = g._prepare_image(command, arch, auth, env)
+    # Keep native processes under the canonical owner in this concurrency test.
+    # Separate Linux UID/DAC tests cover run_probe readability, not the task
+    # runtime's root ownership-repair loop.
+    native_owner = subprocess.check_output(
+        command
+        + [
+            "run",
+            "--rm",
+            "--init",
+            "--network",
+            "none",
+            "--read-only",
+            "--mount",
+            f"type=bind,source={auth.parent},target=/fixture,readonly",
+            "--entrypoint",
+            "/usr/bin/timeout",
+            spec_image,
+            "--kill-after=2s",
+            "10s",
+            "/usr/bin/stat",
+            "-c",
+            "%u:%g",
+            "/fixture",
+        ],
+        env=env,
+        text=True,
+        timeout=15,
+    ).strip()
+    assert len(native_owner.split(":")) == 2 and all(
+        value.isascii() and value.isdecimal() for value in native_owner.split(":")
+    )
     suffix = uuid.uuid4().hex[:12]
     network = "dradar-0113-" + suffix
     idp = "dradar-0113-idp-" + suffix
@@ -157,6 +188,8 @@ def main():
                 "--init",
                 "--name",
                 f"dradar-0113-runtime-{suffix}-{index}",
+                "--user",
+                native_owner,
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,mode=1777",
@@ -350,6 +383,7 @@ g.run_probe(Path(c['auth']),Path(c['root'])/'child',c['env'])
             "native_version": g.VERSION,
             "probe_containers": 4,
             "runtime_containers": 4,
+            "native_process_owner": native_owner,
             "token_posts": len(hits),
             "duplicate_refreshes": 0,
             "identity_preserved": True,
