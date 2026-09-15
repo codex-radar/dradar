@@ -29,6 +29,22 @@ from dradar.providers import (
 from dradar.runner import RunnerError
 
 
+@pytest.fixture(autouse=True)
+def isolate_grok_probe_transport(monkeypatch):
+    """These tests cover result handling; Docker transport is tested separately."""
+    def process(credential, root, env):
+        native = root / "native-home"
+        native.mkdir(exist_ok=True)
+        env = dict(env, HOME=str(native), GROK_AUTH_PATH=str(credential.resolve()))
+        for key in ("GROK_HOME", "GROK_AUTH", "XAI_API_KEY", "GROK_CODE_XAI_API_KEY"):
+            env.pop(key, None)
+        return providers.subprocess.run(
+            ["/usr/bin/grok", "models"], capture_output=True, text=True,
+            timeout=30, check=False, env=env,
+        )
+    monkeypatch.setattr(providers, "_grok_probe_process", process)
+
+
 def _oauth(token: str = "access", refresh: str = "refresh") -> dict:
     return {
         "https://auth.x.ai::client": {
@@ -444,7 +460,9 @@ def test_grok_live_probe_uses_native_private_home(
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
         seen["env"] = kwargs["env"]
-        native = Path(kwargs["env"]["HOME"]) / ".grok" / "auth.json"
+        native = Path(kwargs["env"]["GROK_AUTH_PATH"])
+        assert native == auth.resolve()
+        assert not (Path(kwargs["env"]["HOME"]) / ".grok" / "auth.json").exists()
         assert native.is_file()
         assert native.stat().st_mode & 0o777 == 0o600
         return providers.subprocess.CompletedProcess(
@@ -460,13 +478,13 @@ def test_grok_live_probe_uses_native_private_home(
     assert GROK_API_KEY_ENV not in seen["env"]
 
 
-def test_grok_live_probe_writes_back_rotated_refresh_token(
+def test_grok_live_probe_native_rotation_persists_in_canonical_store(
     tmp_path: Path, monkeypatch,
 ) -> None:
     auth = _write_auth(tmp_path / "auth.json", _oauth("old", "old-refresh"))
 
     def fake_run(cmd, **kwargs):
-        native = Path(kwargs["env"]["HOME"]) / ".grok" / "auth.json"
+        native = Path(kwargs["env"]["GROK_AUTH_PATH"])
         _write_auth(native, _oauth("new", "new-refresh"))
         return providers.subprocess.CompletedProcess(
             cmd, 0, "* grok-4.6 (default)\n", "",
@@ -478,6 +496,99 @@ def test_grok_live_probe_writes_back_rotated_refresh_token(
     assert next(iter(json.loads(auth.read_text()).values()))["refresh_token"] == (
         "new-refresh"
     )
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "auth_failure", "timeout", "cancel"])
+def test_grok_probe_never_restores_a_stale_snapshot(
+    tmp_path, monkeypatch, explicit, outcome,
+):
+    auth = _write_auth(tmp_path / "grok" / "auth.json", _oauth("A", "RT-A"))
+    monkeypatch.setattr(providers, "grok_auth_path", lambda *_: auth)
+
+    def concurrent_writer(cmd, **kwargs):
+        bound = Path(kwargs["env"]["GROK_AUTH_PATH"])
+        assert bound.samefile(auth)
+        # Model a committed native rotation while the catalog request is in flight.
+        _write_auth(auth, _oauth("B", "RT-B"))
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(cmd, 30)
+        if outcome == "cancel":
+            raise KeyboardInterrupt
+        return subprocess.CompletedProcess(
+            cmd, 0, "not authenticated" if outcome == "auth_failure" else "grok-4.6", "",
+        )
+
+    monkeypatch.setattr(providers.subprocess, "run", concurrent_writer)
+    args = ("/inert/grok", auth if explicit else None)
+    if outcome == "cancel":
+        with pytest.raises(KeyboardInterrupt):
+            providers.grok_live_error(*args)
+    else:
+        issue = providers.grok_live_error(*args)
+        assert (issue is None) == (outcome == "success")
+    assert json.loads(auth.read_text()) == _oauth("B", "RT-B")
+
+
+def test_grok_probe_cannot_inherit_another_inline_identity(tmp_path, monkeypatch):
+    auth = _write_auth(tmp_path / "auth.json")
+    for key in ("GROK_AUTH", "GROK_AUTH_PATH", "XAI_API_KEY", "GROK_CODE_XAI_API_KEY"):
+        monkeypatch.setenv(key, "foreign-identity")
+
+    def run(cmd, **kwargs):
+        env = kwargs["env"]
+        assert env["GROK_AUTH_PATH"] == str(auth.resolve())
+        assert all(key not in env for key in ("GROK_AUTH", "XAI_API_KEY", "GROK_CODE_XAI_API_KEY"))
+        return subprocess.CompletedProcess(cmd, 0, "grok-4.6", "")
+
+    monkeypatch.setattr(providers.subprocess, "run", run)
+    assert providers.grok_live_error("/inert/grok", auth) is None
+
+
+def test_grok_probe_rejects_invalid_native_result_without_restoring_old_auth(tmp_path, monkeypatch):
+    auth = _write_auth(tmp_path / "auth.json")
+
+    def run(cmd, **kwargs):
+        auth.write_text("{}")
+        return subprocess.CompletedProcess(cmd, 0, "grok-4.6", "")
+
+    monkeypatch.setattr(providers.subprocess, "run", run)
+    assert "invalid OAuth" in providers.grok_live_error("/inert/grok", auth)
+    assert auth.read_text() == "{}"
+
+
+def test_grok_rechecks_stale_native_banner_only_after_same_identity_rotation(tmp_path, monkeypatch):
+    payload = _oauth("old", "old-refresh")
+    next(iter(payload.values()))["user_id"] = "inert-user"
+    auth = _write_auth(tmp_path / "auth.json", payload)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            next(iter(payload.values())).update(key="new", refresh_token="new-refresh")
+            _write_auth(auth, payload)
+            return subprocess.CompletedProcess(cmd, 0, "You are not authenticated. grok-4.6", "")
+        return subprocess.CompletedProcess(cmd, 0, "You are logged in. grok-4.6", "")
+
+    monkeypatch.setattr(providers.subprocess, "run", run)
+    assert providers.grok_live_error("/inert/grok", auth) is None
+    assert len(calls) == 2
+
+
+def test_grok_identity_change_is_not_accepted_or_rolled_back(tmp_path, monkeypatch):
+    payload = _oauth()
+    next(iter(payload.values()))["user_id"] = "inert-user-A"
+    auth = _write_auth(tmp_path / "auth.json", payload)
+
+    def run(cmd, **kwargs):
+        next(iter(payload.values()))["user_id"] = "inert-user-B"
+        _write_auth(auth, payload)
+        return subprocess.CompletedProcess(cmd, 0, "grok-4.6", "")
+
+    monkeypatch.setattr(providers.subprocess, "run", run)
+    assert "identity changed" in providers.grok_live_error("/inert/grok", auth)
+    assert next(iter(json.loads(auth.read_text()).values()))["user_id"] == "inert-user-B"
 
 
 def test_provider_subprocess_env_adds_os_proxy_without_overriding_shell(
@@ -559,3 +670,17 @@ def test_grok_live_probe_rejects_offline_builtin_catalog_as_network_failure(
     issue = providers.grok_live_error("/usr/bin/grok", auth) or ""
     assert "network/proxy" in issue
     assert "cannot access" not in issue
+
+
+def test_native_command_unsets_inherited_container_auth_and_pins_paths(tmp_path):
+    source=Path(providers.__file__).with_name("pier_grok.py").read_text()
+    helper=next(node for node in ast.parse(source).body if isinstance(node,ast.FunctionDef) and node.name=="_grok_auth_command")
+    namespace={"shlex":shlex}
+    exec(compile(ast.Module(body=[helper],type_ignores=[]),"pier_grok.py","exec"),namespace)
+    command=namespace["_grok_auth_command"](
+        'test -z "${GROK_AUTH+x}" && test -z "${XAI_API_KEY+x}" && test -z "${GROK_CODE_XAI_API_KEY+x}" && test -z "${GROK_HOME+x}" && printf "%s\\n%s\\n" "$HOME" "$GROK_AUTH_PATH"',
+        "/tmp/canonical home", "/tmp/canonical home/.grok/auth.json")
+    env=dict(os.environ,HOME="/foreign",GROK_AUTH_PATH="/foreign/auth.json",GROK_AUTH="INERT-FOREIGN",XAI_API_KEY="INERT-KEY",GROK_CODE_XAI_API_KEY="INERT-ALIAS",GROK_HOME="/foreign/.grok")
+    proc=subprocess.run(["bash","-c",command],env=env,capture_output=True,text=True,check=False)
+    assert proc.returncode==0
+    assert proc.stdout.splitlines()==["/tmp/canonical home","/tmp/canonical home/.grok/auth.json"]

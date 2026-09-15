@@ -50,6 +50,15 @@ GROK_LINUX_SHA256 = {
 }
 
 
+def _grok_auth_command(command: str, user_home: str, auth_path: str) -> str:
+    """Fix native auth at exec time, including ENV baked into task images."""
+    return "bash -o pipefail -c " + shlex.quote(
+        "unset GROK_HOME GROK_AUTH XAI_API_KEY GROK_CODE_XAI_API_KEY; "
+        f"export HOME={shlex.quote(user_home)}; "
+        f"export GROK_AUTH_PATH={shlex.quote(auth_path)}; " + command
+    )
+
+
 def _grok_model_preflight_command(remote_cli: str) -> str:
     """Return a fail-closed model probe that emits only a safe category."""
 
@@ -386,14 +395,20 @@ class GrokBuild(BaseInstalledAgent):
         remote_cli = self._REMOTE_CLI.as_posix()
         env = self.build_process_env({
             "HOME": remote_user_home,
+            "GROK_AUTH_PATH": remote_auth,
             "GROK_TELEMETRY_ENABLED": "0",
             "GROK_TELEMETRY_MIXPANEL_ENABLED": "0",
             "GROK_TELEMETRY_TRACE_UPLOAD": "0",
         })
+        # BaseInstalledAgent merges _extra_env after defaults. Pin these only
+        # after the merge, then also enforce them inside every native command.
+        env.update({"HOME": remote_user_home, "GROK_AUTH_PATH": remote_auth})
         env.pop("GROK_HOME", None)
+        env.pop("GROK_AUTH", None)
         # API keys are intentionally unsupported, including accidental ambient
         # keys baked into a task image or injected by a caller.
         env.pop("XAI_API_KEY", None)
+        env.pop("GROK_CODE_XAI_API_KEY", None)
         await self.exec_as_agent(
             environment,
             command=(
@@ -433,9 +448,10 @@ class GrokBuild(BaseInstalledAgent):
         version_pattern = version.replace(".", r"\.")
         await self.exec_as_agent(
             environment,
-            command=(
+            command=_grok_auth_command(
                 f"{shlex.quote(remote_cli)} --version "
-                f"| grep -Eq '(^| ){version_pattern}( |$)'"
+                f"| grep -Eq '(^| ){version_pattern}( |$)'",
+                remote_user_home, remote_auth,
             ),
             env=env,
         )
@@ -448,7 +464,9 @@ class GrokBuild(BaseInstalledAgent):
         # manufacturing a zero-token invalid submission.
         await self.exec_as_agent(
             environment,
-            command=_grok_model_preflight_command(remote_cli),
+            command=_grok_auth_command(
+                _grok_model_preflight_command(remote_cli), remote_user_home, remote_auth,
+            ),
             env=env,
         )
 
@@ -490,8 +508,9 @@ class GrokBuild(BaseInstalledAgent):
         async def run_initial() -> None:
             await self.exec_as_agent(
                 environment,
-                command=_grok_prompt_command(
-                    remote_cli, flags, instruction, stream,
+                command=_grok_auth_command(
+                    _grok_prompt_command(remote_cli, flags, instruction, stream),
+                    remote_user_home, remote_auth,
                 ),
                 env=env,
             )
@@ -499,9 +518,10 @@ class GrokBuild(BaseInstalledAgent):
         async def run_resume(session_id: str, prompt: str) -> None:
             await self.exec_as_agent(
                 environment,
-                command=_grok_prompt_command(
-                    remote_cli, flags, prompt, stream,
-                    session_id=session_id, append=True,
+                command=_grok_auth_command(
+                    _grok_prompt_command(remote_cli, flags, prompt, stream,
+                        session_id=session_id, append=True),
+                    remote_user_home, remote_auth,
                 ),
                 env=env,
             )
