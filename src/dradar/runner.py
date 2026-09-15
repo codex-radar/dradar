@@ -97,7 +97,7 @@ from .providers import (
     KIMI_AGENT,
     KIMI_API_KEY_ENVS,
     KIMI_CLI_VERSION,
-    KIMI_MODEL,
+    KIMI_MODEL, KIMI_MODELS,
     KIMI_PROVIDER,
     KIMI_SUPPORTED_EFFORTS,
     ZCODE_AGENT,
@@ -1090,10 +1090,10 @@ def _validate_kimi_assignment(assignment: dict) -> None:
             "Kimi Code assignments must explicitly use provider "
             f"{KIMI_PROVIDER!r}"
         )
-    if assignment.get("model") != KIMI_MODEL:
+    if assignment.get("model") not in KIMI_MODELS:
         raise RunnerError(
             f"unsupported Kimi subscription model {assignment.get('model')!r}; "
-            f"only {KIMI_MODEL!r} is enabled"
+            f"enabled models are {sorted(KIMI_MODELS)!r}"
         )
     if assignment.get("effort") not in KIMI_SUPPORTED_EFFORTS:
         raise RunnerError(
@@ -2400,12 +2400,14 @@ def _build_kimi_trajectory_bundle_snapshot(trial_dir: Path) -> dict | None:
 
     _, trajectory_path, _ = trial_artifact_paths(trial_dir)
     session_id = None
+    model_name = None
     if trajectory_path is not None:
         try:
             trajectory = json.loads(trajectory_path.read_text(errors="replace"))
         except (OSError, json.JSONDecodeError):
             trajectory = None
         if isinstance(trajectory, dict):
+            model_name = (trajectory.get("agent") or {}).get("model_name")
             value = trajectory.get("session_id")
             if isinstance(value, str) and value:
                 session_id = value
@@ -2512,13 +2514,14 @@ def _build_kimi_trajectory_bundle_snapshot(trial_dir: Path) -> dict | None:
         parse_error_count == 0
         and isinstance(session_id, str)
         and runtime_version == KIMI_CLI_VERSION
+        and model_name in KIMI_MODELS
         and paired
     )
     session = {
         "session_id": session_id,
         "role": "root",
         "parent_session_id": None,
-        "model_name": KIMI_MODEL,
+        "model_name": model_name,
         "runtime_generation": "node-stream-json-v1",
         "runtime_version": runtime_version,
         "artifact_index": 0,

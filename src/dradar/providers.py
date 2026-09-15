@@ -199,8 +199,12 @@ _GROK_VERSION_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)")
 KIMI_PROVIDER = "kimi-subscription"
 KIMI_AGENT = "kimi-code"
 KIMI_MODEL = "k3"
+# Versioned benchmark identity: the official alias is mutable and had older models.
+KIMI_K28_MODEL = "kimi-k2.8-preview"
+KIMI_MODELS = frozenset({KIMI_MODEL, KIMI_K28_MODEL})
 KIMI_CLI_VERSION = "0.39.1"
 KIMI_SUPPORTED_EFFORTS = frozenset({"low", "high", "max"})
+KIMI_K28_CAPABILITY = "kimi-code-k28-preview-subscription-v1"
 KIMI_CAPABILITY = "kimi-code-k3-subscription-oauth-node-concurrent-v3"
 KIMI_LEGACY_CAPABILITY = "kimi-code-k3-subscription-oauth-node-concurrent-v2"
 KIMI_RUN_CONFIG_VERSION = "kimi-code-k3-subscription-oauth-web-disabled-v5"
@@ -348,7 +352,7 @@ REFILL_HARNESS_ALIASES = {
 REFILL_HARNESS_CONSTRAINTS = {
     CLAUDE_AGENT: (CLAUDE_MODELS, CLAUDE_SUPPORTED_EFFORTS),
     DSH_AGENT: (frozenset(DSH_MODELS), DSH_SUPPORTED_EFFORTS),
-    KIMI_AGENT: (frozenset({KIMI_MODEL}), KIMI_SUPPORTED_EFFORTS),
+    KIMI_AGENT: (KIMI_MODELS, KIMI_SUPPORTED_EFFORTS),
     GROK_AGENT: (frozenset({GROK_MODEL}), GROK_SUPPORTED_EFFORTS),
     ANTIGRAVITY_AGENT: (
         ANTIGRAVITY_MODELS, ANTIGRAVITY_SUPPORTED_EFFORTS,
@@ -1855,8 +1859,9 @@ def _run_kimi_live_probe(
         config_text = (data_home / "config.toml").read_text(encoding="utf-8")
     except OSError:
         return "Kimi login did not provision the official model catalog"
-    if '"kimi-code/k3"' not in config_text:
-        return f"Kimi subscription account cannot access {KIMI_MODEL}"
+    if not any('"kimi-code/' + model + '"' in config_text
+               for model in ("k3", "kimi-for-coding")):
+        return "Kimi subscription account cannot access k3 or kimi-for-coding"
     return None
 
 
@@ -2109,7 +2114,7 @@ def advertised_capabilities(
     ):
         capabilities.append(CLAUDE_CAPABILITY)
     if kimi_cli_path(environ) and kimi_auth_error() is None:
-        capabilities.append(KIMI_CAPABILITY)
+        capabilities.extend((KIMI_CAPABILITY, KIMI_K28_CAPABILITY))
     if (
         prepare_antigravity_auth() is None
         and bundled_adapter_error("pier_antigravity.py") is None

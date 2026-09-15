@@ -129,6 +129,20 @@ if any(marker in tool_input for marker in PROTECTED):
     raise SystemExit(2)
 '''
 
+KIMI_RUNTIME_MODELS = {"k3": "k3", "kimi-k2.8-preview": "kimi-for-coding"}
+
+
+def kimi_model_config(model: str) -> str:
+    runtime = KIMI_RUNTIME_MODELS[model]
+    if model == "k3":
+        return KIMI_CONFIG
+    return (KIMI_CONFIG.replace("kimi-code/k3", "kimi-code/" + runtime)
+            .replace('model = "k3"', 'model = "' + runtime + '"')
+            .replace('display_name = "K3"', 'display_name = "K2.8 Preview"')
+            .replace('default_effort = "high"', 'default_effort = "max"')
+            .replace('"tool_use"', '"tool_use", "image_in", "video_in"'))
+
+
 KIMI_CLI_VERSION = "0.39.1"
 KIMI_BINARY_SHA256 = {
     "x86_64": "585547e082f2f3a32dd80825626a1c8dd4e82f55b4d6a8aa14e6397c00758eca",
@@ -155,6 +169,7 @@ def _usage_instant(value: Any) -> str | None:
 
 def _kimi_usage_facts(
     records: list[dict], retry_records: list[dict] | None = None,
+    model: str = "k3", expected_effort: str | None = None,
 ) -> dict:
     """Reconcile Kimi's durable per-request usage to completed turns.
 
@@ -278,6 +293,8 @@ def _kimi_usage_facts(
             return None
         return text, datetime.fromisoformat(text.replace("Z", "+00:00"))
 
+    runtime_model = KIMI_RUNTIME_MODELS[model]
+    effort_valid = model == "k3" or expected_effort in {"low", "high", "max"}
     for record in records:
         if not isinstance(record, dict):
             session_identity_valid = False
@@ -296,6 +313,8 @@ def _kimi_usage_facts(
             continue
         if record_type == "llm.request":
             request_attempt_count += 1
+            if model != "k3" and record.get("thinkingEffort") != expected_effort:
+                effort_valid = False
             # Managed OAuth can resolve one stable configured alias to an
             # account-specific provider model id.  The alias is the durable
             # identity DRadar pinned in KIMI_CONFIG; do not reject otherwise
@@ -305,12 +324,13 @@ def _kimi_usage_facts(
             model_alias = record.get("modelAlias")
             provider_model = record.get("model")
             if model_alias is None:
-                model_valid = provider_model == "k3"
+                model_valid = provider_model == runtime_model
             else:
                 model_valid = (
-                    model_alias == "kimi-code/k3"
+                    model_alias == "kimi-code/" + runtime_model
                     and isinstance(provider_model, str)
                     and bool(provider_model.strip())
+                    and (model == "k3" or provider_model == runtime_model)
                 )
             if not turn_open or not model_valid:
                 session_identity_valid = False
@@ -388,7 +408,7 @@ def _kimi_usage_facts(
         usage_scope = record.get("usageScope")
         if usage_scope not in {"turn", "session"}:
             continue
-        if not turn_open or record.get("model") != "kimi-code/k3":
+        if not turn_open or record.get("model") != "kimi-code/" + runtime_model:
             session_identity_valid = False
         usage = record.get("usage")
         if not isinstance(usage, dict):
@@ -488,7 +508,7 @@ def _kimi_usage_facts(
         and ended_turns == turn_prompt_count
     )
     session_identity_valid = session_identity_valid and metadata_count == 1
-    observed_valid = usage_valid and session_identity_valid
+    observed_valid = usage_valid and session_identity_valid and effort_valid
     complete = (
         observed_valid
         and request_ledger_valid
@@ -508,7 +528,13 @@ def _kimi_usage_facts(
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "kimi-code",
-        "model": "k3",
+        "model": model,
+        "model_identity_basis": "official_subscription_route",
+        "requested_runtime_model": runtime_model,
+        "observed_model": None,
+        "observed_model_status": "not_exposed_by_runtime",
+        "thinking_effort_verified": effort_valid and request_attempt_count > 0,
+        "verified_thinking_effort": expected_effort if effort_valid and request_attempt_count > 0 else None,
         "complete": complete,
         "request_count": len(events),
         "session_usage_model_request_count": model_request_count,
@@ -647,6 +673,8 @@ class KimiCode(BaseInstalledAgent):
         self._resume_attempts = 0
         self._session_id: str | None = None
         super().__init__(*args, **kwargs)
+        if self.model_name not in KIMI_RUNTIME_MODELS:
+            raise ValueError("Unsupported Kimi benchmark model")
         self._runtime_safety = RuntimeSafety(self.logs_dir)
 
     def get_version_command(self) -> str:
@@ -734,7 +762,7 @@ class KimiCode(BaseInstalledAgent):
         local_policy = self.logs_dir / "kimi-policy.py"
         self._runtime_safety.prepare_host_layout()
         log_store = AgentLogStore(self.logs_dir)
-        log_store.replace_text(local_config, KIMI_CONFIG)
+        log_store.replace_text(local_config, kimi_model_config(self.model_name))
         log_store.replace_text(local_policy, KIMI_POLICY)
         if not self._shared_oauth:
             await inject_private_files(self, environment, [(self._auth_json_file, remote_auth)])
@@ -778,7 +806,7 @@ class KimiCode(BaseInstalledAgent):
             env=env,
         )
         common_flags = [
-            "--model", "kimi-code/k3",
+            "--model", "kimi-code/" + KIMI_RUNTIME_MODELS[self.model_name],
             "--output-format", "stream-json",
             "--skills-dir", remote_skills,
         ]
@@ -1031,7 +1059,7 @@ class KimiCode(BaseInstalledAgent):
                 continue
             if isinstance(record, dict):
                 wire_records.append(record)
-        usage_facts = _kimi_usage_facts(wire_records, retry_records)
+        usage_facts = _kimi_usage_facts(wire_records, retry_records, self.model_name, self._reasoning_effort)
         prompt_tokens = usage_facts["n_input_tokens"] if usage_facts["complete"] else 0
         cached_tokens = usage_facts["n_cache_tokens"] if usage_facts["complete"] else 0
         output_tokens = usage_facts["n_output_tokens"] if usage_facts["complete"] else 0
