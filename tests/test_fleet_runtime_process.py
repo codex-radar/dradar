@@ -126,15 +126,42 @@ def runtime(tmp_path):
         assert not any('/claim' in row[0] or '/checkout' in row[0] for row in observations)
 
 
+def _assert_pool_binding(observations, batch, expected, result, *, timeout=5):
+    # fleet.add may return its startup failure before the pool's finally runs.
+    # A background preparing heartbeat is best effort and can be skipped when
+    # close wins the scheduling race. The synchronous close is emitted only by
+    # the actual pool, after bind_batch, through the same real ApiClient headers.
+    deadline = time.monotonic() + timeout
+    while not any(row[0] == 'POST /api/v1/runner/close' and row[1] == batch
+                  for row in observations):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(.01)
+    lane = [row for row in observations if row[1] == batch and row[0] in (
+        '/api/v1/assignment', 'POST /api/v1/runner/heartbeat', 'POST /api/v1/runner/close')]
+    details = (observations, result.stdout, result.stderr)
+    assert any(row[0] == '/api/v1/assignment' for row in lane), details
+    assert any(row[0] == 'POST /api/v1/runner/close' for row in lane), details
+    assert all(row[2] == expected for row in lane), details
+
+
+@pytest.mark.parametrize('close', [None, ('POST /api/v1/runner/close', 'exact', False),
+                                  ('POST /api/v1/runner/close', 'foreign', True)])
+def test_binding_observation_requires_exact_correct_pool_close(close):
+    from types import SimpleNamespace
+    observations = [('/api/v1/assignment', 'exact', True)]
+    if close is not None:
+        observations.append(close)
+    with pytest.raises(AssertionError):
+        _assert_pool_binding(observations, 'exact', True,
+                             SimpleNamespace(stdout='', stderr=''), timeout=0)
+
+
 @pytest.mark.parametrize("workers", ["1", "auto"])
 def test_old_coordinator_new_binding_reaches_pool(runtime, workers):
     add, observations, home, bindings, *_ = runtime
     batch, result = add(1, bindings, workers)
-    assignments = [row for row in observations if row[1] == batch and row[0] in ('/api/v1/assignment', 'POST /api/v1/runner/heartbeat')]
-    # Preflight and actual pool both pass the real ApiClient header gate. The
-    # pool then intentionally stops before any task environment/model launch.
-    assert len(assignments) >= 2, (observations, result.stdout, result.stderr)
-    assert all(row[2] for row in assignments)
+    _assert_pool_binding(observations, batch, True, result)
     state = json.loads((home / 'fleet/state.json').read_text())
     assert batch in state['batches']
     assert 'KIMI_CREDENTIAL_PATH' not in json.dumps(state)
@@ -162,9 +189,7 @@ def test_concurrent_lanes_do_not_share_binding(runtime):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda item: add(*item), [(1, bindings), (2, {})]))
     for batch, result in results:
-        assignments = [row for row in observations if row[1] == batch and row[0] in ('/api/v1/assignment', 'POST /api/v1/runner/heartbeat')]
-        assert len(assignments) >= 2, (observations, result.stdout, result.stderr)
-        assert all(row[2] == (int(batch, 16) % 2 == 1) for row in assignments)
+        _assert_pool_binding(observations, batch, int(batch, 16) % 2 == 1, result)
 
 
 @pytest.mark.parametrize('kind', ['unknown', 'missing', 'public', 'symlink', 'relative', 'capability'])
