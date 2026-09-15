@@ -180,7 +180,19 @@ def _atomic_json(path: Path, payload: dict) -> None:
             os.fsync(handle.fileno())
         if os.name != "nt":
             os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        # Windows readers may briefly deny deletion/replacement of state.json.
+        # Retry the same complete temporary file; never remove the old state or
+        # downgrade to an in-place write. Permanent denial still fails closed.
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except OSError as exc:
+                if (os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33}
+                        or time.monotonic() >= deadline):
+                    raise
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     finally:
         tmp.unlink(missing_ok=True)
 

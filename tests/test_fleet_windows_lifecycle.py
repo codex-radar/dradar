@@ -249,3 +249,55 @@ print(json.dumps({'ok':True,'result':[1,[],{'account_limit':4}]}))
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         unrelated.terminate()
         unrelated.wait(timeout=5)
+
+
+@pytest.mark.parametrize("release", [True, False])
+def test_atomic_state_replace_with_native_reader(tmp_path, release, monkeypatch):
+    import concurrent.futures
+    import threading
+    import ctypes
+    from ctypes import wintypes
+    target = tmp_path / "state.json"
+    target.write_text('{"generation": 1}')
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # Real readable handle: share reads/writes, deliberately deny delete/replace.
+    handle = kernel.CreateFileW(str(target), 0x80000000, 3, None, 3, 0x80, None)
+    assert handle != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+    denied = threading.Event()
+    real_replace = os.replace
+    def observed_replace(source, destination):
+        try:
+            return real_replace(source, destination)
+        except OSError as exc:
+            if exc.winerror in {5, 32, 33}:
+                denied.set()
+            raise
+    monkeypatch.setattr(fleet.os, "replace", observed_replace)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            started = time.monotonic()
+            future = executor.submit(fleet._atomic_json, target, {"generation": 2})
+            if release:
+                assert denied.wait(timeout=2), "native replacement did not observe denied sharing"
+                assert not future.done()
+                assert json.loads(target.read_text()) == {"generation": 1}
+                assert kernel.CloseHandle(handle)
+                handle = None
+                future.result(timeout=3)
+                assert json.loads(target.read_text()) == {"generation": 2}
+            else:
+                with pytest.raises(OSError) as caught:
+                    future.result(timeout=3)
+                assert caught.value.winerror in {5, 32, 33}
+                assert time.monotonic() - started >= .9
+                assert json.loads(target.read_text()) == {"generation": 1}
+            assert not list(tmp_path.glob(".state.json.*.tmp"))
+        finally:
+            if handle is not None:
+                kernel.CloseHandle(handle)
