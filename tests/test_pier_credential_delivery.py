@@ -162,7 +162,8 @@ def test_codex_adapter_routes_stock_auth_upload_through_private_transport(tmp_pa
     async def run(self,instruction,environment,context):
         await environment.upload_file(source,'/tmp/codex-secrets/auth.json')
     monkeypatch.setattr(pier_codex,'verify_task_baseline',baseline)
-    monkeypatch.setattr(pier_codex,'emit_worker_registered',lambda **kwargs:None)
+    async def registered(**kwargs): pass
+    monkeypatch.setattr(pier_codex,'register_worker',registered)
     monkeypatch.setattr(pier_codex.Codex,'_resolve_auth_json_path',lambda self:source)
     monkeypatch.setattr(pier_codex.Codex,'run',run)
     monkeypatch.setattr(pier_codex.CodexRegistered,'exec_as_agent',Agent.exec_as_agent)

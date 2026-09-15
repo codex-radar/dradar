@@ -34,9 +34,9 @@ except ModuleNotFoundError as exc:
     from dradar.pier_credential_delivery import inject_private_files
 
 try:
-    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
+    from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered, verify_task_baseline
+    from dradar.worker_events import register_worker, verify_task_baseline
 try:
     from _dradar_claude_usage import claude_usage_facts
 except ModuleNotFoundError as exc:
@@ -168,7 +168,7 @@ class ClaudeCodeSubscription(ClaudeCode):
             if self._oauth_config is not None:
                 await self._prepare_native_config(environment)
             await verify_task_baseline(environment)
-            emit_worker_registered(runtime="pier", context="agent", profile="claude")
+            await register_worker(runtime="pier", context="agent", profile="claude")
             await super().run(instruction, environment, context)
         finally:
             if self._remote_config_root:

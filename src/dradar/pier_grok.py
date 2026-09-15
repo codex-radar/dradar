@@ -30,9 +30,9 @@ except ModuleNotFoundError as exc:
     from dradar.pier_credential_delivery import inject_private_files
 
 try:
-    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
+    from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered, verify_task_baseline
+    from dradar.worker_events import register_worker, verify_task_baseline
 
 from _dradar_grok_recovery import (
     grok_provider_stream_is_retryable,
@@ -378,7 +378,7 @@ class GrokBuild(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         await verify_task_baseline(environment)
-        emit_worker_registered(runtime="pier", context="agent", profile="grok")
+        await register_worker(runtime="pier", context="agent", profile="grok")
         del context
         remote_user_home = self._REMOTE_USER_HOME.as_posix()
         remote_home = self._REMOTE_HOME.as_posix()

@@ -6,6 +6,8 @@ on:
       - 'src/dradar/fleet.py'
       - 'src/dradar/launcher.py'
       - 'src/dradar/runloop.py'
+      - 'src/dradar/worker_events.py'
+      - 'tests/test_worker_start_native.py'
       - 'src/dradar/ota/**'
       - 'tests/test_child_entrypoint.py'
       - 'tests/test_fleet_ota_process.py'
@@ -55,7 +57,7 @@ jobs:
         env:
           DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-ota-home
           PYTHONUTF8: '1'
-        run: python -m pytest -q tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+        run: python -m pytest -q tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

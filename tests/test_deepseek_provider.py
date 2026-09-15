@@ -457,6 +457,8 @@ def test_run_removes_temporary_auth_when_command_build_fails(
     monkeypatch,
 ):
     monkeypatch.setenv(DEEPSEEK_API_KEY_ENV, "sentinel-deepseek-secret")
+    # This cleanup fixture must not consult the live npm registry.
+    monkeypatch.setattr(runner, "resolve_latest_codex_cli_version", lambda *a: DEEPSEEK_MIN_CODEX_VERSION)
     created = []
     original = runner.create_deepseek_auth_json
 

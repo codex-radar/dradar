@@ -199,7 +199,8 @@ def test_native_claude_credentials_never_enter_collected_logs(tmp_path,monkeypat
             'CLAUDE_CODE_OAUTH_TOKEN':'OTHER_LOGIN_SENTINEL'})
         if finish=='agent_error':raise RuntimeError('inert model error')
     monkeypatch.setattr(ClaudeCode,'run',native_run)
-    monkeypatch.setattr('dradar.pier_claude.emit_worker_registered',lambda **_:None)
+    async def registered(**kwargs): pass
+    monkeypatch.setattr('dradar.pier_claude.register_worker',registered)
     monkeypatch.setenv('ANTHROPIC_API_KEY','METERED_SENTINEL')
     agent=ClaudeCodeSubscription(logs,oauth_config_file=str(source),model_name='claude-sonnet-5',
         extra_env={'ANTHROPIC_API_KEY':'METERED_SENTINEL','CLAUDE_CODE_USE_VERTEX':'1'})

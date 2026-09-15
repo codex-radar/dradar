@@ -8,6 +8,7 @@ runtime lease.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -146,3 +147,94 @@ def read_worker_event(path: Path, *, offset: int = 0) -> tuple[dict[str, Any] | 
     except (TypeError, ValueError, json.JSONDecodeError):
         return None, new_offset
     return (value if isinstance(value, dict) else None), new_offset
+
+
+WORKER_START_ENV = "DRADAR_WORKER_START_GATE"
+WORKER_START_SCHEMA = "dradar.worker_start.v1"
+WORKER_START_WAIT_SEC = 120.0
+
+
+def _windows_parent_alive(pid: int) -> bool:
+    """Read process state without requesting termination rights."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+    if not handle:
+        return False
+    try:
+        # WAIT_TIMEOUT means a live process; signalled/failed is not proof.
+        return kernel.WaitForSingleObject(handle, 0) == 0x00000102
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _parent_alive(pid: int) -> bool:
+    if os.name == "nt":
+        return _windows_parent_alive(pid)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+async def register_worker(*, runtime="pier", context="agent", profile="provider"):
+    """Publish readiness, then wait cancellably for this launch's owner ACK.
+
+    This host-only permission is not a credential. A fresh nonce scopes it to
+    one job/session; a dead parent, expired wait, or malformed permission fails
+    closed. Ordinary adapters must await this before invoking provider work.
+    """
+    raw = os.environ.get(WORKER_START_ENV)
+    if not raw:
+        # Standalone adapter embedding without a DRadar runner stays supported.
+        # A runner session without its gate must never silently downgrade.
+        if os.environ.get("DRADAR_RUNNER_SESSION_ID") or os.environ.get(WORKER_EVENT_FILE_ENV):
+            raise RuntimeError("worker start gate missing for runner session")
+        return
+    try:
+        request = json.loads(raw)
+        path = Path(request["path"])
+        identity = {key: request[key] for key in ("schema", "nonce", "session_id", "job", "parent_pid")}
+        if (identity["schema"] != WORKER_START_SCHEMA
+                or identity["session_id"] != os.environ.get("DRADAR_RUNNER_SESSION_ID")
+                or not isinstance(identity["nonce"], str) or len(identity["nonce"]) != 32
+                or not isinstance(identity["job"], str) or not identity["job"]
+                or type(identity["parent_pid"]) is not int or identity["parent_pid"] <= 0
+                or not path.is_absolute()):
+            raise ValueError("invalid identity")
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("invalid worker start gate") from None
+    if not emit_worker_registered(runtime=runtime, context=context, profile=profile):
+        raise RuntimeError("worker registration was not persisted")
+    deadline = time.monotonic() + WORKER_START_WAIT_SEC
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            raise RuntimeError("worker start permission expired")
+        if not _parent_alive(identity["parent_pid"]):
+            raise RuntimeError("worker start parent unavailable")
+        try:
+            permit = json.loads(path.read_text())
+        except FileNotFoundError:
+            await asyncio.sleep(0.05)
+            continue
+        except (OSError, ValueError):
+            raise RuntimeError("worker start permission unreadable") from None
+        now = time.monotonic()
+        if now >= deadline:
+            raise RuntimeError("worker start permission expired")
+        if (not isinstance(permit, dict)
+                or any(permit.get(key) != value for key, value in identity.items())
+                or type(permit.get("expires_at")) not in (float, int)
+                or not now < permit["expires_at"] <= now + WORKER_START_WAIT_SEC):
+            raise RuntimeError("worker start permission identity or expiry mismatch")
+        return

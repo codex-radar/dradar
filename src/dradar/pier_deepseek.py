@@ -28,9 +28,9 @@ except ModuleNotFoundError as exc:
     from dradar.pier_credential_delivery import credential_upload_environment
 
 try:
-    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
+    from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered, verify_task_baseline
+    from dradar.worker_events import register_worker, verify_task_baseline
 
 try:
     from _dradar_deepseek_catalog_pin import DEEPSEEK_CATALOG_SHA256 as _CATALOG_SHA256
@@ -85,7 +85,7 @@ class DeepSeekCodex(Codex):
         context: AgentContext,
     ) -> None:
         await verify_task_baseline(environment)
-        emit_worker_registered(runtime="pier", context="agent", profile="deepseek")
+        await register_worker(runtime="pier", context="agent", profile="deepseek")
         remote_home = self._REMOTE_CODEX_HOME.as_posix()
         env = self.build_process_env({
             "CODEX_HOME": remote_home,
