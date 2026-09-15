@@ -33,7 +33,8 @@ def runtime(tmp_path):
     build(source, artifact)
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
-    dradar_home = home / '.dradar'
+    # Keep fixture evidence visible to upload-artifact (hidden files are excluded).
+    dradar_home = home / 'dradar-state'
     dradar_home.mkdir(mode=0o700)
     task_repo = tmp_path / 'existing-user-repo'
     task_repo.mkdir()
@@ -231,7 +232,9 @@ fleet._resolve_workers('auto', '1' * 32, {{'batches': {{}}}})
 '''
     monkeypatch.setattr(child_entrypoint, 'command', lambda *_: [sys.executable, '-c', script])
     monkeypatch.setattr(child_entrypoint, 'popen_options', lambda _env: {})
-    monkeypatch.setattr(fleet, 'REQUEST_TIMEOUT_SECONDS', 5.8)
+    # Allow imports to finish on a loaded native CI host before timing out
+    # the fake Docker probe (which sleeps for 30 seconds).
+    monkeypatch.setattr(fleet, 'REQUEST_TIMEOUT_SECONDS', 10)
     try:
         with pytest.raises(fleet.FleetError, match='could not inspect'):
             fleet._resolve_workers_in_runtime(1, '1' * 32, {'batches': {}}, None, sys.executable, {})
