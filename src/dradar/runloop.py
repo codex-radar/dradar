@@ -2745,13 +2745,16 @@ def _mark_stopped_quietly(
                 stop_kwargs["failure_kind"] = failure_kind
             if failure_diagnostic is not None:
                 stop_kwargs["failure_diagnostic"] = failure_diagnostic
-            client.mark_stopped(assignment_id, **stop_kwargs)
+            response = client.mark_stopped(assignment_id, **stop_kwargs)
+            if not isinstance(response, dict) or response.get("ok") is not True:
+                raise RunnerError("server did not confirm assignment stop")
             # A supervised child may have checked out paid work before this
             # failure. Publish the server-acknowledged return only after the
             # endpoint confirms the lease is still active and its running
             # ownership stamp was cleared. The parent combines this local
             # process-exit proof with a fresh authoritative inventory read.
-            _record_worker_returned_assignment(assignment_id)
+            if not _record_worker_returned_assignment(assignment_id):
+                return False
             return True
         except ApiError as exc:
             last_error = exc
@@ -3052,6 +3055,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             return "environment-build-failed"
         except RunnerCleanupUnconfirmedError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, RunnerError) and cause.report_code:
+                _report_failure_quietly(
+                    client, assignment, phase="runner",
+                    failure_kind="runner_failed", failure_code=cause.report_code,
+                )
             _report_failure_quietly(
                 client, assignment, phase="cleanup",
                 failure_kind="cleanup-unconfirmed",
@@ -3084,7 +3093,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 failure_code=(exc.failure_diagnostic or {}).get("failure_code")
                 or "assignment-isolated",
             )
-            return "assignment-isolated"
+            return "assignment-isolated" if stopped else "cleanup-unconfirmed"
         except RunnerError as exc:
             failure_kind = classify_exception_message(str(exc))
             terminal_outcome = _terminal_failure_outcome(failure_kind)
@@ -3115,11 +3124,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     failure_kind="provider-transport",
                     failure_code="retry-cleanup-unconfirmed",
                 )
-                return "failed"
+                return "cleanup-unconfirmed"
             print(f"trial failed: {exc}\n"
                   "use `dradar resume` to retry later, or `dradar release` to "
                   "give the cell back")
-            _mark_stopped_quietly(
+            stopped = _mark_stopped_quietly(
                 client,
                 assignment,
                 failure_kind=failure_kind or "runner_failed",
@@ -3138,12 +3147,17 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     or failure_kind or "runner_failed"
                 ),
             )
+            if not stopped:
+                print("server stop was not confirmed; quarantining this worker slot")
+                return "cleanup-unconfirmed"
             return terminal_outcome or "failed"
         except (KeyboardInterrupt, EOFError):
-            _mark_stopped_quietly(
+            stopped = _mark_stopped_quietly(
                 client, assignment, defer_seconds=0,
                 failure_kind="user_interrupted",
             )
+            if not stopped:
+                return "cleanup-unconfirmed"
             raise
 
     if assignment.get("agent") == GROK_AGENT:

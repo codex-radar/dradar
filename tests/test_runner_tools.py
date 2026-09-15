@@ -883,6 +883,7 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
         "_cleanup_terminated_pier_containers",
         lambda _job_root: runner_mod.PierContainerCleanup(),
     )
+    monkeypatch.setattr(runner_mod, "_confirm_pier_process_tree_stopped", lambda _proc: None)
     return captured
 
 
@@ -1484,6 +1485,7 @@ def test_live_error_watchdog_keeps_explicit_websocket_auth_terminal(tmp_path):
 
 
 def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_mod, "_confirm_pier_process_tree_stopped", lambda _proc: None)
     """A paid run that reached artifacts must report cost, never vanish."""
     captured = {}
     cleaned = []
