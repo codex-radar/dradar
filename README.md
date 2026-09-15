@@ -347,15 +347,26 @@ dradar go --pick TASK_ID:grok-4.6:high
 ```
 
 凭证保存在 `~/.dradar/providers/grok/auth.json`（目录 `0700`、文件 `0600`），与日常
-`~/.grok` 分离。每次运行只上传一个临时副本，整个模型会话持有独占锁；官方 CLI 静默
-刷新后，DRadar 校验并原子回写，再删除副本。因此同一订阅槽固定单并发，不会让两个
-Pier 容器同时刷新同一个 token。
+`~/.grok` 分离。同一订阅槽的多个 pool 使用同一个 canonical 认证文件：宿主机无生成
+预检在与任务相同的本地 Linux Docker daemon 内，通过官方 `GROK_AUTH_PATH` 直接
+绑定该文件，任务容器绑定其所在目录。官方 CLI
+在刷新期间取得同一 `auth.json.lock`，其他进程随后读取已更新凭据；模型执行可保持
+并发。DRadar 不复制预检凭据，也不在成功、失败或超时后回灌旧副本。
+
+这只协调共享同一存储的进程。把同账号凭据复制到其他 `DRADAR_HOME` 会形成独立刷新
+链，不能靠同名锁文件同步；不要用旧备份覆盖较新 canonical，也不要删除原生锁文件。
+
+首次预检会按 Docker 的 CPU 架构缓存固定校验和的官方 Linux CLI，并准备固定 Debian
+基础镜像上的无生成预检镜像。镜像只含程序与 CA，不含凭据；后续复用镜像。Docker
+未就绪、下载/构建失败与认证失败分别报告，失败时不会退回宿主机刷新。macOS/Windows
+的宿主机与 Docker VM 不保证共享文件锁，因此也必须使用此容器预检路径。远端 Docker
+仍不支持共享本地 OAuth 目录，与任务运行时的限制一致。
 
 `provider setup` 会优先复用正确版本；缺失或版本不同时，会把当前验证过的官方稳定版
 自动安装到 `~/.dradar/providers/grok/runtime`，不修改全局 Grok；这份宿主机 CLI 只用于
 官方 OAuth 与领题前验版。任务镜像按 Linux CPU 架构下载同版本官方二进制并核对固定
 SHA-256，避免把 macOS/Windows 可执行文件误传给 Linux。OAuth 凭证和日常 `~/.grok`
-目录都不会烘焙进镜像，凭证只在容器启动后临时注入。
+目录都不会烘焙进镜像，容器启动后只绑定 DRadar 专用 Grok 目录。
 
 当前 canary 边界：新领题使用官方 Grok CLI `1.0.13`，模型固定为 `grok-4.6`，档位为
 `low`/`medium`/`high`/`xhigh`；只能显式领取，不进入自动推荐或补题；禁用 web search、memory、

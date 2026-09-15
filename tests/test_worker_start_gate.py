@@ -99,13 +99,24 @@ def test_registration_failure_preserves_cause_and_requires_stop_ack(tmp_path,mon
 def test_real_grok_adapter_waits_before_native_model_command(tmp_path,monkeypatch,allowed):
     import importlib,sys
     from types import SimpleNamespace
-    from dradar import grok_recovery
+    from dradar import grok_recovery, providers
+    # Compose the real readiness result handler with the real registration
+    # gate and adapter. Only the native transport/model process is inert.
+    auth=tmp_path/'auth.json'
+    auth.write_text(json.dumps({'scope':{'key':'inert','refresh_token':'inert','user_id':'fixture'}}))
+    auth.chmod(0o600)
+    monkeypatch.setattr(providers,'_grok_probe_process',lambda *a:SimpleNamespace(
+        returncode=0,stdout='You are logged in. grok-4.6',stderr=''))
+    assert providers.grok_live_error('/inert/host-cli',auth) is None
     monkeypatch.setitem(sys.modules,'_dradar_grok_recovery',grok_recovery)
     adapter=importlib.import_module('dradar.pier_grok')
     path,identity=gate(tmp_path,monkeypatch)
     commands=[]
     async def baseline(environment): pass
     async def execute(environment,command,**kwargs):
+        assert kwargs['env']['GROK_AUTH_PATH']=='/tmp/dradar-grok-user/.grok/auth.json'
+        assert 'GROK_AUTH' not in kwargs['env']
+        assert 'GROK_CODE_XAI_API_KEY' not in kwargs['env']
         commands.append(command)
         return SimpleNamespace(return_code=0,stdout='',stderr='')
     monkeypatch.setattr(adapter,'verify_task_baseline',baseline)
@@ -114,7 +125,10 @@ def test_real_grok_adapter_waits_before_native_model_command(tmp_path,monkeypatc
     obj._version=None
     obj.model_name='grok-4.6'
     obj._reasoning_effort='high'
-    obj.build_process_env=lambda values:dict(values)
+    obj._extra_env={'GROK_AUTH':'foreign-identity',
+        'GROK_CODE_XAI_API_KEY':'foreign-key','GROK_AUTH_PATH':'/foreign/auth.json',
+        'HOME':'/foreign/home'}
+    obj._resolved_env_vars={}
     obj.render_instruction=lambda instruction:instruction
     obj.exec_as_agent=execute
     obj.exec_as_root=execute

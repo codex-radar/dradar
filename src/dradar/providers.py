@@ -136,7 +136,7 @@ DSH_RUNTIME_PROFILE = "public-pier-0.3.0-dsh-minimal-full-container-v3"
 
 # Grok Build is intentionally subscription/OAuth-only.  In particular, the
 # runner strips XAI_API_KEY from Pier's environment and never accepts a key in
-# config, argv, or an assignment.  A dedicated DRadar-owned GROK_HOME keeps a
+# config, argv, or an assignment.  A dedicated DRadar-owned provider store keeps a
 # benchmark credential separate from the user's everyday Grok CLI session.
 GROK_PROVIDER = "xai-subscription"
 GROK_AGENT = "grok-build"
@@ -1546,33 +1546,55 @@ def grok_auth_error(path: Path | None = None) -> str | None:
     return None
 
 
+def _grok_probe_process(credential: Path, root: Path, env: dict[str, str]):
+    from .grok_probe import run_probe
+
+    return run_probe(credential, root, env)
+
+
+def _grok_probe_revision(credential: Path):
+    """Private comparison only; never a lock, writeback, or token log."""
+    raw = credential.read_bytes()
+    payload = json.loads(raw)
+    identities = {
+        scope: record["user_id"]
+        for scope, record in payload.items()
+        if isinstance(record, dict) and isinstance(record.get("user_id"), str)
+        and record["user_id"]
+    }
+    return hashlib.sha256(raw).digest(), identities
+
+
 def _run_grok_live_probe(cli: str, credential: Path, root: Path) -> str | None:
-    native_user_home = root / "native-home"
-    native_home = native_user_home / ".grok"
-    native_home.mkdir(parents=True, mode=0o700)
-    native_auth = native_home / GROK_AUTH_FILENAME
-    _replace_private_file(credential, native_auth)
-    env = provider_subprocess_env()
-    env["HOME"] = str(native_user_home)
-    env.pop("GROK_HOME", None)
-    env.pop(GROK_API_KEY_ENV, None)
-    env["GROK_TELEMETRY_ENABLED"] = "0"
-    env["GROK_TELEMETRY_MIXPANEL_ENABLED"] = "0"
-    env["GROK_TELEMETRY_TRACE_UPLOAD"] = "0"
+    from .grok_probe import ProbeUnavailable
+
     try:
-        proc = subprocess.run(
-            [cli, "models"], capture_output=True, text=True,
-            timeout=30, check=False, env=env,
-        )
+        before, identities = _grok_probe_revision(credential)
+        proc = _grok_probe_process(credential, root, provider_subprocess_env())
+        after, current_identities = _grok_probe_revision(credential)
+        if identities != current_identities:
+            return "Grok OAuth identity changed during readiness; verify the provider binding"
+        # 1.0.13 prints its auth banner BEFORE starting the refresh-capable
+        # shell. Recheck once only after an observed same-identity update;
+        # the second native check must still pass every readiness condition.
+        # This comparison never authorizes a refresh or restores old bytes.
+        output = f"{proc.stdout}\n{proc.stderr}".lower()
+        if (proc.returncode == 0 and "not authenticated" in output
+                and "settings fetch failed" not in output
+                and identities and before != after):
+            proc = _grok_probe_process(credential, root, provider_subprocess_env())
+            _, current_identities = _grok_probe_revision(credential)
+            if identities != current_identities:
+                return "Grok OAuth identity changed during readiness; verify the provider binding"
+    except ProbeUnavailable as exc:
+        return str(exc)
+    except (ValueError, TypeError, AttributeError):
+        return "Grok live model check left an invalid OAuth credential"
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"Grok live model check failed: {type(exc).__name__}"
-    finally:
-        # `grok models` may silently rotate the refresh token. Preserve any
-        # structurally valid update even when the catalog request itself
-        # fails, otherwise a harmless readiness check can invalidate the
-        # canonical OAuth slot.
-        if grok_auth_error(native_auth) is None:
-            _replace_private_file(native_auth, credential)
+        return f"Grok readiness runtime failed: {type(exc).__name__}"
+    issue = grok_auth_error(credential)
+    if issue is not None:
+        return "Grok live model check left an invalid OAuth credential: " + issue
     output = f"{proc.stdout}\n{proc.stderr}"
     if "settings fetch failed" in output.lower():
         return "Grok live model check failed; check this machine's network/proxy"
@@ -1594,10 +1616,9 @@ def grok_live_error(
 ) -> str | None:
     """Verify the saved OAuth session and Grok 4.6 catalog without a prompt.
 
-    Grok reads OAuth from ``$HOME/.grok/auth.json``. DRadar keeps its
-    canonical slot at a provider-specific path, so the probe uses a private
-    temporary HOME matching Grok's native layout and never exposes tokens in
-    argv or output.
+    A Linux utility container on the task daemon binds the canonical store.
+    Its pinned CLI uses ``GROK_AUTH_PATH`` for reads and native refresh locks.
+    The host never refreshes a fork or attempts to emulate a Docker VM's lock.
     """
     cli = str(executable or grok_cli_path() or "")
     if not cli:
@@ -1609,8 +1630,7 @@ def grok_live_error(
     with tempfile.TemporaryDirectory(prefix="dradar-grok-probe-") as name:
         root = Path(name)
         if auth_path is None:
-            # The readiness probe shares the same lock and refresh writeback
-            # contract as a paid run.
+            # Validate the same canonical store exposed to paid runs.
             with grok_subscription_session(root / "slot") as run_copy:
                 return _run_grok_live_probe(cli, run_copy, root)
         return _run_grok_live_probe(cli, canonical, root)
