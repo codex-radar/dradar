@@ -1697,3 +1697,43 @@ def test_run_plan_stop_is_clean_only_when_active_work_settles_cleanly(
         assert "recovery" in state["batches"][BATCH_A]["detail"]
     else:
         assert "detail" not in state["batches"][BATCH_A]
+
+
+@pytest.mark.parametrize("platform,code,recover", [
+    ("nt", 5, True), ("nt", 32, True), ("nt", 33, True),
+    ("nt", 5, False), ("nt", 87, False), ("posix", 5, False),
+])
+def test_atomic_state_replace_preserves_old_state_until_commit(tmp_path, monkeypatch,
+                                                              platform, code, recover):
+    from types import SimpleNamespace
+    target = tmp_path / "state.json"
+    target.write_text('{"generation": 1}')
+    replace = os.replace
+    calls, pauses = [], []
+    error = PermissionError("controlled replacement denial")
+    error.winerror = code
+    def controlled(source, destination):
+        assert json.loads(target.read_text()) == {"generation": 1}
+        assert json.loads(Path(source).read_text()) == {"generation": 2}
+        calls.append((source, destination))
+        if not recover or len(calls) < 3:
+            raise error
+        replace(source, destination)
+    monkeypatch.setattr(fleet, "os", SimpleNamespace(**{**vars(os), "name": platform,
+                                                       "replace": controlled}))
+    monkeypatch.setattr(fleet, "time", SimpleNamespace(sleep=pauses.append,
+                                                      monotonic=lambda: sum(pauses)))
+    if recover:
+        fleet._atomic_json(target, {"generation": 2})
+        assert json.loads(target.read_text()) == {"generation": 2}
+        assert len(calls) == 3
+    else:
+        with pytest.raises(PermissionError) as caught:
+            fleet._atomic_json(target, {"generation": 2})
+        assert caught.value is error
+        assert json.loads(target.read_text()) == {"generation": 1}
+        assert len(calls) == (21 if platform == "nt" and code in {5, 32, 33} else 1)
+    assert len(set(str(pair[0]) for pair in calls)) == 1
+    assert len(pauses) == len(calls) - 1
+    assert sum(pauses) <= 1.001
+    assert not list(tmp_path.glob(".state.json.*.tmp"))

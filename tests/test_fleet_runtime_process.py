@@ -89,9 +89,10 @@ def runtime(tmp_path):
     if os.name == 'nt':
         env.update({key: os.environ[key] for key in ('SystemRoot', 'TEMP', 'TMP') if key in os.environ})
         env['USERPROFILE'] = str(home)
+    coordinator_log = (tmp_path / 'coordinator.log').open('w', encoding='utf-8')
     coordinator = subprocess.Popen([sys.executable, str(artifact), 'fleet', 'serve', '--internal'],
         env={**env, 'DRADAR_FLEET_LAUNCH_ID': 'runtime-fixture'},
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=coordinator_log, stderr=subprocess.STDOUT)
     state_path = dradar_home / 'fleet/state.json'
     deadline = time.monotonic() + 10
     while not state_path.exists():
@@ -116,25 +117,75 @@ def runtime(tmp_path):
     try:
         yield add, observations, dradar_home, bindings, env, artifact
     finally:
-        coordinator.terminate()
-        coordinator.wait(timeout=10)
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        try:
+            before_cleanup = {'coordinator_returncode': coordinator.poll(),
+                              'observations': list(observations),
+                              'recorded_at': time.time()}
+            try:
+                # Copy complete process evidence out of the hidden home for CI uploads.
+                logs = dradar_home / 'fleet/logs'
+                pool_logs = {}
+                if logs.exists():
+                    for log in logs.glob('*.log'):
+                        pool_logs[log.name] = log.read_text(encoding='utf-8', errors='replace')
+                before_cleanup['pool_logs'] = pool_logs
+                if state_path.exists():
+                    before_cleanup['state'] = json.loads(state_path.read_text())
+            except (OSError, ValueError) as exc:
+                before_cleanup['capture_error'] = repr(exc)
+            try:
+                (tmp_path / 'lifecycle.json').write_text(json.dumps(before_cleanup, indent=2))
+            except OSError:
+                pass
+        finally:
+            if coordinator.poll() is None:
+                coordinator.terminate()
+            coordinator.wait(timeout=10)
+            coordinator_log.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
         assert (task_repo / 'keep.txt').read_text() == 'unchanged'
         assert not (task_repo / 'tasks').exists()
         assert not any('/claim' in row[0] or '/checkout' in row[0] for row in observations)
+
+
+def _assert_pool_binding(observations, batch, expected, result, *, timeout=5):
+    # fleet.add may return its startup failure before the pool's finally runs.
+    # A background preparing heartbeat is best effort and can be skipped when
+    # close wins the scheduling race. The synchronous close is emitted only by
+    # the actual pool, after bind_batch, through the same real ApiClient headers.
+    deadline = time.monotonic() + timeout
+    while not any(row[0] == 'POST /api/v1/runner/close' and row[1] == batch
+                  for row in observations):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(.01)
+    lane = [row for row in observations if row[1] == batch and row[0] in (
+        '/api/v1/assignment', 'POST /api/v1/runner/heartbeat', 'POST /api/v1/runner/close')]
+    details = (observations, result.stdout, result.stderr)
+    assert any(row[0] == '/api/v1/assignment' for row in lane), details
+    assert any(row[0] == 'POST /api/v1/runner/close' for row in lane), details
+    assert all(row[2] == expected for row in lane), details
+
+
+@pytest.mark.parametrize('close', [None, ('POST /api/v1/runner/close', 'exact', False),
+                                  ('POST /api/v1/runner/close', 'foreign', True)])
+def test_binding_observation_requires_exact_correct_pool_close(close):
+    from types import SimpleNamespace
+    observations = [('/api/v1/assignment', 'exact', True)]
+    if close is not None:
+        observations.append(close)
+    with pytest.raises(AssertionError):
+        _assert_pool_binding(observations, 'exact', True,
+                             SimpleNamespace(stdout='', stderr=''), timeout=0)
 
 
 @pytest.mark.parametrize("workers", ["1", "auto"])
 def test_old_coordinator_new_binding_reaches_pool(runtime, workers):
     add, observations, home, bindings, *_ = runtime
     batch, result = add(1, bindings, workers)
-    assignments = [row for row in observations if row[1] == batch and row[0] in ('/api/v1/assignment', 'POST /api/v1/runner/heartbeat')]
-    # Preflight and actual pool both pass the real ApiClient header gate. The
-    # pool then intentionally stops before any task environment/model launch.
-    assert len(assignments) >= 2, (observations, result.stdout, result.stderr)
-    assert all(row[2] for row in assignments)
+    _assert_pool_binding(observations, batch, True, result)
     state = json.loads((home / 'fleet/state.json').read_text())
     assert batch in state['batches']
     assert 'KIMI_CREDENTIAL_PATH' not in json.dumps(state)
@@ -162,9 +213,7 @@ def test_concurrent_lanes_do_not_share_binding(runtime):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda item: add(*item), [(1, bindings), (2, {})]))
     for batch, result in results:
-        assignments = [row for row in observations if row[1] == batch and row[0] in ('/api/v1/assignment', 'POST /api/v1/runner/heartbeat')]
-        assert len(assignments) >= 2, (observations, result.stdout, result.stderr)
-        assert all(row[2] == (int(batch, 16) % 2 == 1) for row in assignments)
+        _assert_pool_binding(observations, batch, int(batch, 16) % 2 == 1, result)
 
 
 @pytest.mark.parametrize('kind', ['unknown', 'missing', 'public', 'symlink', 'relative', 'capability'])
