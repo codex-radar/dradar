@@ -33,9 +33,9 @@ except ModuleNotFoundError as exc:
     from dradar.pier_credential_delivery import inject_private_files
 
 try:
-    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
+    from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered, verify_task_baseline
+    from dradar.worker_events import register_worker, verify_task_baseline
 
 SUPPORTED_MODEL = "hy4-preview"
 SUPPORTED_EFFORTS = {"low", "high", "max"}
@@ -305,7 +305,7 @@ class CodeBuddySubscription(ClaudeCode):
         context: AgentContext,
     ) -> None:
         await verify_task_baseline(environment)
-        emit_worker_registered(runtime="pier", context="agent", profile="codebuddy")
+        await register_worker(runtime="pier", context="agent", profile="codebuddy")
         del context
         remote_secret = self._REMOTE_SECRET_ROOT.as_posix()
         remote_storage = self._REMOTE_STORAGE.as_posix()

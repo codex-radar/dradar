@@ -54,6 +54,7 @@ from .task_baseline import (
 )
 from .worker_events import (
     WORKER_EVENT_FILE_ENV,
+    WORKER_START_ENV, WORKER_START_SCHEMA, WORKER_START_WAIT_SEC,
     read_worker_event,
     parse_worker_event,
 )
@@ -3808,6 +3809,25 @@ def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
     return True
 
 
+def _confirm_pier_process_tree_stopped(proc: subprocess.Popen) -> None:
+    """A sent signal is not proof that the isolated provider tree exited."""
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
+        raise RunnerError("provider process-tree exit cannot be confirmed on this runtime")
+    deadline = time.monotonic() + 2.0
+    while True:
+        proc.poll()  # reap the direct child before checking the process group
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            raise RunnerError("provider process-tree exit audit failed") from exc
+        if time.monotonic() >= deadline:
+            raise RunnerError("provider process tree remains after cancellation")
+        time.sleep(0.05)
+
+
 def _cleanup_exited_pier_process_group(proc: subprocess.Popen) -> bool:
     """Reap helpers left in Pier's isolated POSIX group after its leader exits."""
 
@@ -4416,6 +4436,17 @@ def run_trial(
         worker_event_path = work_dir / f"{job_name}.worker-events.jsonl"
         worker_event_path.unlink(missing_ok=True)
         env[WORKER_EVENT_FILE_ENV] = str(worker_event_path)
+        # Fresh per-launch identity prevents stale files from authorizing a retry.
+        env.pop(WORKER_START_ENV, None)
+        start_gate = None
+        start_identity = None
+        if on_worker_registered is not None and managed_auth_config is None:
+            nonce = uuid.uuid4().hex
+            start_gate = work_dir / (job_name + "." + nonce + ".worker-start.json")
+            start_identity = dict(schema=WORKER_START_SCHEMA, nonce=nonce,
+                                  session_id=assignment.get("_runner_session_id"),
+                                  job=job_name, parent_pid=os.getpid())
+            env[WORKER_START_ENV] = json.dumps(dict(start_identity, path=str(start_gate.resolve())))
         managed_permit = work_dir / (job_name + ".managed-start.json")
         env.pop("DRADAR_MANAGED_START_PERMIT", None)
         env.pop("DRADAR_MANAGED_STATUS_FILE", None)
@@ -4501,6 +4532,12 @@ def run_trial(
                     )
                     if on_worker_registered is not None:
                         on_worker_registered(event)
+                    if start_gate is not None:
+                        if proc.poll() is not None:
+                            raise RunnerError("worker exited before ownership confirmation")
+                        _materialize_shared_file(start_gate, json.dumps(dict(
+                            start_identity, expires_at=time.monotonic() + WORKER_START_WAIT_SEC,
+                        )).encode())
                     if managed_auth_config is not None:
                         _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}')
                 # Start the local watchdog only after server ownership bind and
@@ -4550,8 +4587,14 @@ def run_trial(
                 # down`, and its orphaned task container keeps the agent alive —
                 # burning quota with nobody left to harvest the result.
                 cleanup_errors: list[str] = []
+                if start_gate is not None:
+                    try:
+                        start_gate.unlink(missing_ok=True)
+                    except OSError:
+                        cleanup_errors.append("worker start permission could not be revoked")
                 try:
                     _terminate_pier_process_tree(proc)
+                    _confirm_pier_process_tree_stopped(proc)
                 except RunnerError as cleanup_error:
                     cleanup_errors.append(str(cleanup_error))
                 try:
@@ -4576,6 +4619,8 @@ def run_trial(
                     terminal_error = exc
                 else:
                     raise
+        if start_gate is not None:
+            start_gate.unlink(missing_ok=True)
         if effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT):
             process_residue, cleanup = _cleanup_exited_pier_runtime(
                 proc, jobs_dir / job_name,

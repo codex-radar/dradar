@@ -33,9 +33,9 @@ except ModuleNotFoundError as exc:
     from dradar.pier_credential_delivery import inject_private_files
 
 try:
-    from _dradar_worker_events import emit_worker_registered, verify_task_baseline
+    from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
-    from dradar.worker_events import emit_worker_registered, verify_task_baseline
+    from dradar.worker_events import register_worker, verify_task_baseline
 
 try:
     from _dradar_pier_runtime_safety import (
@@ -1212,7 +1212,7 @@ class ZCodeBigModel(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         await verify_task_baseline(environment)
-        emit_worker_registered(runtime="pier", context="agent", profile="zcode")
+        await register_worker(runtime="pier", context="agent", profile="zcode")
         del context
         self._instruction = instruction
         remote_home = self._REMOTE_HOME.as_posix()

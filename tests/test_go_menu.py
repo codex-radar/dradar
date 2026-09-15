@@ -1404,6 +1404,8 @@ def test_api_failure_report_code_is_low_cardinality(status, expected):
 
 
 def test_mixed_batch_one_failure_yields_rc_1(monkeypatch, tmp_path: Path):
+    # Continuing the batch requires an explicit successful stop response.
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *a, **k: True)
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
 
