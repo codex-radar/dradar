@@ -2,6 +2,8 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
+from contextlib import nullcontext
 
 import pytest
 
@@ -43,3 +45,58 @@ def test_utf8_output_does_not_hide_child_failure(tmp_path):
         )
     assert failed.returncode == 7
     assert log.read_text(encoding="utf-8").strip() == "•"
+
+
+def test_run_trial_log_boundary_with_legacy_parent(tmp_path, monkeypatch):
+    """Exercise the real runner's header, child fd output and log-tail reader."""
+    from dradar import runner
+
+    monkeypatch.setenv("PYTHONIOENCODING", "gbk")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    original_open = Path.open
+    original_read_text = Path.read_text
+
+    def legacy_log_open(path, mode="r", buffering=-1, encoding=None,
+                        errors=None, newline=None):
+        if path.suffix == ".log" and "b" not in mode and encoding is None:
+            encoding = "gbk"
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", legacy_log_open)
+
+    def legacy_log_read(path, encoding=None, errors=None, **kwargs):
+        if path.suffix == ".log" and encoding is None:
+            encoding = "gbk"
+        return original_read_text(path, encoding=encoding, errors=errors, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", legacy_log_read)
+    text = "trial failed • 完成 ✓"
+
+    def child_command(assignment, tasks_root, jobs_dir, job_name, home,
+                      dev_agent=None, **kwargs):
+        trial = jobs_dir / job_name / "task__t0"
+        program = (
+            "import pathlib, sys; "
+            "p = pathlib.Path(sys.argv[1]) / 'artifacts'; "
+            "p.mkdir(parents=True); "
+            "(p / 'model.patch').write_bytes(b'diff'); "
+            "print(" + repr(text) + "); "
+            "print(" + repr(text) + ", file=sys.stderr); sys.exit(7)"
+        )
+        return [sys.executable, "-c", program, str(trial)]
+
+    monkeypatch.setattr(runner, "build_pier_command", child_command)
+    monkeypatch.setattr(runner, "resolve_latest_codex_cli_version",
+                        lambda *a, **k: "0.145.0")
+    monkeypatch.setattr(runner.image_cache, "prepare_trial_builder",
+                        lambda *a, **k: runner.image_cache.TrialBuilderLease(None, False))
+    monkeypatch.setattr(runner.AUTH_REGISTRY, "session",
+                        lambda *a, **k: nullcontext(None))
+    artifact = runner.run_trial(
+        {"assignment_id": "encoding", "task_id": "fixture", "agent": "codex",
+         "model": "gpt-5.5", "effort": "medium", "agent_version": "0.145.0"},
+        tmp_path, tmp_path,
+    )
+    assert artifact.returncode == 7
+    assert text in artifact.log_path.read_text(encoding="utf-8").splitlines()[0]
+    assert runner._tail(artifact.log_path, 2).splitlines() == [text, text]

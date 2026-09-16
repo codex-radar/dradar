@@ -2986,7 +2986,7 @@ def _tail(log_path: Path, n: int = 15) -> str:
     the file makes the volunteer go hunt for it. Local-terminal only — never
     uploaded — so no scrub concern."""
     try:
-        lines = log_path.read_text(errors="replace").splitlines()
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return ""
     return "\n".join(lines[-n:])
@@ -4492,7 +4492,7 @@ def run_trial(
         # guarded block below so a failed ownership bind tears down this exact
         # process before returning.
         started: float | None = None
-        with log_path.open("w") as log:
+        with log_path.open("w", encoding="utf-8") as log:
             log.write("cmd=" + " ".join(cmd) + "\n")
             log.write(
                 "build_cache_mode="
