@@ -92,6 +92,10 @@ def test_run_trial_log_boundary_with_legacy_parent(tmp_path, monkeypatch):
                         lambda *a, **k: runner.image_cache.TrialBuilderLease(None, False))
     monkeypatch.setattr(runner.AUTH_REGISTRY, "session",
                         lambda *a, **k: nullcontext(None))
+    # This fixture launches plain Python, not Pier. Do not inject the global
+    # conftest's Pier-specific sitecustomize into that child interpreter.
+    monkeypatch.setattr(runner.egress, "prepare_egress_proxy_runtime",
+                        lambda *a, **k: {})
     artifact = runner.run_trial(
         {"assignment_id": "encoding", "task_id": "fixture", "agent": "codex",
          "model": "gpt-5.5", "effort": "medium", "agent_version": "0.145.0"},
