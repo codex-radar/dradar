@@ -165,7 +165,7 @@ class WinAPI:
 
     def create_private_directory(self, path):
         descriptor = C.c_void_p()
-        sddl = f'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{self.user})'
+        sddl = f'O:{self.user}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{self.user})'
         if not self.from_sddl(sddl, 1, C.byref(descriptor), None):
             self.fail()
         try:

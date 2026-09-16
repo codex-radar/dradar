@@ -2707,8 +2707,22 @@ def test_managed_runner_permit_follows_successful_owner_bind(tmp_path, monkeypat
         assert not list(tmp_path.glob('*.managed-start.json'))
 
 
+@pytest.fixture
+def synthetic_cancellation_runtime(monkeypatch, tmp_path):
+    # These tests launch fake Pier only. They must neither require/read a
+    # developer login nor let the fake Popen service an unrelated Docker call.
+    # Native credential behavior is covered separately by test_container_auth.
+    from contextlib import nullcontext
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(tmp_path / "absent-auth.json"))
+    monkeypatch.setattr(runner_mod.AUTH_REGISTRY, "session",
+                        lambda *a, **k: nullcontext(None))
+    monkeypatch.setattr(runner_mod.image_cache, "remove_trial_builder",
+                        lambda *a, **k: (True, None))
+
+
 @pytest.mark.parametrize('has_patch', [True, False])
-def test_interrupt_harvests_only_existing_patch_after_exact_cleanup(tmp_path, monkeypatch, has_patch):
+def test_interrupt_harvests_only_existing_patch_after_exact_cleanup(
+        tmp_path, monkeypatch, has_patch, synthetic_cancellation_runtime):
     captured = _fake_pier(monkeypatch, tmp_path, patch=has_patch)
     original = runner_mod.subprocess.Popen
     class Interrupted(original):
@@ -2757,7 +2771,8 @@ def test_docker_cancellation_audit_has_total_deadline(tmp_path, monkeypatch):
     assert len(calls) <= 3
 
 
-def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(tmp_path, monkeypatch):
+def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
+        tmp_path, monkeypatch, synthetic_cancellation_runtime):
     from dradar import runloop, pending
     from dradar.api_client import ApiError
     from test_go_menu import SubmitClient, _args

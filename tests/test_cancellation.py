@@ -161,3 +161,52 @@ def test_interrupted_artifact_durable_before_failure_reporting(isolated, monkeyp
         runloop._run_and_submit(client, dict(ASSIGNMENT), isolated, _args(), 'abc')
     assert client.submissions == []
     assert runloop._upload_trial(client, pending.load(runloop.HOME)[0]) == 'interrupted'
+
+
+
+def test_staging_creates_and_revalidates_private_host_directories(isolated):
+    from dradar.artifact_boundary import TrialFiles
+    from dradar.artifact_staging import ensure_staged_patch, SOURCE_RELATIVE
+    art = _fake_art(isolated)
+    assert not (art.trial_dir / ".dradar").exists()
+    staged = ensure_staged_patch(art.trial_dir)
+    assert staged.source.read_bytes() == art.patch.read_bytes()
+    with TrialFiles(art.trial_dir) as boundary:
+        # Reopen the directories using the same private-owner checks used by
+        # production creation, including the already-existing (183) branch.
+        boundary.parent(".dradar/artifact-staging/revalidation", create=True)
+        assert boundary.read(SOURCE_RELATIVE) == art.patch.read_bytes()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows owner/ACL boundary")
+def test_staging_rejects_existing_foreign_owner_without_repair(isolated):
+    import ctypes
+    from dradar.artifact_boundary import TrialFiles, UnsafeArtifact
+    from dradar.artifact_boundary_win import WinAPI, SECURITY_ATTRIBUTES
+    from dradar.artifact_staging import ensure_staged_patch
+    art = _fake_art(isolated)
+    foreign = art.trial_dir / ".dradar"
+    api = WinAPI(UnsafeArtifact)
+    descriptor = ctypes.c_void_p()
+    # The elevated Windows CI token can create an Administrators-owned
+    # synthetic directory. The DACL remains narrow; it is the owner that is
+    # deliberately foreign to the current user SID.
+    sddl = f"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{api.user})"
+    assert api.from_sddl(sddl, 1, ctypes.byref(descriptor), None)
+    try:
+        attributes = SECURITY_ATTRIBUTES(
+            ctypes.sizeof(SECURITY_ATTRIBUTES), descriptor, False,
+        )
+        assert api.mkdir(str(foreign), ctypes.byref(attributes))
+    finally:
+        api.free(descriptor)
+    for _ in range(2):
+        with pytest.raises(UnsafeArtifact, match="trial_not_host_private"):
+            ensure_staged_patch(art.trial_dir)
+        # No implicit takeover: the original foreign owner still fails.
+        with TrialFiles(art.trial_dir) as boundary:
+            handle = boundary._open(foreign, directory=True)
+            with pytest.raises(UnsafeArtifact, match="trial_not_host_private"):
+                boundary.api.private(handle)
+    assert not (foreign / "artifact-staging").exists()
+    assert art.patch.read_bytes() == b"diff --git a b\n"
