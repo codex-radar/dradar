@@ -67,7 +67,9 @@ dradar update status
 
 ## 多 worker 安全点
 
-发现并验证候选后，调度层把 refill 从“接受新题”切为“自然排空”，但不释放 assignment、不取消任务、不关闭 Provider。所有 worker 继续完成模型、产物收集、上传、ledger/checkpoint 收尾。只有以下条件全部为真才可从 `waiting_safe_point` 进入 `activated`：
+**以下自动排空流程是目标设计，尚未完整实现。** 当前实现仅在自然空闲、外层 launcher 退出且所有 invocation 锁与待上传结果均已清空时尝试激活；持续运行的 Fleet/refill 尚无发现候选后自动排空并交接新版的协议。不能据本节宣称长期运行会话已具备最终自动升级保证。当前实现和剩余边界见 [automatic-updates.md](automatic-updates.md)。
+
+目标流程：发现并验证候选后，调度层把 refill 从“接受新题”切为“自然排空”，但不释放 assignment、不取消任务、不关闭 Provider。所有 worker 继续完成模型、产物收集、上传、ledger/checkpoint 收尾。只有以下条件全部为真才可从 `waiting_safe_point` 进入 `activated`：
 
 - active assignment、checkout、upload、ledger write、checkpoint write 全为 0；
 - durable pending upload 为 0（有待上传结果不能换版本）；

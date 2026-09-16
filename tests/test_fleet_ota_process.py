@@ -86,7 +86,7 @@ def test_real_fleet_descendants_retain_payload_after_parent_exits(tmp_path, mode
                PYTHONPATH=os.pathsep.join((str(hook), str(installed))))
     command = [sys.executable, '-m', 'dradar.launcher', 'probe-parent']
     if mode == 'ota':
-        installed_version = subprocess.run([sys.executable, '-m', 'dradar.cli', '--version'],
+        installed_version = subprocess.run([sys.executable, '-c', 'from dradar import __version__; print(__version__)'],
                                            env=env, cwd=tmp_path, capture_output=True, text=True,
                                            timeout=10, check=True)
         assert installed_version.stdout.strip() == '0.5.203'

@@ -24,9 +24,13 @@ def main() -> int:
     # Only bypasses discovery in an already verified child/self-test. It never
     # authorizes a pathname or bypasses verification of a downloaded artifact.
     self_test = os.environ.pop("DRADAR_OTA_SELF_TEST", None) == "1"
-    if os.environ.pop("DRADAR_OTA_DISPATCH", None) == "1":
-        discovery.LAUNCH_METHOD = "verified_child"
-        if self_test and sys.argv[1:] == ["--version"]:
+    verified_child = os.environ.pop("DRADAR_OTA_DISPATCH", None) == "1"
+    source_child = os.environ.pop("DRADAR_OTA_SOURCE_CHILD", None) == "1"
+    if verified_child or source_child:
+        # Source workers inherit the installed payload, not a signed artifact.
+        # Both kinds hold activity independently if their supervisor crashes.
+        discovery.LAUNCH_METHOD = "verified_child" if verified_child else "launcher"
+        if verified_child and self_test and sys.argv[1:] == ["--version"]:
             from .cli import main as bundled_main
             return bundled_main()
         # The child owns an independent activity lease as well: if the outer

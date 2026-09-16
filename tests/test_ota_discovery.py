@@ -277,3 +277,109 @@ def test_real_http_trickled_headers_cannot_extend_budget():
                 with bounded.stream('GET',f'http://127.0.0.1:{server.server_port}') as response:list(response.iter_bytes())
             assert time.monotonic()-start < .6
     finally:server.shutdown();server.server_close()
+
+
+@pytest.mark.parametrize('arguments', [
+    ['go', '-y', '--refill', '--refill-harness', 'kimi-code'],
+    ['resume', '-y', '--parallel'],
+    ['fleet', 'serve', '--internal'],
+])
+def test_public_module_entry_uses_launcher_for_all_command_paths(tmp_path, arguments):
+    """Exercise actual module entry/parser, with no model work or live network."""
+    import os, subprocess, sys
+    program = r'''
+import builtins, runpy, sys, threading
+from pathlib import Path
+from dradar import launcher, cli
+from dradar.ota import discovery
+from dradar.ota.activity import active_invocations
+home = launcher.HOME
+seen = []
+launcher.discover_update = lambda home: seen.append('discover')
+stop = threading.Event()
+launcher.start_periodic_discovery = lambda home: stop
+launcher._activate_if_idle = lambda root: seen.append('activate')
+def work(args):
+    assert active_invocations(home / 'ota')
+    assert discovery.LAUNCH_METHOD == 'launcher'
+    seen.append(args.command)
+    return 0
+cli.cmd_go = cli.cmd_fleet_serve = work
+builtins.input = lambda *a: (_ for _ in ()).throw(AssertionError('OTA asked permission'))
+sys.argv = ['dradar.cli', *sys.argv[1:]]
+try:
+    runpy.run_module('dradar.cli', run_name='__main__')
+except SystemExit as e:
+    assert e.code == 0
+assert seen == ['discover', 'activate', sys.argv[1], 'activate'], seen
+assert stop.is_set()
+assert not active_invocations(home / 'ota')
+'''
+    env = {k: v for k, v in os.environ.items() if not k.startswith('DRADAR_OTA_')}
+    env.update(DRADAR_HOME=str(tmp_path / 'home'),
+               PYTHONPATH=str(Path(__file__).parents[1] / 'src'))
+    result = subprocess.run([sys.executable, '-c', program, *arguments], env=env,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('self_test', [False, True])
+def test_source_child_is_registered_without_recursive_ota(tmp_path, monkeypatch, self_test):
+    from dradar import launcher, cli, child_entrypoint
+    import os, sys
+    monkeypatch.setattr(launcher, 'HOME', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['dradar.cli', '--version'])
+    env = {}
+    child_entrypoint.popen_options(env)
+    assert env['DRADAR_OTA_SOURCE_CHILD'] == '1'
+    monkeypatch.setenv('DRADAR_OTA_SOURCE_CHILD', env['DRADAR_OTA_SOURCE_CHILD'])
+    if self_test:
+        monkeypatch.setenv('DRADAR_OTA_SELF_TEST', '1')
+    monkeypatch.setattr(launcher, 'discover_update', lambda *_: pytest.fail('recursive discovery'))
+    monkeypatch.setattr(launcher, 'start_periodic_discovery', lambda *_: pytest.fail('duplicate timer'))
+    monkeypatch.setattr(launcher, '_activate_if_idle', lambda *_: pytest.fail('child activation'))
+    def work():
+        assert active_invocations(tmp_path / 'ota')
+        assert discovery.LAUNCH_METHOD == 'launcher'
+        assert 'DRADAR_OTA_SOURCE_CHILD' not in os.environ
+        # Grandchildren must acquire their own activity lease too.
+        grandchild_env = dict(os.environ)
+        child_entrypoint.popen_options(grandchild_env)
+        assert grandchild_env['DRADAR_OTA_SOURCE_CHILD'] == '1'
+        assert 'DRADAR_OTA_DISPATCH' not in grandchild_env
+        return 23
+    monkeypatch.setattr(cli, 'main', work)
+    assert launcher.main() == 23
+    assert not active_invocations(tmp_path / 'ota')
+
+
+def test_source_child_keeps_activity_after_supervisor_releases(tmp_path):
+    import os, subprocess, sys
+    from dradar import child_entrypoint
+    program = r'''
+from dradar import cli, launcher
+from dradar.ota.activity import active_invocations
+def work():
+    assert active_invocations(launcher.HOME / 'ota')
+    print('ready', flush=True)
+    input()
+    return 0
+cli.main = work
+launcher.discover_update = lambda *_: (_ for _ in ()).throw(AssertionError('recursive discovery'))
+raise SystemExit(launcher.main())
+'''
+    env = {k: v for k, v in os.environ.items() if not k.startswith('DRADAR_OTA_')}
+    env.update(DRADAR_HOME=str(tmp_path),
+               PYTHONPATH=str(Path(__file__).parents[1] / 'src'))
+    child_entrypoint.popen_options(env)
+    with register_invocation(tmp_path / 'ota'):
+        child = subprocess.Popen([sys.executable, '-c', program], env=env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        assert child.stdout.readline().strip() == 'ready'
+    try:
+        assert active_invocations(tmp_path / 'ota')
+    finally:
+        out, err = child.communicate('\n', timeout=10)
+    assert child.returncode == 0, out + err
+    assert not active_invocations(tmp_path / 'ota')
