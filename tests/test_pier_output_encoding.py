@@ -75,6 +75,29 @@ def test_run_trial_log_boundary_with_legacy_parent(tmp_path, monkeypatch):
     def child_command(assignment, tasks_root, jobs_dir, job_name, home,
                       dev_agent=None, **kwargs):
         trial = jobs_dir / job_name / "task__t0"
+        if os.name == "nt":
+            # Elevated Windows CI may default new directory ownership to the
+            # Administrators group. Give this fixture an explicit current-user
+            # owner and protected DACL, as the real artifact boundary requires.
+            import ctypes
+            from dradar.artifact_boundary import TrialFiles, UnsafeArtifact
+            from dradar.artifact_boundary_win import WinAPI, SECURITY_ATTRIBUTES
+
+            trial.parent.mkdir(parents=True)
+            api = WinAPI(UnsafeArtifact)
+            descriptor = ctypes.c_void_p()
+            sddl = f"O:{api.user}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{api.user})"
+            assert api.from_sddl(sddl, 1, ctypes.byref(descriptor), None)
+            try:
+                attributes = SECURITY_ATTRIBUTES(
+                    ctypes.sizeof(SECURITY_ATTRIBUTES), descriptor, False,
+                )
+                assert api.mkdir(str(trial), ctypes.byref(attributes))
+            finally:
+                api.free(descriptor)
+            # Validate fixture ownership before launching the real child.
+            with TrialFiles(trial):
+                pass
         program = (
             "import pathlib, sys; "
             "p = pathlib.Path(sys.argv[1]) / 'artifacts'; "
