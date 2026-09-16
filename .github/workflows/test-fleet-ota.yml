@@ -12,6 +12,11 @@ on:
       - 'src/dradar/launcher.py'
       - 'src/dradar/cli.py'
       - 'src/dradar/runloop.py'
+      - 'src/dradar/runner.py'
+      - 'src/dradar/cancellation.py'
+      - 'tests/test_cancellation.py'
+      - 'tests/test_runner_tools.py'
+      - 'tests/private_artifact_fixture.py'
       - 'src/dradar/worker_events.py'
       - 'tests/test_worker_start_native.py'
       - 'src/dradar/ota/**'
@@ -66,6 +71,19 @@ jobs:
           DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-ota-home
           PYTHONUTF8: '1'
         run: python -m pytest -q tests/test_grok_probe.py tests/test_worker_start_native.py tests/test_child_entrypoint.py tests/test_fleet_windows_lifecycle.py tests/test_fleet_ota_process.py tests/test_fleet.py tests/test_fleet_runtime_process.py tests/test_workers.py tests/test_ota_integration.py tests/test_ota_discovery.py tests/test_ota_runtime.py tests/test_ota_state.py tests/test_ota_multiprocess.py tests/test_mixed_go.py tests/test_late_worker.py tests/test_mixed_go_process.py --basetemp=evidence/native-tests
+      - name: Cancellation artifact handoff with synthetic providers
+        env:
+          DRADAR_HOME: ${{ runner.temp }}/dradar-cancellation-home
+          PYTHONUTF8: '1'
+        run: >-
+          python -m pytest -q
+          tests/test_cancellation.py
+          tests/test_runner_tools.py::test_interrupt_harvests_only_existing_patch_after_exact_cleanup
+          tests/test_runner_tools.py::test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery
+          tests/test_runner_tools.py::test_locate_artifacts_rejects_mixed_trial_directories
+          tests/test_runner_tools.py::test_docker_cancellation_audit_has_total_deadline
+          tests/test_runner_tools.py::test_forced_cleanup_removes_only_container_bound_to_exact_job
+          --basetemp=evidence/cancellation-tests
       - name: Bounded Windows 3.11 concurrent-lane diagnostic
         if: always() && matrix.os == 'windows-latest' && matrix.python == '3.11'
         shell: python

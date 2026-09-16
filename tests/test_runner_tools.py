@@ -3,6 +3,8 @@ import signal
 import math
 import tomllib
 
+from private_artifact_fixture import private_trial
+
 import dradar.runner as runner_mod
 from dradar.runner import CLAUDE_DISALLOWED_TOOLS, build_pier_command
 
@@ -834,6 +836,7 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
         def __init__(self, cmd, **kw):
             captured["process_started"] = True
             trial = work_dir / "jobs" / captured["job_name"] / "task__t0"
+            private_trial(trial)
             (trial / "artifacts").mkdir(parents=True)
             (trial / "agent").mkdir()
             if patch:

@@ -11,6 +11,7 @@ import pytest
 from dradar import cancellation, pending, runloop
 from dradar.runner import RunnerCleanupUnconfirmedError
 from test_go_menu import ASSIGNMENT, SubmitClient, _args, _fake_art
+from private_artifact_fixture import private_trial
 
 
 def test_scope_interrupts_once_and_restores_handler():
@@ -85,6 +86,7 @@ def test_pool_timeout_is_finite_and_only_signals_supplied_children(monkeypatch):
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
+    private_trial(tmp_path / "trial")
     monkeypatch.setattr(runloop, 'HOME', tmp_path / 'home')
     monkeypatch.setattr(runloop.image_cache, 'remove_trial_builder', lambda *a, **k: (True, None))
     monkeypatch.setattr(runloop.image_cache, 'record_trial_images', lambda *a, **k: None)
