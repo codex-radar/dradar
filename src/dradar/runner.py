@@ -1263,6 +1263,13 @@ def _pier_process_env(
         env[CODEBUDDY_SOURCE_IMAGE_ENV] = CODEBUDDY_CONTAINER_IMAGE
     if egress_environment:
         env.update(egress_environment)
+    # Pier's stdout/stderr are redirected to our UTF-8 log. On Windows an
+    # inherited cp936/GBK encoding can crash Rich's final summary (e.g. U+2022)
+    # after the agent has finished, turning a completed run into an error.
+    # Set these before Python starts; changing the parent's console code page
+    # or accepting a nonzero Pier exit is neither necessary nor safe.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -2979,7 +2986,7 @@ def _tail(log_path: Path, n: int = 15) -> str:
     the file makes the volunteer go hunt for it. Local-terminal only — never
     uploaded — so no scrub concern."""
     try:
-        lines = log_path.read_text(errors="replace").splitlines()
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return ""
     return "\n".join(lines[-n:])
@@ -4485,7 +4492,7 @@ def run_trial(
         # guarded block below so a failed ownership bind tears down this exact
         # process before returning.
         started: float | None = None
-        with log_path.open("w") as log:
+        with log_path.open("w", encoding="utf-8") as log:
             log.write("cmd=" + " ".join(cmd) + "\n")
             log.write(
                 "build_cache_mode="
