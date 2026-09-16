@@ -33,7 +33,7 @@ from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
-from . import egress, image_cache
+from . import cancellation, egress, image_cache
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -388,6 +388,10 @@ class RunnerError(RuntimeError):
 
 class RunnerCleanupUnconfirmedError(RunnerError):
     """The local runtime may still be alive, so its lease must stay running."""
+
+    def __init__(self, *args, job_dir: Path | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.job_dir = job_dir
 
 
 class RunnerTaskRetryableError(RunnerError):
@@ -1889,6 +1893,8 @@ def locate_artifacts(jobs_dir: Path, job_name: str) -> tuple[Path, Path]:
     trials = [Path(p) for p in glob.glob(str(job_dir / "*__*")) if Path(p).is_dir()]
     if not trials:
         raise RunnerError(f"no trial dir under {job_dir}")
+    if len(trials) != 1:
+        raise RunnerError(f"ambiguous trial directories under {job_dir}")
     return job_dir, trials[0]
 
 
@@ -3815,7 +3821,10 @@ def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
             raise RunnerError("Pier process group could not be killed") from exc
     else:
         proc.kill()
-    proc.wait()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired as exc:
+        raise RunnerError("Pier did not exit after KILL") from exc
     return True
 
 
@@ -3876,6 +3885,14 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
     # while a just-exited compose project is disappearing. Re-run the whole
     # ownership audit a few times: every attempt still requires positive
     # exact-job ownership before removal, so retries do not broaden cleanup.
+    deadline = time.monotonic() + cancellation.PIER_CLEANUP_SECONDS
+
+    def remaining(cap):
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise RunnerError("terminated Pier cleanup deadline exhausted")
+        return min(cap, budget)
+
     audit_error: RunnerError | None = None
     for attempt in range(3):
         try:
@@ -3887,7 +3904,7 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=remaining(20),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise RunnerError(
@@ -3908,7 +3925,7 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
                     ["docker", "inspect", *container_ids],
                     capture_output=True,
                     text=True,
-                    timeout=30,
+                    timeout=remaining(30),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise RunnerError(
@@ -3929,7 +3946,7 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
             audit_error = exc
             if attempt == 2:
                 raise
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(remaining(0.5 * (attempt + 1)))
     else:  # pragma: no cover - the bounded loop either breaks or raises
         assert audit_error is not None
         raise audit_error
@@ -3974,7 +3991,7 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
             ["docker", "rm", "-f", *owned],
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=remaining(90),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RunnerError(
@@ -4093,6 +4110,7 @@ def _pier_process_options() -> dict:
     return {"start_new_session": False}
 
 
+@cancellation.scoped
 def run_trial(
     assignment: dict,
     tasks_root: Path,
@@ -4106,6 +4124,7 @@ def run_trial(
     on_auth_observed: Callable[[dict], None] | None = None,
     managed_auth_config: Path | None = None,
 ) -> TrialArtifacts:
+    cancellation.begin_execution()
     try:
         preflight_artifact_platform(work_dir)
     except UnsafeArtifact as exc:
@@ -4311,7 +4330,7 @@ def run_trial(
         tasks_root / str(effective_assignment["task_id"]),
         environment_build_timeout_multiplier,
     )
-    terminal_error: RunnerError | None = None
+    terminal_error: RunnerError | KeyboardInterrupt | EOFError | None = None
     live_error_offsets: dict[Path, int] = {}
     live_error_counts: dict[str, int] = {}
     watch_live_account_errors = (
@@ -4591,6 +4610,9 @@ def run_trial(
                         print(f"  … {int((now - started) / 60)} min elapsed — "
                               f"{_last_activity(log_path)}")
             except BaseException as exc:
+                cancellation.protect_finalization(
+                    cancelled=isinstance(exc, (KeyboardInterrupt, EOFError)),
+                )
                 # Same contract subprocess.run had: no exception (timeout, Ctrl-C,
                 # anything) leaves a pier process running detached. TERM first
                 # with a grace window: a SIGKILLed pier can never `docker compose
@@ -4618,8 +4640,9 @@ def run_trial(
                     raise RunnerCleanupUnconfirmedError(
                         f"{exc}\nPier cleanup safety check failed: "
                         + "; ".join(cleanup_errors),
+                        job_dir=jobs_dir / job_name,
                     ) from exc
-                if isinstance(exc, RunnerError):
+                if isinstance(exc, (RunnerError, KeyboardInterrupt, EOFError)):
                     # A watchdog timeout is terminal for this process, but Pier
                     # may already have harvested a patch, trajectory and token
                     # totals while handling TERM. Keep walking the artifact path
@@ -4629,9 +4652,10 @@ def run_trial(
                     terminal_error = exc
                 else:
                     raise
+        cancellation.protect_finalization()
         if start_gate is not None:
             start_gate.unlink(missing_ok=True)
-        if effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT):
+        if terminal_error is None and effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT):
             process_residue, cleanup = _cleanup_exited_pier_runtime(
                 proc, jobs_dir / job_name,
             )
@@ -4660,7 +4684,10 @@ def run_trial(
         try:
             # Pass failures/cancellation through to the provider's native
             # persistence policy; close() would incorrectly report success.
-            provider_stack.__exit__(*sys.exc_info())
+            error_info = sys.exc_info()
+            if error_info[0] is None and isinstance(terminal_error, (KeyboardInterrupt, EOFError)):
+                error_info = (type(terminal_error), terminal_error, terminal_error.__traceback__)
+            provider_stack.__exit__(*error_info)
         except (OSError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
     if started is None:
@@ -4682,7 +4709,7 @@ def run_trial(
         job_dir, trial_dir = locate_artifacts(jobs_dir, job_name)
     except RunnerError:
         if terminal_error is not None:
-            if terminal_error.failure_diagnostic is not None:
+            if getattr(terminal_error, "failure_diagnostic", None) is not None:
                 terminal_error.failure_diagnostic.update(
                     _zcode_runtime_diagnostic(jobs_dir, job_name)
                 )

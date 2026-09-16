@@ -1,4 +1,5 @@
 import os
+import signal
 import math
 import tomllib
 
@@ -2701,3 +2702,95 @@ def test_managed_runner_permit_follows_successful_owner_bind(tmp_path, monkeypat
         with pytest.raises(RuntimeError,match='fixture owner rejected'):
             run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
         assert not list(tmp_path.glob('*.managed-start.json'))
+
+
+@pytest.mark.parametrize('has_patch', [True, False])
+def test_interrupt_harvests_only_existing_patch_after_exact_cleanup(tmp_path, monkeypatch, has_patch):
+    captured = _fake_pier(monkeypatch, tmp_path, patch=has_patch)
+    original = runner_mod.subprocess.Popen
+    class Interrupted(original):
+        interrupted = False
+        def wait(self, timeout=None):
+            if not self.interrupted:
+                self.interrupted = True
+                raise KeyboardInterrupt
+            return super().wait(timeout)
+    monkeypatch.setattr(runner_mod.subprocess, 'Popen', Interrupted)
+    def cleanup(_job):
+        # A second actual signal must not preempt the artifact owner.
+        signal.raise_signal(signal.SIGINT)
+        return runner_mod.PierContainerCleanup()
+    monkeypatch.setattr(runner_mod, '_cleanup_terminated_pier_containers', cleanup)
+    if not has_patch:
+        with pytest.raises(KeyboardInterrupt):
+            run_trial(_assignment('codex'), tmp_path, tmp_path)
+    else:
+        art = run_trial(_assignment('codex'), tmp_path, tmp_path)
+        assert art.patch.is_file()
+        assert art.returncode == runner_mod.TRIAL_TIMEOUT_RETURNCODE
+    assert captured['process_terminated']
+
+
+def test_locate_artifacts_rejects_mixed_trial_directories(tmp_path):
+    for name in ('one__123', 'two__456'):
+        (tmp_path / 'job' / name).mkdir(parents=True)
+    with pytest.raises(RunnerError, match='ambiguous'):
+        runner_mod.locate_artifacts(tmp_path, 'job')
+
+
+def test_docker_cancellation_audit_has_total_deadline(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(runner_mod.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(runner_mod.time, 'sleep', lambda sec: clock.__setitem__(0, clock[0]+sec))
+    calls = []
+    def docker(cmd, **kw):
+        calls.append(kw['timeout'])
+        clock[0] += kw['timeout']
+        raise subprocess.TimeoutExpired(cmd, kw['timeout'])
+    monkeypatch.setattr(runner_mod.subprocess, 'run', docker)
+    with pytest.raises(RunnerError):
+        runner_mod._cleanup_terminated_pier_containers(tmp_path)
+    assert clock[0] <= runner_mod.cancellation.PIER_CLEANUP_SECONDS
+    assert len(calls) <= 3
+
+
+def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(tmp_path, monkeypatch):
+    from dradar import runloop, pending
+    from dradar.api_client import ApiError
+    from test_go_menu import SubmitClient, _args
+    home = tmp_path / 'home'
+    work = home / 'work'
+    work.mkdir(parents=True)
+    monkeypatch.setattr(runloop, 'HOME', home)
+    captured = _fake_pier(monkeypatch, work)
+    original = runner_mod.subprocess.Popen
+    class Interrupted(original):
+        interrupted = False
+        def wait(self, timeout=None):
+            if not self.interrupted:
+                self.interrupted = True
+                signal.raise_signal(signal.SIGINT)
+            return super().wait(timeout)
+    monkeypatch.setattr(runner_mod.subprocess, 'Popen', Interrupted)
+    monkeypatch.setattr(runloop, 'run_trial', lambda a, t, w, **kw: run_trial(a, t, w))
+    monkeypatch.setattr(runloop, '_report_failure_quietly', lambda *a, **k: None)
+    assignment = dict(_assignment('codex'), nonce='original-nonce', batch_id='original-batch',
+                      owner_epoch=7, resume_generation=3, _runner_session_id='original-session')
+    class ScopedClient(SubmitClient):
+        def register_submission_upload_intent(self, aid, nonce, session, epoch, intent):
+            assert session == "original-session" and epoch == 7
+            return intent
+    class LostResponse(ScopedClient):
+        def submit(self, *a, **kw):
+            raise ApiError('synthetic response lost', status_code=None)
+    with pytest.raises(KeyboardInterrupt):
+        runloop._run_and_submit(LostResponse({}), assignment, tmp_path, _args(), 'abc')
+    row = pending.load(home)[0]
+    assert row['assignment_id'] == 'a1' and row['nonce'] == 'original-nonce'
+    assert row['batch_id'] == 'original-batch' and row['owner_epoch'] == 7
+    assert row['resume_generation'] == 3 and row['runner_session_id'] == 'original-session'
+    assert Path(row['patch_source_path']).read_text() == 'diff'
+    assert captured['process_terminated']
+    client = ScopedClient({})
+    assert runloop._upload_trial(client, row) == 'interrupted'
+    assert len(client.submissions) == 1 and pending.load(home) == []
