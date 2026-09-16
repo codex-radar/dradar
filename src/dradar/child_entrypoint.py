@@ -88,10 +88,12 @@ def popen_options(env: dict[str, str], *, extra_fds: tuple[int, ...] = ()) -> di
     bundled = len(prefix) == 2
     env.pop(_WINDOWS_HANDLE_ENV, None)
     env.pop("DRADAR_OTA_SELF_TEST", None)
+    env.pop("DRADAR_OTA_SOURCE_CHILD", None)
     if bundled:
         env["DRADAR_OTA_DISPATCH"] = "1"
     else:
         env.pop("DRADAR_OTA_DISPATCH", None)
+        env["DRADAR_OTA_SOURCE_CHILD"] = "1"
     if os.name != "nt":
         descriptors = tuple(dict.fromkeys((*pass_fds(), *extra_fds)))
         return {"pass_fds": descriptors} if descriptors else {}

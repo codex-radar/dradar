@@ -9,7 +9,7 @@ The actual command implementations live in sibling modules, split by concern:
   local_config.py - the shared ~/.dradar/config.json + constants
 
 This file owns only the argparse tree + `main()`, this package's
-console-script entry point (see pyproject.toml). Import everything else from
+command dispatcher. Public entry points go through the OTA launcher. Import everything else from
 the module that defines it — the single-file-era courtesy re-exports were
 dropped once a grep of the public consumers showed nothing reaching through
 `dradar.cli`.
@@ -682,4 +682,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Module invocations are public entry points too (pip/source installs).
+    # Internal children carry an explicit marker so they retain their running
+    # payload instead of independently selecting a different OTA generation.
+    from .launcher import main as launcher_main
+    sys.exit(launcher_main())
