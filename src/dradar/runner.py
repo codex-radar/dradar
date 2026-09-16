@@ -1263,6 +1263,13 @@ def _pier_process_env(
         env[CODEBUDDY_SOURCE_IMAGE_ENV] = CODEBUDDY_CONTAINER_IMAGE
     if egress_environment:
         env.update(egress_environment)
+    # Pier's stdout/stderr are redirected to our UTF-8 log. On Windows an
+    # inherited cp936/GBK encoding can crash Rich's final summary (e.g. U+2022)
+    # after the agent has finished, turning a completed run into an error.
+    # Set these before Python starts; changing the parent's console code page
+    # or accepting a nonzero Pier exit is neither necessary nor safe.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
