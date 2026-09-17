@@ -23,6 +23,6 @@ def test_real_pier_install_spec_from_runner_bundle(tmp_path, monkeypatch):
     assert len(install.steps) == 1
     assert install.steps[0].user == 'root'
     assert install.steps[0].run == module._install_command()
-    assert install.cache_key.endswith('linux-runtime-v4')
+    assert install.cache_key.endswith('linux-runtime-v5')
     assert '/opt/grok-runtime/bin/grok --version' in install.verification_command
     assert agent.get_version_command() == '/opt/grok-runtime/bin/grok --version'
