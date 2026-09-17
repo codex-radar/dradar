@@ -185,6 +185,7 @@ def test_staging_rejects_existing_foreign_owner_without_repair(isolated):
     from dradar.artifact_boundary_win import WinAPI, SECURITY_ATTRIBUTES
     from dradar.artifact_staging import ensure_staged_patch
     art = _fake_art(isolated)
+    original_patch = art.patch.read_bytes()
     foreign = art.trial_dir / ".dradar"
     api = WinAPI(UnsafeArtifact)
     descriptor = ctypes.c_void_p()
@@ -209,4 +210,50 @@ def test_staging_rejects_existing_foreign_owner_without_repair(isolated):
             with pytest.raises(UnsafeArtifact, match="trial_not_host_private"):
                 boundary.api.private(handle)
     assert not (foreign / "artifact-staging").exists()
-    assert art.patch.read_bytes() == b"diff --git a b\n"
+    assert art.patch.read_bytes() == original_patch
+
+
+
+def test_nested_upload_snapshots_are_private_and_preserve_bytes(isolated):
+    from dradar.artifact_boundary import TrialFiles, snapshot_agent
+    art = _fake_art(isolated)
+    payload = b'{"answer":true}'
+    (art.trial_dir / "result.json").write_bytes(payload)
+    nested = Path("agent/sessions/child/events.jsonl")
+    (art.trial_dir / nested).parent.mkdir(parents=True)
+    (art.trial_dir / nested).write_bytes(payload + b"\n")
+    with snapshot_agent(art.trial_dir, include_result=True) as first:
+        with TrialFiles(first) as boundary:
+            boundary.parent(nested, create=True)
+            assert boundary.read(nested) == payload + b"\n"
+        # The uploader snapshots once, then bundle construction snapshots the
+        # returned directory again. Both complete trees must pass the guard.
+        with snapshot_agent(first, include_result=True) as second:
+            with TrialFiles(second) as boundary:
+                boundary.parent(nested, create=True)
+                assert boundary.read("result.json") == payload
+                assert boundary.read(nested) == payload + b"\n"
+        assert not second.exists()
+    assert not first.exists()
+    assert (art.trial_dir / "result.json").read_bytes() == payload
+
+
+def test_private_post_run_creates_valid_empty_agent_snapshot(isolated):
+    from types import SimpleNamespace
+    from dradar.artifact_boundary import TrialFiles, private_post_run
+    art = _fake_art(isolated)
+    assert not (art.trial_dir / "agent").exists()
+    provider = SimpleNamespace(logs_dir=art.trial_dir / "agent")
+    seen = []
+    @private_post_run
+    def post_run(self, context):
+        with TrialFiles(self.logs_dir.parent) as boundary:
+            boundary.parent("agent/probe", create=True)
+        seen.append(self.logs_dir.parent)
+        return "observed"
+    assert post_run(provider, None) == "observed"
+    assert provider.logs_dir == art.trial_dir / "agent"
+    assert not seen[0].exists()
+    with TrialFiles(art.trial_dir) as boundary:
+        boundary.parent(".dradar/host-output/state.json", create=True)
+        assert boundary.read(".dradar/host-output/state.json")

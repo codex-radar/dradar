@@ -350,7 +350,16 @@ def snapshot_agent(root, *, include_result=False):
     try:
         with tempfile.TemporaryDirectory(prefix='dradar-logs-') as temporary:
             destination = Path(temporary).resolve()  # host-created, not input
-            with TrialFiles(root) as source:
+            if os.name == 'nt':
+                try:
+                    from _dradar_artifact_boundary_win import WinAPI
+                except ModuleNotFoundError:
+                    from dradar.artifact_boundary_win import WinAPI
+                # Do not change the owner of an existing temp root. Create a
+                # fresh child with the same owner/ACL contract as host output.
+                destination = destination / 'snapshot'
+                WinAPI(UnsafeArtifact).create_private_directory(destination)
+            with TrialFiles(root) as source, TrialFiles(destination) as output:
                 paths = (
                     source.files('agent', skip_dirs={DSH_HOME_DIR})
                     if source.exists('agent') else []
@@ -373,9 +382,12 @@ def snapshot_agent(root, *, include_result=False):
                     if total > MAX_TREE_BYTES:
                         raise UnsafeArtifact('tree_limit')
                     target = destination / path
-                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    # Every newly-created nested directory must also satisfy
+                    # the boundary when this snapshot is consumed again.
+                    output.parent(path, create=True)
                     target.write_bytes(data)
                 source.verify()
+                output.verify()
             yield destination
     except OSError as exc:
         raise UnsafeArtifact('artifact_io_rejected') from exc
@@ -392,7 +404,8 @@ def private_post_run(method):
             files.write_host('.dradar/host-output/state.json', b'{"complete":false}')
         with snapshot_agent(trial) as snapshot:
             self.logs_dir = snapshot / 'agent'
-            self.logs_dir.mkdir(exist_ok=True, mode=0o700)
+            with TrialFiles(snapshot) as output:
+                output.parent('agent/.post-run-parent', create=True)
             try:
                 outputs = ('trajectory.json', 'provider-usage.json')
                 for name in outputs:
