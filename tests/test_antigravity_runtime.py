@@ -140,6 +140,39 @@ subprocess.run = slow_run'''
         self.assertTrue(status['exported'])
         self.assertFalse(marker.exists())
 
+    def test_repository_config_cannot_redirect_worktree(self):
+        outside = self.root / 'outside'; outside.mkdir()
+        (outside / 'file').write_text('wrong workspace\n')
+        code = f"""import subprocess
+from pathlib import Path
+Path('file').write_text('actual workspace\\n')
+subprocess.run(['git', 'config', 'core.worktree', {str(outside)!r}], check=True)
+subprocess.run(['git', 'config', 'core.bare', 'true'], check=True)
+"""
+        status = self.finish(self.launch(code))
+        self.assertTrue(status['exported'])
+        patch = (self.root / 'artifacts/model.patch').read_text()
+        self.assertIn('+actual workspace', patch)
+        self.assertNotIn('wrong workspace', patch)
+
+    def test_missing_promisor_object_never_runs_remote_helper(self):
+        remote = self.root / 'remote.git'
+        marker = self.root / 'remote-helper-ran'
+        subprocess.run(['git', 'clone', '--bare', str(self.repo), str(remote)], check=True, capture_output=True)
+        blob = self.git('rev-parse', 'HEAD:file')
+        code = f"""import subprocess
+from pathlib import Path
+Path('file').write_text('changed\\n')
+for k,v in [('remote.origin.url', {str(remote)!r}), ('remote.origin.promisor','true'),
+            ('extensions.partialClone','origin'), ('protocol.file.allow','always'), ('remote.origin.uploadpack', {'touch ' + str(marker) + '; git-upload-pack'!r})]:
+    subprocess.run(['git', 'config', k, v], check=True)
+Path('.git/objects/{blob[:2]}/{blob[2:]}').unlink()
+"""
+        status = self.finish(self.launch(code))
+        self.assertFalse(status['exported'])
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / 'artifacts/model.patch').exists())
+
     def test_model_cannot_read_supervisor_key_or_write_receipt_fd(self):
         code = """import os
 from pathlib import Path

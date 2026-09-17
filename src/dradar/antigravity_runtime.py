@@ -72,9 +72,13 @@ def supervise(config: dict) -> int:
         if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
             raise RuntimeError("AGY subreaper unavailable")
         git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        git_env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
-        git = ["/usr/bin/git", "--no-replace-objects", "-c", "safe.directory=" + config["workspace"],
+        git_env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_NO_LAZY_FETCH="1")
+        git = ["/usr/bin/git", "--no-replace-objects",
+               "--git-dir=" + config["workspace"] + "/.git", "--work-tree=" + config["workspace"],
+               "-c", "safe.directory=" + config["workspace"],
                "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+               "-c", "core.worktree=" + config["workspace"], "-c", "core.bare=false",
+               "-c", "protocol.allow=never", "-c", "diff.submodule=short",
                "-C", config["workspace"]]
         base = subprocess.check_output(git + ["rev-parse", "--verify",
             config["base"] + "^{commit}"], env=git_env, timeout=EXPORT_SECONDS, text=True).strip()
@@ -105,12 +109,14 @@ def supervise(config: dict) -> int:
         # Disable every configured driver before add/diff; --no-textconv alone
         # does not suppress these filters. Never run a repository-owned hook.
         filters = subprocess.run(git + ["config", "--null", "--name-only", "--get-regexp",
-            r"^filter\..*\.(clean|smudge|process|required)$"], env=git_env,
+            r"^(filter\..*\.(clean|smudge|process|required)|protocol\..*\.allow)$"], env=git_env,
             capture_output=True, timeout=max(.001, deadline - time.monotonic()))
         if filters.returncode not in (0, 1) or len(filters.stdout) > 65536:
             raise RuntimeError("AGY filter configuration cannot be bounded")
         for name in filters.stdout.decode().split("\0"):
-            if name:
+            if name.startswith("protocol."):
+                git.extend(["-c", name + "=never"])
+            elif name:
                 driver = name.rsplit(".", 1)[0]
                 for setting in ("clean=", "smudge=", "process=", "required=false"):
                     git.extend(["-c", driver + "." + setting])
