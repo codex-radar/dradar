@@ -1673,6 +1673,11 @@ def build_pier_command(
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"kimi_cli_file={provider_cli_path}",
+            "--ak", "task_execution_context_json=" + json.dumps({
+                "assignment_id": assignment["assignment_id"],
+                "task_id": assignment["task_id"],
+                "attempt_id": assignment.get("_runner_session_id") or uuid.uuid4().hex,
+            }, sort_keys=True, separators=(",", ":")),
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={KIMI_CLI_VERSION}",
         ]
