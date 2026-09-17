@@ -262,6 +262,28 @@ def _grok_usage_facts(events: list[dict]) -> dict:
     }
 
 
+def _download_command() -> str:
+    """Resume only this installation's private file within one wall-clock budget."""
+    return (
+        'set -euo pipefail; grok_tmp=$1; grok_url=$2; grok_sha=$3; '
+        'grok_attempt=1; '
+        'while true; do '
+        '  if curl --fail --silent --show-error --location --continue-at - '
+        '      --connect-timeout 15 --max-time 120 '
+        '      --output "${grok_tmp}" "${grok_url}"; then break; fi; '
+        # A complete pinned file may already exist after a late disconnect or
+        # an HTTP 416 response to a request beyond its last byte.
+        '  if printf "%s  %s\\n" "${grok_sha}" "${grok_tmp}" '
+        '      | sha256sum --check --strict --status -; then break; fi; '
+        '  echo "Grok download attempt ${grok_attempt} failed; '
+        'retained $(wc -c < "${grok_tmp}") bytes for resume" >&2; '
+        '  if [ "${grok_attempt}" -ge 3 ]; then '
+        "    echo 'Grok download failed: exhausted 3 attempts' >&2; exit 1; fi; "
+        '  grok_attempt=$((grok_attempt + 1)); sleep 2; '
+        'done'
+    )
+
+
 def _install_command() -> str:
     return (
         "set -euo pipefail; "
@@ -283,20 +305,22 @@ def _install_command() -> str:
         "mkdir -p /opt/grok-runtime/bin; "
         f"grok_url=https://storage.googleapis.com/grok-build-public-artifacts/cli/"
         f"grok-{GROK_CLI_VERSION}-linux-${{grok_arch}}; "
-        # Retry whole downloads (including curl 18), never append partial bytes.
-        # Three 120s transfers plus two 2s pauses bound download time to 364s.
+        # The watchdog includes retries, pauses and intermediate hash checks.
+        # Keep it in its own process group and forward cancellation before
+        # cleaning up: a retry must never recreate an already removed file.
         'grok_tmp=$(mktemp /opt/grok-runtime/bin/.grok.XXXXXXXX); '
         "trap 'rm -f -- \"${grok_tmp}\"' EXIT; "
         "trap 'exit 1' HUP INT TERM; "
-        "grok_attempt=1; "
-        "while ! curl --fail --silent --show-error --location "
-        "  --connect-timeout 15 --max-time 120 "
-        '  --output "${grok_tmp}" "${grok_url}"; do '
-        '  if [ "${grok_attempt}" -ge 3 ]; then '
-        "    echo 'Grok download failed: exhausted 3 attempts (120s each)' >&2; "
-        "    exit 1; fi; "
-        "  grok_attempt=$((grok_attempt + 1)); sleep 2; "
-        "done; "
+        "timeout --kill-after=5s 364s bash -c "
+        + shlex.quote(_download_command())
+        + ' -- "${grok_tmp}" "${grok_url}" "${grok_sha}" & '
+        'grok_download_pid=$!; '
+        "trap 'kill -TERM \"${grok_download_pid}\" 2>/dev/null || true; "
+        "wait \"${grok_download_pid}\" 2>/dev/null || true; exit 1' HUP INT TERM; "
+        'if wait "${grok_download_pid}"; then :; else '
+        "  echo 'Grok download failed: attempts or 364s wall-clock budget exhausted' >&2; "
+        '  exit 1; fi; '
+        "trap 'exit 1' HUP INT TERM; "
         "printf '%s  %s\\n' \"${grok_sha}\" \"${grok_tmp}\" "
         "  | sha256sum --check --strict -; "
         'chmod 0755 "${grok_tmp}"; '
@@ -373,7 +397,7 @@ class GrokBuild(BaseInstalledAgent):
                 f"{self._REMOTE_CLI.as_posix()} --version "
                 f"| grep -Eq '(^| ){GROK_VERSION_PATTERN}( |$)'"
             ),
-            cache_key=f"dradar-grok-subscription-{version}-linux-runtime-v4",
+            cache_key=f"dradar-grok-subscription-{version}-linux-runtime-v5",
         )
 
     def network_allowlist(self) -> NetworkAllowlist:

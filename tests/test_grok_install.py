@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
 import socket
+import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,8 +25,8 @@ TREE = ast.parse(SOURCE.read_text())
 NODES = [n for n in TREE.body if
          isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and
          t.id in {'GROK_CLI_VERSION', 'GROK_VERSION_PATTERN', 'GROK_LINUX_SHA256'}
-         for t in n.targets) or isinstance(n, ast.FunctionDef) and n.name == '_install_command']
-NS = {}
+         for t in n.targets) or isinstance(n, ast.FunctionDef) and n.name in {'_install_command', '_download_command'}]
+NS = {"shlex": shlex}
 exec(compile(ast.Module(body=NODES, type_ignores=[]), str(SOURCE), 'exec'), NS)
 PAYLOAD = b'#!/bin/sh\necho "grok 1.0.13 (release)"\n'
 
@@ -41,6 +43,9 @@ class GrokInstallTest(unittest.TestCase):
         self.mode = 'ok'
         self.payload = PAYLOAD
         self.requests = 0
+        self.offsets = []
+        self.chunk_size = 16384
+        self.chunk_delay = 0.035
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -56,16 +61,40 @@ class GrokInstallTest(unittest.TestCase):
                     self.send_error(503)
                     return
                 data = owner.payload
-                self.send_response(200)
-                self.send_header('Content-Length', str(len(data)))
+                range_header = self.headers.get('Range')
+                offset = int(range_header.removeprefix('bytes=').split('-')[0]) if range_header else 0
+                owner.offsets.append(offset)
+                if owner.mode == 'range416' or offset >= len(data):
+                    self.send_response(416)
+                    self.send_header('Content-Range', f'bytes */{len(data)}')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                if owner.mode == 'ignore_range':
+                    offset = 0
+                self.send_response(206 if offset else 200)
+                if offset:
+                    start = offset + 1 if owner.mode == 'bad_range' else offset
+                    self.send_header('Content-Range', f'bytes {start}-{len(data)-1}/{len(data)}')
+                self.send_header('Content-Length', str(len(data)-offset))
                 self.end_headers()
-                if owner.mode == 'truncate' or (owner.mode == 'recover' and owner.requests == 1):
-                    self.wfile.write(data[:7])
-                    self.wfile.flush()
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                    self.connection.close()
-                else:
-                    self.wfile.write(data)
+                try:
+                    if owner.mode in {'recover', 'ignore_range', 'bad_range', 'changed'} and owner.requests == 1 or owner.mode == 'truncate':
+                        self.wfile.write(data[offset:offset+7])
+                        self.wfile.flush()
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        self.connection.close()
+                    elif owner.mode == 'slow':
+                        for start in range(offset, len(data), owner.chunk_size):
+                            self.wfile.write(data[start:start+owner.chunk_size])
+                            self.wfile.flush()
+                            time.sleep(owner.chunk_delay)
+                    elif owner.mode == 'changed' and offset:
+                        self.wfile.write(b'X' * (len(data)-offset))
+                    else:
+                        self.wfile.write(data[offset:])
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -82,7 +111,7 @@ class GrokInstallTest(unittest.TestCase):
         path.write_text('#!/bin/sh\n' + body + '\n')
         path.chmod(0o755)
 
-    def run_install(self, *, bad_hash=False, fast=False):
+    def install_command(self, *, bad_hash=False, fast=False):
         command = NS['_install_command']()
         digest = hashlib.sha256(self.payload).hexdigest()
         for sha in NS['GROK_LINUX_SHA256'].values():
@@ -95,9 +124,14 @@ class GrokInstallTest(unittest.TestCase):
                                       '--connect-timeout 0.2 --max-time 0.3')
             command = command.replace('sleep 2;', 'sleep 0.1;')
             command = command.replace('--kill-after=5s 15s', '--kill-after=0.2s 0.3s')
+            command = command.replace('--kill-after=5s 364s', '--kill-after=0.2s 1.2s')
+        return command
+
+    def run_install(self, *, bad_hash=False, fast=False, command=None, limit=25):
+        command = command or self.install_command(bad_hash=bad_hash, fast=fast)
         start = time.monotonic()
         result = subprocess.run(['bash', '-c', command], text=True, capture_output=True,
-                                timeout=25, env=dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin',
+                                timeout=limit, env=dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin',
                                                      NO_PROXY='*', no_proxy='*'))
         self.elapsed = time.monotonic() - start
         self.assertEqual(list(self.target_dir.glob('.grok.*')), [], result.stderr)
@@ -121,6 +155,7 @@ class GrokInstallTest(unittest.TestCase):
         self.assertIn('curl: (18)', result.stderr)
         self.assertEqual(self.target.read_bytes(), PAYLOAD)
         self.assertEqual(self.requests, 2)
+        self.assertEqual(self.offsets, [0, 7])
 
     def test_permanent_truncation(self):
         self.mode = 'truncate'
@@ -169,6 +204,82 @@ class GrokInstallTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(self.target.iterdir()), [])
 
+    def test_continuous_slow_download_resumes(self):
+        self.mode = 'slow'
+        self.payload = PAYLOAD + b'#' * (262144 - len(PAYLOAD))
+        result = self.run_install(fast=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+        self.assertGreaterEqual(self.requests, 2)
+        self.assertGreater(self.offsets[1], 0)
+        self.assertLess(self.elapsed, 1.5)
+
+    def test_216_restart_strategy_fails_same_slow_fixture(self):
+        self.mode = 'slow'
+        self.payload = PAYLOAD + b'#' * (262144 - len(PAYLOAD))
+        command = self.install_command(fast=True).replace('--continue-at - ', '')
+        self.assert_preserved(self.run_install(command=command))
+        self.assertEqual(self.requests, 3)
+        self.assertEqual(self.offsets, [0, 0, 0])
+
+    def test_server_ignores_range(self):
+        self.mode = 'ignore_range'
+        self.assert_preserved(self.run_install(fast=True))
+        self.assertGreater(self.offsets[1], 0)
+
+    def test_wrong_content_range(self):
+        self.mode = 'bad_range'
+        self.assert_preserved(self.run_install(fast=True))
+
+    def test_object_changes_mid_resume(self):
+        self.mode = 'changed'
+        self.assert_preserved(self.run_install(fast=True))
+
+    def test_416_partial_file_is_not_success(self):
+        self.mode = 'range416'
+        self.assert_preserved(self.run_install(fast=True))
+
+    def test_416_complete_file_requires_sha_and_version(self):
+        # curl wrapper models a completed previous write before the 416 reply;
+        # actual curl/HTTP still handle the range response.
+        self.mode = 'range416'
+        seed = self.root / 'seed'
+        seed.write_bytes(self.payload)
+        self.tool('curl', f'for last; do :; done; '
+                  f'prev=""; for arg; do [ "$prev" = --output ] && cp "{seed}" "$arg"; prev="$arg"; done; '
+                  'exec /usr/bin/curl "$@"')
+        result = self.run_install(fast=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+        self.assertEqual(self.offsets, [len(self.payload)])
+
+    def test_global_deadline_includes_retry_pause(self):
+        self.mode = 'truncate'
+        command = self.install_command(fast=True).replace('sleep 0.1;', 'sleep 5;')
+        self.assert_preserved(self.run_install(command=command))
+        self.assertEqual(self.requests, 1)
+        self.assertLess(self.elapsed, 1.7)
+
+    def test_cancel_download_cleans_up_and_stops_retries(self):
+        self.mode = 'stall'
+        process = subprocess.Popen(['bash', '-c', self.install_command()], text=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env=dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin',
+                                            NO_PROXY='*', no_proxy='*'))
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        deadline = time.monotonic() + 3
+        while not self.requests and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.requests, 1)
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=3)
+        self.assertNotEqual(process.returncode, 0, stdout)
+        self.assertEqual(list(self.target_dir.glob('.grok.*')), [], stderr)
+        self.assertEqual(self.target.read_text(), 'previous validated installation')
+        time.sleep(0.3)
+        self.assertEqual(self.requests, 1)
+        self.assertEqual(list(self.target_dir.glob('.grok.*')), [])
+
 
 class GrokInstallContractTest(unittest.TestCase):
     def test_production_pins_and_budget(self):
@@ -182,6 +293,8 @@ class GrokInstallContractTest(unittest.TestCase):
         self.assertNotIn('--insecure', command)
         self.assertNotIn('--retry', command)  # no multiplicative curl retries
         self.assertIn('coreutils', command)
+        self.assertIn('--continue-at -', command)
+        self.assertIn('timeout --kill-after=5s 364s', command)
 
 
 if __name__ == '__main__':
