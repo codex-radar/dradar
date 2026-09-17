@@ -31,6 +31,7 @@ import tempfile
 import time
 import uuid
 
+from . import cancellation
 from . import (
     __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
     empty_submission_circuit, failure_circuit, image_cache, local_jobs, pending,
@@ -1806,6 +1807,7 @@ def _bundled_completed_outcome(
 
 
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False):
+    pending.record(HOME, entry)
     try:
         if (entry.get("upload_blocked") and not request_salvage) or not Path(entry["trial_dir"]).exists():
             return _upload_trial_checked(
@@ -2825,10 +2827,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     if not _assignment_lock_held:
         try:
             with assignment_lock.lock(HOME, assignment["assignment_id"]):
-                return _run_and_submit(
-                    client, assignment, tasks_root, args, local_commit,
-                    telemetry=telemetry, _assignment_lock_held=True,
-                )
+                with cancellation.scope() as stop:
+                    result = _run_and_submit(
+                        client, assignment, tasks_root, args, local_commit,
+                        telemetry=telemetry, _assignment_lock_held=True,
+                    )
+                    if stop.requested and result != "cleanup-unconfirmed":
+                        raise KeyboardInterrupt
+                    return result
         except assignment_lock.AssignmentBusy:
             print(
                 f"assignment {assignment['assignment_id']} is already running on this "
@@ -2969,6 +2975,36 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         event='auth_observed_v2' if 'execution_id' in values else 'auth_observed'
         return _record_flight_event(telemetry,event,component='provider',assignment_id=assignment['assignment_id'],attributes=values,**({'occurred_at':at} if at is not None else {}))
 
+    def remove_builder():
+        # Assignment-scoped builders own only this trial's BuildKit
+        # state and are removed on every exit path. A shared builder
+        # is deliberately retained so its immutable layers serve the
+        # next worker; image/runtime objects are still cleaned below.
+        cache_mode = (
+            getattr(args, "_build_cache_mode", None)
+            or getattr(args, "build_cache_mode", None)
+            or image_cache.DEFAULT_BUILD_CACHE_MODE
+        )
+        if cancellation.requested():
+            builder_removed, builder_note = True, None
+        elif cache_mode == "shared":
+            builder_removed, builder_note = (
+                image_cache.remove_trial_builder(
+                    HOME, assignment["assignment_id"], mode="shared",
+                )
+            )
+        else:
+            builder_removed, builder_note = image_cache.remove_trial_builder(
+                HOME, assignment["assignment_id"],
+            )
+        if not builder_removed:
+            args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
+                "临时构建空间未能删除："
+                + (builder_note or "Docker 未返回具体原因"),
+                limit=1200,
+            )
+
+    art = None
     for attempt in (1, 2):
         assignment["_runner_attempt"]=attempt
         try:
@@ -2993,32 +3029,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         or image_cache.DEFAULT_BUILD_CACHE_MODE
                     ),
                 )
+                cancellation.protect_finalization()
             finally:
-                # Assignment-scoped builders own only this trial's BuildKit
-                # state and are removed on every exit path. A shared builder
-                # is deliberately retained so its immutable layers serve the
-                # next worker; image/runtime objects are still cleaned below.
-                cache_mode = (
-                    getattr(args, "_build_cache_mode", None)
-                    or getattr(args, "build_cache_mode", None)
-                    or image_cache.DEFAULT_BUILD_CACHE_MODE
-                )
-                if cache_mode == "shared":
-                    builder_removed, builder_note = (
-                        image_cache.remove_trial_builder(
-                            HOME, assignment["assignment_id"], mode="shared",
-                        )
-                    )
-                else:
-                    builder_removed, builder_note = image_cache.remove_trial_builder(
-                        HOME, assignment["assignment_id"],
-                    )
-                if not builder_removed:
-                    args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
-                        "临时构建空间未能删除："
-                        + (builder_note or "Docker 未返回具体原因"),
-                        limit=1200,
-                    )
+                if art is None:
+                    remove_builder()
             break
         except BuildFlakeError as exc:
             if telemetry:
@@ -3058,6 +3072,28 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             return "environment-build-failed"
         except RunnerCleanupUnconfirmedError as exc:
+            if exc.job_dir is not None:
+                # This is a quarantine fence, not a claimed valid result. Do
+                # not inspect/copy files while a writer may still be alive.
+                pending.record(HOME, {
+                    "assignment_id": assignment["assignment_id"],
+                    "nonce": assignment["nonce"],
+                    "task_id": assignment["task_id"],
+                    "batch_id": assignment.get("batch_id"),
+                    "scope_fingerprint": pending.scope_fingerprint(
+                        server=getattr(client, "server", None),
+                        account_scope=getattr(client, "account_scope", None),
+                        benchmark_id=getattr(client, "benchmark_id", None),
+                        batch_id=assignment.get("batch_id"),
+                    ),
+                    "job_dir": str(exc.job_dir),
+                    "upload_blocked": "cleanup_unconfirmed",
+                    "ledger_version": 3,
+                    "owner_epoch": assignment.get("owner_epoch", 0),
+                    "resume_generation": assignment.get("resume_generation", 0),
+                    "runner_session_id": (telemetry.session_id if telemetry is not None
+                                          else assignment.get("_runner_session_id")),
+                })
             cause = exc.__cause__
             if isinstance(cause, RunnerError) and cause.report_code:
                 _report_failure_quietly(
@@ -3196,57 +3232,6 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 failure_code=f"grok-preflight-{preflight_kind}",
             )
             return "provider-preflight-failed"
-
-    # Make the authoritative source copy immediately after Pier returns,
-    # before result parsing, image bookkeeping, pause handling, or upload can
-    # be interrupted. _upload_trial repeats this idempotently and persists the
-    # same paths/digest in the pending ledger.
-    try:
-        artifact_staging.ensure_staged_patch(art.trial_dir)
-    except artifact_staging.PatchStagingError:
-        # _upload_trial below records the exact structured failure and keeps it
-        # retryable. Do not turn an artifact handoff fault into a model failure.
-        pass
-
-    # Pier normally removes compose images on a clean stop, but Docker/Pier
-    # failures in the wild leave the task image tagged. Record only exact
-    # label-validated references now, before upload cleanup removes job_dir.
-    # This is best-effort bookkeeping and must never invalidate real work.
-    image_cache.record_trial_images(
-        HOME,
-        assignment_id=assignment["assignment_id"],
-        task_id=assignment["task_id"],
-        trial_name=art.trial_dir.name,
-    )
-    cleanup = image_cache.cleanup_trial_resources(
-        HOME,
-        assignment_id=assignment["assignment_id"],
-        job_dir=art.job_dir,
-        trial_name=art.trial_dir.name,
-        builder_isolated=art.builder_isolated,
-        builder_reusable=art.builder_reusable,
-        builder_name=art.builder_name,
-        keep_images=bool(args.keep),
-    )
-    removed_objects = (
-        cleanup.removed_containers + cleanup.removed_networks
-        + cleanup.removed_volumes + cleanup.removed_images
-    )
-    if cleanup.success:
-        reclaimed = _format_size(cleanup.estimated_reclaimed)
-        print(
-            f"  本题运行环境已清理（{removed_objects} 项，"
-            f"预计释放 {reclaimed}）"
-        )
-    else:
-        args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
-            cleanup.note or "题目运行环境未能完整清理",
-            limit=1200,
-        )
-        print(
-            "  提示：本题运行环境没有清理完整；这一路运行不会继续下一题"
-        )
-        print(f"  -> {args._docker_cleanup_blocked}")
 
     stats = summarize_result(art.result)
     # A recorded agent exception is always interrupted. A nonzero outer Pier
@@ -3508,25 +3493,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "pier_failure_phase": "post_agent",
         })
 
-    if art.job_dir is not None:
-        try:
-            local_jobs.cleanup_assignment(
-                HOME, assignment["assignment_id"], keep_job_dir=art.job_dir,
-            )
-        except ValueError:
-            # Test/developer adapters may return a job outside the managed
-            # jobs root. Never widen cleanup authority to accommodate it.
-            pass
-
-    if outcome == "interrupted":
-        _report_failure_quietly(
-            client, assignment, phase="agent",
-            failure_kind=meta.get("failure_kind") or "runner_failed",
-            failure_code=meta.get("failure_code") or "agent-interrupted",
-            outcome=outcome,
-        )
-
-    upload_outcome = _upload_trial(client, {
+    upload_entry = {
         "assignment_id": assignment["assignment_id"], "nonce": assignment["nonce"],
         "task_id": assignment["task_id"], "trial_dir": str(art.trial_dir),
         # A private run-plan credential may replay only its exact claim batch.
@@ -3546,8 +3513,83 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "ledger_version": 3,
         "owner_epoch": assignment.get("owner_epoch", 0),
         "resume_generation": assignment.get("resume_generation", 0),
-        "runner_session_id": telemetry.session_id if telemetry is not None else None,
-    }, ask_cleanup=(
+        "runner_session_id": (telemetry.session_id if telemetry is not None
+                              else assignment.get("_runner_session_id") or assignment.get("runner_session_id")),
+    }
+    pending.record(HOME, upload_entry)
+    # Persist the original bytes before any network report or optional
+    # reclamation can consume the outer cancellation budget.
+    try:
+        staged = artifact_staging.ensure_staged_patch(art.trial_dir, upload_entry)
+    except artifact_staging.PatchStagingError:
+        # The ordinary uploader records the detailed failure and keeps the
+        # durable fence. Never replace it with a model retry.
+        pass
+    else:
+        upload_entry.update(staged.ledger_fields)
+        pending.record(HOME, upload_entry)
+
+    if art.job_dir is not None:
+        try:
+            local_jobs.cleanup_assignment(
+                HOME, assignment["assignment_id"], keep_job_dir=art.job_dir,
+            )
+        except ValueError:
+            # Test/developer adapters may return a job outside the managed
+            # jobs root. Never widen cleanup authority to accommodate it.
+            pass
+
+    if outcome == "interrupted":
+        _report_failure_quietly(
+            client, assignment, phase="agent",
+            failure_kind=meta.get("failure_kind") or "runner_failed",
+            failure_code=meta.get("failure_code") or "agent-interrupted",
+            outcome=outcome,
+        )
+
+    remove_builder()
+    if not cancellation.requested():
+        # Pier normally removes compose images on a clean stop, but Docker/Pier
+        # failures in the wild leave the task image tagged. Record only exact
+        # label-validated references now, before upload cleanup removes job_dir.
+        # This is best-effort bookkeeping and must never invalidate real work.
+        image_cache.record_trial_images(
+            HOME,
+            assignment_id=assignment["assignment_id"],
+            task_id=assignment["task_id"],
+            trial_name=art.trial_dir.name,
+        )
+        cleanup = image_cache.cleanup_trial_resources(
+            HOME,
+            assignment_id=assignment["assignment_id"],
+            job_dir=art.job_dir,
+            trial_name=art.trial_dir.name,
+            builder_isolated=art.builder_isolated,
+            builder_reusable=art.builder_reusable,
+            builder_name=art.builder_name,
+            keep_images=bool(args.keep),
+        )
+        removed_objects = (
+            cleanup.removed_containers + cleanup.removed_networks
+            + cleanup.removed_volumes + cleanup.removed_images
+        )
+        if cleanup.success:
+            reclaimed = _format_size(cleanup.estimated_reclaimed)
+            print(
+                f"  本题运行环境已清理（{removed_objects} 项，"
+                f"预计释放 {reclaimed}）"
+            )
+        else:
+            args._docker_cleanup_blocked = image_cache.redact_docker_diagnostic(
+                cleanup.note or "题目运行环境未能完整清理",
+                limit=1200,
+            )
+            print(
+                "  提示：本题运行环境没有清理完整；这一路运行不会继续下一题"
+            )
+            print(f"  -> {args._docker_cleanup_blocked}")
+
+    upload_outcome = _upload_trial(client, upload_entry, ask_cleanup=(
         outcome == "completed"
         and not args.keep
         and not getattr(args, "yes", False)
@@ -4898,8 +4940,10 @@ def _worker_entrypoint_pass_fds() -> tuple[int, ...]:
     return pass_fds()
 
 
+@cancellation.scoped
 def _signal_workers(processes: list[subprocess.Popen]) -> None:
     """Ask children to stop cleanly, then bound escalation to dead processes."""
+    cancellation.protect_finalization()
     for process in processes:
         if process.poll() is not None:
             continue
@@ -4910,7 +4954,7 @@ def _signal_workers(processes: list[subprocess.Popen]) -> None:
                 process.send_signal(signal.SIGINT)
         except (OSError, ProcessLookupError):
             pass
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + cancellation.WORKER_STOP_SECONDS
     while time.monotonic() < deadline and any(p.poll() is None for p in processes):
         time.sleep(0.05)
     for process in processes:
