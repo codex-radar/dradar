@@ -841,7 +841,9 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
             (trial / "artifacts").mkdir(parents=True)
             (trial / "agent").mkdir()
             if patch:
-                (trial / "artifacts" / "model.patch").write_text(patch_payload)
+                # Model exports are bytes; avoid Windows text-mode CRLF conversion
+                # changing the payload after its receipt digest is calculated.
+                (trial / "artifacts" / "model.patch").write_bytes(patch_payload.encode())
                 if agy_receipt:
                     import hashlib
                     from dradar.artifact_boundary import TrialFiles
