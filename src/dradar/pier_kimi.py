@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import os
 import shlex
 import uuid
@@ -100,6 +101,7 @@ timeout = 5
 
 KIMI_POLICY = r'''#!/usr/bin/env python3
 import json
+import hashlib
 import sys
 
 DENIED_TOOLS = {"WebSearch", "FetchURL"}
@@ -642,6 +644,7 @@ class KimiCode(BaseInstalledAgent):
         kimi_cli_file: str,
         reasoning_effort: str,
         shared_oauth: bool = False,
+        task_execution_context_json: str | dict | None = None,
         **kwargs: Any,
     ):
         auth = Path(auth_json_file)
@@ -665,6 +668,8 @@ class KimiCode(BaseInstalledAgent):
         }
         if len(secrets) < 2:
             raise ValueError("Kimi OAuth run credential is not refreshable")
+        self._task_execution_context = (json.loads(task_execution_context_json)
+            if isinstance(task_execution_context_json, str) else task_execution_context_json)
         self._auth_json_file = auth
         self._shared_oauth = shared_oauth
         self._reasoning_effort = reasoning_effort
@@ -706,7 +711,6 @@ class KimiCode(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         await verify_task_baseline(environment)
-        await register_worker(runtime="pier", context="agent", profile="kimi")
         del context
         self._instruction = instruction
         remote_home = self._REMOTE_HOME.as_posix()
@@ -878,21 +882,45 @@ class KimiCode(BaseInstalledAgent):
             )
             return validated_session_id(result.stdout)
 
-        async def run_initial() -> None:
-            await self.exec_as_agent(
-                environment,
-                command=command_for(["--prompt", instruction], append=False),
-                env=env,
+        async def execute_model(command: str) -> None:
+            # This is readiness/owner acknowledgement, not a claim that a model
+            # request happened. The live native gate below must still pass.
+            await register_worker(runtime="pier", context="agent", profile="kimi")
+            if not self._shared_oauth:
+                await self.exec_as_agent(environment, command=command, env=env)
+                return
+            gate = getattr(environment, "exec_kimi_model", None)
+            contract = "a846f80a07147e8988959b4f259defb1b70f4b779bae859e61a048c4ef101ecf"
+            if (not callable(gate)
+                    or getattr(environment, "NATIVE_TASK_GATE_CONTRACT_SHA256", None) != contract
+                    or not isinstance(self._task_execution_context, dict)):
+                raise RuntimeError("Kimi shared OAuth requires the native task execution gate")
+            # Match BaseInstalledAgent._exec's final extra-env precedence, using
+            # the real environment's agent/persistent env resolvers.
+            model_env = dict(env)
+            model_env.update(self._extra_env)
+            model_env = environment.agent_process_env(model_env)
+
+            async def record(proof: dict) -> None:
+                path = self.logs_dir / ("native-task-execution-" + proof["dispatch_nonce"] + ".json")
+                log_store.replace_text(path, json.dumps(proof, sort_keys=True))
+
+            result = await gate(
+                command=command, env=model_env, context=self._task_execution_context,
+                config_sha256=hashlib.sha256(kimi_model_config(self.model_name).encode()).hexdigest(),
+                cli_hashes=KIMI_BINARY_SHA256, on_verified=record,
             )
+            if result.return_code != 0:
+                from pier.agents.installed.base import NonZeroAgentExitCodeError
+                raise NonZeroAgentExitCodeError(f"Command failed (exit {result.return_code}): Kimi native command")
+
+        async def run_initial() -> None:
+            await execute_model(command_for(["--prompt", instruction], append=False))
 
         async def run_resume(session_id: str, _prompt: str) -> None:
-            await self.exec_as_agent(
-                environment,
-                command=command_for(
-                    ["--session", session_id, "--prompt", instruction], append=True,
-                ),
-                env=env,
-            )
+            await execute_model(command_for(
+                ["--session", session_id, "--prompt", instruction], append=True,
+            ))
 
         async def classify_retryable_error(error: BaseException) -> bool:
             if pier_exit_code(error) != KIMI_PROVIDER_CONNECTION_EXIT_CODE:
