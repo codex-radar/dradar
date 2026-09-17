@@ -815,7 +815,7 @@ def test_short_baseline_overlay_requires_pre_model_resolution(tmp_path):
 def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
                trajectory_payload=None, runtime_diagnostic=None,
                zcode_outcome=None, provider_usage_sidecar=None,
-               result=None, rc=0):
+               result=None, rc=0, agy_receipt=False, patch_payload="diff"):
     """Stub build_pier_command + subprocess.run; the fake 'pier' lays down the
     trial-dir layout the real one would. Returns a dict capturing job_name."""
     captured = {}
@@ -823,6 +823,7 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home,
                    dev_agent=None, **provider_kwargs):
         captured["job_name"] = job_name
+        captured["assignment"] = assignment
         captured["tasks_root"] = tasks_root
         hook = tasks_root / assignment["task_id"] / "pre_artifacts.sh"
         if hook.is_file():
@@ -840,7 +841,17 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
             (trial / "artifacts").mkdir(parents=True)
             (trial / "agent").mkdir()
             if patch:
-                (trial / "artifacts" / "model.patch").write_text("diff")
+                # Model exports are bytes; avoid Windows text-mode CRLF conversion
+                # changing the payload after its receipt digest is calculated.
+                (trial / "artifacts" / "model.patch").write_bytes(patch_payload.encode())
+                if agy_receipt:
+                    import hashlib
+                    from dradar.artifact_boundary import TrialFiles
+                    with TrialFiles(trial) as files:
+                        files.write_host(".dradar/agy-export.json", json.dumps({
+                            "schema": "dradar-agy-export-v1", "run_id": captured["assignment"]["_artifact_run_id"],
+                            "writer_stopped": True, "exported": True,
+                            "patch_sha256": hashlib.sha256(patch_payload.encode()).hexdigest()}).encode())
             if trajectory:
                 payload = (
                     trajectory_payload
@@ -1310,11 +1321,12 @@ def _prepare_fake_antigravity(monkeypatch, tmp_path):
     monkeypatch.setattr(runner_mod, "prepare_antigravity_auth", lambda: None)
 
 
+@pytest.mark.parametrize("agy_receipt", [True, False])
 def test_antigravity_rc0_reaps_live_exact_job_runtime_and_keeps_patch(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, agy_receipt,
 ):
     _prepare_fake_antigravity(monkeypatch, tmp_path)
-    _fake_pier(monkeypatch, tmp_path, rc=0)
+    _fake_pier(monkeypatch, tmp_path, rc=0, agy_receipt=agy_receipt)
     cleaned = []
     process_groups = []
     monkeypatch.setattr(
@@ -1329,6 +1341,10 @@ def test_antigravity_rc0_reaps_live_exact_job_runtime_and_keeps_patch(
         lambda proc: process_groups.append(proc) or True,
     )
 
+    if not agy_receipt:
+        with pytest.raises(RunnerError, match="confirmed writer shutdown"):
+            run_trial(_antigravity_assignment_for_trial(), tmp_path, tmp_path)
+        return
     art = run_trial(
         _antigravity_assignment_for_trial(), tmp_path, tmp_path,
     )
@@ -2771,8 +2787,9 @@ def test_docker_cancellation_audit_has_total_deadline(tmp_path, monkeypatch):
     assert len(calls) <= 3
 
 
+@pytest.mark.parametrize("agent", ["codex", "antigravity"])
 def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
-        tmp_path, monkeypatch, synthetic_cancellation_runtime):
+        tmp_path, monkeypatch, synthetic_cancellation_runtime, agent):
     from dradar import runloop, pending
     from dradar.api_client import ApiError
     from test_go_menu import SubmitClient, _args
@@ -2780,7 +2797,16 @@ def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
     work = home / 'work'
     work.mkdir(parents=True)
     monkeypatch.setattr(runloop, 'HOME', home)
-    captured = _fake_pier(monkeypatch, work)
+    patch_payload = "diff"
+    if agent == "antigravity":
+        _prepare_fake_antigravity(monkeypatch, work)
+        repo = tmp_path / "source"; repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "file").write_text("base\n")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        (repo / "file").write_text("real changed worktree\n")
+        patch_payload = subprocess.check_output(["git", "-C", str(repo), "diff", "--binary"], text=True)
+    captured = _fake_pier(monkeypatch, work, agy_receipt=agent == "antigravity", patch_payload=patch_payload)
     original = runner_mod.subprocess.Popen
     class Interrupted(original):
         interrupted = False
@@ -2792,7 +2818,7 @@ def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
     monkeypatch.setattr(runner_mod.subprocess, 'Popen', Interrupted)
     monkeypatch.setattr(runloop, 'run_trial', lambda a, t, w, **kw: run_trial(a, t, w))
     monkeypatch.setattr(runloop, '_report_failure_quietly', lambda *a, **k: None)
-    assignment = dict(_assignment('codex'), nonce='original-nonce', batch_id='original-batch',
+    assignment = dict(_antigravity_assignment_for_trial() if agent == "antigravity" else _assignment('codex'), nonce='original-nonce', batch_id='original-batch',
                       owner_epoch=7, resume_generation=3, _runner_session_id='original-session')
     class ScopedClient(SubmitClient):
         def register_submission_upload_intent(self, aid, nonce, session, epoch, intent):
@@ -2804,10 +2830,10 @@ def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
     with pytest.raises(KeyboardInterrupt):
         runloop._run_and_submit(LostResponse({}), assignment, tmp_path, _args(), 'abc')
     row = pending.load(home)[0]
-    assert row['assignment_id'] == 'a1' and row['nonce'] == 'original-nonce'
+    assert row['assignment_id'] == assignment['assignment_id'] and row['nonce'] == 'original-nonce'
     assert row['batch_id'] == 'original-batch' and row['owner_epoch'] == 7
     assert row['resume_generation'] == 3 and row['runner_session_id'] == 'original-session'
-    assert Path(row['patch_source_path']).read_text() == 'diff'
+    assert Path(row['patch_source_path']).read_text() == patch_payload
     assert captured['process_terminated']
     client = ScopedClient({})
     assert runloop._upload_trial(client, row) == 'interrupted'

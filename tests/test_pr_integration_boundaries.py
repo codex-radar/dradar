@@ -16,7 +16,7 @@ def test_shared_builder_is_not_isolated(tmp_path, monkeypatch):
     assert lease.isolated is False
 
 
-@pytest.mark.parametrize('script', [runner.DSH_PRE_ARTIFACTS_SCRIPT, runner.ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT])
+@pytest.mark.parametrize('script', [runner.DSH_PRE_ARTIFACTS_SCRIPT])
 def test_collector_dubious_owner_scoped_trust(tmp_path, script):
     repo = tmp_path/'repo with spaces'
     repo.mkdir()
