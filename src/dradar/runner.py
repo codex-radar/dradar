@@ -274,20 +274,11 @@ fi
 git -c safe.directory="$PWD" diff --binary "$base" HEAD > /logs/artifacts/model.patch
 """
 
-# Antigravity frequently finishes with a valid implementation still staged or
-# uncommitted even though the prompt asks it to commit.  The published task
-# hook only compares the starting commit with HEAD, silently turning that work
-# into an empty patch.  Use a provider-owned hook that snapshots the complete
-# final worktree. ``git -c safe.directory="$PWD" add -N`` makes new, non-ignored files visible to
-# ``git -c safe.directory="$PWD" diff`` without staging their contents or creating a commit.
+# AGY's adapter owns export, including cancellation. Never regenerate here:
+# Pier may call this hook after an uncertain writer shutdown or export failure.
 ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
 set -eu
-cd /app
-mkdir -p /logs/artifacts
-base_ref='__DRADAR_BASE_COMMIT__'
-base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
-git -c safe.directory="$PWD" add -N -- .
-git -c safe.directory="$PWD" diff --binary "$base" -- > /logs/artifacts/model.patch
+test -f /logs/artifacts/model.patch
 """
 
 # Claude Code: deny the web tools (and keep pier's default EnterPlanMode deny).
@@ -848,6 +839,8 @@ def _ensure_antigravity_agent_module(home: Path) -> Path:
             "Antigravity Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_worker_event_module(home)
+    runtime = importlib.resources.files("dradar").joinpath("antigravity_runtime.py")
+    _materialize_shared_file(home / "_dradar_antigravity_runtime.py", runtime.read_bytes())
     return _materialize_shared_file(
         home / ANTIGRAVITY_AGENT_MODULE_FILENAME, source.read_bytes()
     )
@@ -1697,6 +1690,10 @@ def build_pier_command(
             "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"prompt_template_path={submission_prompt}",
             "--ak", f"version={ANTIGRAVITY_CLI_VERSION}",
+            "--ak", f"artifact_run_id={assignment.get('_artifact_run_id') or uuid.uuid4().hex}",
+            "--ak", "artifact_base_commit=" + _antigravity_base_commit(
+                assignment["task_id"], tasks_root / assignment["task_id"]
+            ),
         ]
     elif agent == ZCODE_AGENT:
         if provider_auth_path is None or not provider_auth_path.is_file():
@@ -1911,6 +1908,19 @@ def trial_artifact_paths(trial_dir: Path) -> tuple[Path, Path | None, Path | Non
     trajectory = preferred_log_path(trial_dir, "trajectory.json")
     result = trial_dir / "result.json"
     return patch, trajectory, (result if result.exists() or result.is_symlink() else None)
+
+
+def _verify_antigravity_export(trial_dir: Path, patch: Path, assignment: dict) -> None:
+    try:
+        value = json.loads(read_trial_file(trial_dir, ".dradar/agy-export.json"))
+        digest = hashlib.sha256(read_trial_file(trial_dir, patch.relative_to(trial_dir))).hexdigest()
+        if (not isinstance(value, dict) or value.get("schema") != "dradar-agy-export-v1"
+                or value.get("run_id") != assignment.get("_artifact_run_id")
+                or value.get("writer_stopped") is not True or value.get("exported") is not True
+                or value.get("patch_sha256") != digest):
+            raise ValueError("AGY export identity or digest mismatch")
+    except (OSError, ValueError, TypeError) as exc:
+        raise RunnerError("AGY export is not bound to a confirmed writer shutdown; refusing upload") from exc
 
 
 def _verify_dsh_artifact_binding(
@@ -3694,6 +3704,32 @@ def _artifact_tasks_overlay(
         yield overlay_root
 
 
+def _antigravity_base_commit(task_id: str, source: Path) -> str:
+    task_toml = source / "task.toml"
+    try:
+        task_config = tomllib.loads(task_toml.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RunnerError(f"Antigravity task.toml is unreadable: {exc}") from exc
+    base_commit = task_config.get("metadata", {}).get("base_commit_hash")
+    valid_commit = (
+        isinstance(base_commit, str)
+        and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is not None
+    )
+    # Pompeii's reviewed task pack creates a fixed local tag rather than a
+    # portable 40-byte commit id.  Keep the shell substitution fail-closed:
+    # only that exact tag is accepted, and only for Pompeii task ids.
+    valid_pompeii_tag = (
+        base_commit == "pompeii-base"
+        and task_id.startswith(POMPEII_BENCHMARK_ID + "-")
+    )
+    if not (valid_commit or valid_pompeii_tag):
+        raise RunnerError(
+            "Antigravity task has an invalid metadata.base_commit_hash"
+        )
+
+    return base_commit
+
+
 @contextmanager
 def _antigravity_tasks_overlay(
     assignment: dict,
@@ -3719,27 +3755,7 @@ def _antigravity_tasks_overlay(
     source = tasks_root / task_id
     if not source.is_dir():
         raise RunnerError(f"Antigravity task directory is missing: {source}")
-    task_toml = source / "task.toml"
-    try:
-        task_config = tomllib.loads(task_toml.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise RunnerError(f"Antigravity task.toml is unreadable: {exc}") from exc
-    base_commit = task_config.get("metadata", {}).get("base_commit_hash")
-    valid_commit = (
-        isinstance(base_commit, str)
-        and re.fullmatch(r"[0-9a-f]{7,40}", base_commit) is not None
-    )
-    # Pompeii's reviewed task pack creates a fixed local tag rather than a
-    # portable 40-byte commit id.  Keep the shell substitution fail-closed:
-    # only that exact tag is accepted, and only for Pompeii task ids.
-    valid_pompeii_tag = (
-        base_commit == "pompeii-base"
-        and task_id.startswith(POMPEII_BENCHMARK_ID + "-")
-    )
-    if not (valid_commit or valid_pompeii_tag):
-        raise RunnerError(
-            "Antigravity task has an invalid metadata.base_commit_hash"
-        )
+    _antigravity_base_commit(task_id, source)
 
     work_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
@@ -3752,9 +3768,7 @@ def _antigravity_tasks_overlay(
         if hook.exists() or hook.is_symlink():
             hook.unlink()
         hook.write_text(
-            ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT.replace(
-                "__DRADAR_BASE_COMMIT__", base_commit
-            ),
+            ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT,
             encoding="utf-8",
             newline="\n",
         )
@@ -4228,6 +4242,7 @@ def run_trial(
         effective_assignment = {
             **assignment,
             "agent_version": antigravity_cli_version,
+            "_artifact_run_id": uuid.uuid4().hex,
         }
         print(
             "verified pinned Antigravity subscription CLI: "
@@ -4743,6 +4758,13 @@ def run_trial(
                 "exhausted (Coding Plan usage window; reset required)",
                 failure_diagnostic=diagnostic,
             )
+    if effective_agent == ANTIGRAVITY_AGENT and patch.is_file():
+        try:
+            _verify_antigravity_export(trial_dir, patch, effective_assignment)
+        except RunnerError as exc:
+            if terminal_error is not None:
+                raise terminal_error from exc
+            raise
     dsh_artifact_binding = None
     if effective_agent == DSH_AGENT:
         try:

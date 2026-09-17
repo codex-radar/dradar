@@ -8,7 +8,9 @@ usage to DRadar.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -28,6 +30,12 @@ try:
     from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
     from dradar.worker_events import register_worker, verify_task_baseline
+
+
+try:
+    import _dradar_antigravity_runtime as agy_runtime
+except ModuleNotFoundError:
+    from dradar import antigravity_runtime as agy_runtime
 
 
 ANTIGRAVITY_CLI_VERSION = "1.1.27"
@@ -259,11 +267,11 @@ def _install_command() -> str:
         "  echo 'Antigravity CLI requires a glibc task image' >&2; exit 1; "
         "elif command -v apt-get >/dev/null 2>&1; then "
         "  apt-get update && DEBIAN_FRONTEND=noninteractive "
-        "  apt-get install -y --no-install-recommends ca-certificates curl; "
+        "  apt-get install -y --no-install-recommends ca-certificates curl python3; "
         "elif command -v dnf >/dev/null 2>&1; then "
-        "  dnf install -y ca-certificates curl tar gzip; "
+        "  dnf install -y ca-certificates curl tar gzip python3; "
         "elif command -v yum >/dev/null 2>&1; then "
-        "  yum install -y ca-certificates curl tar gzip; "
+        "  yum install -y ca-certificates curl tar gzip python3; "
         "else echo 'No supported package manager found' >&2; exit 1; fi; "
         'case "$(uname -m)" in '
         f"  x86_64) agy_dir=x64; agy_arch=x64; agy_sha={ANTIGRAVITY_LINUX_SHA512['x86_64']} ;; "
@@ -306,6 +314,8 @@ class Antigravity(BaseInstalledAgent):
         auth_home_dir: str,
         reasoning_effort: str,
         shared_oauth: bool = False,
+        artifact_base_commit: str,
+        artifact_run_id: str,
         **kwargs: Any,
     ):
         auth_home = Path(auth_home_dir)
@@ -315,6 +325,12 @@ class Antigravity(BaseInstalledAgent):
             raise ValueError("Antigravity reasoning_effort must be low, medium, or high")
         if not isinstance(shared_oauth, bool):
             raise ValueError("Antigravity shared_oauth must be a boolean")
+        if re.fullmatch(r"[0-9a-f]{7,40}|pompeii-base", artifact_base_commit) is None:
+            raise ValueError("invalid AGY export baseline")
+        if re.fullmatch(r"[0-9a-f]{32}", artifact_run_id) is None:
+            raise ValueError("invalid AGY artifact run identity")
+        self._artifact_base_commit = artifact_base_commit
+        self._artifact_run_id = artifact_run_id
         self._auth_home_dir = auth_home
         self._reasoning_effort = reasoning_effort
         model = str(kwargs.get("model_name") or ANTIGRAVITY_MODEL).split("/")[-1]
@@ -340,7 +356,7 @@ class Antigravity(BaseInstalledAgent):
                 f"{self._REMOTE_CLI.as_posix()} --version "
                 f"| grep -Fqx {shlex.quote(ANTIGRAVITY_CLI_VERSION)}"
             ),
-            cache_key=f"dradar-antigravity-{version}-linux-runtime-v1",
+            cache_key=f"dradar-antigravity-{version}-linux-runtime-v2",
         )
 
     def network_allowlist(self) -> NetworkAllowlist:
@@ -419,15 +435,84 @@ class Antigravity(BaseInstalledAgent):
             "--output-format", "stream-json",
             "--print-timeout", "120m",
         ]
-        command = " ".join(shlex.quote(part) for part in invocation)
-        await self.exec_as_agent(
-            environment,
-            command="bash -o pipefail -c " + shlex.quote(
-                f"umask 077; cd /app && {command} 2>{shlex.quote(stderr)} "
-                f"| tee {shlex.quote(stream)}"
-            ),
-            env=env,
-        )
+        await self._run_supervised(environment, invocation, env, stream, stderr)
+
+    async def _run_supervised(self, environment, invocation, env, stream, stderr):
+        control = "/tmp/dradar-agy-" + self._artifact_run_id
+        # Provision before the model launch. The persistent stop marker prevents
+        # a delayed exec from launching after cancellation has already returned.
+        await self.exec_as_agent(environment,
+            command="umask 077; /bin/mkdir " + shlex.quote(control), env=env, timeout_sec=5)
+        config = {"run_id": self._artifact_run_id, "control": control,
+                  "workspace": "/app", "artifacts": "/logs/artifacts",
+                  "base": self._artifact_base_commit, "argv": invocation,
+                  "stdout": stream, "stderr": stderr}
+        source = Path(agy_runtime.__file__).read_text()
+        command = "/usr/bin/python3 -I -c " + shlex.quote(source) + " " + shlex.quote(json.dumps(config))
+        receipt = self.logs_dir.parent / ".dradar" / "agy-export.json"
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(json.dumps({"run_id": self._artifact_run_id, "exported": False}))
+        accepting = True
+        async def execute():
+            result = await environment.exec(command=command, env=environment.agent_process_env(env))
+            # Status is emitted by the supervisor, never read from task logs.
+            frames = (result.stdout or "").splitlines()
+            if len(frames) != 2:
+                raise RuntimeError("AGY supervisor receipt frames invalid")
+            first, last = (json.loads(frame) for frame in frames)
+            key = bytes.fromhex(first["key"])
+            payload = last["payload"]
+            if (first.get("run_id") != self._artifact_run_id or len(key) != 32
+                    or not hmac.compare_digest(last["mac"], hmac.new(key, payload.encode(), hashlib.sha256).hexdigest())):
+                raise RuntimeError("AGY supervisor receipt authentication failed")
+            value = json.loads(payload)
+            if not accepting:
+                raise RuntimeError("AGY export completed outside cancellation budget")
+            if not isinstance(value, dict) or value.get("run_id") != self._artifact_run_id:
+                raise RuntimeError("AGY supervisor run identity mismatch")
+            receipt.write_text(json.dumps(value))
+            if value.get("writer_stopped") is not True or value.get("exported") is not True:
+                raise RuntimeError("AGY writer shutdown/export unconfirmed")
+            if result.return_code != 0:
+                from pier.agents.installed.base import NonZeroAgentExitCodeError
+                raise NonZeroAgentExitCodeError("AGY supervised execution ended nonzero")
+        execution = asyncio.create_task(execute())
+        try:
+            await asyncio.shield(execution)
+        except asyncio.CancelledError:
+            async def finish():
+                await self.exec_as_agent(environment,
+                    command="/usr/bin/touch -- " + shlex.quote(control + "/stop"), env=env, timeout_sec=2)
+                try:
+                    await asyncio.shield(execution)
+                except Exception:
+                    pass  # Preserve cancellation; receipt remains fail-closed.
+            finishing = asyncio.create_task(finish())
+            deadline = asyncio.get_running_loop().time() + 12.0
+            try:
+                while not finishing.done():
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        await asyncio.wait_for(asyncio.shield(finishing), remaining)
+                    except asyncio.CancelledError:
+                        continue  # Repeated cancellation never starts another export.
+                    except (Exception, asyncio.TimeoutError):
+                        break
+            finally:
+                accepting = False
+                if not finishing.done():
+                    finishing.cancel()
+                if not execution.done():
+                    execution.cancel()
+                # Consume errors without extending the fixed cancellation budget.
+                def consume(task):
+                    if not task.cancelled():
+                        task.exception()
+                finishing.add_done_callback(consume)
+                execution.add_done_callback(consume)
+            raise
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         path = self.logs_dir / self._STREAM_FILE
