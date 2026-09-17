@@ -280,6 +280,38 @@ class GrokInstallTest(unittest.TestCase):
         self.assertEqual(self.requests, 1)
         self.assertEqual(list(self.target_dir.glob('.grok.*')), [])
 
+    def test_deadline_kills_stubborn_download_descendant(self):
+        self.tool('curl', 'trap "" TERM; prev=""; for arg; do '
+                  '[ "$prev" = --output ] && dest="$arg"; prev="$arg"; done; '
+                  'sleep 2; echo LATE > "$dest"; exit 1')
+        self.assert_preserved(self.run_install(fast=True))
+        self.assertLess(self.elapsed, 1.8)
+        time.sleep(1)
+        self.assertEqual(list(self.target_dir.glob('.grok.*')), [])
+
+    def test_cancel_kills_stubborn_download_descendant(self):
+        marker = self.root / 'started'
+        self.tool('curl', f'trap "" TERM; touch "{marker}"; '
+                  'prev=""; for arg; do [ "$prev" = --output ] && dest="$arg"; '
+                  'prev="$arg"; done; sleep 2; echo LATE > "$dest"; exit 1')
+        process = subprocess.Popen(['bash', '-c', self.install_command(fast=True)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env=dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin',
+                                            NO_PROXY='*', no_proxy='*'))
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(marker.exists())
+        start = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=3)
+        self.assertNotEqual(process.returncode, 0, stdout)
+        self.assertLess(time.monotonic() - start, 0.8)
+        time.sleep(2.2)
+        self.assertEqual(list(self.target_dir.glob('.grok.*')), [], stderr)
+        self.assertEqual(self.target.read_text(), 'previous validated installation')
+
 
 class GrokInstallContractTest(unittest.TestCase):
     def test_production_pins_and_budget(self):

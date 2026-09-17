@@ -309,15 +309,25 @@ def _install_command() -> str:
         # Keep it in its own process group and forward cancellation before
         # cleaning up: a retry must never recreate an already removed file.
         'grok_tmp=$(mktemp /opt/grok-runtime/bin/.grok.XXXXXXXX); '
-        "trap 'rm -f -- \"${grok_tmp}\"' EXIT; "
-        "trap 'exit 1' HUP INT TERM; "
+        'grok_download_pid=; '
+        'grok_stop_download() { '
+        '  if [ -n "${grok_download_pid}" ]; then '
+        '    kill -KILL -- "-${grok_download_pid}" 2>/dev/null || true; '
+        '    kill -KILL "${grok_download_pid}" 2>/dev/null || true; '
+        '    wait "${grok_download_pid}" 2>/dev/null || true; '
+        # Cover cancellation before timeout has created its process group.
+        '    kill -KILL -- "-${grok_download_pid}" 2>/dev/null || true; '
+        '    grok_download_pid=; '
+        '  fi; '
+        '}; '
+        "trap 'grok_stop_download; rm -f -- \"${grok_tmp}\"' EXIT; "
+        # $! also covers a signal between spawning timeout and assigning pid.
+        "trap 'grok_download_pid=${grok_download_pid:-${!:-}}; exit 1' HUP INT TERM; "
         "timeout --kill-after=5s 364s bash -c "
         + shlex.quote(_download_command())
         + ' -- "${grok_tmp}" "${grok_url}" "${grok_sha}" & '
         'grok_download_pid=$!; '
-        "trap 'kill -TERM \"${grok_download_pid}\" 2>/dev/null || true; "
-        "wait \"${grok_download_pid}\" 2>/dev/null || true; exit 1' HUP INT TERM; "
-        'if wait "${grok_download_pid}"; then :; else '
+        'if wait "${grok_download_pid}"; then grok_stop_download; else '
         "  echo 'Grok download failed: attempts or 364s wall-clock budget exhausted' >&2; "
         '  exit 1; fi; '
         "trap 'exit 1' HUP INT TERM; "
