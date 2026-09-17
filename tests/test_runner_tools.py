@@ -844,11 +844,12 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
                 (trial / "artifacts" / "model.patch").write_text(patch_payload)
                 if agy_receipt:
                     import hashlib
-                    (trial / ".dradar").mkdir(exist_ok=True)
-                    (trial / ".dradar/agy-export.json").write_text(json.dumps({
-                        "schema": "dradar-agy-export-v1", "run_id": captured["assignment"]["_artifact_run_id"],
-                        "writer_stopped": True, "exported": True,
-                        "patch_sha256": hashlib.sha256(patch_payload.encode()).hexdigest()}))
+                    from dradar.artifact_boundary import TrialFiles
+                    with TrialFiles(trial) as files:
+                        files.write_host(".dradar/agy-export.json", json.dumps({
+                            "schema": "dradar-agy-export-v1", "run_id": captured["assignment"]["_artifact_run_id"],
+                            "writer_stopped": True, "exported": True,
+                            "patch_sha256": hashlib.sha256(patch_payload.encode()).hexdigest()}).encode())
             if trajectory:
                 payload = (
                     trajectory_payload

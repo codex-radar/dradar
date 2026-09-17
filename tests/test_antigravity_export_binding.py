@@ -5,14 +5,15 @@ from pathlib import Path
 
 import pytest
 from dradar import runner
-from dradar.artifact_boundary import UnsafeArtifact
+from dradar.artifact_boundary import UnsafeArtifact, TrialFiles
+from private_artifact_fixture import private_trial
 
 
 @pytest.mark.parametrize('mutation', ['none', 'absent', 'other_run', 'writer_unknown', 'not_exported', 'tampered_patch', 'symlink'])
 def test_agy_export_binding(tmp_path, mutation):
-    tmp_path.chmod(0o700)
+    tmp_path = tmp_path / 'trial'
+    private_trial(tmp_path)
     (tmp_path / 'artifacts').mkdir()
-    (tmp_path / '.dradar').mkdir()
     patch = tmp_path / 'artifacts/model.patch'
     patch.write_bytes(b'real bytes')
     receipt = tmp_path / '.dradar/agy-export.json'
@@ -22,7 +23,9 @@ def test_agy_export_binding(tmp_path, mutation):
     if mutation == 'writer_unknown': value['writer_stopped'] = False
     if mutation == 'not_exported': value['exported'] = False
     if mutation == 'tampered_patch': patch.write_bytes(b'tampered')
-    if mutation != 'absent': receipt.write_text(json.dumps(value))
+    if mutation != 'absent':
+        with TrialFiles(tmp_path) as files:
+            files.write_host('.dradar/agy-export.json', json.dumps(value).encode())
     if mutation == 'symlink':
         receipt.rename(tmp_path / 'fake')
         receipt.symlink_to(tmp_path / 'fake')

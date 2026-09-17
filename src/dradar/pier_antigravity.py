@@ -33,6 +33,11 @@ except ModuleNotFoundError:
 
 
 try:
+    from _dradar_artifact_boundary import TrialFiles
+except ModuleNotFoundError:
+    from dradar.artifact_boundary import TrialFiles
+
+try:
     import _dradar_antigravity_runtime as agy_runtime
 except ModuleNotFoundError:
     from dradar import antigravity_runtime as agy_runtime
@@ -449,9 +454,10 @@ class Antigravity(BaseInstalledAgent):
                   "stdout": stream, "stderr": stderr}
         source = Path(agy_runtime.__file__).read_text()
         command = "/usr/bin/python3 -I -c " + shlex.quote(source) + " " + shlex.quote(json.dumps(config))
-        receipt = self.logs_dir.parent / ".dradar" / "agy-export.json"
-        receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(json.dumps({"run_id": self._artifact_run_id, "exported": False}))
+        def write_receipt(value):
+            with TrialFiles(self.logs_dir.parent) as files:
+                files.write_host(".dradar/agy-export.json", json.dumps(value).encode())
+        write_receipt({"run_id": self._artifact_run_id, "exported": False})
         accepting = True
         async def execute():
             result = await environment.exec(command=command, env=environment.agent_process_env(env))
@@ -470,7 +476,7 @@ class Antigravity(BaseInstalledAgent):
                 raise RuntimeError("AGY export completed outside cancellation budget")
             if not isinstance(value, dict) or value.get("run_id") != self._artifact_run_id:
                 raise RuntimeError("AGY supervisor run identity mismatch")
-            receipt.write_text(json.dumps(value))
+            write_receipt(value)
             if value.get("writer_stopped") is not True or value.get("exported") is not True:
                 raise RuntimeError("AGY writer shutdown/export unconfirmed")
             if result.return_code != 0:

@@ -1919,7 +1919,7 @@ def _verify_antigravity_export(trial_dir: Path, patch: Path, assignment: dict) -
                 or value.get("writer_stopped") is not True or value.get("exported") is not True
                 or value.get("patch_sha256") != digest):
             raise ValueError("AGY export identity or digest mismatch")
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, UnsafeArtifact) as exc:
         raise RunnerError("AGY export is not bound to a confirmed writer shutdown; refusing upload") from exc
 
 
