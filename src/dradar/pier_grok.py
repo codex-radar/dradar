@@ -269,11 +269,11 @@ def _install_command() -> str:
         "  echo 'Grok Build requires a glibc task image' >&2; exit 1; "
         "elif command -v apt-get >/dev/null 2>&1; then "
         "  apt-get update && DEBIAN_FRONTEND=noninteractive "
-        "  apt-get install -y --no-install-recommends ca-certificates curl; "
+        "  apt-get install -y --no-install-recommends ca-certificates curl coreutils; "
         "elif command -v dnf >/dev/null 2>&1; then "
-        "  dnf install -y ca-certificates curl; "
+        "  dnf install -y ca-certificates curl coreutils; "
         "elif command -v yum >/dev/null 2>&1; then "
-        "  yum install -y ca-certificates curl; "
+        "  yum install -y ca-certificates curl coreutils; "
         "else echo 'No supported package manager found' >&2; exit 1; fi; "
         'case "$(uname -m)" in '
         f"  x86_64) grok_arch=x86_64; grok_sha={GROK_LINUX_SHA256['x86_64']} ;; "
@@ -283,13 +283,26 @@ def _install_command() -> str:
         "mkdir -p /opt/grok-runtime/bin; "
         f"grok_url=https://storage.googleapis.com/grok-build-public-artifacts/cli/"
         f"grok-{GROK_CLI_VERSION}-linux-${{grok_arch}}; "
-        "curl --fail --silent --show-error --location "
-        "  --output /opt/grok-runtime/bin/grok \"${grok_url}\"; "
-        "printf '%s  %s\\n' \"${grok_sha}\" /opt/grok-runtime/bin/grok "
+        # Retry whole downloads (including curl 18), never append partial bytes.
+        # Three 120s transfers plus two 2s pauses bound download time to 364s.
+        'grok_tmp=$(mktemp /opt/grok-runtime/bin/.grok.XXXXXXXX); '
+        "trap 'rm -f -- \"${grok_tmp}\"' EXIT; "
+        "trap 'exit 1' HUP INT TERM; "
+        "grok_attempt=1; "
+        "while ! curl --fail --silent --show-error --location "
+        "  --connect-timeout 15 --max-time 120 "
+        '  --output "${grok_tmp}" "${grok_url}"; do '
+        '  if [ "${grok_attempt}" -ge 3 ]; then '
+        "    echo 'Grok download failed: exhausted 3 attempts (120s each)' >&2; "
+        "    exit 1; fi; "
+        "  grok_attempt=$((grok_attempt + 1)); sleep 2; "
+        "done; "
+        "printf '%s  %s\\n' \"${grok_sha}\" \"${grok_tmp}\" "
         "  | sha256sum --check --strict -; "
-        "chmod 0755 /opt/grok-runtime/bin/grok; "
-        "/opt/grok-runtime/bin/grok --version "
-        f"  | grep -Eq '(^| ){GROK_VERSION_PATTERN}( |$)'"
+        'chmod 0755 "${grok_tmp}"; '
+        'timeout --kill-after=5s 15s "${grok_tmp}" --version '
+        f"  | grep -Eq '(^| ){GROK_VERSION_PATTERN}( |$)'; "
+        'mv -fT -- "${grok_tmp}" /opt/grok-runtime/bin/grok'
     )
 
 
@@ -360,7 +373,7 @@ class GrokBuild(BaseInstalledAgent):
                 f"{self._REMOTE_CLI.as_posix()} --version "
                 f"| grep -Eq '(^| ){GROK_VERSION_PATTERN}( |$)'"
             ),
-            cache_key=f"dradar-grok-subscription-{version}-linux-runtime-v3",
+            cache_key=f"dradar-grok-subscription-{version}-linux-runtime-v4",
         )
 
     def network_allowlist(self) -> NetworkAllowlist:

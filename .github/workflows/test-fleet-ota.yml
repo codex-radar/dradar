@@ -128,7 +128,7 @@ jobs:
       - name: Grok focused regression with inert credentials
         env:
           DRADAR_HOME: ${{ runner.temp }}/dradar-grok-test-home
-        run: python -m pytest -q tests/test_grok_probe.py tests/test_grok_subscription.py tests/test_grok_recovery.py tests/test_shared_oauth_docker.py tests/test_worker_start_gate.py tests/test_worker_start_native.py tests/test_provider_config.py
+        run: python -m pytest -q tests/test_grok_install.py tests/test_grok_install_contract.py tests/test_grok_probe.py tests/test_grok_subscription.py tests/test_grok_recovery.py tests/test_shared_oauth_docker.py tests/test_worker_start_gate.py tests/test_worker_start_native.py tests/test_provider_config.py
       - name: Official pinned Grok Linux x64 in an internal Docker network
         shell: python
         run: |
