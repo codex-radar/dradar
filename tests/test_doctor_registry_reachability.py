@@ -83,11 +83,31 @@ def test_a_configured_proxy_warns_instead_of_failing(monkeypatch, capsys):
     assert "[FAIL]" not in out
 
 
-def test_the_check_cannot_outlast_its_own_budget():
+def test_the_check_cannot_outlast_its_own_budget(monkeypatch):
     """A doctor that hangs is worse than no doctor: the volunteer assumes it
-    is still checking. Two hosts, each bounded twice."""
+    is still checking.
 
-    worst_case = len(net_probe.REGISTRY_PROBE_HOSTS) * (
-        net_probe.DNS_TIMEOUT_SEC + net_probe.TLS_TIMEOUT_SEC
-    )
-    assert worst_case <= 30
+    Measure a real run against a resolver that never answers. The previous
+    version of this test did arithmetic on two constants and called no
+    product code, so it could not have caught the unbounded second lookup
+    inside `socket.create_connection` (#0152 QA).
+    """
+
+    import time
+
+    stop = []
+
+    def never_answers(*_args, **_kwargs):
+        while not stop:
+            time.sleep(0.01)
+        return []
+
+    monkeypatch.setattr(net_probe.socket, "getaddrinfo", never_answers)
+    monkeypatch.setattr(net_probe, "DNS_TIMEOUT_SEC", 0.3)
+    monkeypatch.setattr(net_probe, "TLS_TIMEOUT_SEC", 0.3)
+    monkeypatch.setattr(net_probe, "proxy_configured", lambda env=None: None)
+    started = time.monotonic()
+    assert doctor._registry_reachability("linux") is False
+    elapsed = time.monotonic() - started
+    stop.append(True)
+    assert elapsed < 4.0, f"doctor check ran {elapsed:.1f}s against a 0.6s budget"

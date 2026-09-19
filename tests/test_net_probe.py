@@ -1,5 +1,8 @@
 import socket
+import ssl
 import time
+
+import pytest
 
 from dradar import net_probe
 
@@ -52,7 +55,7 @@ def test_tls_failure_keeps_dns_success_visible(monkeypatch):
     )
     monkeypatch.setattr(
         net_probe, "_tls_handshake",
-        lambda host, timeout: (False, 12.0, "TimeoutError: timed out"),
+        lambda host, addrs, timeout: (False, 12.0, "TimeoutError: timed out"),
     )
     probe = net_probe.probe_host("ghcr.io")
     assert probe.stage == "tls"
@@ -88,7 +91,7 @@ def test_a_synthetic_dns_pool_is_not_reported_as_a_healthy_resolver(monkeypatch)
     )
     monkeypatch.setattr(
         net_probe, "_tls_handshake",
-        lambda host, timeout: (False, 9.0, "TimeoutError: timed out"),
+        lambda host, addrs, timeout: (False, 9.0, "TimeoutError: timed out"),
     )
     probe = net_probe.probe_host("ghcr.io")
     assert probe.synthetic_dns
@@ -101,6 +104,127 @@ def test_proxy_detection_downgrades_a_direct_verdict():
     )
     assert net_probe.proxy_configured({"HTTPS_PROXY": "  "}) is None
     assert net_probe.proxy_configured({}) is None
+
+
+def test_mixed_stage_failures_are_not_flattened_onto_one_phase():
+    """A firewall that resolves one registry and blocks another at a
+    different layer is the normal shape of a partial outage."""
+
+    hint = net_probe.failure_hint([
+        net_probe.HostProbe("ghcr.io", "dns", detail="no answer within 7s"),
+        net_probe.HostProbe("auth.docker.io", "tls", detail="TimeoutError"),
+    ], "linux")
+    assert "ghcr.io did not resolve" in hint
+    assert "auth.docker.io did not finish TLS" in hint
+    assert "auth.docker.io did not resolve" not in hint
+
+
+def test_the_tls_step_never_resolves_a_second_time(monkeypatch):
+    """`socket.create_connection` would call getaddrinfo again, off the
+    abandonable thread and outside every budget -- a resolver that answers
+    once then stalls made the whole probe unbounded through it."""
+
+    calls = []
+    real = net_probe.socket.getaddrinfo
+
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return [(net_probe.socket.AF_INET, None, None, None, ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(net_probe.socket, "getaddrinfo", counted)
+    monkeypatch.setattr(
+        net_probe, "_tls_context", lambda: _RefusingContext(),
+    )
+    net_probe.probe_host("ghcr.io", dns_timeout=1.0, tls_timeout=1.0)
+    assert calls == ["ghcr.io"], f"resolver was consulted {len(calls)} times"
+    assert real is not None
+
+
+class _RefusingContext:
+    def wrap_socket(self, sock, server_hostname=None):
+        raise OSError("refused")
+
+
+def test_the_whole_probe_stays_within_budget_when_the_resolver_stalls_midway(
+    monkeypatch,
+):
+    """Measure a real probe instead of asserting arithmetic on constants.
+
+    The first lookup succeeds and the second never returns -- the behaviour
+    of an intermittent resolver, and previously unbounded.
+    """
+
+    state = {"n": 0}
+    stop = []
+
+    def flaky(*_args, **_kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            return [(net_probe.socket.AF_INET, None, None, None, ("127.0.0.1", 443))]
+        while not stop:
+            time.sleep(0.01)
+        return []
+
+    monkeypatch.setattr(net_probe.socket, "getaddrinfo", flaky)
+    started = time.monotonic()
+    net_probe.probe_host("ghcr.io", dns_timeout=1.0, tls_timeout=1.0)
+    elapsed = time.monotonic() - started
+    stop.append(True)
+    assert elapsed < 4.0, f"probe ran {elapsed:.1f}s against a 2.0s budget"
+
+
+def test_the_trust_store_is_the_system_one_plus_certifi():
+    """Passing cafile= to create_default_context REPLACES the system store,
+    hiding the CA that corporate TLS inspection installs at the OS level and
+    failing a machine that works."""
+
+    system = ssl.create_default_context()
+    ours = net_probe._tls_context()
+    system_subjects = {c["subject"] for c in system.get_ca_certs()}
+    our_subjects = {c["subject"] for c in ours.get_ca_certs()}
+    assert system_subjects <= our_subjects, (
+        f"{len(system_subjects - our_subjects)} system-trusted CAs are "
+        "invisible to the probe"
+    )
+
+
+def test_an_idna_illegal_hostname_does_not_escape_as_a_thread_traceback():
+    """getaddrinfo raises UnicodeError, not OSError, for such a name."""
+
+    probe = net_probe.probe_host("\u0080" * 100, dns_timeout=1.0)
+    assert probe.stage == "dns"
+    assert probe.detail
+
+
+def test_dns_budget_avoids_the_stock_resolver_retry_interval():
+    """A stock resolv.conf carries `options timeout:5 attempts:2`, so a
+    machine whose first nameserver is dead answers just after 5s."""
+
+    assert net_probe.DNS_TIMEOUT_SEC > 5.0
+
+
+def test_an_answer_landing_on_the_budget_is_not_called_a_timeout(monkeypatch):
+    """An answer inside the budget must never be called a timeout.
+
+    Reading `worker.is_alive()` before reading the result could discard an
+    answer the thread had already written. An answer landing *exactly* on
+    the budget stays a genuine coin flip -- that is the definition of a
+    deadline, not a defect -- which is why DNS_TIMEOUT_SEC was also moved
+    off the stock resolver retry interval where that coin was flipped
+    systematically (#0152 QA suggestion 2).
+    """
+
+    def slow(*_args, **_kwargs):
+        time.sleep(0.1)
+        return [(net_probe.socket.AF_INET, None, None, None, ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(net_probe.socket, "getaddrinfo", slow)
+    misses = 0
+    for _ in range(40):
+        addrs, _ms, detail = net_probe._resolve("ghcr.io", 0.3)
+        if addrs is None and "no answer" in detail:
+            misses += 1
+    assert misses == 0, f"{misses}/40 in-budget answers reported as timeouts"
 
 
 def test_both_registries_pier_needs_are_probed():
@@ -125,17 +249,86 @@ def test_build_log_classifier_names_the_phase():
     assert "TLS failure" in intercepted
 
 
-def test_classifier_stays_silent_without_registry_evidence():
-    """Negative control: a healthy build must not be diagnosed as a network
-    failure, and an empty log must not produce a cause at all."""
+# Real build output that contains a failure marker, a registry host, or both,
+# but is NOT a registry failure. Every one of these produced a confident wrong
+# diagnosis before the classifier became line-oriented (#0152 QA).
+NOT_A_REGISTRY_FAILURE = (
+    ("空日志", ""),
+    ("健康构建", "#5 [3/9] RUN pip install -r reqs.txt\n#5 DONE 41.2s"),
+    ("测试摘要", "pytest: 3 failed, 110 passed"),
+    (
+        "Gradle 依赖冲突,且成功拉过 ghcr 镜像",
+        "#1 [internal] load metadata for ghcr.io/codex-radar/"
+        "dradar-egress-proxy@sha256:abc\n#1 DONE 11.4s\n"
+        "FAILURE: Could not resolve all dependencies for ':runtimeClasspath'",
+    ),
+    (
+        "链接器符号未解析",
+        "ld: could not resolve symbol _ZN3foo3barEv",
+    ),
+    (
+        "Go 模块查找被关闭(完全健康)",
+        "go: module lookup disabled by GOFLAGS=-mod=vendor",
+    ),
+    (
+        "等数据库起来的正常重试",
+        "psql: error: connection to server at localhost port 5432 failed: "
+        "Connection refused",
+    ),
+    (
+        "磁盘满,与 ghcr 无关",
+        "#1 [internal] load metadata for ghcr.io/codex-radar/proxy\n#1 DONE 9.1s\n"
+        "#7 ERROR: write /var/lib/docker/tmp/x: no space left on device\n"
+        "context deadline exceeded",
+    ),
+    (
+        "被测任务自己在测 DNS,断言通过",
+        "#9 [5/9] RUN pytest tests/test_resolver.py\n"
+        "test_bad_host[lookup example.invalid: no such host] PASSED",
+    ),
+    (
+        "编译失败,而日志早先拉过 ghcr",
+        "#1 [internal] load metadata for ghcr.io/codex-radar/proxy\n#1 DONE 8.0s\n"
+        '#12 ERROR: process "/bin/sh -c make" did not complete successfully',
+    ),
+)
 
-    assert net_probe.classify_build_log("") is None
-    assert net_probe.classify_build_log(
-        "#5 [3/9] RUN pip install -r requirements.txt\n#5 DONE 41.2s"
-    ) is None
-    assert net_probe.classify_build_log(
-        "pytest: 3 failed, 110 passed"
-    ) is None
+
+@pytest.mark.parametrize(
+    "label,log", NOT_A_REGISTRY_FAILURE, ids=[n for n, _ in NOT_A_REGISTRY_FAILURE],
+)
+def test_classifier_stays_silent_without_registry_evidence(label, log):
+    """A wrong diagnosis is worse than none: the volunteer acts on it."""
+
+    assert net_probe.classify_build_log(log) is None, label
+
+
+def test_a_successful_ghcr_pull_does_not_steal_the_blame():
+    """The pinned egress image is the first thing every build pulls, so a
+    whole-window scan attributed a Docker Hub failure to ghcr.io."""
+
+    verdict = net_probe.classify_build_log(
+        "#1 [internal] load metadata for ghcr.io/codex-radar/"
+        "dradar-egress-proxy@sha256:abc\n#1 DONE 11.4s\n"
+        '#3 ERROR: failed to fetch anonymous token: Get "https://auth.docker.io'
+        '/token": net/http: TLS handshake timeout'
+    )
+    assert verdict == (
+        "the build log shows a TLS failure reaching auth.docker.io"
+    )
+
+
+def test_the_newest_registry_failure_wins():
+    """A build that retried prints the operative failure last."""
+
+    verdict = net_probe.classify_build_log(
+        "#2 ERROR: Head \"https://ghcr.io/v2/x\": dial tcp: lookup ghcr.io: "
+        "no such host\n"
+        "#2 retrying\n"
+        '#2 ERROR: Get "https://ghcr.io/v2/x": x509: certificate signed by '
+        "unknown authority"
+    )
+    assert verdict == "the build log shows a TLS failure reaching ghcr.io"
 
 
 def test_summary_reports_each_host_and_its_timings():

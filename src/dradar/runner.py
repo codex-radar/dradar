@@ -1285,11 +1285,20 @@ def _pier_process_env(
 def _task_agent_timeout_sec(task_path: Path) -> float | None:
     """The task's own declared agent watchdog (task.toml's [agent].timeout_sec).
 
-    Every one of the 113 published DeepSWE tasks declares 10800.0 (3 hours),
-    verified against the live task pack on 2026-09-19 (#0152); an earlier
-    version of this docstring named 5400/7200, which are Pompeii figures and
-    had already misled one reader.  Returns None if the file is missing or
-    malformed -- the caller must not guess a number in that case.
+    All 113 tasks in ``DEEP_SWE_REPO`` -- the fork this CLI clones -- declare
+    10800.0 (3 hours), read from its tasks/ on 2026-09-19 (#0152).
+
+    Name the repository when quoting that number, because three task trees on
+    one machine answer differently and only this one is what a volunteer gets:
+    the upstream ``datacurve-ai/deep-swe`` still declares 5400.0, and the
+    pompeii-adjacency pack declares 7200.0. An earlier docstring offered
+    "commonly 5400/7200" with no source; a reviewer checking it against a
+    stale local checkout of the upstream repo concluded the 10800 figure was
+    the wrong one. Both numbers were real -- the repository was the missing
+    half of the fact.
+
+    Returns None if the file is missing or malformed; the caller must not
+    guess a number in that case.
     """
     try:
         with (task_path / "task.toml").open("rb") as f:
@@ -4173,14 +4182,24 @@ def _wait_for_worker_registration(
                 detail = f"no new build output for {_duration(silent_for)}"
             else:
                 detail = activity
+            # flush: stdout is block-buffered whenever this is piped rather
+            # than a terminal, which would hold the progress lines back until
+            # kilobytes accumulate -- the exact silence being fixed here.
             print(
                 f"  … preparing environment, {_duration(now - started)} elapsed "
                 f"(gives up after {_duration(WORKER_REGISTRATION_GRACE_SEC)}) "
-                f"— {detail}"
+                f"— {detail}",
+                flush=True,
             )
-            if silent_for >= BUILD_STALL_WARN_SEC and not stall_reported:
+            # A registry failure that Docker keeps retrying is never silent,
+            # so waiting for silence would never report it. Say it as soon as
+            # the log names one, whether or not output is still moving.
+            reason = net_probe.classify_build_log(_tail(log_path, 40))
+            if not stall_reported and (
+                reason is not None or silent_for >= BUILD_STALL_WARN_SEC
+            ):
                 stall_reported = True
-                print(f"      {_stall_advice(log_path)}")
+                print(f"      {_stall_advice(log_path)}", flush=True)
         time.sleep(0.25)
 
 

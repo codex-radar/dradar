@@ -33,13 +33,20 @@ from dataclasses import dataclass
 
 import certifi
 
-# A healthy resolver answers in well under a second; five seconds still
-# covers a cold cache behind a VPN.  Eight seconds for connect+handshake
-# covers a slow proxy without letting one dead host dominate the report:
-# two hosts cost at most 26 s, against the 6 min of silence measured on the
-# current build path (#0152).
-DNS_TIMEOUT_SEC = 5.0
+# A healthy resolver answers in well under a second.  Seven seconds covers a
+# cold cache behind a VPN and deliberately avoids 5.0: a stock
+# ``resolv.conf`` carries ``options timeout:5 attempts:2``, so a machine
+# whose first nameserver is dead answers at just over five seconds -- a
+# five-second budget would fail exactly the machines that still work.
+# ``TLS_TIMEOUT_SEC`` covers connect *and* handshake across every address
+# tried, so two hosts cost at most 30 s, against the 6 min of silence
+# measured on the current build path (#0152).
+DNS_TIMEOUT_SEC = 7.0
 TLS_TIMEOUT_SEC = 8.0
+# Registries publish A and AAAA records; trying every one on a host with no
+# route to that family would multiply the budget. The budget is shared, so
+# this only bounds how finely it is divided.
+_MAX_TLS_ADDRESSES = 3
 
 # ``ghcr.io`` serves the pinned Pier egress proxy image; ``auth.docker.io``
 # issues the anonymous token every Docker Hub base-image pull needs.  Either
@@ -93,7 +100,9 @@ class HostProbe:
         return self.stage == "ok"
 
 
-def _resolve(host: str, timeout: float) -> tuple[list[str] | None, float, str]:
+def _resolve(
+    host: str, timeout: float,
+) -> tuple[list[tuple[int, str]] | None, float, str]:
     """Resolve ``host`` on an abandonable thread, bounded by ``timeout``.
 
     The thread is a daemon and is deliberately not joined on timeout: the
@@ -107,8 +116,13 @@ def _resolve(host: str, timeout: float) -> tuple[list[str] | None, float, str]:
     def run() -> None:
         try:
             infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
-            result["addrs"] = sorted({info[4][0] for info in infos})
-        except OSError as exc:
+            # Keep the family with each address: the TLS step connects to
+            # these directly and must not ask the resolver a second time.
+            result["addrs"] = sorted({(info[0], info[4][0]) for info in infos})
+        except (OSError, UnicodeError) as exc:
+            # getaddrinfo raises UnicodeError, not OSError, for a name IDNA
+            # cannot encode. Letting that escape would print a thread
+            # traceback over the volunteer's report.
             result["error"] = f"{type(exc).__name__}: {exc}"
 
     worker = threading.Thread(
@@ -118,47 +132,113 @@ def _resolve(host: str, timeout: float) -> tuple[list[str] | None, float, str]:
     worker.start()
     worker.join(timeout)
     elapsed_ms = (time.monotonic() - started) * 1000.0
-    if worker.is_alive():
-        return None, elapsed_ms, f"no answer within {timeout:g}s"
+    # Read the answer before asking whether the thread is alive: ``run``
+    # writes the result before it returns, so a thread that has answered can
+    # still be alive for a moment and must not be called a timeout.
+    #
+    # An answer landing *exactly* on the budget remains a coin flip -- that
+    # is what a deadline is. What matters is not flipping that coin
+    # systematically, which is why DNS_TIMEOUT_SEC sits away from the stock
+    # resolver retry interval rather than on it.
     addrs = result.get("addrs")
     if isinstance(addrs, list) and addrs:
         return addrs, elapsed_ms, ""
     error = result.get("error")
-    return None, elapsed_ms, str(error) if error else "resolver returned no address"
+    if error is not None:
+        return None, elapsed_ms, str(error)
+    if worker.is_alive():
+        return None, elapsed_ms, f"no answer within {timeout:g}s"
+    return None, elapsed_ms, "resolver returned no address"
 
 
-def _tls_handshake(host: str, timeout: float) -> tuple[bool, float, str]:
-    """Complete a real TLS handshake to ``host``:443 within ``timeout``."""
+def _tls_context() -> ssl.SSLContext:
+    """Trust the system store *and* certifi, never certifi alone.
 
-    context = ssl.create_default_context(cafile=certifi.where())
-    started = time.monotonic()
+    Passing ``cafile=`` to ``create_default_context`` replaces the system
+    trust store rather than adding to it -- 39 CAs the OS trusts were
+    invisible to this probe on the development machine. Corporate and campus
+    TLS inspection installs its CA at the OS level, so certifi-only made a
+    healthy machine fail with "certificate verify failed", which is the one
+    verdict this module states as a certainty.
+    """
+
+    context = ssl.create_default_context()
     try:
-        with socket.create_connection((host, 443), timeout=timeout) as raw:
-            raw.settimeout(timeout)
-            with context.wrap_socket(raw, server_hostname=host):
+        context.load_verify_locations(cafile=certifi.where())
+    except (OSError, ssl.SSLError):
+        # A system store that already works is enough; certifi is a bonus.
+        pass
+    return context
+
+
+def _tls_handshake(
+    host: str, addrs: list[tuple[int, str]], timeout: float,
+) -> tuple[bool, float, str]:
+    """Handshake with ``host`` over an already-resolved address.
+
+    Connects to the resolved IP directly instead of via
+    ``socket.create_connection``, which would call ``getaddrinfo`` again --
+    off the abandonable thread and outside every budget this module sets. A
+    resolver that answers once and then stalls (WSL2 NAT, a flaky hotspot)
+    made the whole probe unbounded through that second lookup: the exact
+    hang this module exists to diagnose.
+
+    ``timeout`` is the budget for connect *and* handshake together, across
+    every address tried, so the caller's arithmetic holds.
+    """
+
+    context = _tls_context()
+    started = time.monotonic()
+    deadline = started + timeout
+    detail = "no address could be reached"
+    for family, address in addrs[:_MAX_TLS_ADDRESSES]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(remaining)
+            sock.connect((address, 443))
+            sock.settimeout(max(0.05, deadline - time.monotonic()))
+            with context.wrap_socket(sock, server_hostname=host):
+                return True, (time.monotonic() - started) * 1000.0, ""
+        except (OSError, ssl.SSLError) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                sock.close()
+            except OSError:
                 pass
-    except (OSError, ssl.SSLError) as exc:
-        return False, (time.monotonic() - started) * 1000.0, f"{type(exc).__name__}: {exc}"
-    return True, (time.monotonic() - started) * 1000.0, ""
+    if time.monotonic() >= deadline and "timed out" not in detail.lower():
+        detail = f"no handshake within {timeout:g}s ({detail})"
+    return False, (time.monotonic() - started) * 1000.0, detail
 
 
 def probe_host(
     host: str,
     *,
-    dns_timeout: float = DNS_TIMEOUT_SEC,
-    tls_timeout: float = TLS_TIMEOUT_SEC,
+    dns_timeout: float | None = None,
+    tls_timeout: float | None = None,
 ) -> HostProbe:
-    """Resolve ``host`` and complete a TLS handshake, each within budget."""
+    """Resolve ``host`` and complete a TLS handshake, each within budget.
 
+    The budgets default to the module constants *at call time*. Binding them
+    as default arguments froze them at import, so neither an operator nor a
+    test could change them -- a budget test that patched the constants
+    silently exercised the real 7s/8s instead (#0152 QA).
+    """
+
+    dns_timeout = DNS_TIMEOUT_SEC if dns_timeout is None else dns_timeout
+    tls_timeout = TLS_TIMEOUT_SEC if tls_timeout is None else tls_timeout
     addrs, dns_ms, dns_error = _resolve(host, dns_timeout)
     if addrs is None:
         return HostProbe(host, "dns", dns_ms=dns_ms, detail=dns_error)
     synthetic = any(
-        addr.startswith(prefix)
-        for addr in addrs
+        address.startswith(prefix)
+        for _family, address in addrs
         for prefix in _FAKE_IP_PREFIXES
     )
-    tls_ok, tls_ms, tls_error = _tls_handshake(host, tls_timeout)
+    tls_ok, tls_ms, tls_error = _tls_handshake(host, addrs, tls_timeout)
     if not tls_ok:
         return HostProbe(
             host, "tls", dns_ms=dns_ms, tls_ms=tls_ms, detail=tls_error,
@@ -172,8 +252,8 @@ def probe_host(
 def probe_registries(
     hosts: tuple[str, ...] = REGISTRY_PROBE_HOSTS,
     *,
-    dns_timeout: float = DNS_TIMEOUT_SEC,
-    tls_timeout: float = TLS_TIMEOUT_SEC,
+    dns_timeout: float | None = None,
+    tls_timeout: float | None = None,
 ) -> list[HostProbe]:
     """Probe every registry host Pier needs, in order, each one bounded."""
 
@@ -233,18 +313,30 @@ def probe_advice(probe: HostProbe, platform: str) -> str:
 
 
 def failure_hint(probes: list[HostProbe], platform: str) -> str:
-    """One actionable line for every host that failed, advice not repeated."""
+    """One actionable line per failing phase, advice not repeated.
+
+    Hosts are grouped by the phase that failed. Flattening them onto the
+    first host's phase told a volunteer whose ``auth.docker.io`` handshake
+    timed out that it "did not resolve", and handed them a resolver recipe
+    for a resolver that was working -- firewalls that permit one registry
+    and block another at a different layer make this the normal shape of a
+    partial outage, not a corner case (#0152 QA).
+    """
 
     failed = [probe for probe in probes if not probe.ok]
     if not failed:
         return ""
-    hosts = ", ".join(probe.host for probe in failed)
-    stage = "did not resolve" if failed[0].stage == "dns" else "did not finish TLS"
-    detail = failed[0].detail
-    advice = "; ".join(
-        dict.fromkeys(probe_advice(probe, platform) for probe in failed)
-    )
-    return f"{hosts} {stage} ({detail}); {advice}"
+    parts = []
+    for stage, wording in (("dns", "did not resolve"), ("tls", "did not finish TLS")):
+        group = [probe for probe in failed if probe.stage == stage]
+        if not group:
+            continue
+        hosts = ", ".join(probe.host for probe in group)
+        advice = "; ".join(
+            dict.fromkeys(probe_advice(probe, platform) for probe in group)
+        )
+        parts.append(f"{hosts} {wording} ({group[0].detail}); {advice}")
+    return " | ".join(parts)
 
 
 def probe_hint(probe: HostProbe, platform: str) -> str:
@@ -305,13 +397,19 @@ def summarize(probes: list[HostProbe]) -> str:
 # Markers Docker/BuildKit and Pier print when a registry cannot be reached.
 # Matched against the build log so a stalled or failed environment build can
 # name the phase instead of returning a bare "runner failed".
+#
+# Every one of these also occurs in ordinary build output that has nothing to
+# do with a registry -- Gradle prints "Could not resolve all dependencies",
+# the linker prints "could not resolve symbol", a service wait loop prints
+# "Connection refused", and a task's own test suite may print "no such host"
+# as a passing assertion. They are therefore only ever consulted on a line
+# that also names a registry host; see classify_build_log.
 _DNS_MARKERS = (
     "no such host",
     "server misbehaving",
     "temporary failure in name resolution",
     "name resolution",
     "could not resolve",
-    "lookup ",
 )
 _TLS_MARKERS = (
     "tls handshake timeout",
@@ -344,27 +442,49 @@ _REGISTRY_HOSTS_IN_LOG = (
 )
 
 
+def _classify_line(lowered: str) -> tuple[str, str] | None:
+    """Phase and host for one log line that names a registry, else None."""
+
+    host = next(
+        (name for name in _REGISTRY_HOSTS_IN_LOG if name in lowered), None,
+    )
+    if host is None:
+        return None
+    if any(marker in lowered for marker in _DNS_MARKERS):
+        return "a DNS failure", host
+    if any(marker in lowered for marker in _TLS_MARKERS):
+        return "a TLS failure", host
+    if any(marker in lowered for marker in _AUTH_MARKERS):
+        return "a registry authentication failure", host
+    if any(marker in lowered for marker in _CONNECT_MARKERS):
+        return "a connection timeout", host
+    return None
+
+
 def classify_build_log(text: str) -> str | None:
     """Name the network phase a build log died or stalled in, if it says.
 
-    Returns ``None`` when the log carries no registry evidence, so callers
-    can stay silent instead of inventing a cause.  This only reads what
-    Docker already printed; it never guesses from the absence of output.
+    The failure marker and the registry host must appear on the **same
+    line**, and the host named is the one on that line. Scanning the whole
+    window instead attributed every failure to whichever host appeared
+    first anywhere in it -- and since the pinned egress image on ``ghcr.io``
+    is the first thing every build pulls, one *successful* ``ghcr.io`` pull
+    stole the attribution from a real ``auth.docker.io`` failure, and any
+    pre-registration failure at all (a compile error, a full disk) came out
+    labelled as a network problem. In sixteen realistic logs the window
+    scan produced fifteen confident wrong answers (#0152 QA).
+
+    The newest evidence wins, because a build that retried prints the
+    operative failure last. Returns ``None`` when no single line carries
+    both, so callers stay silent rather than inventing a cause: a wrong
+    diagnosis is worse than none, since the volunteer acts on it.
     """
 
     if not text:
         return None
-    lowered = text.lower()
-    host = next(
-        (name for name in _REGISTRY_HOSTS_IN_LOG if name in lowered), None,
-    )
-    where = f" reaching {host}" if host else ""
-    if any(marker in lowered for marker in _DNS_MARKERS):
-        return f"the build log shows a DNS failure{where}"
-    if any(marker in lowered for marker in _TLS_MARKERS):
-        return f"the build log shows a TLS failure{where}"
-    if any(marker in lowered for marker in _AUTH_MARKERS):
-        return f"the build log shows a registry authentication failure{where}"
-    if any(marker in lowered for marker in _CONNECT_MARKERS):
-        return f"the build log shows a connection timeout{where}"
+    for line in reversed(text.splitlines()):
+        found = _classify_line(line.lower())
+        if found is not None:
+            phase, host = found
+            return f"the build log shows {phase} reaching {host}"
     return None
