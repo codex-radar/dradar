@@ -153,6 +153,9 @@ _GOOGLE_API_KEY_RE = re.compile(r"\bAIza[A-Za-z0-9_-]{10,}")
 # last paragraph of the module docstring.
 _OPAQUE_MIN_CHARS = 16
 _OPAQUE_MAX_WORD_CHARS = 40
+# Below this length a lowercase run has to be *clean* English, not merely
+# close to it.  See _reads_as_english for the measurement that set it.
+_OPAQUE_STRICT_WORD_CHARS = 18
 _OPAQUE_RUN_RE = re.compile(r"[A-Za-z0-9+/=]{%d,}" % _OPAQUE_MIN_CHARS)
 _OPAQUE_SPLIT_RE = re.compile(r"[+/=]+")
 # Same split, but keeping the separators, for the path-shaped runs that are
@@ -230,25 +233,41 @@ def _reads_as_english(segment: str) -> bool:
     the opposite of what this module is for.  A stderr line that no longer
     names the endpoint that failed cannot locate the failure.
 
-    The allowance is narrow in three ways, and each is what keeps it
-    affordable:
+    What actually holds the line, and what each part is worth:
 
-    - It only applies to a run of pure lowercase ASCII letters.  A random
-      base62 payload is one with probability (26/62)**16 ~= 1e-6, so an
-      ordinary token never reaches this branch at all.
-    - Within that, the letter pairs must be English ones.  Over 40k
-      uniformly random lowercase runs, 0.11% pass; the corpus of real
-      words, hostname labels and package names passes 36 of 36.
+    - The letter pairs must be English ones.  That is the whole test; the
+      numbers below are its numbers.
     - Lowercase hex digests are excluded by naming their alphabet.
       `deadbeefcafebabe...` is pure a-f and reads as flawless English by
-      every statistical test tried here, so nothing else rejects it — and
-      tests/test_agent_stderr.py plants exactly that string.
+      every statistical test tried here, so nothing else rejects it, and
+      tests/test_agent_stderr.py plants exactly that string.  The price of
+      that exclusion is that git SHAs, `sha256:` digests, hyphenless UUIDs
+      and container ids stay masked.  Those are ops evidence and losing
+      them is a real cost, accepted here to keep digests masked.
+    - The `isascii/isalpha/islower` precondition is *not* an independent
+      bound.  At credential lengths the pair test already rejects
+      everything it rejects.  It earns its place only on the
+      `_is_recognizable_segment` path, which has no length floor, where it
+      stops a lone uppercase character from counting as a word.  Do not
+      cite it as a third barrier.
 
-    What it does not do: a credential drawn from a lowercase-letters-only
-    alphabet, long enough to reach the catch-all and matched by no named
-    rule above it, passes at that same 0.11%.  That residue is the price of
-    the allowance, not an oversight.  Narrow it by naming the shape in
-    _RULES, never by widening this test.
+    **The price, stated at the length where it is highest.**  Over 40k
+    uniformly random lowercase runs of length 16-44, 0.11% pass, but that
+    is an average across lengths and the average hides the shape.  Broken
+    out: length 16 passes at 0.98%, length 17 at 0.83%, falling to ~0 by
+    length 21.  The worst case sits exactly on `_OPAQUE_MIN_CHARS`, which
+    is also exactly the shape of a Google app-specific password: 16
+    lowercase letters, no separators.  Measured on 20k of those, 0.86%
+    survived while this test allowed one odd pair at every length.
+
+    That is why a run shorter than `_OPAQUE_STRICT_WORD_CHARS` must have
+    *zero* odd pairs instead of at most one.  It takes the app-password
+    leak to 0.16% and costs one real package name (`pythonjsonlogger`,
+    whose `nj` seam is not an English pair).  0.16% is not 0: a credential
+    drawn from a lowercase-letters-only alphabet and matched by no named
+    rule above still passes at that rate.  That residue is the price of
+    the allowance.  Narrow it by naming the shape in _RULES, never by
+    widening this test.
     """
     if not (segment.isascii() and segment.isalpha() and segment.islower()):
         return False
@@ -258,6 +277,8 @@ def _reads_as_english(segment: str) -> bool:
         return False
     odd = sum(1 for left, right in zip(segment, segment[1:])
               if left + right not in _ENGLISH_PAIRS)
+    if len(segment) < _OPAQUE_STRICT_WORD_CHARS:
+        return odd == 0
     # One odd pair is the seam of a compound (`pythonjsonlogger`).
     return odd <= 1
 
@@ -266,6 +287,24 @@ def _segment_is_safe(segment: str) -> bool:
     if len(segment) < _OPAQUE_MIN_CHARS:
         return True
     # Counters, epochs and byte totals carry no credential shape.
+    if segment.isdigit():
+        return True
+    return _looks_like_identifier(segment) or _reads_as_english(segment)
+
+
+def _is_recognizable_segment(segment: str) -> bool:
+    """Affirmative recognition only -- no "short, therefore safe" clause.
+
+    `_segment_is_safe` passes anything below `_OPAQUE_MIN_CHARS`, which is
+    the right call when a whole run is being judged: a run that short is
+    not a credential.  It is the wrong call for the pieces of a run that
+    has *already* been found to contain one.  A base64 blob broken up by
+    `/` has short pieces too, and keeping them publishes a contiguous
+    slice of the key -- measured at up to 86 characters of a 64-byte
+    secret before this function existed.
+    """
+    if not segment:
+        return True
     if segment.isdigit():
         return True
     return _looks_like_identifier(segment) or _reads_as_english(segment)
@@ -291,7 +330,7 @@ def _opaque_replacement(match: re.Match[str]) -> str:
     if "+" in run or "=" in run:
         return "[REDACTED-OPAQUE]"
     return "".join(
-        piece if piece.startswith("/") or _segment_is_safe(piece)
+        piece if piece.startswith("/") or _is_recognizable_segment(piece)
         else "[REDACTED-OPAQUE]"
         for piece in _OPAQUE_PATH_SPLIT_RE.split(run)
     )
