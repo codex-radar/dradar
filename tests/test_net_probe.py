@@ -416,3 +416,41 @@ def test_the_host_is_taken_from_the_failure_operand(label, log, expected):
     else:
         assert verdict is not None, f"{label}: 漏报"
         assert expected in verdict, f"{label}: {verdict}"
+
+
+def test_a_long_certificate_san_list_cannot_stall_the_classifier():
+    """A regex spanning the comma-separated SAN list nested one quantifier
+    inside another and backtracked exponentially -- 2x per comma, hours at
+    forty. Certificates routinely carry dozens of SANs, and this runs on
+    every heartbeat, so it would have become the hang it reports (#0152 QA).
+    """
+
+    pathological = (
+        "x509: certificate is valid for " + ", ".join(["a"] * 2000) + " END"
+    )
+    started = time.monotonic()
+    assert net_probe.classify_build_log(pathological) is None
+    assert time.monotonic() - started < 0.5
+
+
+def test_a_real_certificate_mismatch_is_still_named():
+    verdict = net_probe.classify_build_log(
+        "x509: certificate is valid for *.corp.local, *.a.com, *.b.com, "
+        "not registry-1.docker.io"
+    )
+    assert verdict == "the build log shows a TLS failure reaching registry-1.docker.io"
+
+
+def test_a_bare_not_is_not_a_failure_operand():
+    """'not' is an ordinary English word; only the x509 phrase licenses it."""
+
+    assert net_probe.classify_build_log(
+        "#4 ERROR: image is not ghcr.io/foo, connection refused"
+    ) is None
+
+
+def test_one_enormous_line_is_truncated_before_matching():
+    huge = "#9 " + "x" * 200_000 + ' Head "https://ghcr.io/v2/x": no such host'
+    started = time.monotonic()
+    net_probe.classify_build_log(huge)
+    assert time.monotonic() - started < 0.5

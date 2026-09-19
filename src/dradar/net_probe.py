@@ -453,13 +453,19 @@ _OPERAND_RE = re.compile(
 )
 # Go's x509 mismatch names the host it was trying to reach after "not":
 #   x509: certificate is valid for *.corp.local, not registry-1.docker.io
-# That trailing name is the operand, so it is read the same way. Anchoring
-# on the full phrase keeps a bare "not" -- an ordinary English word -- from
-# turning any nearby hostname into a subject.
-_X509_OPERAND_RE = re.compile(
-    r"certificate is valid for [^,]+(?:,\s*[^,]+?)*,\s*not\s+"
-    r"([a-z0-9][a-z0-9.\-]*\.[a-z]{2,})",
-)
+# That trailing name is the operand, so it is read the same way.
+#
+# The phrase is matched with a plain substring test and the host with a flat
+# pattern, deliberately. Spanning the comma-separated SAN list with a regex
+# (``[^,]+(?:,\s*[^,]+?)*``) nests one quantifier inside another, which
+# backtracks exponentially when the line does not match: measured at 2x per
+# comma, 0.28s at 22 commas and hours at 40 -- and certificates routinely
+# carry dozens of SANs. That would have hung the CLI on every heartbeat,
+# making this diagnostic the hang it exists to report (#0152 QA r3).
+_X509_PHRASE = "certificate is valid for "
+_X509_NOT_RE = re.compile(r",\s*not\s+([a-z0-9][a-z0-9.\-]*\.[a-z]{2,})")
+# One pathological line must not cost more than it can possibly inform.
+_MAX_CLASSIFIED_LINE = 4000
 
 
 def _failing_registry(lowered: str) -> str | None:
@@ -473,7 +479,9 @@ def _failing_registry(lowered: str) -> str | None:
     healthy, and sends the volunteer to fix the wrong thing.
     """
 
-    operands = _OPERAND_RE.findall(lowered) + _X509_OPERAND_RE.findall(lowered)
+    operands = _OPERAND_RE.findall(lowered)
+    if _X509_PHRASE in lowered:
+        operands += _X509_NOT_RE.findall(lowered)
     for host in reversed(operands):
         if any(
             host == known or host.endswith("." + known)
@@ -520,7 +528,7 @@ def classify_build_log(text: str) -> str | None:
     if not text:
         return None
     for line in reversed(text.splitlines()):
-        found = _classify_line(line.lower())
+        found = _classify_line(line.lower()[:_MAX_CLASSIFIED_LINE])
         if found is not None:
             phase, host = found
             return f"the build log shows {phase} reaching {host}"
