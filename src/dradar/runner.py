@@ -3065,6 +3065,10 @@ def _last_activity(log_path: Path) -> str:
     line, so split on \\r as well and skip pure control/blank chunks."""
     raw = _tail(log_path, 1)
     chunks = [c.strip() for c in raw.replace("\r", "\n").splitlines() if c.strip()]
+    # The 120-char cap is not only cosmetic: this string is fed to
+    # agent_stderr.redact_diagnostic_text on every heartbeat, and that
+    # redactor is super-linear (~2s on 60 KB). Raising this cap moves that
+    # cost onto every beat of the preparation wait.
     return (chunks[-1][:120] if chunks else "still running (no new log output)")
 
 
@@ -4135,6 +4139,7 @@ def _wait_for_worker_registration(
     # last value: when two registries fail together -- which is what the
     # 2026-09-08 report actually describes, ghcr.io and docker.io both down
     # -- the causes alternate, and last-value dedup re-prints on every beat.
+    # Bounded by the beat count, at most one entry per beat.
     reported_reasons: set[str] = set()
     # The most recent cause, remembered for the terminal error: the evidence
     # scrolls out of the tail window, and the cause must not be forgotten
@@ -4246,10 +4251,15 @@ def _duration(seconds: float) -> str:
 def _historical(reason: str) -> str:
     """Restate a remembered cause as history, never as the current state."""
 
-    return (
-        reason.replace("the build log shows", "earlier in this build the log showed", 1)
-        + "; the newest log lines no longer show it"
+    past = reason.replace(
+        net_probe.CLASSIFIED_PREFIX, "earlier in this build the log showed", 1,
     )
+    if past == reason:
+        # The classifier's opening changed and the rewrite silently did
+        # nothing. Falling through would assert in the present tense while
+        # the second clause says the opposite -- worse than not rewriting.
+        past = f"earlier in this build: {reason}"
+    return past + "; the newest log lines no longer show it"
 
 
 def _build_stall_diagnosis(

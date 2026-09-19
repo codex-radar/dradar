@@ -406,3 +406,16 @@ def test_a_cause_still_in_the_log_stays_in_the_present_tense(
     )
     assert "the build log shows a DNS failure reaching ghcr.io" in message
     assert "earlier in this build" not in message
+
+
+def test_history_rewrite_cannot_produce_a_contradictory_present_tense():
+    """If the classifier's opening ever changes, the rewrite silently does
+    nothing -- leaving "the log shows X; the newest lines no longer show it",
+    which asserts and denies the same thing. Fall back instead."""
+
+    assert runner._historical("the build log shows a DNS failure").startswith(
+        "earlier in this build the log showed"
+    )
+    drifted = runner._historical("the build log REPORTS a DNS failure")
+    assert drifted.startswith("earlier in this build:")
+    assert "the build log shows" not in drifted

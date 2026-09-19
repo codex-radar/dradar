@@ -420,12 +420,22 @@ _TLS_MARKERS = (
     "certificate signed by unknown authority",
 )
 _CONNECT_MARKERS = (
-    "i/o timeout",
     "connection refused",
     "network is unreachable",
     "no route to host",
-    "context deadline exceeded",
     "dial tcp",
+)
+# BuildKit and containerd append these *after* the real cause, as a generic
+# note that the surrounding operation also ran out of time. They are the one
+# place where "the rightmost marker is the proximate cause" is false, so they
+# only decide the phase when nothing more specific matched: otherwise a
+# trailing ": context deadline exceeded" rewrote `lookup X: no such host`
+# into a connection timeout -- inverting the diagnosis for the very failure
+# this module was written for, and demoting the module's one certain verdict
+# (an intercepting proxy) to a generic timeout (#0152 QA r4).
+_GENERIC_TIMEOUT_MARKERS = (
+    "i/o timeout",
+    "context deadline exceeded",
 )
 _AUTH_MARKERS = (
     "failed to fetch anonymous token",
@@ -466,6 +476,10 @@ _X509_PHRASE = "certificate is valid for "
 _X509_NOT_RE = re.compile(r",\s*not\s+([a-z0-9][a-z0-9.\-]*\.[a-z]{2,})")
 # One pathological line must not cost more than it can possibly inform.
 _MAX_CLASSIFIED_LINE = 4000
+# The opening of every verdict this module returns. ``runner`` rewrites it
+# when restating a cause as history, so the coupling is named here rather
+# than duplicated as a literal at the other end.
+CLASSIFIED_PREFIX = "the build log shows"
 
 
 def _failing_registry(lowered: str) -> str | None:
@@ -514,8 +528,10 @@ def _bounded(line: str) -> str:
 
     if len(line) <= _MAX_CLASSIFIED_LINE:
         return line
+    joiner = " … "
     head = _MAX_CLASSIFIED_LINE // 4
-    return line[:head] + " … " + line[-(_MAX_CLASSIFIED_LINE - head):]
+    tail = _MAX_CLASSIFIED_LINE - head - len(joiner)
+    return line[:head] + joiner + line[-tail:]
 
 
 def _classify_line(lowered: str) -> tuple[str, str] | None:
@@ -543,7 +559,13 @@ def _classify_line(lowered: str) -> tuple[str, str] | None:
             if at > phase_at:
                 phase, phase_at = name, at
     if phase is None:
-        return None
+        # Nothing specific said what went wrong; a generic timeout note is
+        # then the only evidence there is, and it does mean the connection
+        # never completed.
+        if any(marker in lowered for marker in _GENERIC_TIMEOUT_MARKERS):
+            phase = "a connection timeout"
+        else:
+            return None
     host = _failing_registry(lowered)
     return None if host is None else (phase, host)
 
@@ -573,5 +595,5 @@ def classify_build_log(text: str) -> str | None:
         found = _classify_line(_bounded(line.lower()))
         if found is not None:
             phase, host = found
-            return f"the build log shows {phase} reaching {host}"
+            return f"{CLASSIFIED_PREFIX} {phase} reaching {host}"
     return None

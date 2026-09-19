@@ -551,3 +551,61 @@ def test_a_single_marker_line_keeps_its_obvious_phase():
         'failed to fetch anonymous token: Get "https://auth.docker.io/token": '
         "net/http: TLS handshake timeout"
     ) == "the build log shows a TLS failure reaching auth.docker.io"
+
+
+# BuildKit and containerd append a generic "ran out of time" note *after* the
+# real cause, so the rightmost marker is often the least specific one. Each of
+# these reported "a connection timeout" once the phase was taken from the
+# rightmost marker -- including the failure this ticket exists for (#0152 QA r4).
+TRAILING_NOTE_CASES = (
+    (
+        "DNS 失败 + BuildKit 尾缀(apmengzi 的原始形态)",
+        '#2 Head "https://auth.docker.io/v2/": dial tcp: lookup '
+        "auth.docker.io: no such host: context deadline exceeded",
+        "a DNS failure reaching auth.docker.io",
+    ),
+    (
+        "证书被拦截 + 尾缀(模块唯一的断言式结论)",
+        '#3 Get "https://ghcr.io/v2/": x509: certificate signed by unknown '
+        "authority: context deadline exceeded",
+        "a TLS failure reaching ghcr.io",
+    ),
+    (
+        "TLS 握手超时 + 尾缀",
+        '#4 Get "https://ghcr.io/v2/": net/http: TLS handshake timeout: '
+        "context deadline exceeded",
+        "a TLS failure reaching ghcr.io",
+    ),
+    (
+        "纯连接超时:必须仍然是 connection timeout",
+        '#5 Head "https://ghcr.io/v2/": dial tcp 1.2.3.4:443: i/o timeout',
+        "a connection timeout reaching ghcr.io",
+    ),
+    (
+        "只有尾缀、没有更具体的:兜底仍然报连接超时",
+        '#6 Head "https://ghcr.io/v2/": context deadline exceeded',
+        "a connection timeout reaching ghcr.io",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,log,expected", TRAILING_NOTE_CASES,
+    ids=[c[0] for c in TRAILING_NOTE_CASES],
+)
+def test_a_trailing_timeout_note_does_not_override_a_specific_cause(
+    label, log, expected,
+):
+    assert net_probe.classify_build_log(log) == (
+        f"the build log shows {expected}"
+    ), label
+
+
+def test_the_classified_prefix_is_shared_not_duplicated():
+    """runner._historical rewrites this opening; a literal at each end would
+    drift apart silently."""
+
+    verdict = net_probe.classify_build_log(
+        "#2 dial tcp: lookup ghcr.io: no such host"
+    )
+    assert verdict.startswith(net_probe.CLASSIFIED_PREFIX)
