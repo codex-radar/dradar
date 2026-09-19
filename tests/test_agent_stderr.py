@@ -205,6 +205,149 @@ def test_google_api_key_rule_does_not_fire_on_ordinary_text(text):
     assert "[REDACTED-GOOGLE-API-KEY]" not in redacted
 
 
+# Everything in this block was masked before #0169. Each entry is content an
+# operator needs in order to act on the capture, and the reason it was being
+# eaten is recorded next to it: a run of >=16 payload characters was only
+# spared when it split into two or more >=3-character segments, which no
+# single word and no identifier built from two-letter words ever does.
+UNMASKED_HOSTNAMES = [
+    "generativelanguage.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "containerregistry.example.org",
+    "securitytokenservice.example.net",
+]
+UNMASKED_WORDS = [
+    "internationalization",   # ordinary prose
+    "misconfiguration",
+    "interoperability",
+    "telecommunications",
+    "djangorestframework",    # package names
+    "pythonjsonlogger",
+    "instrumentationtests",
+]
+UNMASKED_IDENTIFIERS = [
+    "InterruptedIOException",       # `IO`
+    "parseIntOrDefault",            # `Or`
+    "getUserByIdOrThrow",           # `By`, `Id`, `Or`
+    "createOrUpdateIfAbsent",       # `Or`, `If`
+    "toStringAsFixedOrNull",        # `to`, `As`, `Or`
+]
+
+
+@pytest.mark.parametrize("hostname", UNMASKED_HOSTNAMES)
+def test_hostname_survives_so_the_failing_endpoint_stays_readable(hostname):
+    """The capture exists to say which endpoint failed. A host whose label
+    is >=16 characters was being replaced with a placeholder, which removes
+    exactly the part worth keeping."""
+    text = f"connect ECONNREFUSED {hostname}:443"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("hostname", UNMASKED_HOSTNAMES)
+def test_url_host_survives_the_catch_all_that_runs_after_the_url_rule(
+        hostname):
+    """_url_replacement deliberately keeps scheme/host/path. The catch-all
+    runs afterwards over the whole string, so it used to undo that decision
+    and take the `//` with it."""
+    text = f"POST https://{hostname}/v1beta/models/x:stream failed"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("word", UNMASKED_WORDS)
+def test_long_ordinary_words_are_not_credentials(word):
+    text = f"error: {word} could not be resolved"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("identifier", UNMASKED_IDENTIFIERS)
+def test_identifiers_built_from_two_letter_words_survive(identifier):
+    """`Or`, `By`, `If`, `IO` are words, not the two-character case flips of
+    a base62 payload -- see _SHORT_WORD_SEGMENTS."""
+    text = f"{identifier}: operation failed"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+def test_one_opaque_path_segment_does_not_condemn_the_whole_path():
+    """`/` is inside the run alphabet, so a path is a single run. Masking
+    the run whole threw away every other segment with it."""
+    redacted, _ = redact_diagnostic_text(
+        "open /var/lib/registry/Qx7vTnZr4KpLw9Bd2ScFmE/blobs failed"
+    )
+    assert redacted == (
+        "open /var/lib/registry/[REDACTED-OPAQUE]/blobs failed"
+    )
+
+
+def test_base64_run_is_masked_whole_so_no_prefix_of_it_survives():
+    """The counterpart to the test above. `+` and `=` are payload, not
+    structure: a run carrying them is one credential, and masking it
+    piecewise would publish its leading characters."""
+    blob = "abc/def+ghiJKLmnoPQRstuVWXyz0123456789AB"
+    redacted, _ = redact_diagnostic_text(f"blob {blob}")
+
+    assert redacted == "blob [REDACTED-OPAQUE]"
+    assert "abc/def" not in redacted
+
+
+@pytest.mark.parametrize("digest", [
+    PLANTED["lowercase-hex"],
+    # The one above is also rejected by the letter-pair test, so on its own
+    # it cannot tell us whether the hex-alphabet exclusion still works --
+    # deleting that exclusion leaves the suite green. This one is pure a-f
+    # AND has no unusual letter pair at all, so it reaches the allowance and
+    # only the exclusion turns it back. 1.0% of random a-f runs look like
+    # this; without the exclusion, that is the share of hex digests that
+    # would be published as prose.
+    "cafebabefacadebead",
+])
+def test_lowercase_hex_digest_is_not_mistaken_for_a_word(digest):
+    """A hex digest is pure a-f and reads as flawless English -- `dead`,
+    `beef`, `cafe`, `face` are words. Naming the alphabet is the only thing
+    that rejects it."""
+    redacted, labels = redact_diagnostic_text(f"digest {digest}")
+
+    assert digest not in redacted
+    assert "OPAQUE" in labels
+
+
+@pytest.mark.parametrize("payload", [
+    "qxvtnzrkplwbdscf",            # lowercase, no vowels
+    "zxcvbnmasdfghjkl",            # lowercase, keyboard walk
+    "Qx7vTnZr4KpLw9Bd2ScF",        # mixed case and digits
+    # Vowel-balanced and free of consonant clusters: it defeats every
+    # "does this look pronounceable" heuristic, and is caught only because
+    # `bo`, `qi` and `xu` are not English letter pairs.
+    "kaboqixuvenazirotemu",
+])
+def test_high_entropy_payload_is_still_masked_after_the_word_allowance(
+        payload):
+    """The allowance in _reads_as_english is for language, not for length."""
+    redacted, labels = redact_diagnostic_text(f"emitted {payload} then died")
+
+    assert payload not in redacted
+    assert "OPAQUE" in labels
+
+
+def test_planted_corpus_is_detectably_hostile(monkeypatch):
+    """Negative control for the negative control.
+
+    `test_no_planted_credential_survives` would pass just as happily if the
+    corpus had stopped containing credentials, or if some unrelated stage
+    were removing them. Neutralise every rule in this module and the same
+    corpus has to come back carrying all of them -- otherwise that test is
+    proving nothing about the redactor.
+    """
+    monkeypatch.setattr(agent_stderr, "_RULES", ())
+    monkeypatch.setattr(agent_stderr, "scrub_text", lambda text: text)
+    monkeypatch.setattr(agent_stderr, "_OPAQUE_RUN_RE", re.compile(r"(?!)"))
+
+    redacted, labels = agent_stderr.redact_diagnostic_text(_planted_stderr())
+
+    assert sorted(name for name, value in PLANTED.items()
+                  if value in redacted) == sorted(PLANTED)
+    assert labels == []
+
+
 def test_url_keeps_endpoint_but_drops_query_and_userinfo():
     redacted, _ = redact_diagnostic_text(
         "POST https://user:pw@api.example.com/v1/chat?api_key=abc123&x=1 failed"

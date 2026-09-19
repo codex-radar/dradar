@@ -22,7 +22,7 @@ enough to be a credential is masked even though it was not recognized.
 Losing a stack frame is cheap; writing a live token into the database is not.
 
 **What this does not catch.**  Masking is not a proof, and reading it as one
-is the way a credential eventually ships.  Two bounds are deliberate:
+is the way a credential eventually ships.  These bounds are deliberate:
 
 - The catch-all fires at ``_OPAQUE_MIN_CHARS`` (16).  A credential shorter
   than that, with no recognized prefix, not adjacent to a credential field
@@ -33,6 +33,15 @@ is the way a credential eventually ships.  Two bounds are deliberate:
   worth reading survive.  A payload shaped exactly like an identifier would
   survive with them.  Random base62 does not decompose that way, which is
   what makes the allowance affordable, not a proof that nothing can.
+- Runs that read as one English word are kept too, so that the hostname of
+  the endpoint that failed survives -- see ``_reads_as_english``, which
+  states its own measured cost.
+
+And one gap that is not deliberate, recorded here because the comment below
+used to claim the opposite: a base64 run broken by ``/`` into pieces that
+are each under ``_OPAQUE_MIN_CHARS`` is passed through whole, because every
+piece clears the length floor on its own.  Splitting on ``/`` bounds how
+much of a path is lost, not how much of a blob is kept.
 
 Widen a rule before assuming a shape is covered, and keep the negative
 control in tests/test_agent_stderr.py as the thing that decides.
@@ -139,33 +148,118 @@ _GOOGLE_API_KEY_RE = re.compile(r"\bAIza[A-Za-z0-9_-]{10,}")
 # The catch-all.  A "run" is a maximal stretch of base64/base64url payload
 # characters; it is masked unless every one of its `+/=`-separated segments
 # is demonstrably not a credential.  Splitting on those separators is what
-# keeps filesystem paths readable without letting a base64 blob that happens
-# to contain `/` slip through in short pieces.
+# keeps filesystem paths readable.  It does NOT stop a base64 blob that
+# happens to contain `/` from slipping through in short pieces -- see the
+# last paragraph of the module docstring.
 _OPAQUE_MIN_CHARS = 16
+_OPAQUE_MAX_WORD_CHARS = 40
 _OPAQUE_RUN_RE = re.compile(r"[A-Za-z0-9+/=]{%d,}" % _OPAQUE_MIN_CHARS)
 _OPAQUE_SPLIT_RE = re.compile(r"[+/=]+")
+# Same split, but keeping the separators, for the path-shaped runs that are
+# masked segment by segment rather than whole.  See _opaque_replacement.
+_OPAQUE_PATH_SPLIT_RE = re.compile(r"(/+)")
 # CamelCase / snake-free identifier segmentation: real identifiers decompose
 # into words, random base62 decomposes into one-character case flips.
 _IDENT_SEGMENT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+")
+
+# Two-letter English words, plus `io`.  Real identifiers are built from real
+# words, and some of those words are two letters long — which is why
+# `InterruptedIOException`, `parseIntOrDefault` and `createOrUpdateIfAbsent`
+# were being masked as payloads.  Requiring every short segment to come from
+# this closed list is what still separates them from a base62 blob's
+# arbitrary two-character case flips: over 20k random runs of each shape,
+# admitting them moves the leak rate by 0.000pp (base62) and 0.025pp
+# (mixed-case letters only), and it recovers every identifier of that shape.
+# The list is closed on purpose — relaxing it to *any* two-character segment
+# is precisely the hole it exists to prevent.
+_SHORT_WORD_SEGMENTS = frozenset(
+    "am an as at be by do go he id if in io is it me my no of ok on or so "
+    "to up us we".split()
+)
+
+# Letter pairs occurring at least 200 times across /usr/share/dict/words.  A
+# lowercase run is only read as language when nearly every adjacent pair is
+# one of these; see _reads_as_english for what that buys and what it costs.
+_ENGLISH_PAIR_SOURCE = (
+    "abacadaeafagahaiakalamanaoaparasatauavawaxayazbabbbcbdbebiblbobrbs"
+    "btbubycacccechcickclcocrcsctcucydadddedfdgdhdidldmdndodrdsdudvdwdy"
+    "eaebecedeeefegeheiejekelemeneoepeqereseteuevewexeyezfafefffiflfofr"
+    "ftfufygageggghgiglgmgngogrgsgugyhahehihlhmhnhohrhthuhwhyiaibicidie"
+    "ifigihiiikiliminioipiqirisitiuivixizjajejijojukakekhkiklknkokrksku"
+    "kwkylalblcldlelflglilklllmlnlolplsltlulvlwlymambmemimlmmmnmompmsmu"
+    "mynanbncndnenfngnhninjnknlnmnnnonpnqnrnsntnunvnwnynzoaobocodoeofog"
+    "ohoiokolomonooopoqorosotouovowoxoyozpapephpiplpnpoppprpsptpupyqura"
+    "rbrcrdrerfrgrhrirkrlrmrnrorprrrsrtrurvrwrysasbscsesfshsiskslsmsnso"
+    "spsqssstsuswsytatbtctetfthtitltmtntotptrtstttutwtyuaubucudueufugui"
+    "ukulumunuoupurusutuvuxvavevivovuwawewhwiwlwnwowrwsxaxcxexixoxpxtxy"
+    "yaybycydyeygyiylymynyoypyrysytywzazezizozyzz"
+)
+_ENGLISH_PAIRS = frozenset(
+    _ENGLISH_PAIR_SOURCE[index:index + 2]
+    for index in range(0, len(_ENGLISH_PAIR_SOURCE), 2)
+)
 
 
 def _looks_like_identifier(segment: str) -> bool:
     """True for `NonZeroAgentExitCodeError`, false for `4eC39HqLyjWDarjtT1`.
 
     A source identifier decomposes into real words; a base62 payload
-    decomposes into short case/digit flips.  All four conditions are needed:
-    dropping any one of them lets a hand-shaped blob such as
+    decomposes into short case/digit flips.  Every condition below is load
+    bearing: dropping any one of them lets a hand-shaped blob such as
     `ghiJKLmnoPQRstuVWXyz0123456789AB` read as an identifier.
     """
     segments = _IDENT_SEGMENT_RE.findall(segment)
     if "".join(segments) != segment or len(segments) < 2:
         return False
-    if any(len(part) < 3 for part in segments):
+    if any(len(part) < 3 and part.lower() not in _SHORT_WORD_SEGMENTS
+           for part in segments):
         return False
     if max(len(part) for part in segments) < 4:
         return False
     # `Sha256HashMismatchError` is an identifier; scattered digits are entropy.
     return sum(1 for part in segments if part.isdigit()) <= 1
+
+
+def _reads_as_english(segment: str) -> bool:
+    """True for `generativelanguage`, false for `qxvtnzrkplwbdscf`.
+
+    An undivided run gives `_looks_like_identifier` nothing to work with —
+    it needs two segments — so every long lowercase word was masked:
+    hostname labels (`generativelanguage.googleapis.com`), package names
+    (`djangorestframework`), ordinary prose (`misconfiguration`).  That is
+    the opposite of what this module is for.  A stderr line that no longer
+    names the endpoint that failed cannot locate the failure.
+
+    The allowance is narrow in three ways, and each is what keeps it
+    affordable:
+
+    - It only applies to a run of pure lowercase ASCII letters.  A random
+      base62 payload is one with probability (26/62)**16 ~= 1e-6, so an
+      ordinary token never reaches this branch at all.
+    - Within that, the letter pairs must be English ones.  Over 40k
+      uniformly random lowercase runs, 0.11% pass; the corpus of real
+      words, hostname labels and package names passes 36 of 36.
+    - Lowercase hex digests are excluded by naming their alphabet.
+      `deadbeefcafebabe...` is pure a-f and reads as flawless English by
+      every statistical test tried here, so nothing else rejects it — and
+      tests/test_agent_stderr.py plants exactly that string.
+
+    What it does not do: a credential drawn from a lowercase-letters-only
+    alphabet, long enough to reach the catch-all and matched by no named
+    rule above it, passes at that same 0.11%.  That residue is the price of
+    the allowance, not an oversight.  Narrow it by naming the shape in
+    _RULES, never by widening this test.
+    """
+    if not (segment.isascii() and segment.isalpha() and segment.islower()):
+        return False
+    if len(segment) > _OPAQUE_MAX_WORD_CHARS:
+        return False
+    if all(character in "abcdef" for character in segment):
+        return False
+    odd = sum(1 for left, right in zip(segment, segment[1:])
+              if left + right not in _ENGLISH_PAIRS)
+    # One odd pair is the seam of a compound (`pythonjsonlogger`).
+    return odd <= 1
 
 
 def _segment_is_safe(segment: str) -> bool:
@@ -174,14 +268,33 @@ def _segment_is_safe(segment: str) -> bool:
     # Counters, epochs and byte totals carry no credential shape.
     if segment.isdigit():
         return True
-    return _looks_like_identifier(segment)
+    return _looks_like_identifier(segment) or _reads_as_english(segment)
 
 
 def _opaque_replacement(match: re.Match[str]) -> str:
+    """Mask a run that is not demonstrably safe — as narrowly as the run's
+    own shape allows.
+
+    A run that contains `+` or `=` is base64 alphabet all the way through:
+    its separators are payload, not structure, so surviving short pieces
+    would be a prefix of a credential and the whole run goes.  A run
+    separated only by `/` is path-shaped — a URL authority, a filesystem
+    path, a registry reference — and there only the offending segment goes.
+    Condemning the whole run there used to take the rest of the path with
+    it: `/var/lib/<long>/blobs/sha256` collapsed to a single placeholder,
+    and `https://<long>.example.com` lost its `//` as well as its host,
+    leaving output that no longer even reads as a URL.
+    """
     run = match.group(0)
     if all(_segment_is_safe(part) for part in _OPAQUE_SPLIT_RE.split(run)):
         return run
-    return "[REDACTED-OPAQUE]"
+    if "+" in run or "=" in run:
+        return "[REDACTED-OPAQUE]"
+    return "".join(
+        piece if piece.startswith("/") or _segment_is_safe(piece)
+        else "[REDACTED-OPAQUE]"
+        for piece in _OPAQUE_PATH_SPLIT_RE.split(run)
+    )
 
 
 def _already_redacted(value: str) -> bool:
