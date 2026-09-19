@@ -33,9 +33,9 @@ import uuid
 
 from . import cancellation
 from . import (
-    __version__, artifact_staging, assignment_boundary, assignment_lock, egress,
-    empty_submission_circuit, failure_circuit, image_cache, local_jobs, pending,
-    refill as refill_plan,
+    __version__, agent_stderr, artifact_staging, assignment_boundary,
+    assignment_lock, egress, empty_submission_circuit, failure_circuit,
+    image_cache, local_jobs, pending, refill as refill_plan,
 )
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .codebuddy_provider import (
@@ -3234,6 +3234,17 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             return "provider-preflight-failed"
 
     stats = summarize_result(art.result)
+
+    # Pier reports a failed agent command as NonZeroAgentExitCodeError with an
+    # exit status and no cause; the cause is in the agent's own stderr under
+    # the trial's agent/ directory. Capture its redacted tail HERE, before
+    # cleanup_trial_resources() below removes this trial's containers and
+    # volumes, so the ordering holds even if that directory should ever stop
+    # being a host bind mount. Never collected for a run that completed, and a
+    # failed capture only records why -- the submission still goes out.
+    agent_stderr_meta = agent_stderr.collect_for_agent_exit(
+        art.trial_dir, art.result,
+    )
     # A recorded agent exception is always interrupted. A nonzero outer Pier
     # rc may happen after the agent completed and the task hook harvested its
     # patch. Accept that paid work only with independent DSH terminal evidence
@@ -3342,6 +3353,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         "dsh_version": art.dsh_version,
         "codebuddy_cli_version": art.codebuddy_cli_version,
         **stats,
+        **agent_stderr_meta,
     }
     if failure_kind:
         # Keep Pier's raw exception_type for debugging, but also upload the
