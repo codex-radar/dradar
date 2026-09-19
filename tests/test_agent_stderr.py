@@ -205,6 +205,256 @@ def test_google_api_key_rule_does_not_fire_on_ordinary_text(text):
     assert "[REDACTED-GOOGLE-API-KEY]" not in redacted
 
 
+# Everything in this block was masked before #0169. Each entry is content an
+# operator needs in order to act on the capture, and the reason it was being
+# eaten is recorded next to it: a run of >=16 payload characters was only
+# spared when it split into two or more >=3-character segments, which no
+# single word and no identifier built from two-letter words ever does.
+UNMASKED_HOSTNAMES = [
+    "generativelanguage.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "containerregistry.example.org",
+    "securitytokenservice.example.net",
+]
+UNMASKED_WORDS = [
+    "internationalization",   # ordinary prose
+    "misconfiguration",
+    "interoperability",
+    "telecommunications",
+    "djangorestframework",    # package names
+    "instrumentationtests",
+]
+UNMASKED_IDENTIFIERS = [
+    "InterruptedIOException",       # `IO`
+    "parseIntOrDefault",            # `Or`
+    "getUserByIdOrThrow",           # `By`, `Id`, `Or`
+    "createOrUpdateIfAbsent",       # `Or`, `If`
+    "toStringAsFixedOrNull",        # `to`, `As`, `Or`
+]
+
+
+@pytest.mark.parametrize("hostname", UNMASKED_HOSTNAMES)
+def test_hostname_survives_so_the_failing_endpoint_stays_readable(hostname):
+    """The capture exists to say which endpoint failed. A host whose label
+    is >=16 characters was being replaced with a placeholder, which removes
+    exactly the part worth keeping."""
+    text = f"connect ECONNREFUSED {hostname}:443"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("hostname", UNMASKED_HOSTNAMES)
+def test_url_host_survives_the_catch_all_that_runs_after_the_url_rule(
+        hostname):
+    """_url_replacement deliberately keeps scheme/host/path. The catch-all
+    runs afterwards over the whole string, so it used to undo that decision
+    and take the `//` with it."""
+    text = f"POST https://{hostname}/v1beta/models/x:stream failed"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("word", UNMASKED_WORDS)
+def test_long_ordinary_words_are_not_credentials(word):
+    text = f"error: {word} could not be resolved"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+@pytest.mark.parametrize("identifier", UNMASKED_IDENTIFIERS)
+def test_identifiers_built_from_two_letter_words_survive(identifier):
+    """`Or`, `By`, `If`, `IO` are words, not the two-character case flips of
+    a base62 payload -- see _SHORT_WORD_SEGMENTS."""
+    text = f"{identifier}: operation failed"
+    assert redact_diagnostic_text(text)[0] == text
+
+
+def test_one_opaque_path_segment_does_not_condemn_the_whole_path():
+    """`/` is inside the run alphabet, so a path is a single run. Masking
+    the run whole threw away every other segment with it."""
+    redacted, _ = redact_diagnostic_text(
+        "open /var/lib/registry/Qx7vTnZr4KpLw9Bd2ScFmE/blobs failed"
+    )
+    assert redacted == (
+        "open /var/lib/registry/[REDACTED-OPAQUE]/blobs failed"
+    )
+
+
+def test_base64_run_is_masked_whole_so_no_prefix_of_it_survives():
+    """The counterpart to the test above. `+` and `=` are payload, not
+    structure: a run carrying them is one credential, and masking it
+    piecewise would publish its leading characters."""
+    blob = "abc/def+ghiJKLmnoPQRstuVWXyz0123456789AB"
+    redacted, _ = redact_diagnostic_text(f"blob {blob}")
+
+    assert redacted == "blob [REDACTED-OPAQUE]"
+    assert "abc/def" not in redacted
+
+
+@pytest.mark.parametrize("digest", [
+    PLANTED["lowercase-hex"],
+    # The one above is also rejected by the letter-pair test, so on its own
+    # it cannot tell us whether the hex-alphabet exclusion still works --
+    # deleting that exclusion leaves the suite green. This one is pure a-f
+    # AND has no unusual letter pair at all, so it reaches the allowance and
+    # only the exclusion turns it back. 1.0% of random a-f runs look like
+    # this; without the exclusion, that is the share of hex digests that
+    # would be published as prose.
+    "cafebabefacadebead",
+])
+def test_lowercase_hex_digest_is_not_mistaken_for_a_word(digest):
+    """A hex digest is pure a-f and reads as flawless English -- `dead`,
+    `beef`, `cafe`, `face` are words. Naming the alphabet is the only thing
+    that rejects it."""
+    redacted, labels = redact_diagnostic_text(f"digest {digest}")
+
+    assert digest not in redacted
+    assert "OPAQUE" in labels
+
+
+@pytest.mark.parametrize("payload", [
+    "qxvtnzrkplwbdscf",            # lowercase, no vowels
+    "zxcvbnmasdfghjkl",            # lowercase, keyboard walk
+    "Qx7vTnZr4KpLw9Bd2ScF",        # mixed case and digits
+    # Vowel-balanced and free of consonant clusters: it defeats every
+    # "does this look pronounceable" heuristic, and is caught only because
+    # `bo`, `qi` and `xu` are not English letter pairs.
+    "kaboqixuvenazirotemu",
+])
+def test_high_entropy_payload_is_still_masked_after_the_word_allowance(
+        payload):
+    """The allowance in _reads_as_english is for language, not for length."""
+    redacted, labels = redact_diagnostic_text(f"emitted {payload} then died")
+
+    assert payload not in redacted
+    assert "OPAQUE" in labels
+
+
+def test_planted_corpus_is_detectably_hostile(monkeypatch):
+    """Negative control for the negative control.
+
+    `test_no_planted_credential_survives` would pass just as happily if the
+    corpus had stopped containing credentials, or if some unrelated stage
+    were removing them. Neutralise every rule in this module and the same
+    corpus has to come back carrying all of them -- otherwise that test is
+    proving nothing about the redactor.
+    """
+    monkeypatch.setattr(agent_stderr, "_RULES", ())
+    monkeypatch.setattr(agent_stderr, "scrub_text", lambda text: text)
+    monkeypatch.setattr(agent_stderr, "_OPAQUE_RUN_RE", re.compile(r"(?!)"))
+
+    redacted, labels = agent_stderr.redact_diagnostic_text(_planted_stderr())
+
+    assert sorted(name for name, value in PLANTED.items()
+                  if value in redacted) == sorted(PLANTED)
+    assert labels == []
+
+
+# Masked on purpose, and each one costs us something real. Listed here so
+# that "the over-masking list" is the whole list and not only the part that
+# got fixed -- a reader who needs one of these back should see it named.
+STILL_MASKED = [
+    # A 16-17 character compound whose seam is not an English pair. Runs
+    # this short have to be clean (see _OPAQUE_STRICT_WORD_CHARS); `nj` is
+    # the price of keeping 16-letter app passwords masked.
+    "pythonjsonlogger",
+    # Everything below is the hex-alphabet exclusion doing its job. These
+    # are ops evidence -- what an operator greps a crash log for -- and we
+    # lose them to keep `deadbeefcafebabe...` masked.
+    "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432",       # git SHA-1
+    "3b1f8c2d" * 8,                                    # sha256: digest
+    "6f1e2d3c4b5a69788796a5b4c3d2e1f0",                # UUID without dashes
+    "c3d4e5f6a7b8" + "9e8d7c6b5a4f3e2d1c0b" * 2 + "abcdef1234",  # container id
+]
+
+
+@pytest.mark.parametrize("value", STILL_MASKED)
+def test_documented_residual_is_still_masked(value):
+    """Not a wish list -- a ledger.
+
+    Each of these is useful output that this module throws away. The test
+    exists so the cost stays visible and so that anyone who relaxes a rule
+    to recover one of them has to come here and say so.
+    """
+    assert value not in redact_diagnostic_text(f"id {value}")[0]
+
+
+def test_sixteen_lowercase_letters_do_not_get_the_benefit_of_the_doubt():
+    """A Google app-specific password is 16 lowercase letters, no
+    separators -- the same shape as a 16-letter English word, and exactly
+    on _OPAQUE_MIN_CHARS where the word test is weakest. Allowing one odd
+    pair at this length let 0.86% of them through; requiring a clean run
+    takes it to 0.16%."""
+    password = "eevcecsldaxofing"        # one odd pair, otherwise wordlike
+    redacted, labels = redact_diagnostic_text(
+        f"SMTP auth failed for {password}"
+    )
+
+    assert password not in redacted
+    assert "OPAQUE" in labels
+
+
+def test_word_allowance_stops_at_the_length_cap():
+    """_OPAQUE_MAX_WORD_CHARS is a load-bearing bound, not decoration: this
+    string is pure lowercase with zero odd pairs, so the letter-pair test
+    alone would hand it straight through."""
+    long_run = "misconfiguration" * 3          # 48 chars, odd pairs = 0
+
+    assert len(long_run) > agent_stderr._OPAQUE_MAX_WORD_CHARS
+    assert long_run not in redact_diagnostic_text(f"emitted {long_run}")[0]
+
+
+@pytest.mark.parametrize("key", [
+    "AIzaFAKEfake01",        # tail of exactly 10 -- the documented floor
+    "AIzaFAKEfake012345",    # 14
+])
+def test_google_api_key_rule_covers_short_tails(key):
+    """The rule says "at least 10 characters after AIza". Without a case in
+    the 10-29 range that claim is unverified, and raising the bound to 30
+    leaves the suite green."""
+    redacted, labels = redact_diagnostic_text(f"emitted {key}")
+
+    assert key not in redacted
+    assert "GOOGLE-API-KEY" in labels
+
+
+def test_base64_run_split_by_slash_keeps_no_usable_slice():
+    """The `+`/`=` guard does not cover base64 that happens to contain `/`
+    and neither of those. Splitting such a run segment-wise used to keep
+    every piece that was merely short -- up to 86 contiguous characters of
+    a 64-byte secret. Whole-string survival cannot see this; the assertion
+    has to be about the longest surviving slice.
+    """
+    # Several pieces under _OPAQUE_MIN_CHARS on either side of a long one.
+    # A vector whose only short piece is two characters cannot tell the two
+    # policies apart -- both keep it, and both stay under the threshold.
+    # Here "short, therefore safe" keeps 22 contiguous characters.
+    secret = "52c8/suDahVuSjVl6sG5TTX5S8/Y/aX//2dwBK6ipBJLg0/C"
+    assert "/" in secret and "+" not in secret and "=" not in secret
+
+    redacted, _ = redact_diagnostic_text(f"blob {secret}")
+
+    longest = max(
+        (length for length in range(len(secret), 0, -1)
+         for start in range(len(secret) - length + 1)
+         if secret[start:start + length] in redacted),
+        default=0,
+    )
+    assert longest < 16, f"{longest} contiguous characters of the key survived"
+
+
+def test_a_lone_uppercase_letter_is_not_a_word():
+    """The `isascii/isalpha/islower` precondition in _reads_as_english does
+    nothing at credential lengths -- the letter-pair test rejects whatever
+    it would reject. Its one real effect is here, on the
+    _is_recognizable_segment path, which has no length floor: a
+    single-character piece has no letter pairs at all, so without this
+    check it reads as flawless English and is kept.
+    """
+    redacted, _ = redact_diagnostic_text(
+        "open /a/B/QxZ7vTnZr4KpLw9Bd2ScFmE/end"
+    )
+
+    assert "/B/" not in redacted
+
+
 def test_url_keeps_endpoint_but_drops_query_and_userinfo():
     redacted, _ = redact_diagnostic_text(
         "POST https://user:pw@api.example.com/v1/chat?api_key=abc123&x=1 failed"
