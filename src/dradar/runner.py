@@ -5148,6 +5148,20 @@ def classify_exception_message(message: str) -> str | None:
         "you've hit your usage limit", "you have hit your usage limit",
     )):
         return "quota-limit"
+    # Geography, not credentials or quota: the provider refused the request
+    # because of where this machine's traffic exits to the internet. Match the
+    # location phrase, never the status that carries it. Gemini sends this as
+    # 400 FAILED_PRECONDITION, but that same status also covers deprecated
+    # models, a disabled API and a plain precondition check, none of which a
+    # volunteer fixes by changing egress. OpenAI sends it as a 403, so this
+    # must stay ahead of the account-auth rules below: a region rejection read
+    # as an auth failure sent volunteers to `codex login`, which cannot help.
+    if any(s in low for s in (
+        "user location is not supported",
+        "country, region, or territory not supported",
+        "unsupported_country_region_territory",
+    )):
+        return "region-blocked"
     # Explicit account-auth signals remain terminal even when Codex reports
     # them while attempting its optional WebSocket transport.  They must take
     # precedence over the recoverable WebSocket-403 exception below.
@@ -5230,7 +5244,7 @@ def diagnose_exception(result_path: Path | None) -> dict:
     {} when there is none, else {type, tail, kind, optional exit_code} where
     kind is one of
     stale-agent | insufficient-balance | quota-limit | rate-limit | auth |
-    model-capacity | provider-transport | provider-temporary |
+    region-blocked | model-capacity | provider-transport | provider-temporary |
     agent-deadline | None
     (unrecognized). The message tail
     matters most: pier's exception_message embeds the agent's actual output,
@@ -5302,6 +5316,15 @@ DIAG_ADVICE = {
         "--live`, `dradar provider status zcode --live`, or `dradar provider "
         "status codebuddy --live`; for the original "
         "OpenAI path run `codex login`, then re-check `dradar doctor`."),
+    "region-blocked": (
+        "the model provider does not serve the region your network exits "
+        "from, so it refused the request before the model ran. This is not a "
+        "problem with your account, your quota or your setup, and nothing "
+        "needs reinstalling. Every cell would fail the same way from this "
+        "network, so this worker stops and the pool will not check out new "
+        "work, while already-running siblings are allowed to finish. Send "
+        "this machine's traffic out through a region the provider supports, "
+        "then start it again."),
     "model-capacity": (
         "the model stayed at capacity after Pier retried the original Codex "
         "session with bounded backoff. This is not a problem with your setup "

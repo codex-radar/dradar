@@ -161,6 +161,7 @@ _ACCOUNT_TERMINAL_OUTCOMES = {
     "runtime-incompatible", "provider-preflight-failed",
     "repeat-agent-failure",
     "empty-submission",
+    "region-blocked",
 }
 _POOL_ABORT_ENV = "DRADAR_POOL_ABORT_FILE"
 _POOL_TARGET_FILE_ENV = "DRADAR_POOL_TARGET_FILE"
@@ -265,6 +266,11 @@ _TERMINAL_FAILURE_OUTCOMES = {
     "quota-limit": ("quota-exhausted", "account quota exhausted"),
     "stale-agent": (
         "runtime-incompatible", "agent runtime is incompatible",
+    ),
+    # The rejection is bound to the host's egress IP, not to this cell, so
+    # claiming another one just burns a lease against the same wall.
+    "region-blocked": (
+        "region-blocked", "provider does not serve this egress region",
     ),
 }
 
@@ -582,6 +588,10 @@ def _announce_account_stop(outcome: str) -> None:
         ),
         "empty-submission": (
             "the server verified a completed run produced an empty model patch"
+        ),
+        "region-blocked": (
+            "the model provider does not serve the region this network exits "
+            "from"
         ),
     }
     reason = messages.get(outcome, "an account-wide stop condition was detected")
