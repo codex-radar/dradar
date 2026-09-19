@@ -454,3 +454,100 @@ def test_one_enormous_line_is_truncated_before_matching():
     started = time.monotonic()
     net_probe.classify_build_log(huge)
     assert time.monotonic() - started < 0.5
+
+
+# Splitting the anchored x509 regex to kill its exponential backtracking
+# dropped the anchor: the phrase and the ", not <host>" clause were then
+# tested independently anywhere on the line (#0152 QA r3).
+X509_ANCHOR_CASES = (
+    (
+        "not 子句在短语之前,与它无关",
+        "#4 mirror selected, not ghcr.io; later: x509: certificate is "
+        "valid for *.corp.local, not internal.corp",
+        None,
+    ),
+    (
+        "短语之后是普通英文的 not",
+        "x509: certificate is valid for internal.corp, not internal2.corp "
+        "(this affects the proxy, not ghcr.io which is fine)",
+        None,
+    ),
+    (
+        "被 COPY 进镜像的文档原文,没有 x509:",
+        'COPY NOTES.md: "our certificate is valid for the mirror, '
+        'not ghcr.io - see wiki"',
+        None,
+    ),
+    (
+        "真阳性:确实是证书不匹配",
+        "x509: certificate is valid for *.corp.local, not registry-1.docker.io",
+        "registry-1.docker.io",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,log,expected", X509_ANCHOR_CASES, ids=[c[0] for c in X509_ANCHOR_CASES],
+)
+def test_the_x509_clause_must_belong_to_the_x509_error(label, log, expected):
+    verdict = net_probe.classify_build_log(log)
+    if expected is None:
+        assert verdict is None, f"{label}: 误报 {verdict}"
+    else:
+        assert verdict is not None and expected in verdict, f"{label}: {verdict}"
+
+
+def test_the_x509_anchor_did_not_reintroduce_backtracking():
+    for payload in (
+        "x509: certificate is valid for " + ", ".join(["a"] * 20000),
+        "x509: " + "certificate is valid for x, not !" * 5000,
+        "x509: certificate is valid for " + "a." * 50000,
+    ):
+        started = time.monotonic()
+        net_probe.classify_build_log(payload)
+        assert time.monotonic() - started < 0.5
+
+
+def test_a_long_wrapped_line_keeps_its_proximate_cause():
+    """Go wraps causes from the outside in, so the real failure is at the
+    END of a long line. Truncating only the head silently dropped it."""
+
+    line = (
+        "#3 ERROR: failed to solve: " + "wrapped: " * 600
+        + 'Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: no such host'
+    )
+    assert len(line) > net_probe._MAX_CLASSIFIED_LINE
+    assert net_probe.classify_build_log(line) == (
+        "the build log shows a DNS failure reaching ghcr.io"
+    )
+
+
+def test_the_phase_comes_from_the_proximate_marker_not_a_fixed_order():
+    """Go wraps causes outside-in, so the rightmost marker is the real one.
+
+    A fixed DNS>TLS>AUTH>CONNECT precedence chose the phase independently
+    of the host, so a non-registry DNS complaint alongside a genuine
+    registry TLS failure reported the right host with the wrong layer --
+    sending the volunteer to fix a resolver that works, while `dradar
+    doctor` reports that resolver healthy (#0152 QA r3).
+    """
+
+    verdict = net_probe.classify_build_log(
+        "ERROR: could not resolve mirror.corp.local; falling back: "
+        'Get "https://auth.docker.io/token": net/http: TLS handshake timeout'
+    )
+    assert verdict == "the build log shows a TLS failure reaching auth.docker.io"
+
+
+def test_a_single_marker_line_keeps_its_obvious_phase():
+    """Negative control for the change above: with one marker there is no
+    precedence question, and the phase must not drift."""
+
+    assert net_probe.classify_build_log(
+        '#2 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: '
+        "no such host"
+    ) == "the build log shows a DNS failure reaching ghcr.io"
+    assert net_probe.classify_build_log(
+        'failed to fetch anonymous token: Get "https://auth.docker.io/token": '
+        "net/http: TLS handshake timeout"
+    ) == "the build log shows a TLS failure reaching auth.docker.io"

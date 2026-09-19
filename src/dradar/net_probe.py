@@ -480,8 +480,20 @@ def _failing_registry(lowered: str) -> str | None:
     """
 
     operands = _OPERAND_RE.findall(lowered)
-    if _X509_PHRASE in lowered:
-        operands += _X509_NOT_RE.findall(lowered)
+    # Only Go's actual x509 error licenses reading a host after "not", and
+    # only the first such clause *after* the phrase is its operand. Testing
+    # the phrase and the clause independently anywhere on the line -- which
+    # is what splitting the anchored regex to kill its backtracking left
+    # behind -- let an unrelated ", not ghcr.io" earlier in the line, or an
+    # ordinary English "not ghcr.io, which is fine" later, become the
+    # subject (#0152 QA r3).
+    if "x509:" in lowered:
+        phrase_at = lowered.find(_X509_PHRASE)
+        if phrase_at != -1:
+            after = lowered[phrase_at + len(_X509_PHRASE):]
+            found = _X509_NOT_RE.search(after)
+            if found is not None:
+                operands.append(found.group(1))
     for host in reversed(operands):
         if any(
             host == known or host.endswith("." + known)
@@ -491,19 +503,49 @@ def _failing_registry(lowered: str) -> str | None:
     return None
 
 
-def _classify_line(lowered: str) -> tuple[str, str] | None:
-    """Phase and host for a line whose failure is about a registry."""
+def _bounded(line: str) -> str:
+    """Cap one line's length, keeping both ends.
 
-    for markers, phase in (
+    Go and Docker wrap causes from the outside in, so the proximate failure
+    sits at the *end* of a long line while the step prefix sits at the
+    start. Truncating the head alone silently dropped the cause on a 4.5 KB
+    wrapped error; keeping both ends preserves whichever one carries it.
+    """
+
+    if len(line) <= _MAX_CLASSIFIED_LINE:
+        return line
+    head = _MAX_CLASSIFIED_LINE // 4
+    return line[:head] + " … " + line[-(_MAX_CLASSIFIED_LINE - head):]
+
+
+def _classify_line(lowered: str) -> tuple[str, str] | None:
+    """Phase and host for a line whose failure is about a registry.
+
+    The phase is taken from the marker that appears *last* on the line, not
+    from a fixed precedence over marker families. Go and Docker wrap causes
+    from the outside in, so the proximate failure is the rightmost one. A
+    fixed order picked the phase independently of the host, and a line
+    carrying a non-registry DNS complaint alongside a real registry TLS
+    failure came out as "a DNS failure reaching auth.docker.io" -- right
+    host, wrong layer, sending the volunteer to fix a resolver that works
+    while `dradar doctor` reports it healthy (#0152 QA r3).
+    """
+
+    phase, phase_at = None, -1
+    for markers, name in (
         (_DNS_MARKERS, "a DNS failure"),
         (_TLS_MARKERS, "a TLS failure"),
         (_AUTH_MARKERS, "a registry authentication failure"),
         (_CONNECT_MARKERS, "a connection timeout"),
     ):
-        if any(marker in lowered for marker in markers):
-            host = _failing_registry(lowered)
-            return None if host is None else (phase, host)
-    return None
+        for marker in markers:
+            at = lowered.rfind(marker)
+            if at > phase_at:
+                phase, phase_at = name, at
+    if phase is None:
+        return None
+    host = _failing_registry(lowered)
+    return None if host is None else (phase, host)
 
 
 def classify_build_log(text: str) -> str | None:
@@ -528,7 +570,7 @@ def classify_build_log(text: str) -> str | None:
     if not text:
         return None
     for line in reversed(text.splitlines()):
-        found = _classify_line(line.lower()[:_MAX_CLASSIFIED_LINE])
+        found = _classify_line(_bounded(line.lower()))
         if found is not None:
             phase, host = found
             return f"the build log shows {phase} reaching {host}"

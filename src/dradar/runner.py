@@ -33,7 +33,7 @@ from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
-from . import cancellation, egress, image_cache, net_probe
+from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -4130,11 +4130,16 @@ def _wait_for_worker_registration(
     last_activity = _last_activity(log_path) if log_path is not None else ""
     last_change = started
     stall_reported = False
-    # The last registry cause reported, so a failure Docker retries forever
-    # is explained once rather than once per beat. Also remembered for the
-    # terminal error: the evidence scrolls out of the tail window, and the
-    # cause must not be forgotten just because the build kept talking.
-    reported_reason: str | None = None
+    # Every registry cause already explained, so a failure Docker retries
+    # forever is explained once rather than once per beat. A *set*, not the
+    # last value: when two registries fail together -- which is what the
+    # 2026-09-08 report actually describes, ghcr.io and docker.io both down
+    # -- the causes alternate, and last-value dedup re-prints on every beat.
+    reported_reasons: set[str] = set()
+    # The most recent cause, remembered for the terminal error: the evidence
+    # scrolls out of the tail window, and the cause must not be forgotten
+    # just because the build kept talking afterwards.
+    last_reason: str | None = None
     while True:
         if worker_event_source is not None:
             raw_event = worker_event_source()
@@ -4157,7 +4162,7 @@ def _wait_for_worker_registration(
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
-                + _build_stall_diagnosis(log_path, reported_reason)
+                + _build_stall_diagnosis(log_path, last_reason)
             )
         now = time.monotonic()
         if now >= deadline:
@@ -4166,7 +4171,7 @@ def _wait_for_worker_registration(
                 f"exceeded its {_duration(WORKER_REGISTRATION_GRACE_SEC)} "
                 "grace window without worker_registered, so no runtime lease "
                 "was started and no quota was consumed"
-                + _build_stall_diagnosis(log_path, reported_reason)
+                + _build_stall_diagnosis(log_path, last_reason)
             )
         # Environment build runs before the post-registration heartbeat, so
         # this loop was the one place where a volunteer saw nothing at all.
@@ -4186,7 +4191,18 @@ def _wait_for_worker_registration(
             if silent_for >= BUILD_STALL_WARN_SEC:
                 detail = f"no new build output for {_duration(silent_for)}"
             else:
-                detail = activity
+                # Pier's newest line is echoed to the terminal, and the build
+                # phase is exactly where `RUN docker login -p ...` and
+                # `--build-arg` secrets appear. Nothing here is uploaded, but
+                # volunteers paste their terminal into help threads, so this
+                # new output surface must not be the one that leaks a token.
+                #
+                # agent_stderr's redactor, not image_cache's: the latter
+                # blanks every URL to "<url>" -- destroying the host this
+                # line exists to show -- while passing ghp_/AIza/sk-proj-
+                # and full email addresses straight through. This one
+                # redacts those and keeps the host readable.
+                detail, _labels = agent_stderr.redact_diagnostic_text(activity)
             # flush: stdout is block-buffered whenever this is piped rather
             # than a terminal, which would hold the progress lines back until
             # kilobytes accumulate -- the exact silence being fixed here.
@@ -4205,12 +4221,13 @@ def _wait_for_worker_registration(
             # 49 times in a 25-minute window (#0152 QA).
             reason = net_probe.classify_build_log(_tail(log_path, 40))
             if reason is not None:
-                if reason != reported_reason:
-                    reported_reason = reason
+                last_reason = reason
+                if reason not in reported_reasons:
+                    reported_reasons.add(reason)
                     print(f"      {_stall_advice(reason)}", flush=True)
             elif silent_for >= BUILD_STALL_WARN_SEC and not stall_reported:
                 stall_reported = True
-                print(f"      {_stall_advice(reported_reason)}", flush=True)
+                print(f"      {_silent_stall_advice(last_reason)}", flush=True)
         time.sleep(0.25)
 
 
@@ -4226,22 +4243,45 @@ def _duration(seconds: float) -> str:
     return f"{int(seconds / 60)} min"
 
 
+def _historical(reason: str) -> str:
+    """Restate a remembered cause as history, never as the current state."""
+
+    return (
+        reason.replace("the build log shows", "earlier in this build the log showed", 1)
+        + "; the newest log lines no longer show it"
+    )
+
+
 def _build_stall_diagnosis(
     log_path: Path | None, remembered: str | None = None,
 ) -> str:
     """Append the registry phase the build log names, when it names one.
 
-    ``remembered`` carries a cause seen earlier in the wait. A build that
-    failed to reach a registry and then kept printing pushes that evidence
-    out of the tail window, and the terminal error must not lose the one
-    fact worth having because the build stayed noisy afterwards.
+    ``remembered`` carries a cause seen earlier in the wait, because a build
+    that failed to reach a registry and then kept printing pushes that
+    evidence out of the tail window.
+
+    A remembered cause is restated in the past tense. A first pull that
+    fails and succeeds on retry is ordinary on a weak connection, so a
+    build that later wedges somewhere else would otherwise be reported as
+    "the build log shows a DNS failure" at a moment when the log shows
+    nothing of the kind -- asserting evidence rather than preserving it,
+    and reinstating through memory the recovered-transient misattribution
+    the classifier was fixed to avoid (#0152 QA r3).
     """
 
-    reason = None
     if log_path is not None:
-        reason = net_probe.classify_build_log(_tail(log_path, 40))
-    reason = reason or remembered
-    return f" ({reason})" if reason else ""
+        current = net_probe.classify_build_log(_tail(log_path, 40))
+        if current:
+            return f" ({current})"
+    return f" ({_historical(remembered)})" if remembered else ""
+
+
+_GENERIC_STALL_ADVICE = (
+    "if this does not move, the image pull is usually blocked by DNS or "
+    "a proxy — run `dradar doctor` in another terminal to check "
+    "ghcr.io and auth.docker.io"
+)
 
 
 def _stall_advice(reason: str | None) -> str:
@@ -4252,11 +4292,21 @@ def _stall_advice(reason: str | None) -> str:
             f"{reason} — fix the resolver/proxy for that host, then re-run "
             "`dradar resume`; `dradar doctor` checks the same hosts"
         )
-    return (
-        "if this does not move, the image pull is usually blocked by DNS or "
-        "a proxy — run `dradar doctor` in another terminal to check "
-        "ghcr.io and auth.docker.io"
-    )
+    return _GENERIC_STALL_ADVICE
+
+
+def _silent_stall_advice(remembered: str | None) -> str:
+    """Advice for a stall the log no longer explains.
+
+    A cause that has since scrolled away or been retried successfully is
+    worth mentioning but must not be presented as the current state, and
+    must not displace the generic pointer: the build is stalled *now*, and
+    what stalled it may have nothing to do with the earlier failure.
+    """
+
+    if not remembered:
+        return _GENERIC_STALL_ADVICE
+    return f"{_GENERIC_STALL_ADVICE} ({_historical(remembered)})"
 
 
 def _pier_process_options() -> dict:

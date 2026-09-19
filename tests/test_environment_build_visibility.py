@@ -261,3 +261,148 @@ def test_the_cause_survives_scrolling_out_of_the_tail_window(
             log_path=log_path,
         )
     assert "DNS failure reaching ghcr.io" in str(exc.value)
+
+
+def test_two_registries_failing_together_do_not_spam(monkeypatch, tmp_path, capsys):
+    """The 2026-09-08 report describes ghcr.io *and* docker.io both broken.
+
+    Docker then alternates between the two causes, and de-duplicating on the
+    last cause alone re-prints the advice on every beat. Each distinct cause
+    is explained once; neither is explained twice.
+    """
+
+    log_path = tmp_path / "build.log"
+    log_path.write_text("start\n", encoding="utf-8")
+    ticks = [0.0] + [beat * 30.0 for beat in range(1, 14)] + [1800.1]
+    monkeypatch.setattr(runner.time, "monotonic", lambda t=iter(ticks): next(t))
+
+    beat = {"n": 0}
+    CAUSES = (
+        '#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: '
+        "no such host",
+        '#4 ERROR: Get "https://auth.docker.io/token": net/http: '
+        "TLS handshake timeout",
+    )
+
+    def alternate(_seconds):
+        beat["n"] += 1
+        log_path.write_text(
+            f"{CAUSES[beat['n'] % 2]} (attempt {beat['n']})\n", encoding="utf-8",
+        )
+
+    monkeypatch.setattr(runner.time, "sleep", alternate)
+    with pytest.raises(runner.RunnerError):
+        runner._wait_for_worker_registration(
+            LiveProcess(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            log_path=log_path,
+        )
+    out = capsys.readouterr().out
+    advice = [ln for ln in out.splitlines() if "then re-run" in ln]
+    assert len(advice) == 2, advice
+    assert sum("ghcr.io" in ln for ln in advice) == 1
+    assert sum("auth.docker.io" in ln for ln in advice) == 1
+
+
+def test_the_progress_line_does_not_echo_a_secret(monkeypatch, tmp_path, capsys):
+    """This change created a new terminal output surface, and the build
+    phase is where `RUN docker login -p ...` appears. Nothing here is
+    uploaded, but volunteers paste their terminal into help threads.
+    """
+
+    ticks = iter((0.0, 30.0, 1800.1))
+    _wait(
+        monkeypatch, tmp_path,
+        "#4 RUN docker login -u bot -p ghp_16C7e42F292c6912E7710c838347Ae178B4a\n",
+        ticks,
+    )
+    out = capsys.readouterr().out
+    assert "ghp_16C7e42F292c6912E7710c838347Ae178B4a" not in out
+    assert "REDACTED" in out
+
+
+def test_redaction_keeps_the_host_the_line_exists_to_show(
+    monkeypatch, tmp_path, capsys,
+):
+    """image_cache's redactor blanks every URL to "<url>", which would
+    destroy the one fact this line carries. Verify the host survives."""
+
+    ticks = iter((0.0, 30.0, 1800.1))
+    _wait(
+        monkeypatch, tmp_path,
+        '#2 ERROR: Head "https://ghcr.io/v2/x/manifests/y": dial tcp: '
+        "lookup ghcr.io on 172.29.240.1:53: no such host\n",
+        ticks,
+    )
+    progress = [
+        ln for ln in capsys.readouterr().out.splitlines()
+        if "preparing environment" in ln
+    ]
+    assert progress, "no progress line printed"
+    assert "ghcr.io" in progress[0]
+    assert "<url>" not in progress[0]
+
+
+def test_a_recovered_cause_is_not_asserted_as_the_current_state(
+    monkeypatch, tmp_path, capsys,
+):
+    """A first pull that fails and succeeds on retry is ordinary on a weak
+    connection. Remembering it is useful; presenting it as what the log
+    shows, while the log shows nothing of the kind, is fabricated evidence
+    -- and reinstates the recovered-transient misattribution the classifier
+    was fixed to avoid.
+    """
+
+    log_path = tmp_path / "build.log"
+    log_path.write_text(
+        '#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: '
+        "no such host\n",
+        encoding="utf-8",
+    )
+    # 30s: the failure is real and current. 400s: recovered, build moving.
+    # 800s: moving no longer -- a stall whose cause the log does not explain.
+    ticks = iter((0.0, 30.0, 400.0, 800.0, 1800.1))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(ticks))
+    recovered = {"done": False}
+
+    def recover(_seconds):
+        if not recovered["done"]:
+            recovered["done"] = True
+            log_path.write_text(
+                "#3 DONE 62.1s\n#7 [6/9] RUN ./configure\n"
+                "#7 12.4 checking for gcc... gcc\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(runner.time, "sleep", recover)
+    with pytest.raises(runner.RunnerError) as exc:
+        runner._wait_for_worker_registration(
+            LiveProcess(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            log_path=log_path,
+        )
+    out = capsys.readouterr().out
+    message = str(exc.value)
+    # Claimed exactly once -- on the beat where the log really did show it.
+    # The later stall must not repeat the claim now that it is untrue.
+    assert out.count("the build log shows a DNS failure") == 1, out
+    assert "earlier in this build the log showed a DNS failure" in out
+    # The terminal error likewise reports it as history, not as the state.
+    assert "the build log shows a DNS failure" not in message
+    assert "earlier in this build" in message
+    assert "no longer show it" in message
+
+
+def test_a_cause_still_in_the_log_stays_in_the_present_tense(
+    monkeypatch, tmp_path,
+):
+    ticks = iter((0.0, 1799.0, 1800.1))
+    message = _wait(
+        monkeypatch, tmp_path,
+        "#3 dial tcp: lookup ghcr.io: no such host\n",
+        ticks,
+    )
+    assert "the build log shows a DNS failure reaching ghcr.io" in message
+    assert "earlier in this build" not in message
