@@ -339,6 +339,22 @@ def test_non_terminal_kind_does_not_stop_the_pool(monkeypatch, tmp_path):
     assert not abort.exists(), "a recoverable failure stopped the pool"
 
 
+def test_every_account_terminal_outcome_names_its_own_cause(capsys):
+    """Membership in `_ACCOUNT_TERMINAL_OUTCOMES` is what stops the pool, but
+    the sentence the volunteer reads comes from a separate table. Adding a
+    member without a message is silent: the run still stops, and the volunteer
+    is told only "an account-wide stop condition was detected", which is the
+    unreadable-error class this ticket exists to remove. Pin the pairing so the
+    next kind cannot land half-wired.
+    """
+    for outcome in sorted(runloop._ACCOUNT_TERMINAL_OUTCOMES):
+        runloop._announce_account_stop(outcome)
+        printed = capsys.readouterr().out
+        assert "an account-wide stop condition was detected" not in printed, (
+            f"{outcome} is account-terminal but has no message of its own"
+        )
+
+
 def test_region_block_never_sends_a_failure_diagnostic_to_the_server(
     monkeypatch, tmp_path,
 ):
