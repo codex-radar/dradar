@@ -363,3 +363,56 @@ def test_advice_separates_interception_from_a_dead_connection():
         "ghcr.io", "tls", detail="SSLCertVerificationError: certificate verify failed",
     )
     assert "trust its CA" in net_probe.probe_advice(intercepted, "linux")
+
+
+# The host must be the one the error is ABOUT -- the URL it fetched, the name
+# it looked up, the address it dialled -- not merely a registry name present
+# somewhere on the line. Each of these was a wrong answer when any mention
+# counted (#0152 QA round 2).
+OPERAND_CASES = (
+    (
+        "配了镜像源:不通的是镜像站,不是 docker.io",
+        '#2 ERROR: failed to resolve source metadata for docker.io/library/'
+        'ubuntu:24.04: failed to do request: Head "https://dockerproxy.cn/v2/'
+        'library/ubuntu/manifests/24.04": dial tcp 1.2.3.4:443: i/o timeout',
+        None,
+    ),
+    (
+        "一行两个 registry,失败的不是优先级靠前那个",
+        'COPY --from=ghcr.io/codex-radar/base /opt /opt\n'
+        '#4 ERROR: failed to fetch anonymous token: Get '
+        '"https://auth.docker.io/token": net/http: TLS handshake timeout',
+        "auth.docker.io",
+    ),
+    (
+        "镜像内的探活循环提到了 registry 名",
+        "#5 0.2 probing ghcr.io ... connection refused, retry 1/30",
+        None,
+    ),
+    (
+        "curl 的 URL 里恰好含 registry 名,失败的是别的主机",
+        '#6 curl: (6) Could not resolve host: raw.githubusercontent.com\n'
+        '#6 + curl -fsSL https://raw.githubusercontent.com/x/ghcr.io-notes.md',
+        None,
+    ),
+    (
+        "真阳性:确实是 auth.docker.io 解析失败",
+        'ERROR: failed to solve: docker.io/library/ubuntu:24.04: failed to '
+        'authorize: failed to fetch anonymous token: Get "https://'
+        'auth.docker.io/token?scope=repository": dial tcp: lookup '
+        'auth.docker.io: no such host',
+        "auth.docker.io",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,log,expected", OPERAND_CASES, ids=[c[0] for c in OPERAND_CASES],
+)
+def test_the_host_is_taken_from_the_failure_operand(label, log, expected):
+    verdict = net_probe.classify_build_log(log)
+    if expected is None:
+        assert verdict is None, f"{label}: 误报 {verdict}"
+    else:
+        assert verdict is not None, f"{label}: 漏报"
+        assert expected in verdict, f"{label}: {verdict}"

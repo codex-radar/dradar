@@ -150,3 +150,114 @@ def test_progress_is_skipped_when_no_log_is_available(monkeypatch, tmp_path, cap
             worker_event_source=lambda: None,
         )
     assert "preparing environment" not in capsys.readouterr().out
+
+
+def test_a_retrying_failure_is_explained_once_not_every_beat(
+    monkeypatch, tmp_path, capsys,
+):
+    """Docker retrying a real registry failure writes a new line every time,
+    so it is never silent. Keying "already said this" on silence printed the
+    advice on every beat of exactly the loop it was added to serve."""
+
+    log_path = tmp_path / "build.log"
+    log_path.write_text("start\n", encoding="utf-8")
+    ticks = [0.0]
+    for beat in range(1, 12):
+        ticks.append(beat * 30.0)
+    ticks.append(1800.1)
+    monkeypatch.setattr(runner.time, "monotonic", lambda t=iter(ticks): next(t))
+
+    attempt = {"n": 0}
+
+    def churn(_seconds):
+        # Each beat leaves a different newest line, all naming the same cause.
+        attempt["n"] += 1
+        log_path.write_text(
+            f'#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup '
+            f'ghcr.io: no such host (attempt {attempt["n"]})\n',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(runner.time, "sleep", churn)
+    with pytest.raises(runner.RunnerError):
+        runner._wait_for_worker_registration(
+            LiveProcess(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            log_path=log_path,
+        )
+    out = capsys.readouterr().out
+    assert out.count("preparing environment") >= 10
+    assert out.count("fix the resolver/proxy for that host") == 1
+
+
+def test_a_different_cause_is_reported_again(monkeypatch, tmp_path, capsys):
+    """Explaining a cause once must not silence a *new* one."""
+
+    log_path = tmp_path / "build.log"
+    log_path.write_text(
+        '#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: '
+        "no such host\n",
+        encoding="utf-8",
+    )
+    ticks = iter((0.0, 30.0, 60.0, 90.0, 1800.1))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(ticks))
+    flipped = {"done": False}
+
+    def switch(_seconds):
+        if not flipped["done"]:
+            flipped["done"] = True
+            log_path.write_text(
+                '#4 ERROR: Get "https://auth.docker.io/token": net/http: '
+                "TLS handshake timeout\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(runner.time, "sleep", switch)
+    with pytest.raises(runner.RunnerError):
+        runner._wait_for_worker_registration(
+            LiveProcess(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            log_path=log_path,
+        )
+    out = capsys.readouterr().out
+    assert "DNS failure reaching ghcr.io" in out
+    assert "TLS failure reaching auth.docker.io" in out
+
+
+def test_the_cause_survives_scrolling_out_of_the_tail_window(
+    monkeypatch, tmp_path,
+):
+    """A build that hit a registry failure and then kept printing pushes the
+    evidence past the tail window; the terminal error must still carry it."""
+
+    log_path = tmp_path / "build.log"
+    log_path.write_text(
+        '#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup ghcr.io: '
+        "no such host\n",
+        encoding="utf-8",
+    )
+    ticks = iter((0.0, 30.0, 60.0, 1800.1))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(ticks))
+    buried = {"done": False}
+
+    def bury(_seconds):
+        if not buried["done"]:
+            buried["done"] = True
+            log_path.write_text(
+                '#3 ERROR: Head "https://ghcr.io/v2/x": dial tcp: lookup '
+                "ghcr.io: no such host\n"
+                + "".join(f"#7 {n}.0 checking for gcc...\n" for n in range(60)),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(runner.time, "sleep", bury)
+    with pytest.raises(runner.RunnerError) as exc:
+        runner._wait_for_worker_registration(
+            LiveProcess(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            log_path=log_path,
+        )
+    assert "DNS failure reaching ghcr.io" in str(exc.value)

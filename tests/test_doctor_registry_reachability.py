@@ -110,4 +110,4 @@ def test_the_check_cannot_outlast_its_own_budget(monkeypatch):
     assert doctor._registry_reachability("linux") is False
     elapsed = time.monotonic() - started
     stop.append(True)
-    assert elapsed < 4.0, f"doctor check ran {elapsed:.1f}s against a 0.6s budget"
+    assert elapsed < 2.0, f"doctor check ran {elapsed:.1f}s against a 0.6s budget"

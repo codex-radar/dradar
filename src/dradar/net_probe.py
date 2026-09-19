@@ -25,6 +25,7 @@ because the volunteer assumes it is still checking.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import ssl
 import threading
@@ -442,22 +443,58 @@ _REGISTRY_HOSTS_IN_LOG = (
 )
 
 
-def _classify_line(lowered: str) -> tuple[str, str] | None:
-    """Phase and host for one log line that names a registry, else None."""
+# The host an error names as the thing it was contacting. Docker and Go
+# phrase that operand as a URL, as ``lookup X``, or as ``dial tcp X:port``;
+# a registry name appearing anywhere else on the line is context, not the
+# subject of the failure -- an image reference, a copy source, a structured
+# log field, a probe message, or simply text inside a file being built.
+_OPERAND_RE = re.compile(
+    r"(?:https?://|lookup\s+|dial\s+tcp\s+)([a-z0-9][a-z0-9.\-]*\.[a-z]{2,})",
+)
+# Go's x509 mismatch names the host it was trying to reach after "not":
+#   x509: certificate is valid for *.corp.local, not registry-1.docker.io
+# That trailing name is the operand, so it is read the same way. Anchoring
+# on the full phrase keeps a bare "not" -- an ordinary English word -- from
+# turning any nearby hostname into a subject.
+_X509_OPERAND_RE = re.compile(
+    r"certificate is valid for [^,]+(?:,\s*[^,]+?)*,\s*not\s+"
+    r"([a-z0-9][a-z0-9.\-]*\.[a-z]{2,})",
+)
 
-    host = next(
-        (name for name in _REGISTRY_HOSTS_IN_LOG if name in lowered), None,
-    )
-    if host is None:
-        return None
-    if any(marker in lowered for marker in _DNS_MARKERS):
-        return "a DNS failure", host
-    if any(marker in lowered for marker in _TLS_MARKERS):
-        return "a TLS failure", host
-    if any(marker in lowered for marker in _AUTH_MARKERS):
-        return "a registry authentication failure", host
-    if any(marker in lowered for marker in _CONNECT_MARKERS):
-        return "a connection timeout", host
+
+def _failing_registry(lowered: str) -> str | None:
+    """The registry this line's error is *about*, if it is about one.
+
+    Returning None for a line whose failure operand is some other host is
+    the point: with a mirror configured -- standard for volunteers behind a
+    slow path to Docker Hub -- the unreachable host is the mirror, while the
+    canonical ``docker.io`` reference sits on the same line as plain text.
+    Blaming ``docker.io`` there contradicts the live probe, which finds it
+    healthy, and sends the volunteer to fix the wrong thing.
+    """
+
+    operands = _OPERAND_RE.findall(lowered) + _X509_OPERAND_RE.findall(lowered)
+    for host in reversed(operands):
+        if any(
+            host == known or host.endswith("." + known)
+            for known in _REGISTRY_HOSTS_IN_LOG
+        ):
+            return host
+    return None
+
+
+def _classify_line(lowered: str) -> tuple[str, str] | None:
+    """Phase and host for a line whose failure is about a registry."""
+
+    for markers, phase in (
+        (_DNS_MARKERS, "a DNS failure"),
+        (_TLS_MARKERS, "a TLS failure"),
+        (_AUTH_MARKERS, "a registry authentication failure"),
+        (_CONNECT_MARKERS, "a connection timeout"),
+    ):
+        if any(marker in lowered for marker in markers):
+            host = _failing_registry(lowered)
+            return None if host is None else (phase, host)
     return None
 
 

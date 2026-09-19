@@ -4130,6 +4130,11 @@ def _wait_for_worker_registration(
     last_activity = _last_activity(log_path) if log_path is not None else ""
     last_change = started
     stall_reported = False
+    # The last registry cause reported, so a failure Docker retries forever
+    # is explained once rather than once per beat. Also remembered for the
+    # terminal error: the evidence scrolls out of the tail window, and the
+    # cause must not be forgotten just because the build kept talking.
+    reported_reason: str | None = None
     while True:
         if worker_event_source is not None:
             raw_event = worker_event_source()
@@ -4152,7 +4157,7 @@ def _wait_for_worker_registration(
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
-                + _build_stall_diagnosis(log_path)
+                + _build_stall_diagnosis(log_path, reported_reason)
             )
         now = time.monotonic()
         if now >= deadline:
@@ -4161,7 +4166,7 @@ def _wait_for_worker_registration(
                 f"exceeded its {_duration(WORKER_REGISTRATION_GRACE_SEC)} "
                 "grace window without worker_registered, so no runtime lease "
                 "was started and no quota was consumed"
-                + _build_stall_diagnosis(log_path)
+                + _build_stall_diagnosis(log_path, reported_reason)
             )
         # Environment build runs before the post-registration heartbeat, so
         # this loop was the one place where a volunteer saw nothing at all.
@@ -4193,13 +4198,19 @@ def _wait_for_worker_registration(
             )
             # A registry failure that Docker keeps retrying is never silent,
             # so waiting for silence would never report it. Say it as soon as
-            # the log names one, whether or not output is still moving.
+            # the log names one, whether or not output is still moving --
+            # but key the "already said this" flag on the cause, not on
+            # silence. Reusing the silence flag here printed the advice on
+            # every beat of exactly the retry loop it was added to serve,
+            # 49 times in a 25-minute window (#0152 QA).
             reason = net_probe.classify_build_log(_tail(log_path, 40))
-            if not stall_reported and (
-                reason is not None or silent_for >= BUILD_STALL_WARN_SEC
-            ):
+            if reason is not None:
+                if reason != reported_reason:
+                    reported_reason = reason
+                    print(f"      {_stall_advice(reason)}", flush=True)
+            elif silent_for >= BUILD_STALL_WARN_SEC and not stall_reported:
                 stall_reported = True
-                print(f"      {_stall_advice(log_path)}", flush=True)
+                print(f"      {_stall_advice(reported_reason)}", flush=True)
         time.sleep(0.25)
 
 
@@ -4215,22 +4226,27 @@ def _duration(seconds: float) -> str:
     return f"{int(seconds / 60)} min"
 
 
-def _build_stall_diagnosis(log_path: Path | None) -> str:
-    """Append the registry phase the build log names, when it names one."""
+def _build_stall_diagnosis(
+    log_path: Path | None, remembered: str | None = None,
+) -> str:
+    """Append the registry phase the build log names, when it names one.
 
-    if log_path is None:
-        return ""
-    reason = net_probe.classify_build_log(_tail(log_path, 40))
+    ``remembered`` carries a cause seen earlier in the wait. A build that
+    failed to reach a registry and then kept printing pushes that evidence
+    out of the tail window, and the terminal error must not lose the one
+    fact worth having because the build stayed noisy afterwards.
+    """
+
+    reason = None
+    if log_path is not None:
+        reason = net_probe.classify_build_log(_tail(log_path, 40))
+    reason = reason or remembered
     return f" ({reason})" if reason else ""
 
 
-def _stall_advice(log_path: Path | None) -> str:
+def _stall_advice(reason: str | None) -> str:
     """What to do about a build that has stopped producing output."""
 
-    reason = (
-        net_probe.classify_build_log(_tail(log_path, 40))
-        if log_path is not None else None
-    )
     if reason:
         return (
             f"{reason} — fix the resolver/proxy for that host, then re-run "
