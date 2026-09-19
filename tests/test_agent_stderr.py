@@ -49,6 +49,11 @@ PLANTED = {
     "shaped-opaque": "AbcDefGhiJklMnoPqrStuVwx",
     "email": "volunteer.name@example.com",
     "short-password": "hunter2secret",
+    # `AIza` + 35 of [A-Za-z0-9_-]: the real shape. Chosen because it is one
+    # of the 4.8% that the catch-all does NOT stop on its own -- a key that
+    # the catch-all happens to mask would leave this corpus proving nothing
+    # about the rule that is supposed to be masking it.
+    "google-api-key": "AIzaFAKE_fake_KEY_0123456789abcdefghijk",
 }
 
 SURVIVOR = "and this ordinary diagnostic sentence must survive intact"
@@ -76,6 +81,12 @@ def _planted_stderr() -> str:
         f"opaque {PLANTED['shaped-opaque']}",
         "refresh_token: 1//0gAbCdEfGhIjKlMnOpQrStUvWxYz",
         f"password={PLANTED['short-password']}",
+        # Deliberately NOT written as `GOOGLE_API_KEY=<value>`: that field
+        # name alone gets the value masked, which would let this corpus pass
+        # while the redactor knew nothing about `AIza`. This is the shape
+        # Google's own error actually prints.
+        f"Error: API key not valid. Please pass a valid API key. "
+        f"(key {PLANTED['google-api-key']})",
         SURVIVOR,
     ])
 
@@ -136,6 +147,62 @@ def test_real_error_text_is_not_damaged():
 
     assert redacted == text
     assert labels == []
+
+
+@pytest.mark.parametrize("key", [
+    PLANTED["google-api-key"],
+    "AIzaSyD_fake-KEY_0123456789abcdefghijk",   # `_` and `-` throughout
+    "AIzaSyB1234567890abcdefghijklmnopqrstuv",  # no separators at all
+    "AIza" + "0123456789" * 3 + "abcde",        # digit-heavy tail
+])
+def test_google_api_key_is_masked(key):
+    """`AIza` keys were reaching client_meta intact.
+
+    `_` and `-` are outside the catch-all's run alphabet, so a real key is
+    split into pieces that each clear _OPAQUE_MIN_CHARS on their own and the
+    remainder often reads as an identifier (`0123456789abcdefghijk` decomposes
+    into a digit run and a letter run). 4.8% of 5k keys generated to the real
+    shape survived the whole pipeline before this rule existed.
+    """
+    redacted, labels = redact_diagnostic_text(f"agent emitted {key} then died")
+
+    assert key not in redacted
+    assert "[REDACTED-GOOGLE-API-KEY]" in redacted
+    assert "GOOGLE-API-KEY" in labels
+
+
+@pytest.mark.parametrize("shape,value", [
+    ("google-api-key", PLANTED["google-api-key"]),
+    ("github-oauth", PLANTED["github-oauth"]),
+    ("jwt", PLANTED["jwt"]),
+    ("proxy-uri", "vmess://eyJhZGQiOiIxLjIuMy40In0="),
+])
+@pytest.mark.parametrize("context", [
+    "agent emitted {} then died",
+    "  > blob {}",
+    "config: {}",
+])
+def test_named_credential_shapes_are_masked_in_any_context(shape, value,
+                                                           context):
+    """The four shapes that reach this collector most often, each checked
+    away from the field name that would otherwise catch it."""
+    assert value not in redact_diagnostic_text(context.format(value))[0]
+
+
+@pytest.mark.parametrize("text", [
+    # Asserted on the rule's own label rather than on the text surviving:
+    # the catch-all masks long hostname labels for an unrelated reason, and
+    # this test must not quietly depend on that being fixed.
+    "connect ECONNREFUSED generativelanguage.googleapis.com:443",
+    "module AIzaHelper failed",     # fewer than 10 characters after `AIza`
+    "AIzawa reported the fault",
+    "aizaSyB1234567890abcdefghij",  # wrong case: not the Google prefix
+])
+def test_google_api_key_rule_does_not_fire_on_ordinary_text(text):
+    redacted, labels = redact_diagnostic_text(text)
+
+    assert "GOOGLE-API-KEY" not in labels
+    assert "[REDACTED-GOOGLE-API-KEY]" not in redacted
 
 
 def test_url_keeps_endpoint_but_drops_query_and_userinfo():
