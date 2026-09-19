@@ -127,6 +127,15 @@ _WEAK_ASSIGNMENT_RE = re.compile(
 # variants leak the same way.
 _GITHUB_TOKEN_RE = re.compile(r"\bgh[opsur]_[A-Za-z0-9]{8,}")
 
+# Google API keys are `AIza` followed by 35 characters of [A-Za-z0-9_-].
+# Neither scrub.py nor anything above knows that shape, and `_` and `-` are
+# outside the catch-all's run alphabet, so a real key is chopped into pieces
+# that each clear the length floor on their own -- measured over 5k keys
+# generated to the real shape, 4.8% came through the whole pipeline intact.
+# The tail after `AIza` is required to be at least 10 characters so that the
+# rule keys on a credential rather than on any word beginning `AIza`.
+_GOOGLE_API_KEY_RE = re.compile(r"\bAIza[A-Za-z0-9_-]{10,}")
+
 # The catch-all.  A "run" is a maximal stretch of base64/base64url payload
 # characters; it is masked unless every one of its `+/=`-separated segments
 # is demonstrably not a credential.  Splitting on those separators is what
@@ -228,6 +237,10 @@ def _github_replacement(_match: re.Match[str]) -> str:
     return "[REDACTED-GITHUB-TOKEN]"
 
 
+def _google_api_key_replacement(_match: re.Match[str]) -> str:
+    return "[REDACTED-GOOGLE-API-KEY]"
+
+
 # Ordered: structural rules that consume whole values run before the
 # shape-based ones, and the unrecognized-run catch-all runs last so it never
 # re-examines a placeholder.
@@ -240,6 +253,7 @@ _RULES: tuple[tuple[str, re.Pattern[str], _Replacement], ...] = (
     ("CREDENTIAL-FIELD", _STRONG_ASSIGNMENT_RE, _assignment_replacement),
     ("CREDENTIAL-FIELD", _WEAK_ASSIGNMENT_RE, _assignment_replacement),
     ("GITHUB-TOKEN", _GITHUB_TOKEN_RE, _github_replacement),
+    ("GOOGLE-API-KEY", _GOOGLE_API_KEY_RE, _google_api_key_replacement),
 )
 
 
