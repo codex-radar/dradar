@@ -4574,8 +4574,10 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
         return
     from . import fleet
 
+    published = False
+    channel_failed = False
     try:
-        fleet.publish_pool_startup_failure(
+        published = fleet.publish_pool_startup_failure(
             HOME,
             args.batch_id,
             error_code=code,
@@ -4585,7 +4587,13 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
     except (fleet.FleetError, OSError, ValueError):
         # The original startup result remains authoritative. A dead coordinator
         # or an already-ready pool must never be replaced by reporting cleanup.
-        pass
+        channel_failed = True
+    # A pool that already reported ready publishes nothing, so neither flag is
+    # set on the success path and nothing is printed there. Otherwise this
+    # diagnosis existed only inside the Fleet channel: an operator whose
+    # coordinator is the broken part saw the child exit with no reason at all.
+    if published or channel_failed:
+        print(f"startup failed before any task began [{reason_code}]: {message}")
 
 
 def cmd_go(args) -> int:
@@ -5114,6 +5122,18 @@ def _pool_backfill_v2_enabled() -> bool:
     return os.environ.get(_POOL_BACKFILL_V2_ENV, "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
+
+
+def _precheckout_reason_summary(reasons: set[str]) -> str:
+    """Name why children exited, for the console the operator is sent to.
+
+    The codes are already classified for Fleet. Repeating them locally is what
+    makes "check your local log" actionable: without this the log holds an exit
+    status and nothing about the cause.
+    """
+    if not reasons:
+        return "no child published a reason"
+    return "reason: " + ", ".join(sorted(reasons))
 
 
 def _worker_activity_path() -> Path | None:
@@ -5964,8 +5984,9 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                         )
                     else:
                         print(
-                            f"worker {slot} exited {returncode} before checkout; "
-                            f"retrying this vacant slot after bounded backoff "
+                            f"worker {slot} exited {returncode} before checkout "
+                            f"[{precheckout_reason}]; retrying this vacant slot "
+                            f"after bounded backoff "
                             f"({attempt}/{_POOL_BACKFILL_MAX_ATTEMPTS})"
                         )
                 elif returncode != 0 and not backfill_disabled:
@@ -6278,15 +6299,18 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             return _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
         if fleet_pool and not startup_ready:
             print(
-                "worker pool stopped before verified child readiness; held "
-                "assignments remain waiting and Fleet will record a startup failure"
+                "worker pool stopped before verified child readiness "
+                f"({_precheckout_reason_summary(precheckout_failure_reasons)}); "
+                "held assignments remain waiting and Fleet will record a "
+                "startup failure"
             )
             return 1
         return 0
     if fleet_pool and not startup_ready:
         print(
-            "worker pool never reached verified child readiness; held assignments "
-            "remain waiting for a later retry"
+            "worker pool never reached verified child readiness "
+            f"({_precheckout_reason_summary(precheckout_failure_reasons)}); "
+            "held assignments remain waiting for a later retry"
         )
         return 1
     if backfill_error:
