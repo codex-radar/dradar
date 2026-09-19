@@ -4,19 +4,6 @@ import time
 from dradar import net_probe
 
 
-class _Clock:
-    """Deterministic stand-in so a probe's own budget can be asserted."""
-
-    def __init__(self):
-        self.now = 0.0
-
-    def advance(self, seconds):
-        self.now += seconds
-
-    def __call__(self):
-        return self.now
-
-
 def test_resolver_error_is_reported_as_a_dns_failure(monkeypatch):
     def boom(*_args, **_kwargs):
         raise socket.gaierror(8, "nodename nor servname provided")
@@ -159,3 +146,27 @@ def test_summary_reports_each_host_and_its_timings():
     summary = net_probe.summarize(probes)
     assert "ghcr.io ok (dns 5ms, tls 228ms)" in summary
     assert "auth.docker.io DNS failed" in summary
+
+
+def test_combined_hint_names_every_host_but_gives_advice_once():
+    probes = [
+        net_probe.HostProbe("ghcr.io", "dns", detail="no answer within 5s"),
+        net_probe.HostProbe("auth.docker.io", "dns", detail="no answer within 5s"),
+    ]
+    hint = net_probe.failure_hint(probes, "wsl")
+    assert hint.startswith("ghcr.io, auth.docker.io did not resolve")
+    assert hint.count("generateResolvConf=false") == 1
+
+
+def test_combined_hint_is_empty_when_everything_works():
+    probes = [net_probe.HostProbe("ghcr.io", "ok", dns_ms=5.0, tls_ms=228.0)]
+    assert net_probe.failure_hint(probes, "linux") == ""
+
+
+def test_advice_separates_interception_from_a_dead_connection():
+    dead = net_probe.HostProbe("ghcr.io", "tls", detail="TimeoutError: timed out")
+    assert "outbound 443" in net_probe.probe_advice(dead, "linux")
+    intercepted = net_probe.HostProbe(
+        "ghcr.io", "tls", detail="SSLCertVerificationError: certificate verify failed",
+    )
+    assert "trust its CA" in net_probe.probe_advice(intercepted, "linux")

@@ -614,7 +614,7 @@ def _registry_reachability(platform: str) -> bool:
     label = "registry reachability for Pier images (DNS + TLS)"
     if not failed:
         return _check(f"{label} — {net_probe.summarize(probes)}", True)
-    hint = "; ".join(net_probe.probe_hint(probe, platform) for probe in failed)
+    hint = net_probe.failure_hint(probes, platform)
     proxy = net_probe.proxy_configured()
     if proxy is not None:
         _warn(

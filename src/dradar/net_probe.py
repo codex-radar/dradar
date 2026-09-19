@@ -203,6 +203,50 @@ def _resolver_hint(platform: str) -> str:
     return "point /etc/resolv.conf at a resolver that can answer, then restart Docker"
 
 
+def probe_advice(probe: HostProbe, platform: str) -> str:
+    """The fix for one failed probe, without naming the host.
+
+    Kept separate from :func:`probe_hint` so a report covering several hosts
+    that failed the same way can print the recipe once instead of burying it
+    under a repeat per host.
+    """
+
+    if probe.stage == "dns":
+        return _resolver_hint(platform)
+    if probe.stage != "tls":
+        return ""
+    lowered = probe.detail.lower()
+    if (
+        "certificate verify failed" in lowered
+        or "sslcertverificationerror" in lowered
+        or "hostname mismatch" in lowered
+        or "self-signed certificate" in lowered
+    ):
+        return (
+            "a proxy or filter is intercepting the connection — trust its CA "
+            "or exclude the registry from interception"
+        )
+    return (
+        "allow outbound 443 to it, or configure a registry mirror/proxy "
+        "Docker can reach"
+    )
+
+
+def failure_hint(probes: list[HostProbe], platform: str) -> str:
+    """One actionable line for every host that failed, advice not repeated."""
+
+    failed = [probe for probe in probes if not probe.ok]
+    if not failed:
+        return ""
+    hosts = ", ".join(probe.host for probe in failed)
+    stage = "did not resolve" if failed[0].stage == "dns" else "did not finish TLS"
+    detail = failed[0].detail
+    advice = "; ".join(
+        dict.fromkeys(probe_advice(probe, platform) for probe in failed)
+    )
+    return f"{hosts} {stage} ({detail}); {advice}"
+
+
 def probe_hint(probe: HostProbe, platform: str) -> str:
     """Turn one failed probe into the fix that addresses *that* phase."""
 
