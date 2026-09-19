@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, docker_runtime, egress, runner
+from . import __version__, docker_runtime, egress, net_probe, runner
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CLI_VERSION,
@@ -593,6 +593,39 @@ def _docker_hub_preflight(
     return False, _docker_hub_hint(output, platform)
 
 
+def _registry_reachability(platform: str) -> bool:
+    """Name the registry host and the phase that a broken network breaks.
+
+    The Docker Hub preflight above proves only that ``docker.io`` answered.
+    The pinned Pier egress image lives on ``ghcr.io`` and every Hub base
+    image needs a token from ``auth.docker.io``; a volunteer whose resolver
+    cannot answer for those sees the environment build stall with nothing
+    on screen (volunteer report, 2026-09-08).  Probe them directly so the
+    report says which host and whether resolution or TLS is at fault.
+
+    A configured proxy makes the verdict inconclusive -- the proxy resolves
+    on this process's behalf, and Docker may carry a daemon-side proxy that
+    is invisible here -- so the result is reported as a warning instead of
+    failing an otherwise working machine.
+    """
+
+    probes = net_probe.probe_registries()
+    failed = [probe for probe in probes if not probe.ok]
+    label = "registry reachability for Pier images (DNS + TLS)"
+    if not failed:
+        return _check(f"{label} — {net_probe.summarize(probes)}", True)
+    hint = "; ".join(net_probe.probe_hint(probe, platform) for probe in failed)
+    proxy = net_probe.proxy_configured()
+    if proxy is not None:
+        _warn(
+            label,
+            f"{net_probe.summarize(probes)} — probed directly while {proxy} is "
+            f"set, so Docker may still reach these through the proxy. {hint}",
+        )
+        return True
+    return _check(label, False, hint)
+
+
 _PF_VIRT_FIRMWARE_ENABLED = 21
 
 
@@ -719,6 +752,7 @@ def cmd_doctor(args) -> int:
                 egress_ready,
                 egress_hint,
             )
+            all_ok &= _registry_reachability(plat)
 
     # Native Windows cannot run a task until Docker Desktop's Linux engine is
     # healthy. Avoid installing Pier or cloning the benchmark repository while

@@ -33,7 +33,7 @@ from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
-from . import cancellation, egress, image_cache
+from . import cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -242,11 +242,23 @@ CODEBUDDY_AGENT_MODULE_FILENAME = "_dradar_pier_codebuddy.py"
 CODEBUDDY_RUNTIME_MODULE_FILENAME = "_dradar_codebuddy_runtime.py"
 BETA_SUBSCRIPTION_TRIAL_TIMEOUT_FLOOR_SEC = 120 * 60
 # A cold multi-worker BuildKit start can spend tens of minutes pulling base
-# images and package layers.  Three task windows (90 minutes for the common
-# 1800s task declaration) gives slow mirrors room to recover while the
-# bounded 1..8 override and two-attempt Pier retry still prevent a wedged
-# daemon from holding a lease forever.
+# images and package layers.  Three task windows gives slow mirrors room to
+# recover while the bounded 1..8 override and two-attempt Pier retry still
+# prevent a wedged daemon from holding a lease forever.
+#
+# This multiplier sizes *Pier's* environment timeout, not DRadar's wait for
+# it.  All 113 live DeepSWE tasks declare ``[environment].build_timeout_sec
+# = 1800`` (verified against the published task pack, #0152), so Pier is
+# given 90 minutes per attempt -- but WORKER_REGISTRATION_GRACE_SEC below
+# stops waiting after 30, and the server's own preparation grace is 45
+# minutes.  Raising the multiplier therefore cannot extend the phase it is
+# named after; the grace is the binding constraint.  Left as-is
+# deliberately: the reported failure was an invisible wait, not a wait that
+# was too short, and no healthy build has been observed exceeding 30
+# minutes.
 DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER = 3.0
+# Fallback only, for a task.toml that cannot be read; live packs declare
+# their own value.
 DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_SEC = 600.0
 PIER_ENVIRONMENT_START_ATTEMPTS = 2
 ENVIRONMENT_BUILD_WATCHDOG_SLACK_SEC = 120
@@ -1271,9 +1283,14 @@ def _pier_process_env(
 
 
 def _task_agent_timeout_sec(task_path: Path) -> float | None:
-    """The task's own declared agent watchdog (task.toml's [agent].timeout_sec
-    -- commonly 5400.0/90min or 7200.0/120min across managed packs). None if the
-    file is missing or malformed; caller must not guess a number in that case."""
+    """The task's own declared agent watchdog (task.toml's [agent].timeout_sec).
+
+    Every one of the 113 published DeepSWE tasks declares 10800.0 (3 hours),
+    verified against the live task pack on 2026-09-19 (#0152); an earlier
+    version of this docstring named 5400/7200, which are Pompeii figures and
+    had already misled one reader.  Returns None if the file is missing or
+    malformed -- the caller must not guess a number in that case.
+    """
     try:
         with (task_path / "task.toml").open("rb") as f:
             data = tomllib.load(f)
@@ -3017,6 +3034,15 @@ def _tail(log_path: Path, n: int = 15) -> str:
 # build can be silent while Docker pulls layers, so a one-minute cadence made
 # a healthy cold start look abandoned in the radar UI.
 HEARTBEAT_SEC = 30
+# One progress line per HEARTBEAT_SEC keeps the preparation cadence identical
+# to the run heartbeat, so a volunteer sees the same rhythm before and after
+# the model starts.
+BUILD_PROGRESS_SEC = HEARTBEAT_SEC
+# A single large layer can be quiet for a minute or two, and BuildKit prints
+# on its own retries, so five minutes of complete silence is well past any
+# healthy pull while still leaving most of the 30-minute grace window for the
+# volunteer to act on the warning.
+BUILD_STALL_WARN_SEC = 300
 TRIAL_TIMEOUT_RETURNCODE = 124
 LIVE_ACCOUNT_ERROR_CONFIRMATIONS = 3
 _LIVE_ACCOUNT_TERMINAL_KINDS = {
@@ -4084,8 +4110,17 @@ def _wait_for_worker_registration(
 
     event_offset = 0
     # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
-    # this clock is separate from the post-registration runtime watchdog.
-    deadline = time.monotonic() + WORKER_REGISTRATION_GRACE_SEC
+    # this clock is separate from the post-registration runtime watchdog, and
+    # --environment-build-timeout-multiplier does not extend it.  The server
+    # holds its own preparation grace of 45 minutes, so this remains the inner
+    # bound and the server never expires a lease the CLI still considers
+    # alive.
+    started = time.monotonic()
+    deadline = started + WORKER_REGISTRATION_GRACE_SEC
+    next_beat = started + BUILD_PROGRESS_SEC
+    last_activity = _last_activity(log_path) if log_path is not None else ""
+    last_change = started
+    stall_reported = False
     while True:
         if worker_event_source is not None:
             raw_event = worker_event_source()
@@ -4108,14 +4143,85 @@ def _wait_for_worker_registration(
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
+                + _build_stall_diagnosis(log_path)
             )
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             raise registration_error(
-                "environment preparation exceeded its grace window without "
-                "worker_registered; runtime lease was not started"
+                "the environment never finished building: preparation "
+                f"exceeded its {_duration(WORKER_REGISTRATION_GRACE_SEC)} "
+                "grace window without worker_registered, so no runtime lease "
+                "was started and no quota was consumed"
+                + _build_stall_diagnosis(log_path)
             )
+        # Environment build runs before the post-registration heartbeat, so
+        # this loop was the one place where a volunteer saw nothing at all.
+        # A stalled registry pull is silent by construction: Docker retries
+        # inside itself, Pier keeps waiting, and the whole grace window
+        # elapses with no output (volunteer report, 2026-09-08 -- reported as
+        # a permanent hang, which is what 30 silent minutes look like).
+        # Report elapsed time, the remaining budget, and Pier's own newest
+        # log line on the same cadence the run heartbeat uses.
+        if log_path is not None and now >= next_beat:
+            next_beat = now + BUILD_PROGRESS_SEC
+            activity = _last_activity(log_path)
+            if activity != last_activity:
+                last_activity, last_change = activity, now
+                stall_reported = False
+            silent_for = now - last_change
+            if silent_for >= BUILD_STALL_WARN_SEC:
+                detail = f"no new build output for {_duration(silent_for)}"
+            else:
+                detail = activity
+            print(
+                f"  … preparing environment, {_duration(now - started)} elapsed "
+                f"(gives up after {_duration(WORKER_REGISTRATION_GRACE_SEC)}) "
+                f"— {detail}"
+            )
+            if silent_for >= BUILD_STALL_WARN_SEC and not stall_reported:
+                stall_reported = True
+                print(f"      {_stall_advice(log_path)}")
         time.sleep(0.25)
 
+
+def _duration(seconds: float) -> str:
+    """Whole seconds under a minute, whole minutes above it.
+
+    A preparation line that reads "0 min elapsed" for the first two minutes
+    tells the volunteer nothing about whether anything is moving.
+    """
+
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    return f"{int(seconds / 60)} min"
+
+
+def _build_stall_diagnosis(log_path: Path | None) -> str:
+    """Append the registry phase the build log names, when it names one."""
+
+    if log_path is None:
+        return ""
+    reason = net_probe.classify_build_log(_tail(log_path, 40))
+    return f" ({reason})" if reason else ""
+
+
+def _stall_advice(log_path: Path | None) -> str:
+    """What to do about a build that has stopped producing output."""
+
+    reason = (
+        net_probe.classify_build_log(_tail(log_path, 40))
+        if log_path is not None else None
+    )
+    if reason:
+        return (
+            f"{reason} — fix the resolver/proxy for that host, then re-run "
+            "`dradar resume`; `dradar doctor` checks the same hosts"
+        )
+    return (
+        "if this does not move, the image pull is usually blocked by DNS or "
+        "a proxy — run `dradar doctor` in another terminal to check "
+        "ghcr.io and auth.docker.io"
+    )
 
 
 def _pier_process_options() -> dict:
