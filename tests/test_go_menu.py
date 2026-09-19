@@ -451,16 +451,18 @@ def test_get_assignment_401_exits_with_token_recovery_hint(monkeypatch, tmp_path
     assert "radar page" in msg
 
 
-def test_get_assignment_network_error_exits_mentioning_resume(monkeypatch, tmp_path: Path):
+def test_get_assignment_network_error_requires_state_check_before_retry(monkeypatch, tmp_path: Path):
     _patch_run(monkeypatch)
-    client = ErrorClient(ApiError("cannot reach https://radar.example: boom",
-                                  status_code=None))
+    error = ApiError("cannot reach https://radar.example: boom", status_code=None)
+    client = ErrorClient(error)
     with pytest.raises(SystemExit) as excinfo:
         runloop._go_menu(_args(yes=True, dev_agent=None), {}, client, tmp_path)
     msg = str(excinfo.value)
     assert "cannot reach" in msg
     assert "check your connection" in msg
-    assert "leases stay active" in msg and "dradar resume" in msg
+    assert excinfo.value.__cause__ is error
+    assert "current state" in msg and "original run instructions" in msg
+    assert "leases stay active" not in msg and "dradar resume" not in msg
 
 
 def test_get_assignment_403_passes_server_detail_through(monkeypatch, tmp_path: Path):
