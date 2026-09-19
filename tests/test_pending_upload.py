@@ -1851,6 +1851,64 @@ def test_incomplete_kimi_usage_keeps_tokens_and_cost_unavailable(
     ) == "submitted"
 
 
+def test_incomplete_codebuddy_usage_uploads_observed_ledger_without_settlement(
+    tmp_path: Path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial_dir = _make_trial_dir(tmp_path)
+    agent_dir = trial_dir / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "provider-usage.json").write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy",
+        "model": "hy4-preview",
+        "complete": False,
+        "request_count": 1,
+        "n_input_tokens": 300,
+        "n_cache_tokens": 200,
+        "n_output_tokens": 21,
+        "cache_creation_tokens": 80,
+        "request_usage_complete": False,
+        "request_usage_observed": True,
+        "usage_evidence_tier": "observed_unreconciled",
+        "usage_incomplete_reason": "terminal_aggregate_missing",
+        "usage_incomplete_reasons": ["terminal_aggregate_missing"],
+        "timed_usage_complete": False,
+        "provider_actual_cost_observed": False,
+        "cost_semantics": "server-priced-api-equivalent",
+        "token_usage_events": [{
+            "n_input_tokens": 300,
+            "n_cache_tokens": 200,
+            "n_output_tokens": 21,
+            "cache_creation_tokens": 80,
+        }],
+    }), encoding="utf-8")
+
+    class CaptureClient(FakeClient):
+        def submit(self, assignment_id, nonce, patch, trajectory, result, meta,
+                   outcome="completed", resume_generation=None,
+                   trajectory_bundle=None):
+            assert meta["usage_aggregation_complete"] is False
+            assert meta["request_usage_complete"] is False
+            assert meta["request_usage_observed"] is True
+            assert meta["usage_evidence_tier"] == "observed_unreconciled"
+            assert meta["usage_incomplete_reason"] == "terminal_aggregate_missing"
+            assert meta["usage_incomplete_reasons"] == [
+                "terminal_aggregate_missing",
+            ]
+            assert meta["n_input_tokens"] == 300
+            assert meta["n_cache_tokens"] == 200
+            assert meta["n_output_tokens"] == 21
+            assert meta["cost_usd"] is None
+            assert meta["provider_actual_cost_observed"] is False
+            return {"submission_id": "s1", "grade_status": "pending"}
+
+    assert runloop._upload_trial(
+        CaptureClient(lambda _aid: None),
+        _entry(trial_dir, meta={"codebuddy_cli_version": "2.137.1"}),
+    ) == "submitted"
+
+
 def test_upload_suppresses_cost_when_any_subagent_usage_is_missing(
     tmp_path: Path, monkeypatch,
 ):
