@@ -246,6 +246,231 @@ def test_diagnose_classifies_insufficient_balance_before_generic_http_errors(tmp
     assert d["kind"] == "insufficient-balance"
 
 
+# A volunteer on a Hong Kong egress (2026-09-08) saw only the provider's raw
+# "FAILED_PRECONDITION (400): User location is not supported for the API use",
+# with no hint that the fix was to exit through another region. Classify it so
+# the console prints a sentence instead of the wire text.
+REGION_MSG = (
+    "Command failed (exit 1): gemini --print\n"
+    "stdout: FAILED_PRECONDITION (400): User location is not supported for "
+    "the API use"
+)
+
+REGION_JSON_MSG = (
+    'Command failed (exit 1): gemini --print\nstdout: {"error": {"code": 400, '
+    '"message": "User location is not supported for the API use.", '
+    '"status": "FAILED_PRECONDITION"}}'
+)
+
+
+# OpenAI answers the same refusal with a 403 and its own wording. Before this
+# category existed the 403 fell through to the account-auth rule, so Codex --
+# DRadar's default agent -- told volunteers to run `codex login`, which cannot
+# move their egress. Keep both phrasings in one kind.
+REGION_OPENAI_MSG = (
+    'Command failed (exit 1): codex exec\nstdout: server returned 403: '
+    '{"error":{"message":"Country, region, or territory not supported",'
+    '"type":"request_forbidden","param":null,'
+    '"code":"unsupported_country_region_territory"}}'
+)
+
+# The shape above does NOT match has_http_status(403); this one does, which is
+# the shape the repo already documents for a real Codex 403 (see
+# test_diagnose_classifies_https_api_403_as_auth_terminal). Keep both: only
+# this one used to be answered with "run `codex login`", so only this one
+# proves the rule has to sit ahead of the auth rules.
+REGION_OPENAI_HTTP_MSG = (
+    "Command failed (exit 1): codex exec\nstdout: HTTP 403 Forbidden, "
+    "url: https://api.openai.com/v1/responses — Country, region, or "
+    "territory not supported"
+)
+
+
+@pytest.mark.parametrize("message", [
+    REGION_MSG, REGION_JSON_MSG, REGION_OPENAI_MSG, REGION_OPENAI_HTTP_MSG,
+])
+def test_diagnose_classifies_provider_region_rejection(tmp_path, message):
+    d = diagnose_exception(_result(tmp_path, message))
+    assert d["kind"] == "region-blocked"
+
+
+def test_region_rule_precedes_the_generic_http_403_auth_path(tmp_path):
+    """The OpenAI refusal carries a 403, so rule order is the whole fix here:
+    placed after the auth rules this message would still read as `auth`."""
+    message = (
+        "http 403 forbidden: Country, region, or territory not supported"
+    )
+    assert diagnose_exception(_result(tmp_path, message))["kind"] == (
+        "region-blocked"
+    )
+
+
+def test_region_block_is_account_terminal_and_drains_without_interrupting(
+    monkeypatch, tmp_path,
+):
+    """A region refusal is bound to the host's egress IP, not to this cell, so
+    the pool must stop claiming -- but siblings already paying for a model run
+    are left to finish (interrupt_siblings=False)."""
+    abort = tmp_path / "pool-abort"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort))
+
+    outcome = runloop._terminal_failure_outcome("region-blocked")
+
+    assert outcome == "region-blocked"
+    assert abort.is_file(), "pool was not told to stop"
+    interrupt_siblings, reason = runloop._pool_stop_directive(abort)
+    assert interrupt_siblings is False
+    assert "region" in reason
+    # `_pool_abort_reason` is what the worker child actually reads before its
+    # next checkout, so assert the value that loop would see -- not just the
+    # helper pair above.
+    assert runloop._pool_abort_reason() == reason
+
+
+def test_non_terminal_kind_does_not_stop_the_pool(monkeypatch, tmp_path):
+    """Negative control for the test above: the terminal table must not have
+    turned every classified failure into a pool stop."""
+    abort = tmp_path / "pool-abort"
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort))
+
+    for recoverable in ("rate-limit", "provider-transport", "agent-deadline"):
+        assert runloop._terminal_failure_outcome(recoverable) is None
+    assert runloop._terminal_failure_outcome(None) is None
+    assert not abort.exists(), "a recoverable failure stopped the pool"
+
+
+def test_every_account_terminal_outcome_names_its_own_cause(capsys):
+    """Membership in `_ACCOUNT_TERMINAL_OUTCOMES` is what stops the pool, but
+    the sentence the volunteer reads comes from a separate table. Adding a
+    member without a message is silent: the run still stops, and the volunteer
+    is told only "an account-wide stop condition was detected", which is the
+    unreadable-error class this ticket exists to remove. Pin the pairing so the
+    next kind cannot land half-wired.
+    """
+    for outcome in sorted(runloop._ACCOUNT_TERMINAL_OUTCOMES):
+        runloop._announce_account_stop(outcome)
+        printed = capsys.readouterr().out
+        assert "an account-wide stop condition was detected" not in printed, (
+            f"{outcome} is account-terminal but has no message of its own"
+        )
+
+
+def test_region_block_never_sends_a_failure_diagnostic_to_the_server(
+    monkeypatch, tmp_path,
+):
+    """Cross-repo contract with dradar-server #0165.
+
+    The server refuses `failure_diagnostic` for any kind outside
+    {runner_failed, task_content_mismatch} and has a test pinning that refusal
+    for `region-blocked` specifically. The only thing making that assumption
+    true is the conditional at this call site, so pin it from this side too:
+    if someone later passes the diagnostic unconditionally, the server answers
+    422 and the CLI silently drops BOTH fields on retry.
+    """
+    from test_go_menu import ASSIGNMENT, SubmitClient
+
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(tmp_path / "pool-abort"))
+
+    def region_refusal(*_a, **_kw):
+        raise RunnerError(
+            "trial failed: FAILED_PRECONDITION (400): User location is not "
+            "supported for the API use",
+            failure_diagnostic={
+                "schema": "dradar-runner-failure-v1",
+                "failure_code": "trial_timeout",
+            },
+        )
+
+    monkeypatch.setattr(runloop, "run_trial", region_refusal)
+    client = SubmitClient({})
+    stopped = []
+    client.mark_stopped = lambda aid, **kw: (
+        stopped.append((aid, kw)) or {"ok": True}
+    )
+
+    runloop._run_and_submit(
+        client, {**ASSIGNMENT, "assignment_id": "a-region"},
+        tmp_path, _args(), "abc123",
+    )
+
+    assert stopped, "the lease was never returned to the server"
+    _, kwargs = stopped[-1]
+    assert kwargs.get("failure_kind") == "region-blocked"
+    assert "failure_diagnostic" not in kwargs or (
+        kwargs["failure_diagnostic"] is None
+    ), "a region refusal must not carry a diagnostic the server will reject"
+
+
+def test_region_block_stop_announcement_names_the_real_cause(capsys):
+    """`_ACCOUNT_TERMINAL_OUTCOMES` membership alone would print the generic
+    'an account-wide stop condition was detected', which is the unreadable
+    message this ticket exists to remove."""
+    runloop._announce_account_stop("region-blocked")
+    printed = capsys.readouterr().out
+    assert "region" in printed
+    assert "account-wide stop condition was detected" not in printed
+
+
+@pytest.mark.parametrize("message", [
+    # FAILED_PRECONDITION is not a geography signal on its own: the same status
+    # carries a disabled API, a retired model and a bare precondition failure.
+    'FAILED_PRECONDITION (400): Precondition check failed.',
+    '{"error": {"code": 400, "message": "Gemini 1.0 Pro Vision has been '
+    'deprecated", "status": "FAILED_PRECONDITION"}}',
+    '{"error": {"code": 400, "message": "Generative Language API has not been '
+    'used in project 12345 before or it is disabled", '
+    '"status": "FAILED_PRECONDITION"}}',
+    # Nor is an ordinary rejected request that merely mentions a location.
+    'server returned 400: {"error":{"message":"unknown location parameter"}}',
+])
+def test_diagnose_does_not_read_every_failed_precondition_as_region_block(
+    tmp_path, message,
+):
+    assert diagnose_exception(_result(tmp_path, message))["kind"] != (
+        "region-blocked"
+    )
+
+
+@pytest.mark.parametrize(("message", "kind"), [
+    ("http status 401 unauthorized", "auth"),
+    ("invalid credentials", "auth"),
+    ("status_code: 429 too many requests", "rate-limit"),
+    ("you've hit your usage limit", "quota-limit"),
+    ("402 Payment Required: Insufficient Balance", "insufficient-balance"),
+])
+def test_region_block_rule_does_not_shadow_existing_classifications(
+    tmp_path, message, kind,
+):
+    assert diagnose_exception(_result(tmp_path, message))["kind"] == kind
+
+
+def test_region_block_advice_points_at_egress_not_credentials_or_quota():
+    """The volunteer's complaint was an unreadable error, so the fix is only
+    real if the printed sentence names the actual remedy. Wrong advice is worse
+    than none: an earlier report proved "wait for your quota to reset" sent
+    someone chasing a version problem. Ban the remedies the other kinds
+    prescribe, not the words -- saying "not your quota" is the point."""
+    advice = runner_mod.DIAG_ADVICE["region-blocked"]
+    assert "region" in advice
+    for prescribed_elsewhere in (
+        "codex login", "dradar doctor", "dradar resume", "provider status",
+        "recharge", "--refresh", "resets", "try again later",
+    ):
+        assert prescribed_elsewhere not in advice
+
+
+def test_failed_trial_prints_region_advice_instead_of_raw_provider_text(
+    tmp_path,
+):
+    """End of the chain the volunteer actually sees: runloop must reach
+    DIAG_ADVICE for the new kind, not just classify it."""
+    diag = diagnose_exception(_result(tmp_path, REGION_MSG))
+    advice = runloop.DIAG_ADVICE.get(diag["kind"])
+    assert advice, "runloop cannot reach advice for the new kind"
+    assert "region" in advice
+
+
 def test_diagnose_classifies_model_capacity(tmp_path):
     d = diagnose_exception(_result(tmp_path,
         "turn.failed: Selected model is at capacity. Please try a different model."))
