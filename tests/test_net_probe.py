@@ -586,7 +586,37 @@ TRAILING_NOTE_CASES = (
         '#6 Head "https://ghcr.io/v2/": context deadline exceeded',
         "a connection timeout reaching ghcr.io",
     ),
+    (
+        "另一个泛型尾注单独出现时同样走兜底",
+        '#7 Head "https://ghcr.io/v2/": i/o timeout',
+        "a connection timeout reaching ghcr.io",
+    ),
 )
+
+# The fallback tier must not start guessing a subject. It fires only when no
+# specific marker matched, which is exactly when there is least evidence.
+FALLBACK_MUST_STAY_SILENT = (
+    (
+        "泛型超时,但操作数不是 registry",
+        '#8 Head "https://mirror.corp.local/v2/": context deadline exceeded',
+    ),
+    (
+        "泛型超时,操作数是镜像站",
+        '#9 Get "https://dockerproxy.cn/v2/": i/o timeout',
+    ),
+    (
+        "泛型超时,行内根本没有操作数",
+        "#10 build step timed out: context deadline exceeded",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,log", FALLBACK_MUST_STAY_SILENT,
+    ids=[c[0] for c in FALLBACK_MUST_STAY_SILENT],
+)
+def test_the_fallback_tier_still_needs_a_registry_operand(label, log):
+    assert net_probe.classify_build_log(log) is None, label
 
 
 @pytest.mark.parametrize(

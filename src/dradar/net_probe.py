@@ -547,6 +547,19 @@ def _classify_line(lowered: str) -> tuple[str, str] | None:
     while `dradar doctor` reports it healthy (#0152 QA r3).
     """
 
+    # Known limitation: the phase and the host are chosen independently, so
+    # a line carrying an unrelated *specific* failure alongside the
+    # registry's *generic* timeout takes the phase from the unrelated one --
+    #     could not resolve mirror.corp.local; Head "https://ghcr.io/…":
+    #     context deadline exceeded
+    # reports a DNS failure reaching ghcr.io. Tying the two together needs
+    # the marker and the operand to come from the same clause, and no cheap
+    # textual rule separates them: splitting on ";" only works on
+    # hand-written examples, and adding ": " breaks Go's genuine DNS
+    # nesting, which spans colons (#0152 QA r4/r5, both prototypes
+    # withdrawn). Left as-is: this shape needs an unrelated specific failure
+    # and a registry generic timeout on one physical line, while the case
+    # the demotion above fixes is this ticket's own reported failure.
     phase, phase_at = None, -1
     for markers, name in (
         (_DNS_MARKERS, "a DNS failure"),
