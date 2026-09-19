@@ -33,7 +33,7 @@ from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
 )
-from . import cancellation, egress, image_cache
+from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -242,11 +242,23 @@ CODEBUDDY_AGENT_MODULE_FILENAME = "_dradar_pier_codebuddy.py"
 CODEBUDDY_RUNTIME_MODULE_FILENAME = "_dradar_codebuddy_runtime.py"
 BETA_SUBSCRIPTION_TRIAL_TIMEOUT_FLOOR_SEC = 120 * 60
 # A cold multi-worker BuildKit start can spend tens of minutes pulling base
-# images and package layers.  Three task windows (90 minutes for the common
-# 1800s task declaration) gives slow mirrors room to recover while the
-# bounded 1..8 override and two-attempt Pier retry still prevent a wedged
-# daemon from holding a lease forever.
+# images and package layers.  Three task windows gives slow mirrors room to
+# recover while the bounded 1..8 override and two-attempt Pier retry still
+# prevent a wedged daemon from holding a lease forever.
+#
+# This multiplier sizes *Pier's* environment timeout, not DRadar's wait for
+# it.  All 113 live DeepSWE tasks declare ``[environment].build_timeout_sec
+# = 1800`` (verified against the published task pack, #0152), so Pier is
+# given 90 minutes per attempt -- but WORKER_REGISTRATION_GRACE_SEC below
+# stops waiting after 30, and the server's own preparation grace is 45
+# minutes.  Raising the multiplier therefore cannot extend the phase it is
+# named after; the grace is the binding constraint.  Left as-is
+# deliberately: the reported failure was an invisible wait, not a wait that
+# was too short, and no healthy build has been observed exceeding 30
+# minutes.
 DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER = 3.0
+# Fallback only, for a task.toml that cannot be read; live packs declare
+# their own value.
 DEFAULT_ENVIRONMENT_BUILD_TIMEOUT_SEC = 600.0
 PIER_ENVIRONMENT_START_ATTEMPTS = 2
 ENVIRONMENT_BUILD_WATCHDOG_SLACK_SEC = 120
@@ -1271,9 +1283,23 @@ def _pier_process_env(
 
 
 def _task_agent_timeout_sec(task_path: Path) -> float | None:
-    """The task's own declared agent watchdog (task.toml's [agent].timeout_sec
-    -- commonly 5400.0/90min or 7200.0/120min across managed packs). None if the
-    file is missing or malformed; caller must not guess a number in that case."""
+    """The task's own declared agent watchdog (task.toml's [agent].timeout_sec).
+
+    All 113 tasks in ``DEEP_SWE_REPO`` -- the fork this CLI clones -- declare
+    10800.0 (3 hours), read from its tasks/ on 2026-09-19 (#0152).
+
+    Name the repository when quoting that number, because three task trees on
+    one machine answer differently and only this one is what a volunteer gets:
+    the upstream ``datacurve-ai/deep-swe`` still declares 5400.0, and the
+    pompeii-adjacency pack declares 7200.0. An earlier docstring offered
+    "commonly 5400/7200" with no source; a reviewer checking it against a
+    stale local checkout of the upstream repo concluded the 10800 figure was
+    the wrong one. Both numbers were real -- the repository was the missing
+    half of the fact.
+
+    Returns None if the file is missing or malformed; the caller must not
+    guess a number in that case.
+    """
     try:
         with (task_path / "task.toml").open("rb") as f:
             data = tomllib.load(f)
@@ -3017,6 +3043,15 @@ def _tail(log_path: Path, n: int = 15) -> str:
 # build can be silent while Docker pulls layers, so a one-minute cadence made
 # a healthy cold start look abandoned in the radar UI.
 HEARTBEAT_SEC = 30
+# One progress line per HEARTBEAT_SEC keeps the preparation cadence identical
+# to the run heartbeat, so a volunteer sees the same rhythm before and after
+# the model starts.
+BUILD_PROGRESS_SEC = HEARTBEAT_SEC
+# A single large layer can be quiet for a minute or two, and BuildKit prints
+# on its own retries, so five minutes of complete silence is well past any
+# healthy pull while still leaving most of the 30-minute grace window for the
+# volunteer to act on the warning.
+BUILD_STALL_WARN_SEC = 300
 TRIAL_TIMEOUT_RETURNCODE = 124
 LIVE_ACCOUNT_ERROR_CONFIRMATIONS = 3
 _LIVE_ACCOUNT_TERMINAL_KINDS = {
@@ -3030,6 +3065,10 @@ def _last_activity(log_path: Path) -> str:
     line, so split on \\r as well and skip pure control/blank chunks."""
     raw = _tail(log_path, 1)
     chunks = [c.strip() for c in raw.replace("\r", "\n").splitlines() if c.strip()]
+    # The 120-char cap is not only cosmetic: this string is fed to
+    # agent_stderr.redact_diagnostic_text on every heartbeat, and that
+    # redactor is super-linear (~2s on 60 KB). Raising this cap moves that
+    # cost onto every beat of the preparation wait.
     return (chunks[-1][:120] if chunks else "still running (no new log output)")
 
 
@@ -4084,8 +4123,28 @@ def _wait_for_worker_registration(
 
     event_offset = 0
     # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
-    # this clock is separate from the post-registration runtime watchdog.
-    deadline = time.monotonic() + WORKER_REGISTRATION_GRACE_SEC
+    # this clock is separate from the post-registration runtime watchdog, and
+    # --environment-build-timeout-multiplier does not extend it.  The server
+    # holds its own preparation grace of 45 minutes, so this remains the inner
+    # bound and the server never expires a lease the CLI still considers
+    # alive.
+    started = time.monotonic()
+    deadline = started + WORKER_REGISTRATION_GRACE_SEC
+    next_beat = started + BUILD_PROGRESS_SEC
+    last_activity = _last_activity(log_path) if log_path is not None else ""
+    last_change = started
+    stall_reported = False
+    # Every registry cause already explained, so a failure Docker retries
+    # forever is explained once rather than once per beat. A *set*, not the
+    # last value: when two registries fail together -- which is what the
+    # 2026-09-08 report actually describes, ghcr.io and docker.io both down
+    # -- the causes alternate, and last-value dedup re-prints on every beat.
+    # Bounded by the beat count, at most one entry per beat.
+    reported_reasons: set[str] = set()
+    # The most recent cause, remembered for the terminal error: the evidence
+    # scrolls out of the tail window, and the cause must not be forgotten
+    # just because the build kept talking afterwards.
+    last_reason: str | None = None
     while True:
         if worker_event_source is not None:
             raw_event = worker_event_source()
@@ -4108,14 +4167,156 @@ def _wait_for_worker_registration(
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
+                + _build_stall_diagnosis(log_path, last_reason)
             )
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             raise registration_error(
-                "environment preparation exceeded its grace window without "
-                "worker_registered; runtime lease was not started"
+                "the environment never finished building: preparation "
+                f"exceeded its {_duration(WORKER_REGISTRATION_GRACE_SEC)} "
+                "grace window without worker_registered, so no runtime lease "
+                "was started and no quota was consumed"
+                + _build_stall_diagnosis(log_path, last_reason)
             )
+        # Environment build runs before the post-registration heartbeat, so
+        # this loop was the one place where a volunteer saw nothing at all.
+        # A stalled registry pull is silent by construction: Docker retries
+        # inside itself, Pier keeps waiting, and the whole grace window
+        # elapses with no output (volunteer report, 2026-09-08 -- reported as
+        # a permanent hang, which is what 30 silent minutes look like).
+        # Report elapsed time, the remaining budget, and Pier's own newest
+        # log line on the same cadence the run heartbeat uses.
+        if log_path is not None and now >= next_beat:
+            next_beat = now + BUILD_PROGRESS_SEC
+            activity = _last_activity(log_path)
+            if activity != last_activity:
+                last_activity, last_change = activity, now
+                stall_reported = False
+            silent_for = now - last_change
+            if silent_for >= BUILD_STALL_WARN_SEC:
+                detail = f"no new build output for {_duration(silent_for)}"
+            else:
+                # Pier's newest line is echoed to the terminal, and the build
+                # phase is exactly where `RUN docker login -p ...` and
+                # `--build-arg` secrets appear. Nothing here is uploaded, but
+                # volunteers paste their terminal into help threads, so this
+                # new output surface must not be the one that leaks a token.
+                #
+                # agent_stderr's redactor, not image_cache's: the latter
+                # blanks every URL to "<url>" -- destroying the host this
+                # line exists to show -- while passing ghp_/AIza/sk-proj-
+                # and full email addresses straight through. This one
+                # redacts those and keeps the host readable.
+                detail, _labels = agent_stderr.redact_diagnostic_text(activity)
+            # flush: stdout is block-buffered whenever this is piped rather
+            # than a terminal, which would hold the progress lines back until
+            # kilobytes accumulate -- the exact silence being fixed here.
+            print(
+                f"  … preparing environment, {_duration(now - started)} elapsed "
+                f"(gives up after {_duration(WORKER_REGISTRATION_GRACE_SEC)}) "
+                f"— {detail}",
+                flush=True,
+            )
+            # A registry failure that Docker keeps retrying is never silent,
+            # so waiting for silence would never report it. Say it as soon as
+            # the log names one, whether or not output is still moving --
+            # but key the "already said this" flag on the cause, not on
+            # silence. Reusing the silence flag here printed the advice on
+            # every beat of exactly the retry loop it was added to serve,
+            # 49 times in a 25-minute window (#0152 QA).
+            reason = net_probe.classify_build_log(_tail(log_path, 40))
+            if reason is not None:
+                last_reason = reason
+                if reason not in reported_reasons:
+                    reported_reasons.add(reason)
+                    print(f"      {_stall_advice(reason)}", flush=True)
+            elif silent_for >= BUILD_STALL_WARN_SEC and not stall_reported:
+                stall_reported = True
+                print(f"      {_silent_stall_advice(last_reason)}", flush=True)
         time.sleep(0.25)
 
+
+def _duration(seconds: float) -> str:
+    """Whole seconds under a minute, whole minutes above it.
+
+    A preparation line that reads "0 min elapsed" for the first two minutes
+    tells the volunteer nothing about whether anything is moving.
+    """
+
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    return f"{int(seconds / 60)} min"
+
+
+def _historical(reason: str) -> str:
+    """Restate a remembered cause as history, never as the current state."""
+
+    past = reason.replace(
+        net_probe.CLASSIFIED_PREFIX, "earlier in this build the log showed", 1,
+    )
+    if past == reason:
+        # The classifier's opening changed and the rewrite silently did
+        # nothing. Falling through would assert in the present tense while
+        # the second clause says the opposite -- worse than not rewriting.
+        past = f"earlier in this build: {reason}"
+    return past + "; the newest log lines no longer show it"
+
+
+def _build_stall_diagnosis(
+    log_path: Path | None, remembered: str | None = None,
+) -> str:
+    """Append the registry phase the build log names, when it names one.
+
+    ``remembered`` carries a cause seen earlier in the wait, because a build
+    that failed to reach a registry and then kept printing pushes that
+    evidence out of the tail window.
+
+    A remembered cause is restated in the past tense. A first pull that
+    fails and succeeds on retry is ordinary on a weak connection, so a
+    build that later wedges somewhere else would otherwise be reported as
+    "the build log shows a DNS failure" at a moment when the log shows
+    nothing of the kind -- asserting evidence rather than preserving it,
+    and reinstating through memory the recovered-transient misattribution
+    the classifier was fixed to avoid (#0152 QA r3).
+    """
+
+    if log_path is not None:
+        current = net_probe.classify_build_log(_tail(log_path, 40))
+        if current:
+            return f" ({current})"
+    return f" ({_historical(remembered)})" if remembered else ""
+
+
+_GENERIC_STALL_ADVICE = (
+    "if this does not move, the image pull is usually blocked by DNS or "
+    "a proxy — run `dradar doctor` in another terminal to check "
+    "ghcr.io and auth.docker.io"
+)
+
+
+def _stall_advice(reason: str | None) -> str:
+    """What to do about a build that has stopped producing output."""
+
+    if reason:
+        return (
+            f"{reason} — fix the resolver/proxy for that host, then re-run "
+            "`dradar resume`; `dradar doctor` checks the same hosts"
+        )
+    return _GENERIC_STALL_ADVICE
+
+
+def _silent_stall_advice(remembered: str | None) -> str:
+    """Advice for a stall the log no longer explains.
+
+    A cause that has since scrolled away or been retried successfully is
+    worth mentioning but must not be presented as the current state, and
+    must not displace the generic pointer: the build is stalled *now*, and
+    what stalled it may have nothing to do with the earlier failure.
+    """
+
+    if not remembered:
+        return _GENERIC_STALL_ADVICE
+    return f"{_GENERIC_STALL_ADVICE} ({_historical(remembered)})"
 
 
 def _pier_process_options() -> dict:
