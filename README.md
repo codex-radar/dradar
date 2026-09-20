@@ -9,7 +9,7 @@ CLI 的核心能力围绕通用的 benchmark 运行流程设计，包括格子�
 Pier + Docker 作为现阶段的任务执行方案；未来可以继续接入其他 benchmark 和对应 runner。
 
 - 官网与任务大表：[deng.codexradar.com](https://deng.codexradar.com)
-- CLI 仓库：[github.com/SecurityMind/dradar](https://github.com/SecurityMind/dradar)
+- CLI 仓库：[github.com/codex-radar/dradar](https://github.com/codex-radar/dradar)
 - 当前 CLI 版本：运行 `dradar --version` 查看
 - 设计原则：[CLI 用户—Agent 双层交互设计原则](docs/CLI_USER_AGENT_INTERACTION_PRINCIPLES.md)
 - 接入指南：[DRadar Harness 接入最佳实践指南](docs/HARNESS_INTEGRATION_BEST_PRACTICES.md)
@@ -67,17 +67,17 @@ codex login
 手动使用时，可以一直通过 GitHub 主线运行最新版：
 
 ```bash
-uvx --from git+https://github.com/SecurityMind/dradar dradar --version
-uvx --from git+https://github.com/SecurityMind/dradar dradar login \
+uvx --from git+https://github.com/codex-radar/dradar dradar --version
+uvx --from git+https://github.com/codex-radar/dradar dradar login \
   --server https://api.codexradar.com --token <YOUR_TOKEN>
-uvx --from git+https://github.com/SecurityMind/dradar dradar doctor
+uvx --from git+https://github.com/codex-radar/dradar dradar doctor
 ```
 
 下面的文档为了简洁统一写成 `dradar ...`。如果没有把它安装成全局命令，就在每条命令前
 加上：
 
 ```bash
-uvx --from git+https://github.com/SecurityMind/dradar
+uvx --from git+https://github.com/codex-radar/dradar
 ```
 
 最常见的一次运行：
