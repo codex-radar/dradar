@@ -3177,6 +3177,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             print(f"trial failed: {exc}\n"
                   "use `dradar resume` to retry later, or `dradar release` to "
                   "give the cell back")
+            if failure_kind == "auth":
+                from .auth_failure import auth_failure_sentence
+                print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
             stopped = _mark_stopped_quietly(
                 client,
                 assignment,
@@ -3341,6 +3344,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             print(f"the agent failed inside the container: {diag.get('type') or 'unknown error'}")
             for ln in diag.get("tail", []):
                 print(f"  | {ln[:300]}")
+            if diag.get("kind") == "auth":
+                from .auth_failure import auth_failure_sentence
+                print(f"  -> {auth_failure_sentence(diag.get('auth_signal'))}")
             advice = DIAG_ADVICE.get(diag.get("kind"))
             if advice:
                 print(f"  -> {advice}")
