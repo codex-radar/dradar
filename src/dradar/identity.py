@@ -223,6 +223,12 @@ def cmd_status(args) -> int:
             note = f"  — {cause}{timing}{retry_note}"
         print(f"  {s['task_id']:42s} {s['model']}@{s['effort']:7s} "
               f"{s['grade_status']:8s} {icon}  {_relative_time(s['submitted_at'])}{flags}{note}")
+        explanation = s.get("failure_explanation")
+        if s["grade_status"] == "invalid" and isinstance(explanation, dict):
+            # Written by the server from the platform's own answer (#0226).
+            text = explanation.get("en")
+            if isinstance(text, str) and text:
+                print(f"      {text}")
     if len(subs) > 20:
         print(f"  ... and {len(subs) - 20} more (showing the 20 most recent)")
 

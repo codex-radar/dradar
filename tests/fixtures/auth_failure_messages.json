@@ -1,0 +1,176 @@
+{
+ "schema": "dradar-auth-failure-fixtures-v1",
+ "note": "Real platform/agent text behind failure_kind=auth (#0226), and the exact sentence for each signal. dradar-server and the dradar CLI each keep a copy of this file and each pins its own module to it, so the two copies cannot drift apart silently. Every message names where it came from.",
+ "messages": [
+  {
+   "name": "probe_missing",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: Reading additional input from stdin...\n2026-09-20T23:36:57.191349Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n{\"type\":\"thread.started\",\"thread_id\":\"<id>\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: <id>)\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: <id>\"}}\n{\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>)\"}\n{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>\"}}\nstderr: None",
+   "expected_signal": "no_credential",
+   "source": "codex-cli 0.153.4 run on the #0226 workstation with a throwaway CODEX_HOME, 2026-09-20; request ids redacted: no auth.json at all; stderr merged into stdout as Pier records it (codex runs `2>&1 | tee`), repeats dropped"
+  },
+  {
+   "name": "probe_malformed",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: Reading additional input from stdin...\n2026-09-20T23:37:17.979164Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n{\"type\":\"thread.started\",\"thread_id\":\"<id>\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: <id>)\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: <id>\"}}\n{\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>)\"}\n{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>\"}}\nstderr: None",
+   "expected_signal": "no_credential",
+   "source": "codex-cli 0.153.4 run on the #0226 workstation with a throwaway CODEX_HOME, 2026-09-20; request ids redacted: auth.json present but not JSON; stderr merged into stdout as Pier records it (codex runs `2>&1 | tee`), repeats dropped"
+  },
+  {
+   "name": "probe_fake_access_fresh",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: Reading additional input from stdin...\n2026-09-20T23:36:40.537047Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Could not parse your authentication token. Please try signing in again., url: https://chatgpt.com/backend-api/codex/models?client_version=0.153.4, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: unauthorized_unknown\n2026-09-20T23:36:41.178903Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 401: {\\n  \\\"error\\\": {\\n    \\\"message\\\": \\\"Could not parse your authentication token. Please try signing in again.\\\",\\n    \\\"type\\\": null,\\n    \\\"code\\\": \\\"unauthorized_unknown\\\",\\n    \\\"param\\\": null\\n  },\\n  \\\"status\\\": 401\\n}\")\n2026-09-20T23:36:41.931007Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses\n2026-09-20T23:36:43.083853Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {\n  \"error\": {\n    \"message\": \"Could not validate your refresh token. Please try signing in again.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": null,\n    \"code\": \"invalid_refresh_token\"\n  }\n}\n{\"type\":\"thread.started\",\"thread_id\":\"<id>\"}\n{\"type\":\"turn.started\"}\nstderr: None",
+   "expected_signal": "login_rejected",
+   "source": "codex-cli 0.153.4 run on the #0226 workstation with a throwaway CODEX_HOME, 2026-09-20; request ids redacted: structurally valid ChatGPT sign-in with a forged, unexpired access token; stderr merged into stdout as Pier records it (codex runs `2>&1 | tee`), repeats dropped"
+  },
+  {
+   "name": "probe_fake_access_expired",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: ull,\\n    \\\"code\\\": \\\"unauthorized_unknown\\\",\\n    \\\"param\\\": null\\n  },\\n  \\\"status\\\": 401\\n}\")\n2026-09-20T23:37:39.812027Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again.\n2026-09-20T23:37:40.032959Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 401: {\\n  \\\"error\\\": {\\n    \\\"message\\\": \\\"Could not parse your authentication token. Please try signing in again.\\\",\\n    \\\"type\\\": null,\\n    \\\"code\\\": \\\"unauthorized_unknown\\\",\\n    \\\"param\\\": null\\n  },\\n  \\\"status\\\": 401\\n}\")\n2026-09-20T23:37:40.402254Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses\n{\"type\":\"thread.started\",\"thread_id\":\"<id>\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"Your access token could not be refreshed. Please log out and sign in again.\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"Your access token could not be refreshed. Please log out and sign in again.\"}}\nstderr: None",
+   "expected_signal": "login_rejected",
+   "source": "codex-cli 0.153.4 run on the #0226 workstation with a throwaway CODEX_HOME, 2026-09-20; request ids redacted: forged ChatGPT sign-in whose access token has expired, forcing a refresh; stderr merged into stdout as Pier records it (codex runs `2>&1 | tee`), repeats dropped"
+  },
+  {
+   "name": "probe_bad_api_key",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: Reading additional input from stdin...\n2026-09-20T23:37:46.295302Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\nq_26fe8318f9574066b68dfa06b7343672, auth error: 401, auth error code: invalid_api_key)\"}\n{\"type\":\"error\",\"message\":\"Reconnecting... 3/5 (unexpected status 401 Unauthorized: {\\n  \\\", url: wss://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key)\"}\n{\"type\":\"error\",\"message\":\"Reconnecting... 4/5 (unexpected status 401 Unauthorized: {\\n  \\\"e, url: wss://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key)\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: {\\n  \\\", url: wss://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key\"}}\n{\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-fixtu***********************0000. You can find your API key at https://platform.openai.com/account/api-keys., url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key)\"}\n{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided: sk-fixtu***********************0000. You can find your API key at https://platform.openai.com/account/api-keys., url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Incorrect API key provided: sk-fixtu***********************0000. You can find your API key at https://platform.openai.com/account/api-keys., url: https://api.openai.com/v1/responses, cf-ray: <id>, request id: <id>, auth error: 401, auth error code: invalid_api_key\"}}\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "codex-cli 0.153.4 run on the #0226 workstation with a throwaway CODEX_HOME, 2026-09-20; request ids redacted: API-key sign-in with a made-up key; stderr merged into stdout as Pier records it (codex runs `2>&1 | tee`), repeats dropped"
+  },
+  {
+   "name": "prod_codex_api_key_rejected",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: WARNING: proceeding, even though we could not create PATH aliases\nReading additional input from stdin...\n{\"type\":\"thread.started\",\"thread_id\":\"<id>\"}\n{\"type\":\"turn.started\"}\n2026-09-20T19:16:44.864205Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n{\"type\":\"error\",\"message\":\"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-fixtu***********************0000 ... [truncated]\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted (the four runs that opened #0226)"
+  },
+  {
+   "name": "prod_kimi_api_key_rejected",
+   "message": "Command failed (exit 1): kimi --print\nstdout: Error code: 401 - {'error': {'message': 'The API Key appears to be invalid or may have expired. Please verify your credentials and try again.', 'type': 'invalid_authentication_error'}}\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_deepseek_api_key_rejected",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: {\"type\":\"error\",\"message\":\"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****abcd is invalid, url: https://api.deepseek.com/responses)\"}\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_dsh_api_key_rejected",
+   "message": "Command failed (exit 1): dsh run\nstdout: dsh: AUTH: Authentication Fails, Your api key: ****abcd is invalid\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted (the client filed this one as agent-command-failed)"
+  },
+  {
+   "name": "prod_codex_api_key_zh",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: 2026-09-20T00:00:00.000000Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: API 密钥无效, url: https://api.example.invalid/v1/models?client_version=0.154.0\nstderr: None",
+   "expected_signal": "api_key_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_codex_token_invalidated",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: 2026-09-20T00:00:00.000000Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Your authentication token has been invalidated. Please try signing in again., url: https://chatgpt.com/backend-api/codex/models\nstderr: None",
+   "expected_signal": "login_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_codex_invalidated_oauth",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: 2026-09-20T00:00:00.000000Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, failing request, url: https://chatgpt.com/backend-api/codex/models\nstderr: None",
+   "expected_signal": "login_rejected",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_codex_401_unknown",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: 2026-09-20T00:00:00.000000Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses\n{\"type\":\"error\",\"message\":\"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Unknown error, url: wss://chatgpt.com/backend-api/codex/responses, cf-ray: <id> ... [truncated]\nstderr: None",
+   "expected_signal": "platform_401",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_gemini_agent_reported",
+   "message": "Command failed (exit 1): antigravity run\nstdout: {\"event\":\"result\",\"result\":{\"conversation_id\":\"\",\"status\":\"ERROR\",\"response\":\"\",\"error\":\"authentication failed or timed out\",\"duration_seconds\":0,\"num_turns\":0}}\nstderr: None",
+   "expected_signal": "auth_reported",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_model_output_about_gcm",
+   "message": "Command failed (exit 1): dsh run\nstdout: Wrong key: GCM Open fails at chunk -> message authentication failed. Good, \"wrong key must fail\".\nstderr: None",
+   "expected_signal": "auth_reported",
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted (the client called this auth; it is the model's own prose about AES-GCM)"
+  },
+  {
+   "name": "account_suspended_403",
+   "message": "Command failed (exit 1): codex exec\nstdout: 403 Forbidden: account suspended\nstderr: None",
+   "expected_signal": "access_forbidden",
+   "source": "shape pinned by dradar CLI tests/test_diagnosis.py (403 Forbidden: account suspended)"
+  },
+  {
+   "name": "prod_agent_exception_nonzero",
+   "message": "AGY supervised execution ended nonzero",
+   "expected_signal": null,
+   "source": "production result.json, 2026-09-20 (read-only): the agent_exception bucket #0227 exists to fix — a non-zero agent exit whose code never reached the message. Not an auth failure; no sentence may appear."
+  },
+  {
+   "name": "successful_run_mcp_auth_noise",
+   "message": "Command failed (exit 1): codex exec\nstdout: 2026-09-21T00:27:16.161476Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authentic\nstderr: None",
+   "expected_signal": null,
+   "source": "observed on the #0226 live positive control: a codex run with a CORRECT credential that SUCCEEDED (rc 0, no error events) still logs an MCP AuthRequired line. Recorded truncated at the width it was captured; the authorization covered one run, so the full line was not re-captured. A successful run never reaches the classifier (no exception_info), but the same noise can ride along in a run that failed for another reason."
+  },
+  {
+   "name": "prod_dsh_rate_limit",
+   "message": "Command failed (exit 1): dsh run\nstdout: dsh: RATE_LIMIT: 429: {\"code\":\"rate_limit_exceeded\",\"message\":\"quota rate limited by upstream\"}\nstderr: None",
+   "expected_signal": null,
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "prod_dsh_transport",
+   "message": "Command failed (exit 1): dsh run\nstdout: dsh: TRANSPORT: Connection error.\nstderr: None",
+   "expected_signal": null,
+   "source": "production result.json, 2026-09-20 (read-only); key prefixes, ids and paths redacted"
+  },
+  {
+   "name": "openai_region_refusal",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: server returned 403: {\"error\":{\"message\":\"Country, region, or territory not supported\",\"type\":\"request_forbidden\",\"param\":null,\"code\":\"unsupported_country_region_territory\"}}\nstderr: None",
+   "expected_signal": null,
+   "source": "shape pinned by dradar CLI #0160 tests"
+  },
+  {
+   "name": "openai_region_refusal_http403",
+   "message": "Command failed (exit 1): codex exec\nstdout: HTTP 403 Forbidden, url: https://api.openai.com/v1/responses — Country, region, or territory not supported\nstderr: None",
+   "expected_signal": null,
+   "source": "shape pinned by dradar CLI tests/test_diagnosis.py REGION_OPENAI_HTTP_MSG: carries a real 403, so only the region rule keeps it out of auth"
+  },
+  {
+   "name": "websocket_403_then_https",
+   "message": "Command failed (exit 1): if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --model gpt-5.6-luna -- '<task instruction elided>' 2>&1 </dev/null | tee /logs/agent/codex.txt\nstdout: 2026-09-20T00:00:00.000000Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden, url: wss://chatgpt.com/backend-api/codex/responses\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"stream disconnected before completion\"}}\nstderr: None",
+   "expected_signal": null,
+   "source": "shape pinned by dradar CLI tests (WebSocket 403 then HTTPS fallback is transport)"
+  },
+  {
+   "name": "instruction_mentions_auth",
+   "message": "Command failed (exit 1): codex exec -- 'Make the handler return 401 Unauthorized when the API key is invalid; Incorrect API key provided must be logged'\nstdout: {\"type\":\"turn.failed\",\"error\":{\"message\":\"stream disconnected before completion\"}}\nstderr: None",
+   "expected_signal": null,
+   "source": "synthetic: auth words only inside the task instruction"
+  }
+ ],
+ "sentences": {
+  "access_forbidden": {
+   "zh": "模型平台拒绝了这次运行的访问（平台返回 HTTP 403 或账号不可用的答复）。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "The model platform refused access for this run (HTTP 403, or an answer that the account is not available). This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  },
+  "api_key_rejected": {
+   "zh": "模型平台拒绝了这次运行使用的 API key（平台返回 HTTP 401：Incorrect API key provided / invalid_api_key）。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "The model platform refused the API key this run used (HTTP 401: Incorrect API key provided / invalid_api_key). This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  },
+  "auth_reported": {
+   "zh": "客户端把这次运行归为认证失败；没有从平台的答复里识别出具体原因。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "The client classified this run as an authentication failure; no specific answer from the platform was recognised. This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  },
+  "login_rejected": {
+   "zh": "模型平台不接受这次运行使用的登录令牌（平台答复令牌无法续期或授权不被接受，要求重新登录）。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "The model platform did not accept the sign-in token this run used (it answered that the token could not be refreshed or the grant was not accepted, and asked for a new sign-in). This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  },
+  "no_credential": {
+   "zh": "这次运行里，agent 发给模型平台的请求没有携带任何凭据，平台拒绝了请求（平台返回 HTTP 401：Missing bearer or basic authentication）。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "In this run the agent's requests to the model platform carried no credential, and the platform refused them (HTTP 401: Missing bearer or basic authentication). This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  },
+  "platform_401": {
+   "zh": "模型平台对这次运行的请求返回了 HTTP 401（未通过认证）。这笔因此判为无效、不计分；如果运行中已经调用了模型，那部分消耗计在你自己的账户额度上。自查：运行 `dradar doctor`（它只检查本机登录文件在不在，不向平台验证凭据）。有问题请在站点点「✉️ 雷达信箱」留言。",
+   "en": "The model platform answered this run's requests with HTTP 401 (not authenticated). This run is therefore invalid and earns no points; if the model was called during the run, that usage counts against your own account quota. To check: run `dradar doctor` (it checks that the local sign-in file is present; it does not verify the credential with the platform). Questions: use the ✉️ Radar Mailbox on the site."
+  }
+ }
+}

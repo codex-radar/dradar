@@ -404,6 +404,11 @@ class RunnerTaskRetryableError(RunnerError):
 class LiveAccountTerminalError(RunnerError):
     """A running agent reported an account-wide terminal provider failure."""
 
+    #: For ``auth``: which answer the platform gave (``auth_failure``), read
+    #: from the event that confirmed it. The message text stays generic
+    #: because the run loop re-classifies it.
+    auth_signal: str | None = None
+
 
 def resolve_latest_codex_cli_version(
     server_version: str | None = None,
@@ -3077,6 +3082,7 @@ def _scan_live_account_errors(
     job_name: str,
     offsets: dict[Path, int],
     counts: dict[str, int],
+    last_messages: dict[str, str] | None = None,
 ) -> str | None:
     """Inspect only structured Codex error events from the current job.
 
@@ -3128,6 +3134,8 @@ def _scan_live_account_errors(
                     if kind not in _LIVE_ACCOUNT_TERMINAL_KINDS:
                         continue
                     counts[kind] = counts.get(kind, 0) + 1
+                    if last_messages is not None:
+                        last_messages[kind] = message
                     if counts[kind] >= LIVE_ACCOUNT_ERROR_CONFIRMATIONS:
                         return kind
         except OSError:
@@ -4554,6 +4562,7 @@ def run_trial(
     terminal_error: RunnerError | KeyboardInterrupt | EOFError | None = None
     live_error_offsets: dict[Path, int] = {}
     live_error_counts: dict[str, int] = {}
+    live_error_messages: dict[str, str] = {}
     watch_live_account_errors = (
         (dev_agent or effective_assignment["agent"]) in (
             "codex", CLAUDE_AGENT, DSH_AGENT, GROK_AGENT, KIMI_AGENT,
@@ -4807,11 +4816,18 @@ def run_trial(
                         live_failure = _scan_live_account_errors(
                             jobs_dir, job_name,
                             live_error_offsets, live_error_counts,
+                            live_error_messages,
                         )
                         if live_failure is not None:
-                            raise LiveAccountTerminalError(
+                            live_error = LiveAccountTerminalError(
                                 _live_account_error_message(live_failure)
                             )
+                            if live_failure == "auth":
+                                from .auth_failure import auth_failure_signal
+                                live_error.auth_signal = auth_failure_signal(
+                                    live_error_messages.get("auth")
+                                )
+                            raise live_error
                     if now - started > timeout_sec:
                         log.flush()
                         raise RunnerError(
@@ -5265,6 +5281,11 @@ def diagnose_exception(result_path: Path | None) -> dict:
     exception_type = info.get("exception_type")
     tail = [ln.strip() for ln in msg.splitlines() if ln.strip()][-6:]
     diagnostic = {"type": exception_type, "kind": kind, "tail": tail}
+    if kind == "auth":
+        # The kind alone read the same for a refused API key and for a request
+        # that carried no credential at all (#0226).
+        from .auth_failure import auth_failure_signal
+        diagnostic["auth_signal"] = auth_failure_signal(msg)
     # The command header can precede many lines of tool output and therefore
     # disappear from the bounded console tail.  Preserve only its numeric exit
     # code so the repeated-zero-progress circuit sees the same authoritative
