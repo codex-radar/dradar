@@ -368,7 +368,7 @@ dradar go --pick TASK_ID:grok-4.6:high
 SHA-256，避免把 macOS/Windows 可执行文件误传给 Linux。OAuth 凭证和日常 `~/.grok`
 目录都不会烘焙进镜像，容器启动后只绑定 DRadar 专用 Grok 目录。
 
-当前 canary 边界：新领题使用官方 Grok CLI `1.0.13`，模型固定为 `grok-4.6`，档位为
+当前 canary 边界：新领题使用官方 Grok CLI `1.0.40`，模型为 `grok-4.6` 或 `grok-4.7`，档位为
 `low`/`medium`/`high`/`xhigh`；只能显式领取，不进入自动推荐或补题；禁用 web search、memory、
 subagents 和 plan，并把容器运行时网络限制为 `auth.x.ai` 与
 `cli-chat-proxy.grok.com`、`code.grok.com`。轨迹按 ATIF-v1.7 保存，但订阅

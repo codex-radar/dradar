@@ -42,14 +42,14 @@ from _dradar_grok_recovery import (
 )
 
 
-GROK_CLI_VERSION = "1.0.13"
+GROK_CLI_VERSION = "1.0.40"
 GROK_VERSION_PATTERN = GROK_CLI_VERSION.replace(".", r"\.")
 # Must stay equal to dradar.providers.GROK_MODELS; this module runs inside
 # Pier and cannot import the CLI package.
 GROK_MODELS = frozenset({"grok-4.6", "grok-4.7"})
 GROK_LINUX_SHA256 = {
-    "x86_64": "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1",
-    "aarch64": "b926fc5308374396e260e7efbd6107231a8dae13c084ddaf0fe89b7ebb3edd25",
+    "x86_64": "92c997dfd109c0672d40d5ae6fbd15835d53ffaf12cf9ea124d22aaef3ff23fc",
+    "aarch64": "a16d26cf06892ebb3eca9a702c65e031a053431ed4dde3b23bebc58a92b6117f",
 }
 
 

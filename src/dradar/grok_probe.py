@@ -22,10 +22,10 @@ from urllib.parse import urlsplit, urlunsplit
 import certifi
 import httpx
 
-VERSION = "1.0.13"
+VERSION = "1.0.40"
 LINUX_SHA256 = {
-    "x86_64": "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1",
-    "aarch64": "b926fc5308374396e260e7efbd6107231a8dae13c084ddaf0fe89b7ebb3edd25",
+    "x86_64": "92c997dfd109c0672d40d5ae6fbd15835d53ffaf12cf9ea124d22aaef3ff23fc",
+    "aarch64": "a16d26cf06892ebb3eca9a702c65e031a053431ed4dde3b23bebc58a92b6117f",
 }
 BASE_IMAGE = "docker.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 LABEL = "io.codex-radar.grok-probe-spec"

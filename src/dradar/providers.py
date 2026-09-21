@@ -143,12 +143,14 @@ GROK_AGENT = "grok-build"
 GROK_MODEL = "grok-4.6"
 GROK_47_MODEL = "grok-4.7"
 GROK_MODELS = frozenset({GROK_MODEL, GROK_47_MODEL})
-GROK_CLI_VERSION = "1.0.13"
+GROK_CLI_VERSION = "1.0.40"
 GROK_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
-GROK_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v5"
-GROK_LEGACY_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v4"
-GROK_RUN_CONFIG_VERSION = "grok-4.6-subscription-oauth-concurrent-v5"
-GROK_RUNTIME_PROFILE = "pier-grok-build-4.6-shared-oauth-lock-v5"
+# v6 = official Grok CLI 1.0.40 (#0233); v5 was 1.0.13 and is never advertised
+# again, so a v6 client is not dispatched cells pinned to the old runtime.
+GROK_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v6"
+GROK_LEGACY_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v5"
+GROK_RUN_CONFIG_VERSION = "grok-4.6-subscription-oauth-concurrent-v6"
+GROK_RUNTIME_PROFILE = "pier-grok-build-4.6-shared-oauth-lock-v6"
 # Grok 4.7 has its own capability and attested runtime tuple so the server
 # never dispatches a 4.7 cell to a client that predates it and never accepts a
 # 4.6 runtime as evidence for a 4.7 row (or the reverse).
@@ -1590,8 +1592,9 @@ def _run_grok_live_probe(cli: str, credential: Path, root: Path) -> str | None:
         after, current_identities = _grok_probe_revision(credential)
         if identities != current_identities:
             return "Grok OAuth identity changed during readiness; verify the provider binding"
-        # 1.0.13 prints its auth banner BEFORE starting the refresh-capable
-        # shell. Recheck once only after an observed same-identity update;
+        # 1.0.13 and 1.0.40 print the auth banner BEFORE starting the
+        # refresh-capable shell. Recheck once only after an observed
+        # same-identity update;
         # the second native check must still pass every readiness condition.
         # This comparison never authorizes a refresh or restores old bytes.
         output = f"{proc.stdout}\n{proc.stderr}".lower()

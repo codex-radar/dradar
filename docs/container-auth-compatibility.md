@@ -8,7 +8,7 @@ This is an implementation/validation matrix, not a claim of complete supported h
 | Claude native OAuth | 2.1.251 | private native file copy | Real macOS ARM64 binary: offline version and empty auth status verified. Projection only; stable principal, native writer contract and actual renewal remain unverified. |
 | Claude setup-token | 2.1.251 | process environment | Official docs specify the token is fixed for the session; replacement requires restart. No hot-reload promise or automatic model rerun. |
 | Kimi | 0.39.1 | shared native directory | Exact tag source has provider lock/re-read; Windows explicitly skips that lock. Host-only renewal and cross-VM lock proof absent. |
-| Grok | 1.0.13 | shared native directory | Public current docs/source describe an external auth command, but its compatibility with pinned 1.0.13 is unverified. No automatic host adapter activation. |
+| Grok | 1.0.40 | shared native directory | Public current docs/source describe an external auth command, but its compatibility with pinned 1.0.40 is unverified. No automatic host adapter activation. |
 | Antigravity | 1.1.27 | shared native directory | Host-only renewal and token lifetime contracts unverified. New AT is not evidence of extended RT lifetime. |
 | CodeBuddy | 2.137.1 | validated directory merge | Host-only renewal, principal discovery and hot adoption unverified. |
 | ZCode | 0.16.5 | temporary API-key file | No OAuth refresh. |
