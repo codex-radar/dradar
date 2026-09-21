@@ -99,6 +99,18 @@
    "source": "shape pinned by dradar CLI tests/test_diagnosis.py (403 Forbidden: account suspended)"
   },
   {
+   "name": "prod_agent_exception_nonzero",
+   "message": "AGY supervised execution ended nonzero",
+   "expected_signal": null,
+   "source": "production result.json, 2026-09-20 (read-only): the agent_exception bucket #0227 exists to fix — a non-zero agent exit whose code never reached the message. Not an auth failure; no sentence may appear."
+  },
+  {
+   "name": "successful_run_mcp_auth_noise",
+   "message": "Command failed (exit 1): codex exec\nstdout: 2026-09-21T00:27:16.161476Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authentic\nstderr: None",
+   "expected_signal": null,
+   "source": "observed on the #0226 live positive control: a codex run with a CORRECT credential that SUCCEEDED (rc 0, no error events) still logs an MCP AuthRequired line. Recorded truncated at the width it was captured; the authorization covered one run, so the full line was not re-captured. A successful run never reaches the classifier (no exception_info), but the same noise can ride along in a run that failed for another reason."
+  },
+  {
    "name": "prod_dsh_rate_limit",
    "message": "Command failed (exit 1): dsh run\nstdout: dsh: RATE_LIMIT: 429: {\"code\":\"rate_limit_exceeded\",\"message\":\"quota rate limited by upstream\"}\nstderr: None",
    "expected_signal": null,
