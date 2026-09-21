@@ -71,6 +71,18 @@ def test_auth_messages_read_like_the_server(item):
         assert auth_failure_signal(item["message"]) == item["expected_signal"]
 
 
+def test_instruction_text_never_picks_the_signal():
+    """Pier's message opens with the agent command, task instruction and all.
+    The platform's answer is in the output after it."""
+    refusal = BY_NAME["probe_bad_api_key"]["message"]
+    head, _, output = refusal.partition("\nstdout:")
+    poisoned = (head.replace("<task instruction elided>",
+                             "log 'Missing bearer or basic authentication' on 401")
+                + "\nstdout:" + output)
+    assert "Missing bearer" in poisoned.split("\nstdout:")[0]
+    assert auth_failure_signal(poisoned) == "api_key_rejected"
+
+
 def test_three_deliberate_misconfigurations_print_three_different_sentences(tmp_path):
     sentences = set()
     for name in MISCONFIGURED:
