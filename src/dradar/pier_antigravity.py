@@ -481,7 +481,10 @@ class Antigravity(BaseInstalledAgent):
                 raise RuntimeError("AGY writer shutdown/export unconfirmed")
             if result.return_code != 0:
                 from pier.agents.installed.base import NonZeroAgentExitCodeError
-                raise NonZeroAgentExitCodeError("AGY supervised execution ended nonzero")
+                # Same header as Pier's exec_as_agent and pier_kimi: the runner
+                # and the server derive the numeric exit code from it.
+                raise NonZeroAgentExitCodeError(
+                    f"Command failed (exit {result.return_code}): AGY supervised execution ended nonzero")
         execution = asyncio.create_task(execute())
         try:
             await asyncio.shield(execution)
