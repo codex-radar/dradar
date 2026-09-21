@@ -20,6 +20,9 @@ from dradar.providers import (
     DSH_RUN_CONFIG_VERSION,
     DSH_RUNTIME_PROFILE,
     DSH_VERSION,
+    GROK_47_MODEL,
+    GROK_47_RUN_CONFIG_VERSION,
+    GROK_47_RUNTIME_PROFILE,
     GROK_AGENT,
     GROK_CLI_VERSION,
     GROK_MODEL,
@@ -1038,11 +1041,13 @@ def test_parse_degraded_terminal_bundle_survives_nonzero_postrun_rc(
     }
 
 
-def _write_complete_grok_artifacts(art: TrialArtifacts) -> dict:
+def _write_complete_grok_artifacts(
+    art: TrialArtifacts, model: str = GROK_MODEL,
+) -> dict:
     usage = {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "grok",
-        "model": GROK_MODEL,
+        "model": model,
         "complete": True,
         "request_count": 2,
         "n_input_tokens": 300,
@@ -1099,14 +1104,14 @@ def _write_complete_grok_artifacts(art: TrialArtifacts) -> dict:
         "agent": {
             "name": GROK_AGENT,
             "version": GROK_CLI_VERSION,
-            "model_name": GROK_MODEL,
+            "model_name": model,
             "extra": {"provider": GROK_PROVIDER, "oauth": True},
         },
         "steps": [{
             "step_id": 1,
             "source": "agent",
             "message": "Implementation complete.",
-            "model_name": GROK_MODEL,
+            "model_name": model,
             "reasoning_effort": "xhigh",
             "llm_call_count": 1,
         }],
@@ -1165,6 +1170,36 @@ def test_grok_complete_evidence_survives_nonzero_pier_postrun_rc(
         "request_count": 2,
         "n_agent_steps": 1,
     }
+
+
+def test_grok_47_run_attests_its_own_runtime_tuple(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    art = _fake_art(tmp_path, rc=1, result_data={})
+    art.codex_cli_version = None
+    art.grok_cli_version = GROK_CLI_VERSION
+    _write_complete_grok_artifacts(art, GROK_47_MODEL)
+    monkeypatch.setattr(runloop, "run_trial", lambda *a, **kw: art)
+    client = SubmitClient({})
+    assignment = {
+        **ASSIGNMENT,
+        "agent": GROK_AGENT,
+        "provider": GROK_PROVIDER,
+        "model": GROK_47_MODEL,
+        "effort": "xhigh",
+        "agent_version": GROK_CLI_VERSION,
+    }
+
+    tag = runloop._run_and_submit(
+        client, assignment, tmp_path, _args(), "abc123",
+    )
+
+    assert tag == "submitted"
+    meta = client.submissions[0]["meta"]
+    assert meta["model_config_version"] == GROK_47_RUN_CONFIG_VERSION
+    assert meta["model_runtime_profile"] == GROK_47_RUNTIME_PROFILE
+    assert meta["grok_completion_evidence"]["model"] == GROK_47_MODEL
 
 
 @pytest.mark.parametrize(

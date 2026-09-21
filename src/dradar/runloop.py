@@ -78,10 +78,9 @@ from .providers import (
     DSH_RUN_CONFIG_VERSION,
     DSH_RUNTIME_PROFILE,
     GROK_AGENT,
-    GROK_MODEL,
+    GROK_MODEL_RUNTIME_TUPLES,
+    GROK_MODELS,
     GROK_PROVIDER,
-    GROK_RUN_CONFIG_VERSION,
-    GROK_RUNTIME_PROFILE,
     KIMI_AGENT,
     KIMI_RUN_CONFIG_VERSION,
     KIMI_RUNTIME_PROFILE,
@@ -248,7 +247,8 @@ _GROK_PREFLIGHT_ADVICE = {
         "network/proxy, then run `dradar provider status grok` before resuming."
     ),
     "catalog": (
-        "This Grok subscription session cannot currently see grok-4.6. Run "
+        "This Grok subscription session cannot currently see the assigned "
+        "Grok model. Run "
         "`dradar provider status grok`; reauthenticate if that check confirms "
         "the model is unavailable."
     ),
@@ -1606,7 +1606,7 @@ def _grok_completed_outcome(
     if (
         assignment.get("agent") != GROK_AGENT
         or assignment.get("provider") != GROK_PROVIDER
-        or assignment.get("model") != GROK_MODEL
+        or assignment.get("model") not in GROK_MODELS
     ):
         return None
     _, trajectory_path, _ = trial_artifact_paths(trial_dir)
@@ -3430,9 +3430,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "claude_customizations": "disabled-isolated-config-v1",
         })
     if assignment.get("agent") == GROK_AGENT:
+        grok_config, grok_profile = GROK_MODEL_RUNTIME_TUPLES[assignment["model"]]
         meta.update({
-            "model_config_version": GROK_RUN_CONFIG_VERSION,
-            "model_runtime_profile": GROK_RUNTIME_PROFILE,
+            "model_config_version": grok_config,
+            "model_runtime_profile": grok_profile,
             "subscription_oauth": True,
             "subscription_concurrency": (
                 telemetry.target_workers if telemetry is not None else 1

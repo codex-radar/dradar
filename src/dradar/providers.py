@@ -141,12 +141,24 @@ DSH_RUNTIME_PROFILE = "public-pier-0.3.0-dsh-minimal-full-container-v3"
 GROK_PROVIDER = "xai-subscription"
 GROK_AGENT = "grok-build"
 GROK_MODEL = "grok-4.6"
+GROK_47_MODEL = "grok-4.7"
+GROK_MODELS = frozenset({GROK_MODEL, GROK_47_MODEL})
 GROK_CLI_VERSION = "1.0.13"
 GROK_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 GROK_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v5"
 GROK_LEGACY_CAPABILITY = "grok-build-4.6-subscription-oauth-concurrent-v4"
 GROK_RUN_CONFIG_VERSION = "grok-4.6-subscription-oauth-concurrent-v5"
 GROK_RUNTIME_PROFILE = "pier-grok-build-4.6-shared-oauth-lock-v5"
+# Grok 4.7 has its own capability and attested runtime tuple so the server
+# never dispatches a 4.7 cell to a client that predates it and never accepts a
+# 4.6 runtime as evidence for a 4.7 row (or the reverse).
+GROK_47_CAPABILITY = "grok-build-4.7-subscription-oauth-concurrent-v1"
+GROK_47_RUN_CONFIG_VERSION = "grok-4.7-subscription-oauth-concurrent-v1"
+GROK_47_RUNTIME_PROFILE = "pier-grok-build-4.7-shared-oauth-lock-v1"
+GROK_MODEL_RUNTIME_TUPLES = {
+    GROK_MODEL: (GROK_RUN_CONFIG_VERSION, GROK_RUNTIME_PROFILE),
+    GROK_47_MODEL: (GROK_47_RUN_CONFIG_VERSION, GROK_47_RUNTIME_PROFILE),
+}
 GROK_HOME_RELATIVE_PATH = Path("providers") / "grok"
 GROK_RUNTIME_RELATIVE_PATH = (
     GROK_HOME_RELATIVE_PATH / "runtime" / GROK_CLI_VERSION
@@ -353,7 +365,7 @@ REFILL_HARNESS_CONSTRAINTS = {
     CLAUDE_AGENT: (CLAUDE_MODELS, CLAUDE_SUPPORTED_EFFORTS),
     DSH_AGENT: (frozenset(DSH_MODELS), DSH_SUPPORTED_EFFORTS),
     KIMI_AGENT: (KIMI_MODELS, KIMI_SUPPORTED_EFFORTS),
-    GROK_AGENT: (frozenset({GROK_MODEL}), GROK_SUPPORTED_EFFORTS),
+    GROK_AGENT: (GROK_MODELS, GROK_SUPPORTED_EFFORTS),
     ANTIGRAVITY_AGENT: (
         ANTIGRAVITY_MODELS, ANTIGRAVITY_SUPPORTED_EFFORTS,
     ),
@@ -2107,7 +2119,7 @@ def advertised_capabilities(
     # Advertise it only when both the CLI and a safe refreshable OAuth session
     # are actually present, preventing the server from assigning unusable work.
     if grok_cli_path(environ) and grok_auth_error() is None:
-        capabilities.append(GROK_CAPABILITY)
+        capabilities.extend((GROK_CAPABILITY, GROK_47_CAPABILITY))
     if (
         claude_subscription_error() is None
         and bundled_adapter_error("pier_claude.py") is None
