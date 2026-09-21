@@ -19,7 +19,7 @@ def test_real_pier_install_spec_from_runner_bundle(tmp_path, monkeypatch):
     agent._version = None
     install = agent.install_spec()
     assert isinstance(install, AgentInstallSpec)
-    assert install.version == '1.0.13'
+    assert install.version == '1.0.40'
     assert len(install.steps) == 1
     assert install.steps[0].user == 'root'
     assert install.steps[0].run == module._install_command()

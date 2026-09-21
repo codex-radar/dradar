@@ -1,6 +1,6 @@
 """Opt-in macOS contract check: official pinned CLI + inert loopback IdP only.
 
-Run with --binary <downloaded grok-1.0.13-macos-aarch64> --output <private dir>.
+Run with --binary <downloaded grok-1.0.40-macos-aarch64> --output <private dir>.
 Seatbelt denies all external networking. Never uses the invoking user's HOME,
 credentials, API keys, settings, or model endpoint. Model readiness is NOT tested.
 """

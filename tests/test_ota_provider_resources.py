@@ -136,7 +136,8 @@ def test_all_supported_harness_capabilities_source_and_zip(tmp_path):
     build_artifact(artifact)
     from dradar import providers as p
     from dradar.managed_auth_selection import CAPABILITY, TRIAL_CAPABILITY
-    expected = {CAPABILITY, TRIAL_CAPABILITY, p.GROK_CAPABILITY, p.KIMI_CAPABILITY,
+    expected = {CAPABILITY, TRIAL_CAPABILITY, p.GROK_CAPABILITY, p.GROK_47_CAPABILITY,
+                p.KIMI_CAPABILITY,
                 p.CLAUDE_CAPABILITY, p.ANTIGRAVITY_CAPABILITY, p.ANTIGRAVITY_FLASH_38_CAPABILITY,
                 p.ZCODE_CAPABILITY, p.CODEBUDDY_CAPABILITY, p.DSH_FLASH_CAPABILITY,
                 p.DSH_PRO_CAPABILITY, p.DSH_FLASH_41_CAPABILITY, p.DSH_VISION_CAPABILITY,

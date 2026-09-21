@@ -28,7 +28,7 @@ NODES = [n for n in TREE.body if
          for t in n.targets) or isinstance(n, ast.FunctionDef) and n.name in {'_install_command', '_download_command'}]
 NS = {"shlex": shlex}
 exec(compile(ast.Module(body=NODES, type_ignores=[]), str(SOURCE), 'exec'), NS)
-PAYLOAD = b'#!/bin/sh\necho "grok 1.0.13 (release)"\n'
+PAYLOAD = b'#!/bin/sh\necho "grok 1.0.40 (release)"\n'
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'installer targets Linux/glibc')
@@ -179,7 +179,7 @@ class GrokInstallTest(unittest.TestCase):
         self.assertEqual(self.requests, 1)
 
     def test_version_command_failure(self):
-        self.payload = b'#!/bin/sh\necho "grok 1.0.13"\nexit 1\n'
+        self.payload = b'#!/bin/sh\necho "grok 1.0.40"\nexit 1\n'
         self.assert_preserved(self.run_install())
 
     def test_version_timeout(self):
@@ -316,7 +316,7 @@ class GrokInstallTest(unittest.TestCase):
 class GrokInstallContractTest(unittest.TestCase):
     def test_production_pins_and_budget(self):
         command = NS['_install_command']()
-        self.assertIn('https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-1.0.13-linux-', command)
+        self.assertIn('https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-1.0.40-linux-', command)
         for sha in NS['GROK_LINUX_SHA256'].values():
             self.assertIn(sha, command)
         self.assertIn('--connect-timeout 15 --max-time 120', command)

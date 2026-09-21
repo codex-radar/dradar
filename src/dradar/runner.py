@@ -91,7 +91,7 @@ from .providers import (
     GROK_AGENT,
     GROK_API_KEY_ENV,
     GROK_CLI_VERSION,
-    GROK_MODEL,
+    GROK_MODELS,
     GROK_PROVIDER,
     GROK_SUPPORTED_EFFORTS,
     KIMI_AGENT,
@@ -1063,10 +1063,10 @@ def _validate_grok_assignment(assignment: dict) -> None:
             "Grok Build assignments must explicitly use provider "
             f"{GROK_PROVIDER!r}"
         )
-    if assignment.get("model") != GROK_MODEL:
+    if assignment.get("model") not in GROK_MODELS:
         raise RunnerError(
             f"unsupported Grok subscription model {assignment.get('model')!r}; "
-            f"only {GROK_MODEL!r} is enabled"
+            f"enabled models are {', '.join(sorted(GROK_MODELS))}"
         )
     if assignment.get("effort") not in GROK_SUPPORTED_EFFORTS:
         raise RunnerError(

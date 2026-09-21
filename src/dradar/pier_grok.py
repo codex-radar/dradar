@@ -42,11 +42,14 @@ from _dradar_grok_recovery import (
 )
 
 
-GROK_CLI_VERSION = "1.0.13"
+GROK_CLI_VERSION = "1.0.40"
 GROK_VERSION_PATTERN = GROK_CLI_VERSION.replace(".", r"\.")
+# Must stay equal to dradar.providers.GROK_MODELS; this module runs inside
+# Pier and cannot import the CLI package.
+GROK_MODELS = frozenset({"grok-4.6", "grok-4.7"})
 GROK_LINUX_SHA256 = {
-    "x86_64": "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1",
-    "aarch64": "b926fc5308374396e260e7efbd6107231a8dae13c084ddaf0fe89b7ebb3edd25",
+    "x86_64": "92c997dfd109c0672d40d5ae6fbd15835d53ffaf12cf9ea124d22aaef3ff23fc",
+    "aarch64": "a16d26cf06892ebb3eca9a702c65e031a053431ed4dde3b23bebc58a92b6117f",
 }
 
 
@@ -59,8 +62,11 @@ def _grok_auth_command(command: str, user_home: str, auth_path: str) -> str:
     )
 
 
-def _grok_model_preflight_command(remote_cli: str) -> str:
+def _grok_model_preflight_command(remote_cli: str, model: str) -> str:
     """Return a fail-closed model probe that emits only a safe category."""
+
+    if model not in GROK_MODELS:
+        raise ValueError(f"unsupported Grok model {model!r}")
 
     return (
         "umask 077; "
@@ -85,7 +91,7 @@ def _grok_model_preflight_command(remote_cli: str) -> str:
         # Do not pipe the Rust CLI directly into grep -q. grep exits on the
         # first match and some Grok releases then panic on EPIPE.
         "if ! printf '%s\\n' \"$models_output\" "
-        "  | grep -Fq grok-4.6; then "
+        f"  | grep -Fq {shlex.quote(model)}; then "
         "  printf 'DRADAR_GROK_PREFLIGHT_FAILURE=catalog\\n'; "
         "  exit 78; "
         "fi"
@@ -114,7 +120,7 @@ def _grok_prompt_command(
     )
 
 
-def _grok_usage_facts(events: list[dict]) -> dict:
+def _grok_usage_facts(events: list[dict], model: str) -> dict:
     """Cross-check Grok's official per-response and terminal token ledgers."""
 
     names = (
@@ -232,7 +238,7 @@ def _grok_usage_facts(events: list[dict]) -> dict:
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "grok",
-        "model": "grok-4.6",
+        "model": model,
         "complete": complete,
         "request_count": selected_request_count,
         "n_input_tokens": prompt,
@@ -394,6 +400,13 @@ class GrokBuild(BaseInstalledAgent):
         self._session_id: str | None = None
         super().__init__(*args, **kwargs)
 
+    def _model(self) -> str:
+        # Unset only for legacy callers that predate multi-model Grok Build.
+        model = self.model_name or "grok-4.6"
+        if model not in GROK_MODELS:
+            raise ValueError(f"unsupported Grok model {model!r}")
+        return model
+
     def get_version_command(self) -> str:
         return f"{self._REMOTE_CLI.as_posix()} --version"
 
@@ -512,13 +525,14 @@ class GrokBuild(BaseInstalledAgent):
         await self.exec_as_agent(
             environment,
             command=_grok_auth_command(
-                _grok_model_preflight_command(remote_cli), remote_user_home, remote_auth,
+                _grok_model_preflight_command(remote_cli, self._model()),
+                remote_user_home, remote_auth,
             ),
             env=env,
         )
 
         stream = f"/logs/agent/{self._STREAM_FILE}"
-        model = self.model_name or "grok-4.6"
+        model = self._model()
         # The path rules are defense in depth around the credential file.  The
         # Docker/Pier egress allowlist remains the primary data-exfiltration
         # boundary for untrusted benchmark instructions.
@@ -675,7 +689,7 @@ class GrokBuild(BaseInstalledAgent):
             )
         if not steps:
             return
-        usage_facts = _grok_usage_facts(parsed_events)
+        usage_facts = _grok_usage_facts(parsed_events, self._model())
         usage_facts["resume_attempts"] = self._resume_attempts
         input_tokens = usage_facts["n_input_tokens"] if usage_facts["complete"] else 0
         cached_tokens = usage_facts["n_cache_tokens"] if usage_facts["complete"] else 0

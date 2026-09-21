@@ -62,6 +62,7 @@ def test_grok_upgrade_does_not_advertise_old_server_capability(
     monkeypatch.setattr(providers, "grok_auth_error", lambda *_args, **_kwargs: None)
     capabilities = providers.advertised_capabilities({})
     assert providers.GROK_CAPABILITY in capabilities
+    assert providers.GROK_47_CAPABILITY in capabilities
     assert providers.GROK_LEGACY_CAPABILITY not in capabilities
 
 
@@ -211,6 +212,41 @@ def test_unverified_grok_assignments_fail_before_paid_run(
         )
 
 
+def test_grok_47_assignment_builds_a_47_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/pier")
+    tasks = tmp_path / "tasks"
+    (tasks / "task-1").mkdir(parents=True)
+    auth = _write_auth(tmp_path / "providers" / "grok" / "auth.json")
+    cli = tmp_path / "grok"
+    cli.write_text("binary", encoding="utf-8")
+    cmd = runner.build_pier_command(
+        _assignment(model="grok-4.7"), tasks, tmp_path / "jobs", "job", tmp_path,
+        provider_auth_path=auth, provider_cli_path=cli,
+    )
+    assert cmd[cmd.index("--model") + 1] == "grok-4.7"
+    assert providers.GROK_MODELS == {"grok-4.6", "grok-4.7"}
+    assert set(providers.GROK_MODEL_RUNTIME_TUPLES) == providers.GROK_MODELS
+    assert len(set(providers.GROK_MODEL_RUNTIME_TUPLES.values())) == 2
+    with pytest.raises(RunnerError, match="unsupported Grok subscription model"):
+        runner._validate_grok_assignment(_assignment(model="grok-4.8"))
+
+
+def test_pier_adapter_model_set_matches_the_cli() -> None:
+    """pier_grok.py runs inside Pier and keeps its own copy of the set."""
+    source = Path(providers.__file__).with_name("pier_grok.py").read_text()
+    module = ast.parse(source)
+    node = next(
+        node for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "GROK_MODELS" for t in node.targets)
+    )
+    assert eval(compile(ast.Expression(node.value), "pier_grok.py", "eval")) == (
+        providers.GROK_MODELS
+    )
+
+
 def test_grok_assignment_version_is_only_a_hint() -> None:
     runner._validate_grok_assignment(_assignment(agent_version="1.0.3"))
     runner._validate_grok_assignment(_assignment(agent_version="9.9.9"))
@@ -243,17 +279,22 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
 
 
 @pytest.mark.parametrize(
-    ("output", "returncode", "expected"),
+    ("model", "output", "returncode", "expected"),
     [
-        ("* grok-4.6 (default)\n", 0, None),
-        ("* grok-4.5 (default)\n", 0, "catalog"),
-        ("Not authenticated; refresh=TOPSECRET\n", 1, "auth"),
-        ("settings fetch failed for https://token.example\n", 1, "network"),
-        ("opaque failure TOPSECRET\n", 1, "unknown"),
+        ("grok-4.6", "* grok-4.6 (default)\n", 0, None),
+        ("grok-4.6", "* grok-4.5 (default)\n", 0, "catalog"),
+        ("grok-4.7", "* grok-4.7 (default)\n  grok-4.6\n", 0, None),
+        # The binaries' bundled fallback catalog lists 4.6 and 4.5 only, so a
+        # slot that never fetched the live catalog must not pass for 4.7.
+        ("grok-4.7", "* grok-4.6 (default)\n  grok-4.5\n", 0, "catalog"),
+        ("grok-4.6", "Not authenticated; refresh=TOPSECRET\n", 1, "auth"),
+        ("grok-4.6", "settings fetch failed for https://token.example\n", 1, "network"),
+        ("grok-4.6", "opaque failure TOPSECRET\n", 1, "unknown"),
     ],
 )
 def test_grok_model_preflight_emits_only_bounded_failure_category(
-    tmp_path: Path, output: str, returncode: int, expected: str | None,
+    tmp_path: Path, model: str, output: str, returncode: int,
+    expected: str | None,
 ) -> None:
     source = Path(providers.__file__).with_name("pier_grok.py").read_text()
     module = ast.parse(source)
@@ -262,7 +303,7 @@ def test_grok_model_preflight_emits_only_bounded_failure_category(
         if isinstance(node, ast.FunctionDef)
         and node.name == "_grok_model_preflight_command"
     )
-    namespace = {"shlex": shlex}
+    namespace = {"shlex": shlex, "GROK_MODELS": frozenset({"grok-4.6", "grok-4.7"})}
     exec(compile(ast.Module(body=[helper], type_ignores=[]), "pier_grok.py", "exec"),
          namespace)
     fake = tmp_path / "grok fake"
@@ -274,7 +315,7 @@ def test_grok_model_preflight_emits_only_bounded_failure_category(
     )
     fake.chmod(0o700)
 
-    command = namespace["_grok_model_preflight_command"](str(fake))
+    command = namespace["_grok_model_preflight_command"](str(fake), model)
     proc = subprocess.run(
         ["bash", "-c", command], capture_output=True, text=True, check=False,
     )
@@ -387,7 +428,7 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
         "total_cost_usd": 0.00142052,
         "usage": official_usage,
     }
-    facts = namespace["_grok_usage_facts"]([*response_events, terminal])
+    facts = namespace["_grok_usage_facts"]([*response_events, terminal], "grok-4.6")
     assert facts["complete"] is True
     assert facts["n_input_tokens"] == 1_000
     assert facts["n_cache_tokens"] == 400
@@ -412,7 +453,7 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
 
     replayed = namespace["_grok_usage_facts"]([
         response_events[0], response_events[0], response_events[1], terminal,
-    ])
+    ], "grok-4.6")
     assert replayed["complete"] is True
     assert replayed["request_count"] == 2
     assert replayed["n_input_tokens"] == 1_000
@@ -420,18 +461,18 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
     incomplete = namespace["_grok_usage_facts"]([
         *response_events,
         {**terminal, "usage_is_incomplete": True},
-    ])
+    ], "grok-4.6")
     assert incomplete["complete"] is False
 
     mismatched = namespace["_grok_usage_facts"]([
         *response_events,
         {**terminal, "usage": {**official_usage, "total_tokens": 1_051}},
-    ])
+    ], "grok-4.6")
     assert mismatched["complete"] is False
 
     missing_response = namespace["_grok_usage_facts"]([
         response_events[0], terminal,
-    ])
+    ], "grok-4.6")
     assert missing_response["complete"] is False
     assert missing_response["request_usage_observed"] is True
     assert missing_response["request_count"] == 1
@@ -439,7 +480,7 @@ def test_grok_usage_keeps_cached_input_as_prompt_subset() -> None:
     assert missing_response["n_cache_tokens"] == 250
     assert missing_response["n_output_tokens"] == 30
 
-    missing_terminal = namespace["_grok_usage_facts"](response_events)
+    missing_terminal = namespace["_grok_usage_facts"](response_events, "grok-4.6")
     assert missing_terminal["complete"] is False
     assert missing_terminal["request_usage_complete"] is False
     assert missing_terminal["request_usage_observed"] is True
