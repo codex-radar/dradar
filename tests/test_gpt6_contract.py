@@ -83,6 +83,11 @@ def test_gpt6_subscription_guard_rejects_api_fallback_before_execution(tmp_path,
     assert 'fixture-paid-key' not in str(error.value)
     agent._extra_env.clear()
 
+    agent._extra_env['OPENAI_BASE_URL'] = 'https://paid-proxy.example'
+    with pytest.raises(RuntimeError, match='subscription authentication'):
+        agent.verify_gpt6_subscription_auth(auth)
+    agent._extra_env.clear()
+
     auth.write_text(json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'fixture-paid-key'}))
     with pytest.raises(RuntimeError, match='subscription authentication') as error:
         agent.verify_gpt6_subscription_auth(auth)
@@ -91,3 +96,46 @@ def test_gpt6_subscription_guard_rejects_api_fallback_before_execution(tmp_path,
     auth.write_text('{}')
     with pytest.raises(RuntimeError, match='subscription authentication'):
         agent.verify_gpt6_subscription_auth(auth)
+
+
+def test_gpt6_stock_adapter_uses_validated_auth_snapshot(tmp_path, monkeypatch):
+    import asyncio
+    from dradar import pier_codex
+
+    auth = tmp_path / 'auth.json'
+    accepted = {'auth_mode': 'chatgpt', 'tokens': {'access_token': 'fixture-access'}}
+    auth.write_text(json.dumps(accepted))
+    auth.chmod(0o600)
+    agent = pier_codex.CodexRegistered(
+        logs_dir=tmp_path, model_name='gpt-6-sol', version='0.155.1',
+        extra_env={'CODEX_AUTH_JSON_PATH': str(auth)},
+    )
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('CODEX_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_BASE_URL', raising=False)
+    monkeypatch.delenv('OPENAI_API_BASE', raising=False)
+    original = agent.verify_gpt6_subscription_auth
+
+    def validate_then_replace(path):
+        snapshot = original(path)
+        auth.write_text(json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'fixture-paid-key'}))
+        return snapshot
+
+    monkeypatch.setattr(agent, 'verify_gpt6_subscription_auth', validate_then_replace)
+    async def noop(*args, **kwargs):
+        return None
+    monkeypatch.setattr(agent, 'verify_gpt6_runtime', noop)
+    monkeypatch.setattr(pier_codex, 'verify_task_baseline', noop)
+    monkeypatch.setattr(pier_codex, 'register_worker', noop)
+    seen = []
+
+    async def stock_run(self, instruction, environment, context):
+        path = self._resolve_auth_json_path()
+        seen.append(json.loads(path.read_text()))
+        assert path in environment._sources
+
+    monkeypatch.setattr(pier_codex.Codex, 'run', stock_run)
+    asyncio.run(agent.run('fixture instruction', object(), None))
+    assert seen == [accepted]
+    assert agent._extra_env['CODEX_AUTH_JSON_PATH'] == str(auth)
+    assert json.loads(auth.read_text())['auth_mode'] == 'apikey'
