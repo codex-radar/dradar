@@ -131,7 +131,10 @@ def test_gpt6_stock_adapter_uses_validated_auth_snapshot(tmp_path, monkeypatch):
 
     async def stock_run(self, instruction, environment, context):
         path = self._resolve_auth_json_path()
-        seen.append(json.loads(path.read_text()))
+        # Follow the real upload reader, including its symlink-component and
+        # owner-only checks. Path.read_text() missed macOS /var -> /private/var.
+        from dradar.credential_files import read_private_credential
+        seen.append(json.loads(read_private_credential(path)))
         assert path in environment._sources
 
     monkeypatch.setattr(pier_codex.Codex, 'run', stock_run)

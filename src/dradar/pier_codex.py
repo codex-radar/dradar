@@ -90,7 +90,9 @@ class CodexRegistered(Codex):
         # Stock Pier resolves and uploads auth.json again inside run(). Pin both
         # reads to the same private snapshot that passed the subscription check.
         with tempfile.TemporaryDirectory(prefix="dradar-gpt6-auth-") as directory:
-            frozen = Path(directory) / "auth.json"
+            # macOS can hand tempfile a /var path whose /var component is a
+            # symlink; credential delivery deliberately refuses such paths.
+            frozen = Path(directory).resolve() / "auth.json"
             fd = os.open(frozen, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
             with os.fdopen(fd, "wb") as handle:
                 handle.write(snapshot)
