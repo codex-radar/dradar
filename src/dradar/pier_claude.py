@@ -38,11 +38,11 @@ try:
 except ModuleNotFoundError:
     from dradar.worker_events import register_worker, verify_task_baseline
 try:
-    from _dradar_claude_usage import claude_usage_facts
+    from _dradar_claude_usage import claude_usage_facts, observed_claude_models
 except ModuleNotFoundError as exc:
     if exc.name != "_dradar_claude_usage":
         raise
-    from dradar.claude_usage import claude_usage_facts
+    from dradar.claude_usage import claude_usage_facts, observed_claude_models
 
 
 try:
@@ -192,6 +192,15 @@ class ClaudeCodeSubscription(ClaudeCode):
             return
         usage = claude_usage_facts(trajectory, self.model_name or "")
         if usage is None:
+            return
+        observed = observed_claude_models(self._get_session_dir())
+        if observed == {self.model_name}:
+            usage["observed_model"] = self.model_name
+            usage["observed_model_status"] = "native-response-verified"
+            usage["model_identity_basis"] = "claude-native-session-jsonl"
+        elif self.model_name == "claude-opus-5-5":
+            # Opus 5.5 must never inherit the request ID when the provider
+            # returned a different model or native evidence is unavailable.
             return
         try:
             (self.logs_dir / "provider-usage.json").write_text(

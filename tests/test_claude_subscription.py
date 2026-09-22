@@ -8,7 +8,7 @@ import pytest
 
 import dradar.providers as providers
 import dradar.runner as runner
-from dradar.claude_usage import claude_usage_facts
+from dradar.claude_usage import claude_usage_facts, observed_claude_models
 from dradar.runloop import _subscription_trial_usage
 
 
@@ -31,9 +31,9 @@ def _assignment(**changes):
     return value
 
 
-def test_claude_contract_has_two_cards_and_five_native_efforts() -> None:
+def test_claude_contract_has_three_cards_and_five_native_efforts() -> None:
     assert providers.CLAUDE_MODELS == {
-        "claude-sonnet-5", "claude-opus-5",
+        "claude-sonnet-5", "claude-opus-5", "claude-opus-5-5",
     }
     assert providers.CLAUDE_SUPPORTED_EFFORTS == {
         "low", "medium", "high", "xhigh", "max",
@@ -93,6 +93,18 @@ def test_claude_runner_scrubs_ambient_api_and_oauth_variables(
     env = runner._pier_process_env(_assignment())
     for name in (*providers.CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
         assert name not in env
+
+
+def test_opus_55_requires_new_cli_while_historical_opus_keeps_old_pin() -> None:
+    runner._validate_claude_assignment(_assignment(
+        model=providers.CLAUDE_OPUS_MODEL,
+        agent_version=providers.CLAUDE_LEGACY_CLI_VERSION,
+    ))
+    with pytest.raises(runner.RunnerError, match="2.1.280"):
+        runner._validate_claude_assignment(_assignment(
+            model=providers.CLAUDE_OPUS_55_MODEL,
+            agent_version=providers.CLAUDE_LEGACY_CLI_VERSION,
+        ))
 
 
 def test_claude_atif_usage_is_reconciled_for_server_repricing(tmp_path: Path) -> None:
@@ -164,3 +176,42 @@ def test_claude_usage_fails_closed_when_final_totals_disagree() -> None:
         },
     }
     assert claude_usage_facts(trajectory, providers.CLAUDE_OPUS_MODEL) is None
+
+
+def test_native_response_model_evidence_rejects_fallback(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    session.mkdir()
+    path = session / "session.jsonl"
+    path.write_text(json.dumps({"type": "assistant", "message": {
+        "model": providers.CLAUDE_OPUS_55_MODEL, "usage": {"input_tokens": 1},
+    }}) + "\n", encoding="utf-8")
+    assert observed_claude_models(session) == {providers.CLAUDE_OPUS_55_MODEL}
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"type": "assistant", "message": {
+            "model": providers.CLAUDE_OPUS_MODEL, "usage": {"input_tokens": 1},
+        }}) + "\n")
+    assert observed_claude_models(session) == {
+        providers.CLAUDE_OPUS_55_MODEL, providers.CLAUDE_OPUS_MODEL,
+    }
+
+
+def test_opus_55_usage_preserves_both_cache_write_durations() -> None:
+    trajectory = {
+        "agent": {"model_name": providers.CLAUDE_OPUS_55_MODEL},
+        "steps": [{"source": "agent", "model_name": providers.CLAUDE_OPUS_55_MODEL,
+                   "metrics": {"prompt_tokens": 100, "cached_tokens": 10,
+                               "completion_tokens": 4, "extra": {
+                                   "cache_creation_input_tokens": 30,
+                                   "cache_creation": {"ephemeral_5m_input_tokens": 20,
+                                                      "ephemeral_1h_input_tokens": 10},
+                               }}}],
+        "final_metrics": {"total_prompt_tokens": 100, "total_cached_tokens": 10,
+                          "total_completion_tokens": 4,
+                          "extra": {"total_cache_creation_input_tokens": 30}},
+    }
+    usage = claude_usage_facts(trajectory, providers.CLAUDE_OPUS_55_MODEL)
+    assert usage is not None
+    assert usage["n_cache_write_5m_tokens"] == 20
+    assert usage["n_cache_write_1h_tokens"] == 10
+    trajectory["steps"][0]["model_name"] = providers.CLAUDE_OPUS_MODEL
+    assert claude_usage_facts(trajectory, providers.CLAUDE_OPUS_55_MODEL) is None

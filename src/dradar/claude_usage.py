@@ -3,10 +3,36 @@
 from __future__ import annotations
 
 import math
+import json
+from pathlib import Path
 
 
 def _nonnegative_int(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def observed_claude_models(session_dir: Path | None) -> set[str] | None:
+    """Read response model IDs from Claude's native assistant messages."""
+    if session_dir is None:
+        return None
+    models: set[str] = set()
+    for path in session_dir.rglob("*.jsonl"):
+        try:
+            with path.open(encoding="utf-8") as stream:
+                for line in stream:
+                    event = json.loads(line)
+                    if not isinstance(event, dict) or event.get("type") != "assistant":
+                        continue
+                    message = event.get("message")
+                    if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+                        continue
+                    model = message.get("model")
+                    if not isinstance(model, str) or not model:
+                        return None
+                    models.add(model)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    return models or None
 
 
 def claude_usage_facts(trajectory: object, expected_model: str) -> dict | None:
@@ -25,10 +51,14 @@ def claude_usage_facts(trajectory: object, expected_model: str) -> dict | None:
     events = []
     totals = {"n_input_tokens": 0, "n_cache_tokens": 0, "n_output_tokens": 0}
     cache_creation = 0
+    cache_creation_5m = 0
+    cache_creation_1h = 0
     timestamps_complete = True
     for step in steps:
         if not isinstance(step, dict) or not isinstance(step.get("metrics"), dict):
             continue
+        if step.get("source") == "agent" and step.get("model_name") != expected_model:
+            return None
         current = step["metrics"]
         prompt = _nonnegative_int(current.get("prompt_tokens"))
         cached = _nonnegative_int(current.get("cached_tokens"))
@@ -39,9 +69,23 @@ def claude_usage_facts(trajectory: object, expected_model: str) -> dict | None:
         created = _nonnegative_int(extra.get("cache_creation_input_tokens", 0))
         if created is None or cached + created > prompt:
             return None
+        creation_detail = extra.get("cache_creation")
+        if expected_model == "claude-opus-5-5":
+            if not isinstance(creation_detail, dict) and created:
+                return None
+            creation_detail = creation_detail or {}
+            write_5m = _nonnegative_int(creation_detail.get("ephemeral_5m_input_tokens", 0))
+            write_1h = _nonnegative_int(creation_detail.get("ephemeral_1h_input_tokens", 0))
+            if write_5m is None or write_1h is None or write_5m + write_1h != created:
+                return None
+        else:
+            write_5m, write_1h = created, 0
         event = {
             "n_input_tokens": prompt,
             "n_cache_tokens": cached,
+            "n_cache_write_tokens": created,
+            "n_cache_write_5m_tokens": write_5m,
+            "n_cache_write_1h_tokens": write_1h,
             "n_output_tokens": completion,
         }
         occurred_at = step.get("timestamp")
@@ -54,6 +98,8 @@ def claude_usage_facts(trajectory: object, expected_model: str) -> dict | None:
         totals["n_cache_tokens"] += cached
         totals["n_output_tokens"] += completion
         cache_creation += created
+        cache_creation_5m += write_5m
+        cache_creation_1h += write_1h
     if not events:
         return None
     expected = {
@@ -80,6 +126,9 @@ def claude_usage_facts(trajectory: object, expected_model: str) -> dict | None:
         "request_count": len(events),
         **totals,
         "cache_creation_tokens": cache_creation,
+        "n_cache_write_tokens": cache_creation,
+        "n_cache_write_5m_tokens": cache_creation_5m,
+        "n_cache_write_1h_tokens": cache_creation_1h,
         "subscription_reported_cost_usd": reported_cost,
         "subscription_reported_cost_basis": "official-claude-cli-api-equivalent",
         "provider_actual_cost_observed": False,

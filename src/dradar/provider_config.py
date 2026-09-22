@@ -823,8 +823,8 @@ def _live_claude_status(executable: str, path: Path) -> int:
             )
             return 1
     print(
-        "Claude subscription access verified live for Sonnet 5 and Opus 5; "
-        "this check consumed two minimal provider requests."
+        "Claude subscription access verified live for Sonnet 5, Opus 5, "
+        "and Opus 5.5; this check consumed three minimal provider requests."
     )
     return 0
 
