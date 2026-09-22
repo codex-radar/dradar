@@ -14,6 +14,7 @@ import pytest
 
 import dradar.providers as providers
 import dradar.runner as runner
+from dradar.gpt6 import GPT6_CAPABILITY
 from dradar.providers import (
     DEFAULT_CODEX_PROVIDER,
     DEEPSEEK_API_FLASH_MODEL,
@@ -99,6 +100,7 @@ def _command(tmp_path: Path, monkeypatch, assignment=None) -> tuple[list[str], P
 def test_capability_advertises_software_support_before_first_key_setup():
     assert advertised_capabilities({}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
+        GPT6_CAPABILITY,
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
         DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
@@ -106,6 +108,7 @@ def test_capability_advertises_software_support_before_first_key_setup():
     )
     assert advertised_capabilities({DEEPSEEK_API_KEY_ENV: "key"}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
+        GPT6_CAPABILITY,
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
         DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
@@ -154,7 +157,9 @@ def test_corrupt_catalog_withholds_paid_provider_capability(
     monkeypatch.setattr(providers, "deepseek_catalog_path", lambda: corrupt)
 
     assert "integrity check failed" in (deepseek_catalog_error(corrupt) or "")
-    assert advertised_capabilities({}) == (TASK_PACKAGE_SYNC_CAPABILITY,)
+    assert advertised_capabilities({}) == (
+        TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY,
+    )
 
 
 def test_command_resolves_both_flash_lanes_to_the_official_slug(
