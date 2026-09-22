@@ -108,3 +108,34 @@ def test_new_model_bound_continuation_checks_new_version(monkeypatch, model):
     api._check_managed_assignments({'active':[{'agent':'codex','provider':'openai','model':model,
         'auth_runtime':selection.PROFILE,'assignment_id':'a'*32,'auth_cohort_id':'b'*32}]})
     assert [method for method,_,_ in calls]==['GET']
+
+
+@pytest.mark.parametrize('order', [('gpt-6-sol','gpt-5.5'),('gpt-5.5','gpt-6-luna')])
+def test_mixed_managed_continuations_use_each_rows_model_and_binding(monkeypatch,order):
+    monkeypatch.setattr(selection,'load_selection',lambda:object())
+    monkeypatch.setattr(selection,'selection_requested',lambda:True)
+    monkeypatch.setattr(selection,'trial_platform_ready',lambda:True)
+    rows={
+        'a'*32:('gpt-6-sol','0.155.1','c'*32),
+        'b'*32:('gpt-5.5','0.154.0','d'*32),
+        'e'*32:('gpt-6-luna','0.155.1','f'*32),
+    }
+    ids={'gpt-6-sol':'a'*32,'gpt-5.5':'b'*32,'gpt-6-luna':'e'*32}
+    observed=[]
+    def request(req):
+        assert req.method=='GET'
+        assignment_id=req.url.params['assignment_id']
+        model,version,cohort=rows[assignment_id]
+        observed.append((assignment_id,version))
+        return httpx.Response(200,json={'schema':'dradar.auth-runtime.v1',
+            'profiles':[{'id':selection.PROFILE,'capability':selection.TRIAL_CAPABILITY,
+                         'agent':'codex','provider':'openai','agent_version':version}],
+            'binding':{'schema':'dradar.managed_trial_binding.v1','assignment_id':assignment_id,
+                       'auth_cohort_id':cohort,'auth_runtime':selection.PROFILE}})
+    api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),
+        capabilities=[selection.CAPABILITY,selection.TRIAL_CAPABILITY,'codex-gpt6-sol-luna-v1'])
+    active=[{'agent':'codex','provider':'openai','model':model,
+             'auth_runtime':selection.PROFILE,'assignment_id':ids[model],
+             'auth_cohort_id':rows[ids[model]][2]} for model in order]
+    api._check_managed_assignments({'active':active})
+    assert observed==[(ids[model],rows[ids[model]][1]) for model in order]

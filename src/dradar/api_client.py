@@ -601,9 +601,9 @@ class ApiClient:
                     raise ApiError("已有任务绑定普通认证；请显式选择兼容模式完成它，或释放后重新领取。", status_code=409, code="auth_runtime_mismatch")
                 if not self._managed_cohort_id(item.get('auth_cohort_id')) or not self._managed_cohort_id(item.get('assignment_id')):
                     raise ApiError('Managed assignment lacks a valid cohort binding.',status_code=409,code='auth_runtime_mismatch')
-                continuation_ids.append((item['assignment_id'],item['auth_cohort_id']))
-        for assignment_id,cohort_id in continuation_ids:
-            self._negotiate_managed_auth_runtime(assignment_id=assignment_id,model=item.get("model"),expected_cohort_id=cohort_id)
+                continuation_ids.append((item['assignment_id'],item['auth_cohort_id'],item.get('model')))
+        for assignment_id,cohort_id,model in continuation_ids:
+            self._negotiate_managed_auth_runtime(assignment_id=assignment_id,model=model,expected_cohort_id=cohort_id)
 
     def claim_assignment(
         self,
