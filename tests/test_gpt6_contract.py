@@ -30,6 +30,7 @@ def test_dispatch_preserves_model_effort_and_pins_install(tmp_path, monkeypatch,
     ('gpt-6-luna','ultra','0.155.1'),('gpt-6-sol','bogus','0.155.1'),
     ('gpt-6-sol','medium','0.154.0'),('gpt-6-sol','medium','latest'),
     ('gpt-6-sol-unknown','medium','0.155.1'),
+    ('gpt-6-foo','medium','0.155.1'),
 ])
 def test_invalid_contract_rejected_before_execution(model,effort,version):
     with pytest.raises(runner.RunnerError):

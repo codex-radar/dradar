@@ -28,10 +28,12 @@ except ModuleNotFoundError:
     from dradar.artifact_boundary import private_post_run
 
 
-def validate_codex_version_output(output):
+def validate_codex_version_output(output, expected_version="0.154.0"):
     """Pier may merge stderr before or after stdout; require one exact version."""
     lines = (output or '').strip().splitlines()
-    version = 'codex-cli 0.154.0'
+    if expected_version not in ('0.154.0', '0.155.1'):
+        raise RuntimeError('managed container version unsupported')
+    version = 'codex-cli ' + expected_version
     home = r'/tmp/dradar-managed-[a-f0-9]{32}/codex-home'
     warning = (r'WARNING: proceeding, even though we could not create PATH aliases: '
                r'(?:CODEX_HOME points to "' + home + r'", but that path does not exist'
@@ -54,8 +56,13 @@ class CodexManaged(Codex):
         super().__init__(*args, **kwargs)
         if any(key in self._extra_env for key in ('OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_AUTH_JSON_PATH', 'CODEX_FORCE_AUTH_JSON')):
             raise ValueError('managed consumer rejects alternate credential environment')
-        if self._version != '0.154.0':
-            raise ValueError('managed consumer requires Codex 0.154.0')
+        if self._version not in ('0.154.0', '0.155.1'):
+            raise ValueError('managed consumer runtime unsupported')
+        model = (self.model_name or '').split('/')[-1]
+        if model in ('gpt-6-sol', 'gpt-6-luna') and self._version != '0.155.1':
+            raise ValueError('GPT-6 managed consumer requires Codex 0.155.1')
+        if model not in ('gpt-6-sol', 'gpt-6-luna') and self._version != '0.154.0':
+            raise ValueError('legacy managed consumer requires Codex 0.154.0')
 
     def _module(self, name):
         return importlib.import_module(self._managed_package + '.' + name)
@@ -176,7 +183,7 @@ class CodexManaged(Codex):
             await self._publish(environment, root, 'bridge.cjs', self._managed_bridge_file.read_bytes())
             await self._publish(environment, root, 'codex-home/config.toml', (self._config_toml or '').encode())
             result = await self._checked(environment, 'if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex --version', env=env, timeout_sec=10)
-            validate_codex_version_output(result.stdout)
+            validate_codex_version_output(result.stdout, self._version)
             material = await asyncio.to_thread(session.prepare)
             await self._publish(environment, root, 'request.json', {'schema': 'dradar.managed_run.v1',
                 'instruction': instruction, 'model': self._command_model_name or self.model_name.split('/')[-1],

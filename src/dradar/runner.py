@@ -416,7 +416,7 @@ def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True
     if not isinstance(model, str):
         raise RunnerError("assignment model must be a string")
     if model not in GPT6_EFFORTS:
-        if model.startswith(("gpt-6-sol", "gpt-6-luna")):
+        if model.startswith("gpt-6-") and model != "gpt-6-astra":
             raise RunnerError(f"unsupported GPT-6 model: {model}")
         return
     if assignment.get("effort") not in GPT6_EFFORTS[model]:
@@ -1616,8 +1616,8 @@ def build_pier_command(
                 "starting the task container"
             )
         if managed:
-            if version != "0.154.0":
-                raise RunnerError("managed runtime requires Codex 0.154.0")
+            if version != (GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"):
+                raise RunnerError("managed runtime version differs from the assigned model contract")
             cmd += ["--ak", f"managed_config_file={managed_auth_config}",
                     "--ak", f"managed_bridge_file={managed_bridge}",
                     "--ak", f"managed_package={managed_package}"]
@@ -4434,7 +4434,7 @@ def run_trial(
                 f"{codex_cli_version}"
             )
         elif managed_auth_config is not None:
-            codex_cli_version = "0.154.0"
+            codex_cli_version = GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"
         else:
             # Resolve before creating the job, extending the lease, or starting
             # Pier. A registry outage therefore consumes no model quota and leaves

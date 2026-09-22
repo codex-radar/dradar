@@ -16,7 +16,7 @@ The stable npm/GitHub release inspected is Codex 0.155.1, used as this candidate
 
 The official darwin-arm64 0.155.1 package passed npm SHA512 integrity and native `--version`; generated app-server schema was inspected without a model call. SHA256 of native executable: 8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e. Six-platform npm distributions exist; execution of all six binaries and six-platform OTA build verification remain release gates.
 
-The experimental managed-auth profile remains pinned to its reviewed 0.154.0 credential contract. New-model managed claims are explicitly rejected before leasing. Upgrading that authentication profile is an outstanding integration decision, not completed by changing a version string. Existing stores, users and in-flight work have not been modified.
+The experimental managed-auth host credential authority remains pinned to its reviewed 0.154.0 native binary and unchanged custody/refresh contract. For GPT-6 Sol/Luna, new managed assignments pin their separate task container to Codex 0.155.1; older managed assignments retain 0.154.0. The server advertises and checks the model-specific container version and GPT-6 client capability before leasing and on continuation. The client checks the exact descriptor and container output. The official 0.155.1 app-server accepted a synthetic external ChatGPT token in an isolated temporary home without a provider request; fake-token success verifies protocol shape, not real account/model adoption or refresh behavior. The managed mode remains a bounded experimental cohort. Existing stores, users and in-flight work have not been modified.
 
 ## Staged rollout and compatibility
 

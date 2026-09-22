@@ -1,5 +1,5 @@
 'use strict';
-// Container-side Codex 0.154.0 driver. Auth RPC payloads never enter output.
+// Container-side pinned Codex 0.154.0/0.155.1 driver. Auth RPC payloads never enter output.
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
