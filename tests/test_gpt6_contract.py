@@ -1,4 +1,5 @@
 """Offline contracts only: no provider credentials, requests, or Docker runs."""
+import json
 import pytest
 from dradar.gpt6 import GPT6_EFFORTS, GPT6_CAPABILITY, GPT6_CODEX_VERSION
 from dradar import runner
@@ -61,3 +62,32 @@ def test_actual_container_binary_is_checked_before_model_execution(tmp_path, mon
     else:
         with pytest.raises(RuntimeError,match='container version'):
             asyncio.run(agent.verify_gpt6_runtime(object()))
+
+
+def test_gpt6_subscription_guard_rejects_api_fallback_before_execution(tmp_path, monkeypatch):
+    from dradar.pier_codex import CodexRegistered
+    auth = tmp_path / 'auth.json'
+    auth.write_text(json.dumps({
+        'auth_mode': 'chatgpt', 'OPENAI_API_KEY': None,
+        'tokens': {'access_token': 'fixture-access'},
+    }))
+    auth.chmod(0o600)
+    agent = CodexRegistered(logs_dir=tmp_path, model_name='gpt-6-luna', version='0.155.1')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('CODEX_API_KEY', raising=False)
+    agent.verify_gpt6_subscription_auth(auth)
+
+    agent._extra_env['OPENAI_API_KEY'] = 'fixture-paid-key'
+    with pytest.raises(RuntimeError, match='subscription authentication') as error:
+        agent.verify_gpt6_subscription_auth(auth)
+    assert 'fixture-paid-key' not in str(error.value)
+    agent._extra_env.clear()
+
+    auth.write_text(json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'fixture-paid-key'}))
+    with pytest.raises(RuntimeError, match='subscription authentication') as error:
+        agent.verify_gpt6_subscription_auth(auth)
+    assert 'fixture-paid-key' not in str(error.value)
+
+    auth.write_text('{}')
+    with pytest.raises(RuntimeError, match='subscription authentication'):
+        agent.verify_gpt6_subscription_auth(auth)
