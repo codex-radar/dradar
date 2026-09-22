@@ -29,6 +29,7 @@ from pathlib import Path
 
 import httpx
 
+from .gpt6 import GPT6_EFFORTS, GPT6_CODEX_VERSION
 from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
@@ -408,6 +409,23 @@ class LiveAccountTerminalError(RunnerError):
     #: from the event that confirmed it. The message text stays generic
     #: because the run loop re-classifies it.
     auth_signal: str | None = None
+
+
+def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True):
+    model = assignment.get("model", "")
+    if not isinstance(model, str):
+        raise RunnerError("assignment model must be a string")
+    if model not in GPT6_EFFORTS:
+        if model.startswith(("gpt-6-sol", "gpt-6-luna")):
+            raise RunnerError(f"unsupported GPT-6 model: {model}")
+        return
+    if assignment.get("effort") not in GPT6_EFFORTS[model]:
+        raise RunnerError(f"unsupported effort for {model}: {assignment.get('effort')}")
+    if validate_version:
+        version = assignment.get("agent_version", "")
+        if (not isinstance(version, str) or not _STABLE_CODEX_VERSION_RE.fullmatch(version)
+                or tuple(map(int, version.split("."))) < tuple(map(int, GPT6_CODEX_VERSION.split(".")))):
+            raise RunnerError(f"{model} requires the DRadar candidate Codex runtime >= {GPT6_CODEX_VERSION}")
 
 
 def resolve_latest_codex_cli_version(
@@ -1571,6 +1589,7 @@ def build_pier_command(
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         cmd += ["--ae", f"{var}=trial@dradar.invalid"]
     if agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
+        _validate_gpt6_assignment(assignment)
         auth = None if managed else (provider_auth_path or codex_auth_path())
         if not managed and not auth.is_file():
             raise RunnerError(f"codex auth not found: {auth} (run `codex login` first)")
@@ -4392,6 +4411,7 @@ def run_trial(
     )
     build_cache_mode = image_cache.normalize_build_cache_mode(build_cache_mode)
     if effective_agent == "codex":
+        _validate_gpt6_assignment(assignment, validate_version=False)
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER
         )
