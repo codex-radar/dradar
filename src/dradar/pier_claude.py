@@ -54,6 +54,23 @@ except ModuleNotFoundError:
 class ClaudeCodeSubscription(ClaudeCode):
     """Claude.ai subscription variant with a fail-closed auth boundary."""
 
+    def install_spec(self):
+        """Use the pinned npm package when the task image already has npm.
+
+        Pier 0.3.0 chooses the native install script on non-Alpine images.
+        That endpoint can return an HTML block page inside Pier's isolated
+        Docker build, while the official npm package remains reachable.
+        Preserve Pier's fallback for images without npm.
+        """
+        spec = super().install_spec()
+        stock_branch = "if command -v apk &> /dev/null; then"
+        if stock_branch not in spec.steps[-1].run:
+            raise RuntimeError("Pier Claude install contract changed")
+        spec.steps[-1].run = spec.steps[-1].run.replace(
+            stock_branch, "if command -v npm &> /dev/null; then", 1,
+        )
+        return spec
+
     def __init__(self, *args, oauth_token_file: str | None = None,
                  oauth_config_file: str | None = None, **kwargs):
         if bool(oauth_token_file) == bool(oauth_config_file):

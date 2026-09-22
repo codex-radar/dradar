@@ -95,6 +95,26 @@ def test_claude_runner_scrubs_ambient_api_and_oauth_variables(
         assert name not in env
 
 
+def test_claude_install_prefers_pinned_npm_on_non_alpine_images(
+    tmp_path: Path,
+) -> None:
+    from dradar.pier_claude import ClaudeCodeSubscription
+
+    auth = providers.store_claude_oauth_token(_token(), home=tmp_path)
+    agent = ClaudeCodeSubscription(
+        logs_dir=tmp_path / "logs", model_name=providers.CLAUDE_OPUS_55_MODEL,
+        version=providers.CLAUDE_CLI_VERSION, reasoning_effort="medium",
+        oauth_token_file=str(auth),
+    )
+    spec = agent.install_spec()
+
+    assert spec.version == providers.CLAUDE_CLI_VERSION
+    assert "if command -v npm" in spec.steps[-1].run
+    assert "npm install -g @anthropic-ai/claude-code@2.1.280" in spec.steps[-1].run
+    assert "curl -fsSL https://claude.ai/install.sh" in spec.steps[-1].run
+    assert "claude --version" in spec.steps[-1].run
+
+
 def test_opus_55_requires_new_cli_while_historical_opus_keeps_old_pin() -> None:
     runner._validate_claude_assignment(_assignment(
         model=providers.CLAUDE_OPUS_MODEL,
