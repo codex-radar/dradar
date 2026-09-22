@@ -35,6 +35,7 @@ from .artifact_boundary import (
 )
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
+from .credential_files import is_claude_metered_auth
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_API_KEY_ENVS,
@@ -1253,8 +1254,9 @@ def _pier_process_env(
     if assignment.get("agent") == GROK_AGENT:
         env.pop(GROK_API_KEY_ENV, None)
     if assignment.get("agent") == CLAUDE_AGENT:
-        for name in (*CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
-            env.pop(name, None)
+        for name in tuple(env):
+            if name in CLAUDE_API_KEY_ENVS or is_claude_metered_auth(name) or name == "CLAUDE_CODE_OAUTH_TOKEN":
+                env.pop(name, None)
     if assignment.get("agent") == KIMI_AGENT:
         for name in KIMI_API_KEY_ENVS:
             env.pop(name, None)

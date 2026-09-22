@@ -88,10 +88,14 @@ def test_claude_pier_command_uses_file_contract_without_secret_in_argv(
 def test_claude_runner_scrubs_ambient_api_and_oauth_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in (*providers.CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
+    names = (*providers.CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN",
+             "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+             "GOOGLE_APPLICATION_CREDENTIALS", "ANTHROPIC_FOUNDRY_RESOURCE",
+             "AZURE_CLIENT_ID", "AWS_ROLE_ARN", "ANTHROPIC_CUSTOM_HEADERS")
+    for name in names:
         monkeypatch.setenv(name, "must-not-leak")
     env = runner._pier_process_env(_assignment())
-    for name in (*providers.CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
+    for name in names:
         assert name not in env
 
 
