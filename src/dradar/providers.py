@@ -41,10 +41,18 @@ CLAUDE_PROVIDER = "anthropic-subscription"
 CLAUDE_AGENT = "claude-code"
 CLAUDE_SONNET_MODEL = "claude-sonnet-5"
 CLAUDE_OPUS_MODEL = "claude-opus-5"
-CLAUDE_MODELS = frozenset({CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL})
-CLAUDE_CLI_VERSION = "2.1.251"
+CLAUDE_OPUS_55_MODEL = "claude-opus-5-5"
+CLAUDE_MODELS = frozenset({CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL, CLAUDE_OPUS_55_MODEL})
+CLAUDE_CLI_VERSION = "2.1.280"
+CLAUDE_LEGACY_CLI_VERSION = "2.1.251"
+CLAUDE_MODEL_CLI_VERSIONS = {
+    CLAUDE_SONNET_MODEL: frozenset({CLAUDE_LEGACY_CLI_VERSION, CLAUDE_CLI_VERSION}),
+    CLAUDE_OPUS_MODEL: frozenset({CLAUDE_LEGACY_CLI_VERSION, CLAUDE_CLI_VERSION}),
+    CLAUDE_OPUS_55_MODEL: frozenset({CLAUDE_CLI_VERSION}),
+}
 CLAUDE_SUPPORTED_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 CLAUDE_CAPABILITY = "claude-code-5-subscription-oauth-sandbox-v1"
+CLAUDE_OPUS_55_CAPABILITY = "claude-code-opus-5-5-v1"
 CLAUDE_RUN_CONFIG_VERSION = "claude-code-5-subscription-oauth-safe-mode-v1"
 CLAUDE_RUNTIME_PROFILE = "pier-claude-code-5-private-oauth-full-container-v1"
 CLAUDE_HOME_RELATIVE_PATH = Path("providers") / "claude"
@@ -2128,7 +2136,7 @@ def advertised_capabilities(
         claude_subscription_error() is None
         and bundled_adapter_error("pier_claude.py") is None
     ):
-        capabilities.append(CLAUDE_CAPABILITY)
+        capabilities.extend((CLAUDE_CAPABILITY, CLAUDE_OPUS_55_CAPABILITY))
     if kimi_cli_path(environ) and kimi_auth_error() is None:
         capabilities.extend((KIMI_CAPABILITY, KIMI_K28_CAPABILITY))
     if (

@@ -1411,6 +1411,14 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         or value.get("provider") != expected_provider
     ):
         return None
+    if (expected_provider == "claude-code" and meta.get("claude_model")
+            and value.get("model") != meta["claude_model"]):
+        return None
+    if meta.get("claude_model") == "claude-opus-5-5" and (
+        value.get("observed_model") != "claude-opus-5-5"
+        or value.get("observed_model_status") != "native-response-verified"
+    ):
+        return None
     complete = value.get("complete") is True
     incomplete_reason = value.get("usage_incomplete_reason")
     allowed_incomplete_reasons = {
@@ -2083,7 +2091,10 @@ def _upload_trial_checked(
             source_key = "sessions" if key == "agent_session_usage" else key
             if source_key in usage:
                 upload_meta[key] = usage[source_key]
-        for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens"):
+        for key in ("n_input_tokens", "n_cache_tokens", "n_cache_write_tokens",
+                    "n_cache_write_5m_tokens", "n_cache_write_1h_tokens", "n_output_tokens"):
+            if key not in usage:
+                continue
             upload_meta[key] = (
                 usage[key]
                 if (
@@ -3423,7 +3434,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 telemetry.target_workers if telemetry is not None else 1
             ),
             "subscription_oauth_coordination": "shared-setup-token-v1",
-            "claude_cli_version": CLAUDE_CLI_VERSION,
+            "claude_cli_version": assignment["agent_version"],
             "claude_model": assignment["model"],
             "claude_native_efforts": ["low", "medium", "high", "xhigh", "max"],
             "claude_credential_mode": "private-file-process-env-v1",

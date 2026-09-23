@@ -36,6 +36,7 @@ from .artifact_boundary import (
 )
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
+from .credential_files import is_claude_metered_auth
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_API_KEY_ENVS,
@@ -71,6 +72,7 @@ from .providers import (
     CLAUDE_AGENT,
     CLAUDE_API_KEY_ENVS,
     CLAUDE_CLI_VERSION,
+    CLAUDE_MODEL_CLI_VERSIONS,
     CLAUDE_MODELS,
     CLAUDE_PROVIDER,
     CLAUDE_SUPPORTED_EFFORTS,
@@ -1109,9 +1111,10 @@ def _validate_claude_assignment(assignment: dict) -> None:
             "Claude Code effort must be low, medium, high, xhigh, or max; "
             f"got {assignment.get('effort')!r}"
         )
-    if assignment.get("agent_version") != CLAUDE_CLI_VERSION:
+    if assignment.get("agent_version") not in CLAUDE_MODEL_CLI_VERSIONS[assignment["model"]]:
         raise RunnerError(
-            f"Claude Code requires CLI {CLAUDE_CLI_VERSION}; the assignment "
+            f"Claude Code {assignment['model']} requires CLI "
+            f"{', '.join(sorted(CLAUDE_MODEL_CLI_VERSIONS[assignment['model']]))}; the assignment "
             f"requested {assignment.get('agent_version')!r}"
         )
 
@@ -1269,8 +1272,9 @@ def _pier_process_env(
     if assignment.get("agent") == GROK_AGENT:
         env.pop(GROK_API_KEY_ENV, None)
     if assignment.get("agent") == CLAUDE_AGENT:
-        for name in (*CLAUDE_API_KEY_ENVS, "CLAUDE_CODE_OAUTH_TOKEN"):
-            env.pop(name, None)
+        for name in tuple(env):
+            if name in CLAUDE_API_KEY_ENVS or is_claude_metered_auth(name) or name == "CLAUDE_CODE_OAUTH_TOKEN":
+                env.pop(name, None)
     if assignment.get("agent") == KIMI_AGENT:
         for name in KIMI_API_KEY_ENVS:
             env.pop(name, None)
@@ -1660,7 +1664,7 @@ def build_pier_command(
         cmd += [
             "--model", assignment["model"],
             "--ak", f"reasoning_effort={assignment['effort']}",
-            "--ak", f"version={CLAUDE_CLI_VERSION}",
+            "--ak", f"version={assignment['agent_version']}",
             "--ak", f"disallowed_tools={CLAUDE_DISALLOWED_TOOLS}",
             "--ae", "API_TIMEOUT_MS=3000000",
             "--ae", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000",
@@ -4452,9 +4456,9 @@ def run_trial(
         _validate_claude_assignment(assignment)
         effective_assignment = {
             **assignment,
-            "agent_version": CLAUDE_CLI_VERSION,
+            "agent_version": assignment["agent_version"],
         }
-        print(f"verified pinned Claude Code subscription CLI: {CLAUDE_CLI_VERSION}")
+        print(f"verified pinned Claude Code subscription CLI: {assignment['agent_version']}")
     elif effective_agent == GROK_AGENT:
         _validate_grok_assignment(assignment)
         effective_assignment = {

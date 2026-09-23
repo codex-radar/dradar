@@ -38,11 +38,11 @@ try:
 except ModuleNotFoundError:
     from dradar.worker_events import register_worker, verify_task_baseline
 try:
-    from _dradar_claude_usage import claude_usage_facts
+    from _dradar_claude_usage import claude_usage_facts, observed_claude_models
 except ModuleNotFoundError as exc:
     if exc.name != "_dradar_claude_usage":
         raise
-    from dradar.claude_usage import claude_usage_facts
+    from dradar.claude_usage import claude_usage_facts, observed_claude_models
 
 
 try:
@@ -53,6 +53,23 @@ except ModuleNotFoundError:
 
 class ClaudeCodeSubscription(ClaudeCode):
     """Claude.ai subscription variant with a fail-closed auth boundary."""
+
+    def install_spec(self):
+        """Use the pinned npm package when the task image already has npm.
+
+        Pier 0.3.0 chooses the native install script on non-Alpine images.
+        That endpoint can return an HTML block page inside Pier's isolated
+        Docker build, while the official npm package remains reachable.
+        Preserve Pier's fallback for images without npm.
+        """
+        spec = super().install_spec()
+        stock_branch = "if command -v apk &> /dev/null; then"
+        if stock_branch not in spec.steps[-1].run:
+            raise RuntimeError("Pier Claude install contract changed")
+        spec.steps[-1].run = spec.steps[-1].run.replace(
+            stock_branch, "if command -v npm &> /dev/null; then", 1,
+        )
+        return spec
 
     def __init__(self, *args, oauth_token_file: str | None = None,
                  oauth_config_file: str | None = None, **kwargs):
@@ -192,6 +209,15 @@ class ClaudeCodeSubscription(ClaudeCode):
             return
         usage = claude_usage_facts(trajectory, self.model_name or "")
         if usage is None:
+            return
+        observed = observed_claude_models(self._get_session_dir())
+        if observed == {self.model_name}:
+            usage["observed_model"] = self.model_name
+            usage["observed_model_status"] = "native-response-verified"
+            usage["model_identity_basis"] = "claude-native-session-jsonl"
+        elif self.model_name == "claude-opus-5-5":
+            # Opus 5.5 must never inherit the request ID when the provider
+            # returned a different model or native evidence is unavailable.
             return
         try:
             (self.logs_dir / "provider-usage.json").write_text(
