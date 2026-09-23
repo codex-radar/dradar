@@ -549,6 +549,26 @@ def test_explicit_batch_benchmark_overrides_saved_channel_for_exact_batch(monkey
     assert capacity["held_tasks"] == 2
 
 
+def test_legacy_config_without_benchmark_pins_deep_swe_default(monkeypatch):
+    class Client:
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            assert self.benchmark_id == "deep-swe"
+            return {"active": [{"assignment_id": "held", "benchmark_id": "deep-swe"}]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"server": "test", "token": "test"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+    _workers, _warnings, capacity = fleet._resolve_workers(
+        1, BATCH_B, {"batches": {}},
+    )
+    assert capacity["benchmark"] == "deep-swe"
+
+
 def test_explicit_batch_benchmark_cannot_override_run_plan(monkeypatch):
     monkeypatch.setattr(
         fleet, "runtime_config", lambda _path: {"benchmark": "deep-swe"},

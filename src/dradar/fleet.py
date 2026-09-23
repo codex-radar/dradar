@@ -49,7 +49,7 @@ from .codebuddy_provider import (
     managed_codebuddy_home,
 )
 from .identity import _client
-from .local_config import HOME, _load_config, runtime_config
+from .local_config import DEFAULT_BENCHMARK, HOME, _load_config, runtime_config
 from .machine import acquire_run_lock
 from .providers import KIMI_CREDENTIAL_PATH_ENV
 
@@ -652,13 +652,15 @@ def _resolve_workers(
             if credentials_file and cfg.get("benchmark") != benchmark:
                 raise FleetError("benchmark differs from the run-plan credential")
             cfg["benchmark"] = benchmark
+        selected_benchmark = cfg.get("benchmark") or DEFAULT_BENCHMARK
+        if not isinstance(selected_benchmark, str) or not selected_benchmark.strip():
+            raise FleetError("invalid saved benchmark channel")
+        cfg["benchmark"] = selected_benchmark
         client = _client(cfg)
     except (SystemExit, ValueError) as exc:
         raise FleetError(str(exc)) from exc
     client.set_batch_id(batch_id)
-    selected_benchmark = cfg.get("benchmark")
-    if selected_benchmark:
-        client.benchmark_id = selected_benchmark
+    client.benchmark_id = selected_benchmark
     reserved = sum(
         int(item.get("workers") or 0) for item in _active_batches(state).values()
     )
