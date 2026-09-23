@@ -774,6 +774,27 @@ def test_artifact_task_overlay_preserves_existing_task_hook(tmp_path):
         assert hook.read_text() == "#!/bin/sh\nexit 0\n"
 
 
+def test_artifact_task_overlay_preserves_similar_custom_hook(tmp_path):
+    task = tmp_path / "tasks/task-1"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "main"\n'
+    )
+    hook = task / "pre_artifacts.sh"
+    custom = (
+        "#!/bin/bash\n"
+        "# Capture the agent's committed work with a custom collector.\n"
+        "exit 0\n"
+    )
+    hook.write_text(custom)
+
+    with _artifact_tasks_overlay(
+        {"task_id": "task-1"}, task.parent, tmp_path / "work", "job",
+    ) as selected:
+        assert selected == task.parent
+        assert hook.read_text() == custom
+
+
 def test_published_deep_swe_hook_recovers_uncommitted_worktree(tmp_path):
     from dradar.runner import LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT
 

@@ -3727,20 +3727,29 @@ def _artifact_tasks_overlay(
             (source / "task.toml").read_text(encoding="utf-8")
         )
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        if existing_hook.is_file():
+            yield tasks_root
+            return
         raise RunnerError(f"task.toml is unreadable: {exc}") from exc
-    base_commit = task_config.get("metadata", {}).get("base_commit_hash", "")
-    if not isinstance(base_commit, str) or (
-        base_commit
-        and re.fullmatch(r"[0-9a-f]{4,40}", base_commit) is None
-    ):
-        raise RunnerError("task has an invalid metadata.base_commit_hash")
-    if existing_hook.is_file() and existing_text.replace("\r\n", "\n") != (
-        LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT.replace(
+    metadata = task_config.get("metadata", {})
+    base_commit = (
+        metadata.get("base_commit_hash", "")
+        if isinstance(metadata, dict) else None
+    )
+    if existing_hook.is_file() and (
+        not isinstance(base_commit, str)
+        or existing_text.replace("\r\n", "\n")
+        != LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT.replace(
             "__DRADAR_BASE_COMMIT__", base_commit
         )
     ):
         yield tasks_root
         return
+    if not isinstance(base_commit, str) or (
+        base_commit
+        and re.fullmatch(r"[0-9a-f]{4,40}", base_commit) is None
+    ):
+        raise RunnerError("task has an invalid metadata.base_commit_hash")
     short_commit = bool(base_commit and len(base_commit) < 40)
     if short_commit:
         repository_url = task_config.get("metadata", {}).get("repository_url")
