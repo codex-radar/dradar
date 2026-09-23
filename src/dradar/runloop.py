@@ -656,16 +656,142 @@ def _allow_explicit_empty_submission_retry(
         )
         return False
     assignment = blocked[0]
+    if (
+        getattr(args, "_empty_submission_retry_confirmed", False)
+        and getattr(args, "_precise_retry_assignment_id", None)
+        == assignment["assignment_id"]
+    ):
+        return True
     answer = input(
-        f"the previous completed {assignment.get('model')}@"
-        f"{assignment.get('effort')} run produced an empty model patch. "
-        "Explicitly retry this one held task now? [y/N] "
+        f"a previous completed {assignment.get('model')}@"
+        f"{assignment.get('effort')} run in this runtime produced an empty "
+        "model patch. Explicitly retry this one held task now? [y/N] "
     ).strip().lower()
     if answer not in {"y", "yes"}:
         print("retry cancelled; the assignment and circuit remain untouched")
         return False
     args._empty_submission_retry_confirmed = True
     return True
+
+
+def _record_empty_submission_outcome(
+    args, client: ApiClient, assignment: dict, upload_outcome: str,
+) -> None:
+    if upload_outcome == "empty-submission":
+        empty_submission_circuit.record_empty(
+            HOME, assignment, __version__,
+            account_scope=getattr(client, "account_scope", None),
+        )
+        if getattr(args, "refill", False):
+            refill_plan.open_circuit(HOME, assignment, "empty_submission")
+        _signal_pool_abort(
+            "server-verified completed empty model patch",
+            interrupt_siblings=False,
+        )
+    elif upload_outcome == "submitted":
+        if (
+            getattr(args, "assignment", None) == assignment["assignment_id"]
+            and getattr(args, "_precise_retry_assignment_id", None)
+            == assignment["assignment_id"]
+        ):
+            # This confirmation authorizes one task, not the whole runtime
+            # scope. A successful retry must not unlock its held siblings.
+            print("this retry is complete; empty-patch protection remains for this runtime")
+        else:
+            empty_submission_circuit.record_success(
+                HOME, assignment, __version__,
+                account_scope=getattr(client, "account_scope", None),
+            )
+
+
+def _validate_precise_resume_options(args) -> None:
+    """Reject unattended or claim-capable forms before any runner setup."""
+    selected = getattr(args, "assignment", None)
+    if selected is None:
+        return
+    if not re.fullmatch(r"[0-9a-f]{32}", selected):
+        sys.exit("--assignment requires a 32-character lowercase hex assignment ID")
+    if not getattr(args, "resume", False) or not getattr(args, "batch_id", None):
+        sys.exit("--assignment requires `dradar resume --batch-id BATCH_ID`")
+    if (
+        getattr(args, "yes", False)
+        or getattr(args, "parallel", False)
+        or getattr(args, "worker_child", False)
+        or getattr(args, "fleet_pool", False)
+        or getattr(args, "refill", False)
+        or getattr(args, "refill_to", None) is not None
+        or getattr(args, "auto", None) is not None
+        or getattr(args, "pick", None)
+        or getattr(args, "workers", 1) != 1
+        or getattr(args, "worker_target_file", None)
+        or getattr(args, "forget_assignment_boundary", False)
+        or getattr(args, "dev_agent", None)
+        or getattr(args, "allow_task_drift", False)
+        or not sys.stdin.isatty()
+    ):
+        sys.exit(
+            "--assignment requires an interactive, single-worker resume "
+            "without -y, parallel, refill, task claiming, or safety overrides"
+        )
+
+
+_PRECISE_RESUME_IDENTITY_FIELDS = (
+    "assignment_id", "task_id", "batch_id", "benchmark_id", "agent",
+    "provider", "model", "effort", "nonce", "agent_version",
+    "lease_generation", "owner_epoch", "deep_swe_commit",
+)
+
+
+def _select_precise_resume_assignment(
+    args, client: ApiClient, active: list[dict], benchmark_id: str,
+) -> dict | None:
+    """Use the authenticated exact-batch inventory; never claim a replacement."""
+    selected_id = args.assignment
+    if selected_id in _pending_assignment_ids_for_client(
+        client, batch_id=args.batch_id,
+    ):
+        print("selected assignment already has a durable result pending upload; refusing to rerun")
+        return None
+    matches = [a for a in active if a.get("assignment_id") == selected_id]
+    if len(matches) != 1:
+        print("selected assignment is not exactly one current held lease in this account and batch")
+        return None
+    assignment = matches[0]
+    try:
+        batch_id = normalize_batch_id(assignment.get("batch_id"))
+        expires_at = datetime.fromisoformat(
+            str(assignment.get("expires_at", "")).replace("Z", "+00:00")
+        )
+        if expires_at.tzinfo is None:
+            raise ValueError("lease expiry has no timezone")
+    except (TypeError, ValueError):
+        print("selected assignment has invalid batch or lease expiry metadata")
+        return None
+    if (
+        getattr(client, "batch_id", None) != args.batch_id
+        or batch_id != args.batch_id
+        or assignment.get("benchmark_id") != benchmark_id
+        or any(not isinstance(assignment.get(key), str) or not assignment[key]
+               for key in ("task_id", "agent", "model", "effort", "nonce"))
+        or assignment.get("status", "leased") != "leased"
+    ):
+        print("selected assignment's batch, benchmark, or task/model/effort identity changed")
+        return None
+    if (
+        expires_at <= datetime.now(timezone.utc)
+        or assignment.get("execution_state") != "waiting"
+        or assignment.get("runner_state") != "waiting"
+        or assignment.get("heartbeat_running") is not False
+        or assignment.get("runner_phase") is not None
+        or assignment.get("started_at") is not None
+        or assignment.get("checkpoint_id") is not None
+    ):
+        print("selected assignment is expired, in flight, completed, or no longer waiting")
+        return None
+    if selected_id not in _empty_submission_blocked_ids([assignment], client):
+        print("selected assignment has no matching empty-patch protection to confirm")
+        return None
+    return assignment
 
 
 def _repeat_failure_state_path() -> Path | None:
@@ -3635,22 +3761,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         and not getattr(args, "yes", False)
         and not getattr(args, "parallel", False)
     ))
-    if upload_outcome == "empty-submission":
-        empty_submission_circuit.record_empty(
-            HOME, assignment, __version__,
-            account_scope=getattr(client, "account_scope", None),
-        )
-        if getattr(args, "refill", False):
-            refill_plan.open_circuit(HOME, assignment, "empty_submission")
-        _signal_pool_abort(
-            "server-verified completed empty model patch",
-            interrupt_siblings=False,
-        )
-    elif upload_outcome == "submitted":
-        empty_submission_circuit.record_success(
-            HOME, assignment, __version__,
-            account_scope=getattr(client, "account_scope", None),
-        )
+    _record_empty_submission_outcome(args, client, assignment, upload_outcome)
     if telemetry:
         upload_succeeded = upload_outcome in {
             "submitted", "interrupted", "empty-submission",
@@ -4638,13 +4749,14 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
 
 def cmd_go(args) -> int:
     try:
-        preflight_artifact_platform()
-    except UnsafeArtifact:
-        sys.exit(PLATFORM_PREFLIGHT_MESSAGE)
-    try:
         args.batch_id = normalize_batch_id(getattr(args, "batch_id", None))
     except ValueError as exc:
         sys.exit(f"invalid --batch-id: {exc}")
+    _validate_precise_resume_options(args)
+    try:
+        preflight_artifact_platform()
+    except UnsafeArtifact:
+        sys.exit(PLATFORM_PREFLIGHT_MESSAGE)
     if getattr(args, "pick", None) and getattr(args, "auto", None):
         sys.exit("--auto and --pick are two different ways to choose cells; pass only one")
     if getattr(args, "auto", None) is not None and args.auto < 1:
@@ -4839,6 +4951,8 @@ def cmd_go(args) -> int:
             args.allow_new_claims = _maintain_image_cache(
                 client, cfg, phase="before run",
             )
+            if getattr(args, "assignment", None):
+                args.allow_new_claims = False
 
         # Preparing is a real phase: cloning the task repo and installing pier
         # can take minutes on a fresh machine. The heartbeat lets operators
@@ -4877,7 +4991,8 @@ def cmd_go(args) -> int:
         # duplicate-upload herd precisely when the server asks us to slow down.
         if not getattr(args, "worker_child", False) and not fleet_pool:
             _mark_pending_scope_required(client)
-            _retry_pending_uploads(client)
+            if not getattr(args, "assignment", None):
+                _retry_pending_uploads(client)
 
         boundary_path = _prepare_assignment_boundary(
             args, client, cfg["benchmark"],
@@ -7449,10 +7564,15 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
 def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
              telemetry: RunnerTelemetry | None = None) -> int:
     """Prepare a held batch and run it through atomic checkout when possible."""
+    precise_resume = bool(getattr(args, "assignment", None))
+    if precise_resume:
+        _validate_precise_resume_options(args)
+        args.allow_new_claims = False
     active, free_pick = _prepare_batch(args, client)
     if not active:
-        return 0
-    if (not getattr(args, "worker_child", False)
+        return 1 if precise_resume else 0
+    if (not precise_resume
+            and not getattr(args, "worker_child", False)
             and not getattr(args, "fleet_pool", False)
             and _prepared_batch_ids(active)):
         # Keep the same run.lock and selection; never claim a second time.
@@ -7471,6 +7591,38 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
             return 1
     if telemetry:
         telemetry.bind_batch(active[0].get("batch_id"))
+    if precise_resume:
+        selected = _select_precise_resume_assignment(
+            args, client, active, cfg["benchmark"],
+        )
+        if selected is None:
+            return 1
+        print(
+            f"protected resume: assignment {selected['assignment_id']}, "
+            f"{selected['task_id']} / {selected['benchmark_id']} / "
+            f"{selected['model']}@{selected['effort']}, batch {selected['batch_id']}. "
+            f"The other {len(active) - 1} held assignment(s) will remain untouched."
+        )
+        if not _allow_explicit_empty_submission_retry(args, [selected], client):
+            return 1
+        # A human can leave the confirmation prompt open while a lease expires
+        # or another runner acquires it. Re-read authenticated server state
+        # immediately after confirmation; assignment/started remains the final
+        # ownership fence before provider execution.
+        fresh_active, _ = _acquire_batch(
+            client, False, allow_new_claims=False,
+        )
+        fresh = _select_precise_resume_assignment(
+            args, client, fresh_active, cfg["benchmark"],
+        )
+        if fresh is None or any(
+            fresh.get(key) != selected.get(key)
+            for key in _PRECISE_RESUME_IDENTITY_FIELDS
+        ):
+            print("selected assignment changed after confirmation; no model was started")
+            return 1
+        args._precise_retry_assignment_id = fresh["assignment_id"]
+        return _run_batch(args, client, tasks_root, [fresh], telemetry=telemetry)
     # Non-interactive free-pick runs go through the parallel-safe checkout
     # loop (the standard paste-command path). Interactive runs keep the
     # legacy batch flow — its per-cell confirm/skip prompts don't translate

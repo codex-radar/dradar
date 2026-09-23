@@ -16,6 +16,7 @@ dropped once a grep of the public consumers showed nothing reaching through
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -62,6 +63,12 @@ def _batch_id_value(value: str) -> str:
     if normalized is None:
         raise argparse.ArgumentTypeError("batch id is required")
     return normalized
+
+
+def _assignment_id_value(value: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise argparse.ArgumentTypeError("assignment ID must be 32 lowercase hex characters")
+    return value
 
 
 def _nonnegative_int(value: str) -> int:
@@ -663,6 +670,12 @@ def main(argv: list[str] | None = None) -> int:
                 help="nothing held? claim this exact cell instead of auto-picking "
                      "(repeatable), then run — e.g. "
                      "--pick abs-module-cache-flags:gpt-5.6-sol:low",
+            )
+        else:
+            p.add_argument(
+                "--assignment", type=_assignment_id_value, metavar="ID",
+                help="interactively retry only this exact held assignment in an "
+                     "empty-patch-protected batch (requires --batch-id)",
             )
         p.set_defaults(func=cmd_go, resume=is_resume, lease_hint=True)
 

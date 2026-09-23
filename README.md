@@ -607,11 +607,13 @@ dradar go --auto 3      # 把当前持有批次补到总计 3 题
 
 ```bash
 dradar resume
-dradar resume --assignment <ASSIGNMENT_ID>
+dradar resume --batch-id <BATCH_ID> --assignment <ASSIGNMENT_ID>
 ```
 
 `resume` 首先重试 durable pending-upload，再运行账号仍持有且尚未开始的 waiting 任务。
-指定 `--assignment` 时只处理对应 assignment，且必须使用单 worker，不能同时开启持续补题。
+`--assignment` 用于空补丁保护下的单题恢复：必须指定原批次 ID，使用交互式单 worker，
+核对服务端当前租约并人工确认后，只运行该 assignment 一次；不能使用 `-y`、并行或持续补题。
+这条精准恢复路径不会自动补传其他任务，也不会清除同运行域其余任务的空补丁保护。
 已存在待上传记录的 assignment 会阻止 go、resume、自动补位和多 worker 再次运行模型；
 如果没有待上传结果和活动租约，它安全退出。
 
