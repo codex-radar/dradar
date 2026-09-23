@@ -35,6 +35,28 @@ def _key(scope: dict) -> str:
     return json.dumps(scope, sort_keys=True, separators=(",", ":"))
 
 
+def _matches_runtime(
+    saved: object, candidate: dict, *, conservative_missing_runtime: bool = False,
+) -> bool:
+    """A client upgrade must not silently rearm the same protected runtime.
+
+    Keep the version in persisted v1 records for rollback compatibility, but
+    compare the actual account/runtime identity when reading or settling one.
+    """
+    if not isinstance(saved, dict):
+        return False
+    for key in ("account_scope", "benchmark_id", "model", "effort"):
+        if saved.get(key) != candidate.get(key):
+            return False
+    for key in ("harness", "provider", "agent_version"):
+        if saved.get(key) == candidate.get(key):
+            continue
+        if conservative_missing_runtime and candidate.get(key) is None:
+            continue
+        return False
+    return True
+
+
 @contextmanager
 def _locked(home: Path) -> Iterator[None]:
     home.mkdir(parents=True, exist_ok=True)
@@ -102,10 +124,15 @@ def open_for(
     account_scope: str | None = None,
 ) -> bool:
     """Read without creating state, for pre-claim/pre-checkout checks."""
-    state = _load(home)
-    return _key(_scope(
-        assignment, client_version, account_scope,
-    )) in state["circuits"]
+    candidate = _scope(assignment, client_version, account_scope)
+    circuits = _load(home)["circuits"]
+    if _key(candidate) in circuits:
+        return True
+    return any(
+        _matches_runtime(record.get("scope"), candidate)
+        for record in circuits.values()
+        if isinstance(record, dict)
+    )
 
 
 def open_for_claim(
@@ -119,24 +146,11 @@ def open_for_claim(
         scope = saved.get("scope") if isinstance(saved, dict) else None
         if not isinstance(scope, dict):
             continue
-        if any(
-            scope.get(key) != candidate.get(key)
-            for key in (
-                "account_scope", "benchmark_id", "model", "effort",
-                "client_version",
-            )
+        if _matches_runtime(
+            scope, candidate,
+            conservative_missing_runtime=conservative_missing_runtime,
         ):
-            continue
-        optional = ("harness", "provider", "agent_version")
-        if any(
-            scope.get(key) != candidate.get(key)
-            and not (
-                conservative_missing_runtime and candidate.get(key) is None
-            )
-            for key in optional
-        ):
-            continue
-        return True
+            return True
     return False
 
 
@@ -162,9 +176,13 @@ def record_success(
     """A normal non-empty accepted submission explicitly rearms its scope."""
     with _locked(home):
         state = _load(home)
-        state["circuits"].pop(_key(_scope(
-            assignment, client_version, account_scope,
-        )), None)
+        candidate = _scope(assignment, client_version, account_scope)
+        state["circuits"].pop(_key(candidate), None)
+        for key, record in list(state["circuits"].items()):
+            if isinstance(record, dict) and _matches_runtime(
+                record.get("scope"), candidate,
+            ):
+                state["circuits"].pop(key, None)
         if state["circuits"]:
             _save(home, state)
         else:
