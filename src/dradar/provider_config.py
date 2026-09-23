@@ -64,7 +64,6 @@ from .providers import (
     KIMI_BINARY_BASE_URL,
     KIMI_BINARY_SHA256,
     KIMI_CLI_VERSION,
-    ZCODE_CLI_VERSION,
     ZCODE_MODELS,
     ZCODE_OFFICIAL_DOWNLOAD_PAGE,
     antigravity_auth_path,
@@ -107,6 +106,7 @@ from .providers import (
     zcode_api_key,
     zcode_cli_error,
     zcode_cli_path,
+    zcode_cli_version_is_compatible,
     zcode_credential_source,
     zcode_secret_error,
     zcode_secret_path,
@@ -1386,17 +1386,21 @@ def _status_zcode(*, live: bool) -> int:
         print(f"ZCode provider not ready: could not verify the CLI: {exc}")
         return 1
     found = parse_zcode_cli_version(proc.stdout + "\n" + proc.stderr)
-    if proc.returncode != 0 or found != ZCODE_CLI_VERSION:
+    if proc.returncode != 0 or not zcode_cli_version_is_compatible(found):
         print(
-            f"ZCode provider not ready: CLI {ZCODE_CLI_VERSION} required, "
+            "ZCode provider not ready: compatible CLI 0.16.x required, "
             f"found {found or 'unknown'}."
         )
         return 1
     source = zcode_credential_source()
+    available_models = sorted(
+        model for model in ZCODE_MODELS
+        if zcode_cli_version_is_compatible(found, model=model)
+    )
     print(
         f"ZCode provider ready via {source or 'local credential'} "
-        f"(value hidden, CLI {ZCODE_CLI_VERSION}, models "
-        f"{', '.join(sorted(ZCODE_MODELS))})."
+        f"(value hidden, CLI {found}, models "
+        f"{', '.join(available_models)})."
     )
     return _live_zcode_status(key) if live else 0
 

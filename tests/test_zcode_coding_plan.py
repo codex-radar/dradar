@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import re
@@ -138,6 +139,158 @@ def test_zcode_cli_accepts_newer_patch_on_compatible_protocol_line(
     )
 
     assert providers.zcode_cli_error(runtime) is None
+
+
+def test_zcode_0169_requires_and_imports_only_builtin_provider_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#401: 0.16.9 setup keeps the one external resource needed at launch."""
+
+    resources = tmp_path / "ZCode.app/Contents/Resources"
+    runtime = _private(resources / "glm/zcode.cjs", "official-cli")
+    config = resources / "config/provider/zcode-builtin.json"
+    config.parent.mkdir(parents=True)
+    unrelated = resources / "config/provider/private.json"
+    monkeypatch.setattr(providers.shutil, "which", lambda _name: "/usr/bin/node")
+    monkeypatch.setattr(
+        providers.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="0.16.9\n", stderr="",
+        ),
+    )
+
+    assert "zcode-builtin.json" in (providers.zcode_cli_error(runtime) or "")
+    config.write_text('{"schemaVersion":1,"config":{}}', encoding="utf-8")
+    unrelated.write_text("never-import", encoding="utf-8")
+    assert providers.zcode_cli_error(runtime) is None
+    target = store_zcode_cli(runtime, home=tmp_path / "dradar")
+    imported = target.parent / "provider/zcode-builtin.json"
+    assert imported.read_bytes() == config.read_bytes()
+    assert target.read_text(encoding="utf-8") == "official-cli\n"
+    assert not (target.parent / "provider/private.json").exists()
+    assert providers.zcode_cli_error(target) is None
+    if os.name != "nt":
+        assert imported.stat().st_mode & 0o777 == 0o600
+
+
+def test_zcode_0169_rejects_missing_or_linked_builtin_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#401: neither a missing resource nor a link may pass preflight."""
+
+    runtime = _private(tmp_path / "glm/zcode.cjs", "official-cli")
+    monkeypatch.setattr(providers.shutil, "which", lambda _name: "/usr/bin/node")
+    monkeypatch.setattr(
+        providers.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="0.16.9\n", stderr="",
+        ),
+    )
+    assert "zcode-builtin.json" in (providers.zcode_cli_error(runtime) or "")
+    with pytest.raises(ValueError, match="zcode-builtin.json"):
+        store_zcode_cli(runtime, home=tmp_path / "dradar")
+    config = tmp_path / "config/provider/zcode-builtin.json"
+    config.parent.mkdir(parents=True)
+    config.symlink_to(runtime)
+    assert "zcode-builtin.json" in (providers.zcode_cli_error(runtime) or "")
+
+
+@pytest.mark.parametrize("version", ["0.16.5", "0.16.9"])
+def test_zcode_adapter_stages_builtin_config_only_when_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str,
+) -> None:
+    """#401: the real adapter upload path places 0.16.9's config by its entrypoint."""
+
+    pytest.importorskip("pier")
+    import dradar.pier_zcode as zcode
+
+    key = _private(tmp_path / "key")
+    cli = _private(tmp_path / "zcode.cjs", "test-runtime")
+    config = tmp_path / "provider/zcode-builtin.json"
+    if version == "0.16.9":
+        config.parent.mkdir()
+        config.write_text("{}", encoding="utf-8")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    adapter = zcode.ZCodeBigModel(
+        logs_dir=logs,
+        api_key_file=str(key),
+        zcode_cli_file=str(cli),
+        reasoning_effort="high",
+        session_timeout_sec=120,
+        version=version,
+    )
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(zcode, "verify_task_baseline", noop)
+    monkeypatch.setattr(zcode, "register_worker", noop)
+    monkeypatch.setattr(zcode, "inject_private_files", noop)
+    monkeypatch.setattr(zcode.RuntimeSafety, "prepare_host_layout", lambda self: None)
+    monkeypatch.setattr(zcode.AgentLogStore, "replace_text", lambda self, p, t: None)
+    events = []
+
+    async def fake_exec(environment, *, command, **kwargs):
+        events.append(("exec", command))
+
+    adapter.exec_as_agent = fake_exec
+    adapter.exec_as_root = fake_exec
+
+    class Environment:
+        default_user = None
+
+        async def upload_file(self, source, destination):
+            events.append(("upload", Path(source), destination))
+
+    asyncio.run(zcode.ZCodeBigModel.run.__wrapped__(
+        adapter, "test instruction", Environment(), None,
+    ))
+    uploads = [event for event in events if event[0] == "upload"]
+    config_uploads = [event for event in uploads if event[2].endswith("zcode-builtin.json")]
+    if version == "0.16.9":
+        assert config_uploads == [
+            ("upload", config, "/tmp/dradar-zcode-bin/provider/zcode-builtin.json")
+        ]
+        assert "/tmp/dradar-zcode-bin/provider" in events[0][1]
+    else:
+        assert config_uploads == []
+
+
+@pytest.mark.parametrize(
+    ("version", "ready"),
+    [("0.16.3", True), ("0.16.5", True), ("0.16.9", True), ("0.17.0", False)],
+)
+def test_zcode_status_uses_compatible_version_and_reports_observed_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], version: str, ready: bool,
+) -> None:
+    """#401: status agrees with setup and runner on supported CLI patches."""
+
+    runtime = _private(tmp_path / "zcode.cjs", "test-runtime")
+    monkeypatch.setattr(provider_config, "zcode_secret_path", lambda: tmp_path / "key")
+    monkeypatch.setattr(provider_config, "zcode_secret_error", lambda _path: None)
+    monkeypatch.setattr(provider_config, "zcode_api_key", lambda: "dummy-key")
+    monkeypatch.setattr(provider_config, "zcode_cli_path", lambda: str(runtime))
+    monkeypatch.setattr(provider_config, "zcode_cli_error", lambda _path: None)
+    monkeypatch.setattr(provider_config, "zcode_credential_source", lambda: "test")
+    monkeypatch.setattr(provider_config.shutil, "which", lambda _name: "/usr/bin/node")
+    monkeypatch.setattr(
+        provider_config.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=f"{version}\n", stderr="",
+        ),
+    )
+
+    assert provider_config._status_zcode(live=False) == (0 if ready else 1)
+    output = capsys.readouterr().out
+    if ready:
+        assert f"provider ready via test (value hidden, CLI {version}," in output
+        assert "dummy-key" not in output
+        assert "glm-5.3" in output
+        assert ("glm-5.3-flash" in output) == (version != "0.16.3")
+    else:
+        assert "compatible CLI 0.16.x required" in output
 
 
 def test_zcode_cli_rejects_incompatible_runtime_minor(

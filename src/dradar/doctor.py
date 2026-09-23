@@ -36,7 +36,6 @@ from .providers import (
     KIMI_AGENT,
     KIMI_CLI_VERSION,
     ZCODE_AGENT,
-    ZCODE_CLI_VERSION,
     bundled_adapter_error,
     prepare_antigravity_auth,
     antigravity_auth_path,
@@ -957,7 +956,7 @@ def cmd_doctor(args) -> int:
                 _check("Kimi K3 — subscription provider ready", True)
         if zcode_requested:
             all_ok &= _check(
-                f"ZCode CLI {ZCODE_CLI_VERSION} — pinned Coding Plan runner",
+                "ZCode CLI 0.16.x — compatible Coding Plan runner",
                 zcode_cli_issue is None,
                 zcode_cli_issue or "reinstall the verified official ZCode runtime",
             )

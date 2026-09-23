@@ -59,6 +59,7 @@ NODE_SHA256 = {
 }
 SUPPORTED_EFFORTS = frozenset({"low", "high", "max"})
 SUPPORTED_MODELS = frozenset({"glm-5.3", "glm-5.3-flash"})
+_BUILTIN_CONFIG_RELATIVE_PATH = Path("provider") / "zcode-builtin.json"
 _ARTIFACT_ID_RE = re.compile(r"[0-9a-f]{32}")
 _SESSION_ID_RE = re.compile(r"sess_[A-Za-z0-9._:-]{1,155}")
 
@@ -1085,6 +1086,7 @@ class ZCodeBigModel(BaseInstalledAgent):
     _REMOTE_BIN_DIR = PurePosixPath("/tmp/dradar-zcode-bin")
     _REMOTE_SECRET_ROOT = PurePosixPath("/tmp/dradar-zcode-secrets")
     _REMOTE_CLI = _REMOTE_BIN_DIR / "zcode.cjs"
+    _REMOTE_BUILTIN_CONFIG = _REMOTE_BIN_DIR / "provider" / "zcode-builtin.json"
     _REMOTE_RUNNER = _REMOTE_BIN_DIR / "protocol_runner.py"
     _OUTCOME_FILE = "zcode-outcome.json"
     _EVENTS_FILE = "zcode-protocol-events.json"
@@ -1154,6 +1156,23 @@ class ZCodeBigModel(BaseInstalledAgent):
             or version_parts[2] < minimum_patch
         ):
             raise ValueError("ZCode adapter requires a compatible 0.16.x CLI")
+        builtin_config = None
+        if version_parts[2] >= 9:
+            for candidate in (
+                cli_file.parent / _BUILTIN_CONFIG_RELATIVE_PATH,
+                cli_file.parent.parent / "config" / _BUILTIN_CONFIG_RELATIVE_PATH,
+            ):
+                try:
+                    info = candidate.lstat()
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 1024 * 1024:
+                    builtin_config = candidate
+                    break
+            if builtin_config is None:
+                raise ValueError(
+                    "ZCode CLI 0.16.9+ requires provider/zcode-builtin.json"
+                )
         extra_env = dict(kwargs.get("extra_env") or {})
         forbidden = sorted(
             name for name in extra_env
@@ -1167,6 +1186,7 @@ class ZCodeBigModel(BaseInstalledAgent):
             )
         self._api_key_file = key_file
         self._zcode_cli_file = cli_file
+        self._builtin_config_file = builtin_config
         self._reasoning_effort = reasoning_effort
         self._model_name = resolved_model
         self._session_timeout_sec = resolved_session_timeout
@@ -1246,6 +1266,8 @@ class ZCodeBigModel(BaseInstalledAgent):
         ):
             env.pop(name, None)
         directories = (remote_home, remote_user_home, remote_bin, remote_secret)
+        if self._builtin_config_file is not None:
+            directories += (self._REMOTE_BUILTIN_CONFIG.parent.as_posix(),)
         setup = "mkdir -p " + " ".join(shlex.quote(item) for item in directories)
         setup += " && chmod 700 " + " ".join(shlex.quote(item) for item in directories)
         await self.exec_as_agent(environment, command=setup, env=env)
@@ -1258,12 +1280,20 @@ class ZCodeBigModel(BaseInstalledAgent):
             log_store.replace_text(local_runner, _PROTOCOL_RUNNER)
             log_store.replace_text(local_instruction, instruction)
             await environment.upload_file(self._zcode_cli_file, remote_cli)
+            if self._builtin_config_file is not None:
+                await environment.upload_file(
+                    self._builtin_config_file,
+                    self._REMOTE_BUILTIN_CONFIG.as_posix(),
+                )
             await environment.upload_file(local_runner, remote_runner)
             await environment.upload_file(local_instruction, instruction_path)
             await inject_private_files(self, environment, [(self._api_key_file, remote_key)])
+            uploaded = (remote_cli, remote_runner, instruction_path, remote_key)
+            if self._builtin_config_file is not None:
+                uploaded += (self._REMOTE_BUILTIN_CONFIG.as_posix(),)
             targets = " ".join(
                 shlex.quote(item)
-                for item in (remote_cli, remote_runner, instruction_path, remote_key)
+                for item in uploaded
             )
             if environment.default_user is not None:
                 command = (
