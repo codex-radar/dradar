@@ -3,6 +3,8 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import os
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 import zipfile
@@ -153,6 +155,98 @@ def test_transport_startup_failure_uses_typed_cause_and_safe_diagnosis(
         "deep-swe", "docker", "auth", "proxy://", "password", "token=",
         "request_body=private",
     ))
+
+
+def test_cli_claim_response_lost_does_not_retry_or_change_server_state(
+        monkeypatch, tmp_path, capsys):
+    assignment = {"assignment_id": "server-held", "task_id": "t1"}
+
+    class LostResponseClient:
+        batch_id = None
+
+        def __init__(self):
+            self.calls = []
+            self.held = []
+
+        def get_assignment(self):
+            self.calls.append("get_assignment")
+            return {"active": [], "free_pick": True}
+
+        def claim_assignment(self, task_id, model, effort):
+            self.calls.append("claim_assignment")
+            self.held.append(assignment)  # The server committed the claim.
+            raise runloop.ApiError(
+                "token=secret proxy://user:password@host request_body=private",
+                status_code=None,
+            )  # The response never reached the CLI.
+
+        def release_assignment(self, *_args, **_kwargs):
+            self.calls.append("release_assignment")
+
+        def checkout(self, *_args, **_kwargs):
+            self.calls.append("checkout")
+
+    client = LostResponseClient()
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {})
+    monkeypatch.setattr(runloop, "_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
+    monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
+    monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
+    monkeypatch.setattr(runloop, "sweep_orphan_compose", lambda *_args: None)
+    monkeypatch.setattr(runloop, "_maintain_image_cache", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_args: None)
+    monkeypatch.setattr(runloop, "ensure_pier", lambda: None)
+    monkeypatch.setattr(runloop, "_ensure_egress_runtime", lambda **_kwargs: None)
+    monkeypatch.setattr(runloop, "_mark_pending_scope_required", lambda _client: None)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda _client: None)
+    monkeypatch.setattr(runloop, "_prepare_assignment_boundary", lambda *_args: None)
+    monkeypatch.setattr(
+        runloop, "_pending_assignment_ids_for_client", lambda *_args, **_kwargs: set(),
+    )
+    monkeypatch.setattr(
+        runloop, "_allow_claim_after_empty_submission", lambda *_args, **_kwargs: True,
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["go", "--pick", "t1:m:e", "-y"])
+
+    assert isinstance(excinfo.value.code, str)  # Python exits 1 for a message.
+    assert excinfo.value.__cause__ is not None
+    assert isinstance(excinfo.value.__cause__, runloop.ApiError)
+    assert "server may have processed it" in str(excinfo.value)
+    assert "dradar leases" in str(excinfo.value)
+    assert client.held == [assignment]
+    assert client.calls == ["get_assignment", "claim_assignment"]
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    public = str(excinfo.value) + captured.out
+    assert all(secret not in public for secret in (
+        "token=", "proxy://", "password", "request_body=private",
+    ))
+
+
+def test_cli_transport_failure_process_exits_one_without_secret_traceback():
+    script = (
+        "from dradar import cli, runloop\n"
+        "from dradar.api_client import ApiError\n"
+        "cli.cmd_go = lambda _args: runloop._exit_for(ApiError("
+        "'token=secret proxy://user:password@host', status_code=None))\n"
+        "cli.main(['go', '-y'])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+    )
+
+    assert result.returncode == 1
+    assert "server may have processed it" in result.stderr
+    assert "dradar leases" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "token=secret" not in result.stderr
+    assert "proxy://" not in result.stderr
 
 
 def test_cli_parses_archive_session_as_explicit_opt_in(monkeypatch):
