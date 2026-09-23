@@ -1393,10 +1393,14 @@ def _status_zcode(*, live: bool) -> int:
         )
         return 1
     source = zcode_credential_source()
+    available_models = sorted(
+        model for model in ZCODE_MODELS
+        if zcode_cli_version_is_compatible(found, model=model)
+    )
     print(
         f"ZCode provider ready via {source or 'local credential'} "
         f"(value hidden, CLI {found}, models "
-        f"{', '.join(sorted(ZCODE_MODELS))})."
+        f"{', '.join(available_models)})."
     )
     return _live_zcode_status(key) if live else 0
 

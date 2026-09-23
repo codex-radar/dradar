@@ -259,7 +259,7 @@ def test_zcode_adapter_stages_builtin_config_only_when_required(
 
 @pytest.mark.parametrize(
     ("version", "ready"),
-    [("0.16.5", True), ("0.16.9", True), ("0.17.0", False)],
+    [("0.16.3", True), ("0.16.5", True), ("0.16.9", True), ("0.17.0", False)],
 )
 def test_zcode_status_uses_compatible_version_and_reports_observed_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -287,6 +287,8 @@ def test_zcode_status_uses_compatible_version_and_reports_observed_runtime(
     if ready:
         assert f"provider ready via test (value hidden, CLI {version}," in output
         assert "dummy-key" not in output
+        assert "glm-5.3" in output
+        assert ("glm-5.3-flash" in output) == (version != "0.16.3")
     else:
         assert "compatible CLI 0.16.x required" in output
 
