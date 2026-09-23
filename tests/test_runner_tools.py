@@ -774,6 +774,150 @@ def test_artifact_task_overlay_preserves_existing_task_hook(tmp_path):
         assert hook.read_text() == "#!/bin/sh\nexit 0\n"
 
 
+def test_artifact_task_overlay_preserves_similar_custom_hook(tmp_path):
+    task = tmp_path / "tasks/task-1"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "main"\n'
+    )
+    hook = task / "pre_artifacts.sh"
+    custom = (
+        "#!/bin/bash\n"
+        "# Capture the agent's committed work with a custom collector.\n"
+        "exit 0\n"
+    )
+    hook.write_text(custom)
+
+    with _artifact_tasks_overlay(
+        {"task_id": "task-1"}, task.parent, tmp_path / "work", "job",
+    ) as selected:
+        assert selected == task.parent
+        assert hook.read_text() == custom
+
+
+def test_published_deep_swe_hook_recovers_uncommitted_worktree(tmp_path):
+    from dradar.runner import LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True,
+        ).strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    (repo / "tracked.txt").write_text("before\n")
+    git("add", "tracked.txt")
+    git("commit", "--quiet", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    tasks = tmp_path / "tasks"
+    task = tasks / "fixture-task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text(
+        '[metadata]\nbase_commit_hash = "' + base + '"\n'
+    )
+    legacy = LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT.replace(
+        "__DRADAR_BASE_COMMIT__", base,
+    )
+    (task / "pre_artifacts.sh").write_text(legacy)
+
+    (repo / "tracked.txt").write_text("after\n")
+    (repo / "new.txt").write_text("new answer\n")
+    # Effective old command: HEAD has not moved, so the published hook loses
+    # both the tracked edit and the new file.
+    old_patch = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--binary", base, "HEAD"],
+    )
+    assert old_patch == b""
+
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, tasks, tmp_path / "work", "job",
+    ) as selected:
+        assert selected != tasks
+        assert (task / "pre_artifacts.sh").read_text() == legacy
+        script = (selected / "fixture-task/pre_artifacts.sh").read_text()
+        script = script.replace("/app", str(repo))
+        script = script.replace("/logs/artifacts", str(tmp_path / "artifacts"))
+        subprocess.run(["sh", "-c", script], check=True)
+        patch = (tmp_path / "artifacts/model.patch").read_bytes()
+        assert b"+after" in patch
+        assert b"+new answer" in patch
+
+        git("add", "--all")
+        git("commit", "--quiet", "-m", "answer")
+        subprocess.run(["sh", "-c", script], check=True)
+        # A clean committed answer keeps the established patch bytes.
+        assert (tmp_path / "artifacts/model.patch").read_bytes() == patch
+
+
+def test_deep_swe_worktree_collector_empty_and_failure_paths(tmp_path):
+    from dradar.runner import LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Fixture"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "fixture@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "--quiet", "-m", "base"], check=True)
+    base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    task = tmp_path / "tasks/fixture-task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text('[metadata]\nbase_commit_hash = "' + base + '"\n')
+    (task / "pre_artifacts.sh").write_text(
+        LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT.replace("__DRADAR_BASE_COMMIT__", base)
+    )
+
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+    ) as selected:
+        script = (selected / "fixture-task/pre_artifacts.sh").read_text()
+        script = script.replace("/app", str(repo))
+        script = script.replace("/logs/artifacts", str(tmp_path / "artifacts"))
+        subprocess.run(["sh", "-c", script], check=True)
+        patch_path = tmp_path / "artifacts/model.patch"
+        assert patch_path.read_bytes() == b""
+        patch_path.unlink()
+        broken = script.replace("base_ref='" + base + "'", "base_ref='" + "0" * 40 + "'")
+        failed = subprocess.run(["sh", "-c", broken], capture_output=True)
+        assert failed.returncode != 0
+        assert not patch_path.exists()
+
+
+def test_artifact_task_overlay_without_base_uses_root_commit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True,
+        ).strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    (repo / "answer.txt").write_text("before\n")
+    git("add", "answer.txt")
+    git("commit", "--quiet", "-m", "base")
+    (repo / "answer.txt").write_text("after\n")
+    git("add", "answer.txt")
+    git("commit", "--quiet", "-m", "answer")
+    task = tmp_path / "tasks/fixture-task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text("[metadata]\n")
+
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+    ) as selected:
+        script = (selected / "fixture-task/pre_artifacts.sh").read_text()
+        script = script.replace("/app", str(repo))
+        script = script.replace("/logs/artifacts", str(tmp_path / "artifacts"))
+        subprocess.run(["sh", "-c", script], check=True)
+        assert b"+after" in (tmp_path / "artifacts/model.patch").read_bytes()
+
+
 def test_artifact_task_overlay_rejects_untrusted_base_ref(tmp_path):
     task_id = "task-1"
     task = tmp_path / "tasks" / task_id
