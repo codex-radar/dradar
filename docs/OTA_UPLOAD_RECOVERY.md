@@ -14,11 +14,21 @@ claiming work, starting a model, or requesting a new upload owner.
    control flow. A current `waiting_safe_point` state is expected; never fake a
    safe point or edit the pending ledger or OTA pointers.
 2. Pin the official stable signed manifest and its exact platform package for
-   the recovery version. Use the already trusted, installed CLI (for example
-   0.5.229) with its **public** `update prepare --manifest SIGNED_JSON
-   --trusted-key KEY_ID=RAW_PUBLIC_KEY` in a fresh, disposable physical
-   `DRADAR_HOME`. The public key must be the production key already embedded in
-   that trusted CLI, not one supplied by the manifest or candidate download.
+   the recovery version. Start the already trusted, installed CLI (for example
+   its signed 0.5.229 pyz) through its ordinary public launcher in a fresh,
+   disposable physical `DRADAR_HOME`, for example with `update status --json`.
+   With no pending work in that home, normal discovery verifies the official
+   signed stable release and can activate it there. Require the scratch home
+   to show the **exact pinned recovery version and sequence committed**, then
+   verify its signed release record, platform package size and SHA-256 against
+   the pinned manifest. This is the preferred trust bootstrap: the old CLI's
+   embedded production key verifies new code before the new code executes.
+
+   If automatic discovery cannot obtain the target, the old CLI's public
+   `update prepare --manifest SIGNED_JSON --trusted-key KEY_ID=RAW_PUBLIC_KEY`
+   is a fallback in the same disposable home. The public key must be the
+   production key already embedded in that trusted CLI, not one supplied by
+   the manifest or candidate download.
    For the 0.5.229 → 0.5.232 recovery, the trusted 0.5.229 bundle's
    `dradar/ota/discovery.py` pins key ID
    `dradar-ota-prod-2026-09-03-01`, raw key base64
@@ -27,7 +37,7 @@ claiming work, starting a model, or requesting a new upload owner.
    Cross-check those bytes against the **old signed bundle** before passing a
    raw key file to `update prepare`; reject an unfamiliar key ID or digest.
    `update prepare` accepts caller-provided keys, so this equality check is a
-   required part of the trust chain. The old CLI then performs
+   required part of the fallback trust chain. The old CLI then performs
    signature, rollout, compatibility, size and SHA-256 checks before running
    the candidate. Its discovery may also install the same signed version in
    this disposable home. Inspect `update status --json` and the release record
