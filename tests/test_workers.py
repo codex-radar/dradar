@@ -114,6 +114,47 @@ def test_worker_startup_failure_marker_is_low_cardinality(
     assert "private" not in marker.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("chained", (False, True))
+def test_transport_startup_failure_uses_typed_cause_and_safe_diagnosis(
+        monkeypatch, tmp_path, capsys, chained):
+    marker = tmp_path / "worker.started"
+    marker.write_text("preparing", encoding="utf-8")
+    monkeypatch.setenv(runloop._POOL_WORKER_ACTIVITY_ENV, str(marker))
+    error = runloop.ApiError(
+        "deep-swe docker auth proxy://user:password@host "
+        "token=secret request_body=private",
+        status_code=None,
+    )
+    if chained:
+        with pytest.raises(SystemExit) as excinfo:
+            runloop._exit_for(error)
+        reason = excinfo.value
+        assert reason.__cause__ is error
+    else:
+        reason = error
+    published = []
+    monkeypatch.setattr(
+        fleet, "publish_pool_startup_failure",
+        lambda *_args, **kwargs: published.append(kwargs) or True,
+    )
+
+    runloop._publish_fleet_startup_failure(
+        _args(worker_child=True, fleet_pool=True, batch_id="batch"), reason,
+    )
+
+    assert marker.read_text(encoding="utf-8") == (
+        "preparing:startup-network-unavailable"
+    )
+    assert len(published) == 1
+    assert published[0]["error_code"] == "api_connection_failed"
+    assert "服务端可能已经处理请求" in published[0]["user_message"]
+    public = published[0]["user_message"] + capsys.readouterr().out
+    assert all(secret not in public for secret in (
+        "deep-swe", "docker", "auth", "proxy://", "password", "token=",
+        "request_body=private",
+    ))
+
+
 def test_cli_parses_archive_session_as_explicit_opt_in(monkeypatch):
     seen = []
     monkeypatch.setattr(cli, "cmd_go", lambda args: seen.append(args) or 0)

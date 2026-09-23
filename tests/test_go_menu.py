@@ -454,16 +454,27 @@ def test_get_assignment_401_exits_with_token_recovery_hint(monkeypatch, tmp_path
     assert "radar page" in msg
 
 
-def test_get_assignment_network_error_exits_mentioning_resume(monkeypatch, tmp_path: Path):
+def test_get_assignment_network_error_preserves_cause_without_leaking_details(
+        monkeypatch, tmp_path: Path):
     _patch_run(monkeypatch)
-    client = ErrorClient(ApiError("cannot reach https://radar.example: boom",
-                                  status_code=None))
+    error = ApiError(
+        "deep-swe docker auth proxy://user:password@host token=secret "
+        "request_body=private",
+        status_code=None,
+    )
+    client = ErrorClient(error)
     with pytest.raises(SystemExit) as excinfo:
         runloop._go_menu(_args(yes=True, dev_agent=None), {}, client, tmp_path)
     msg = str(excinfo.value)
-    assert "cannot reach" in msg
-    assert "check your connection" in msg
-    assert "leases stay active" in msg and "dradar resume" in msg
+    assert "without a complete HTTP response" in msg
+    assert "server may have processed it" in msg
+    assert "dradar leases" in msg and "original run instructions" in msg
+    assert "stay active" not in msg
+    assert all(secret not in msg for secret in (
+        "deep-swe", "docker", "auth", "proxy://", "password", "token=",
+        "request_body=private",
+    ))
+    assert excinfo.value.__cause__ is error
 
 
 def test_get_assignment_403_passes_server_detail_through(monkeypatch, tmp_path: Path):
