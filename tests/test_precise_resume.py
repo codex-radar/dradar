@@ -80,14 +80,15 @@ def _args(**overrides):
     return SimpleNamespace(**values)
 
 
-def _setup(monkeypatch, tmp_path, response="y"):
+def _setup(monkeypatch, tmp_path, response="y", circuit_version=None):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     monkeypatch.setattr(runloop.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr("builtins.input", lambda _prompt: response)
     monkeypatch.setattr(runloop, "_check_version_pin", lambda *a, **kw: None)
     prior = _held("8829e57009b44414acbda7e590053664", "goreleaser")
     empty_submission_circuit.record_empty(
-        tmp_path, prior, runloop.__version__, account_scope="fixture-account",
+        tmp_path, prior, circuit_version or runloop.__version__,
+        account_scope="fixture-account",
     )
 
 
@@ -254,3 +255,123 @@ def test_assignment_option_is_resume_only(monkeypatch):
     assert parsed[0].resume is True and parsed[0].assignment == FIRST
     with pytest.raises(SystemExit):
         cli.main(["go", "--batch-id", BATCH, "--assignment", FIRST])
+
+
+def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
+    monkeypatch, tmp_path,
+):
+    _setup(monkeypatch, tmp_path, circuit_version="0.5.225")
+    monkeypatch.setattr(runloop, "__version__", "0.5.226")
+    first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
+    automatic = _args(assignment=None, yes=True)
+    client = ExactBatchClient([[first, second]])
+    assert runloop._empty_submission_blocked_ids([first, second], client) == {
+        FIRST, SECOND,
+    }
+    assert not runloop._allow_explicit_empty_submission_retry(
+        automatic, [first, second], client,
+    )
+    assert runloop._go_menu(
+        automatic, {"benchmark": "deep-swe"}, client, tmp_path,
+    ) == 1
+
+    selected_args = _args()
+    ran = []
+
+    def submit(client, assignment, *_a, **_kw):
+        ran.append(assignment["assignment_id"])
+        runloop._record_empty_submission_outcome(
+            selected_args, client, assignment, "submitted",
+        )
+        return "submitted"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", submit)
+    client = ExactBatchClient([[first, second], [first, second]])
+    assert runloop._go_menu(
+        selected_args, {"benchmark": "deep-swe"}, client, tmp_path,
+    ) == 0
+    assert ran == [FIRST]
+    assert all(
+        empty_submission_circuit.open_for(
+            tmp_path, second, version, account_scope="fixture-account",
+        ) for version in ("0.5.225", "0.5.226")
+    )
+    assert not runloop._allow_explicit_empty_submission_retry(
+        automatic, [second], client,
+    )
+    assert runloop._go_menu(
+        _args(), {"benchmark": "deep-swe"},
+        ExactBatchClient([[second]]), tmp_path,
+    ) == 1
+    assert ran == [FIRST]
+
+
+def test_upgrade_failed_retry_does_not_rearm_scope(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path, circuit_version="0.5.225")
+    monkeypatch.setattr(runloop, "__version__", "0.5.226")
+    first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
+    args = _args()
+
+    def fail(client, assignment, *_a, **_kw):
+        runloop._record_empty_submission_outcome(args, client, assignment, "failed")
+        return "failed"
+
+    monkeypatch.setattr(runloop, "_run_and_submit", fail)
+    assert runloop._go_menu(
+        args, {"benchmark": "deep-swe"},
+        ExactBatchClient([[first, second], [first, second]]), tmp_path,
+    ) == 1
+    assert empty_submission_circuit.open_for(
+        tmp_path, second, "0.5.226", account_scope="fixture-account",
+    )
+
+
+def test_upgrade_scope_matching_preserves_account_and_model_isolation(tmp_path):
+    first = _held(FIRST, "csstree")
+    empty_submission_circuit.record_empty(
+        tmp_path, first, "0.5.225", account_scope="account-a",
+    )
+    assert empty_submission_circuit.open_for(
+        tmp_path, first, "0.5.226", account_scope="account-a",
+    )
+    assert empty_submission_circuit.open_for_claim(
+        tmp_path, first, "0.5.226", account_scope="account-a",
+    )
+    for changed, account in (
+        (first, "account-b"),
+        ({**first, "model": "gpt-6-luna"}, "account-a"),
+        ({**first, "effort": "high"}, "account-a"),
+    ):
+        assert not empty_submission_circuit.open_for(
+            tmp_path, changed, "0.5.226", account_scope=account,
+        )
+    other_model = {**first, "model": "gpt-6-luna"}
+    empty_submission_circuit.record_empty(
+        tmp_path, other_model, "0.5.226", account_scope="account-a",
+    )
+    empty_submission_circuit.record_empty(
+        tmp_path, first, "0.5.225", account_scope="account-b",
+    )
+    empty_submission_circuit.record_success(
+        tmp_path, first, "0.5.226", account_scope="account-a",
+    )
+    assert not empty_submission_circuit.open_for(
+        tmp_path, first, "0.5.225", account_scope="account-a",
+    )
+    assert empty_submission_circuit.open_for(
+        tmp_path, other_model, "0.5.226", account_scope="account-a",
+    )
+    assert empty_submission_circuit.open_for(
+        tmp_path, first, "0.5.226", account_scope="account-b",
+    )
+
+
+def test_precise_selector_without_old_or_new_protection_fails_closed(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "__version__", "0.5.226")
+    first = _held(FIRST, "csstree")
+    assert runloop._select_precise_resume_assignment(
+        _args(), ExactBatchClient([[first]]), [first], "deep-swe",
+    ) is None
