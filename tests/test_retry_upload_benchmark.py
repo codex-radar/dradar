@@ -157,4 +157,24 @@ def test_benchmark_hint_does_not_recommend_ordinary_retry_for_blocked_row(
     output = capsys.readouterr().out
     assert "saved upload benchmark 'deep-swe'" in output
     assert "blocked and requires explicit review" in output
-    assert "retry with `dradar retry-upload --benchmark deep-swe`" not in output
+    assert "retryable rows need `dradar retry-upload --benchmark deep-swe`" not in output
+
+
+def test_benchmark_hint_reports_retryable_and_blocked_rows_separately(
+    tmp_path, monkeypatch, capsys,
+):
+    _setup(tmp_path, monkeypatch)
+    first = _entry(_client())
+    second = {**_entry(_client()), "assignment_id": "blocked-assignment",
+              "upload_blocked": "owner_superseded"}
+    pending.record(tmp_path, first)
+    pending.record(tmp_path, second)
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda *_args: pytest.fail("wrong benchmark must stay local"),
+    )
+    assert runloop.cmd_retry_upload(SimpleNamespace(benchmark=None)) == 1
+    output = capsys.readouterr().out
+    assert "retryable rows need `dradar retry-upload --benchmark deep-swe`" in output
+    assert "blocked and requires explicit review" in output
+    assert pending.load(tmp_path) == [first, second]

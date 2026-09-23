@@ -4166,7 +4166,7 @@ def cmd_retry_upload(args) -> int:
         if skipped:
             benchmark = getattr(client, "benchmark_id", None)
             if benchmark:
-                saved_benchmarks: dict[str, bool] = {}
+                saved_benchmarks: dict[str, set[str]] = {}
                 for entry in skipped:
                     if not isinstance(entry, dict):
                         continue
@@ -4178,22 +4178,22 @@ def cmd_retry_upload(args) -> int:
                         if _pending_entry_matches_scope(
                             probe, entry, batch_id=entry.get("batch_id"),
                         ):
-                            saved_benchmarks[candidate] = (
-                                saved_benchmarks.get(candidate, False)
-                                or not entry.get("upload_blocked")
+                            saved_benchmarks.setdefault(candidate, set()).add(
+                                "blocked" if entry.get("upload_blocked")
+                                else "retryable"
                             )
-                for saved, retryable in sorted(saved_benchmarks.items()):
+                for saved, states in sorted(saved_benchmarks.items()):
                     prefix = (
                         f"selected benchmark {benchmark!r} differs from "
                         f"saved upload benchmark {saved!r}; "
                     )
-                    if retryable:
+                    if "retryable" in states:
                         print(
-                            prefix + f"retry with `dradar retry-upload "
+                            prefix + f"retryable rows need `dradar retry-upload "
                             f"--benchmark {saved}` only after confirming "
                             "the saved result's identity"
                         )
-                    else:
+                    if "blocked" in states:
                         print(
                             prefix + "the saved upload is blocked and "
                             "requires explicit review before any recovery"
