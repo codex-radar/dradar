@@ -328,6 +328,7 @@ ZCODE_RUN_CONFIG_VERSION = "zcode-protocol-glm-5.3-family-full-container-v3"
 ZCODE_RUNTIME_PROFILE = "pier-zcode-glm-5.3-family-api-key-full-container-v3"
 ZCODE_HOME_RELATIVE_PATH = Path("providers") / "zcode"
 ZCODE_CLI_RELATIVE_PATH = ZCODE_HOME_RELATIVE_PATH / "current" / "zcode.cjs"
+ZCODE_BUILTIN_CONFIG_RELATIVE_PATH = Path("provider") / "zcode-builtin.json"
 ZCODE_SECRET_RELATIVE_PATH = Path("secrets") / "zcode_coding_plan_api_key"
 ZCODE_API_KEY_ENV = "ZCODE_API_KEY"
 ZCODE_OFFICIAL_DOWNLOAD_PAGE = "https://zcode.z.ai/cn"
@@ -975,6 +976,23 @@ def zcode_cli_version_is_compatible(
     return (major, minor) == (0, 16) and patch >= minimum_patch
 
 
+def zcode_builtin_config_path(cli: Path) -> Path | None:
+    """Find the one built-in config shipped beside a desktop or imported CLI."""
+
+    candidates = (
+        cli.parent / ZCODE_BUILTIN_CONFIG_RELATIVE_PATH,
+        cli.parent.parent / "config" / ZCODE_BUILTIN_CONFIG_RELATIVE_PATH,
+    )
+    for candidate in candidates:
+        try:
+            info = candidate.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 1024 * 1024:
+            return candidate
+    return None
+
+
 def zcode_cli_error(
     path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -1034,6 +1052,13 @@ def zcode_cli_error(
             f"a compatible ZCode CLI 0.16.x >= {minimum} is required; "
             f"found {found or 'an unrecognized version'}"
         )
+    # The official 0.16.9 desktop runtime is no longer a standalone CJS file.
+    # Check before accepting setup/status/doctor, not after a paid trial starts.
+    if int(found.split(".")[2]) >= 9 and zcode_builtin_config_path(resolved) is None:
+        return (
+            "ZCode CLI 0.16.9+ requires provider/zcode-builtin.json "
+            "from its official desktop bundle"
+        )
     return None
 
 
@@ -1054,10 +1079,16 @@ def store_zcode_cli(
     if os.name != "nt":
         os.chmod(target.parent, 0o700)
     source_path = Path(source).expanduser().resolve(strict=True)
+    builtin_config = zcode_builtin_config_path(source_path)
+    target_config = target.parent / ZCODE_BUILTIN_CONFIG_RELATIVE_PATH
     if target.exists() and source_path == target.resolve(strict=True):
         if os.name != "nt":
             os.chmod(target, 0o600)
+            if builtin_config is not None:
+                os.chmod(builtin_config, 0o600)
         return target
+    if builtin_config is not None:
+        _replace_private_file(builtin_config, target_config)
     _replace_private_file(source_path, target)
     return target
 
