@@ -805,12 +805,17 @@ content-bound intent 和 `pending_uploads.json` 构成唯一恢复路径；`retr
 
 ```bash
 dradar retry-upload
+dradar retry-upload --benchmark deep-swe
 dradar retry-upload --request-salvage <ASSIGNMENT_ID>
 dradar retry-upload --request-salvage <ASSIGNMENT_ID> -y
 ```
 
 它只补传已有结果，不领取或运行新任务。每次 `go` / `resume` 启动时也会先自动执行同样
 的普通补传。服务端按 assignment 幂等接收，已经提交的结果不会重复计分。
+如果当前登录配置选择了另一题库，使用 `--benchmark` 显式选择原结果的题库；此参数只对
+本次补传生效，不修改登录配置或待上传结果。CLI 仍核对保存的服务端、账号、批次和题库
+作用域；服务端继续核对租约、owner/session 与上传意图。通过本地作用域检查并不保证
+旧租约仍允许上传。
 
 `--request-salvage` 只接受本地账本中已被标记为 `owner_superseded` 的指定 assignment，
 默认需要交互确认；它不会运行模型，也不会自动处理其他记录。服务端若发现 replacement

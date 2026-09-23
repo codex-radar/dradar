@@ -4067,6 +4067,14 @@ def cmd_retry_upload(args) -> int:
     grabbing any new work (e.g. you're back online and just want to clear
     the backlog before deciding whether to run more)."""
     cfg = _load_config()
+    selected_benchmark = getattr(args, "benchmark", None)
+    if selected_benchmark is not None:
+        if not selected_benchmark.strip():
+            print("benchmark must not be empty; no upload was attempted")
+            return 2
+        # The command's explicit channel is only a client context. Never
+        # rewrite the saved config or the pending entry's scope fingerprint.
+        cfg = {**cfg, "benchmark": selected_benchmark}
     client = _client(cfg)
     entries = pending.load(HOME)
     if not entries:
@@ -4156,6 +4164,28 @@ def cmd_retry_upload(args) -> int:
                 "again on the next `dradar go`/`retry-upload`)"
             )
         if skipped:
+            benchmark = getattr(client, "benchmark_id", None)
+            if benchmark:
+                saved_benchmarks = set()
+                for entry in skipped:
+                    if not isinstance(entry, dict):
+                        continue
+                    for candidate in (DEFAULT_BENCHMARK, POMPEII_BENCHMARK_ID):
+                        if candidate == benchmark:
+                            continue
+                        probe = copy.copy(client)
+                        probe.benchmark_id = candidate
+                        if _pending_entry_matches_scope(
+                            probe, entry, batch_id=entry.get("batch_id"),
+                        ):
+                            saved_benchmarks.add(candidate)
+                for saved in sorted(saved_benchmarks):
+                    print(
+                        f"selected benchmark {benchmark!r} differs from "
+                        f"saved upload benchmark {saved!r}; retry with "
+                        f"`dradar retry-upload --benchmark {saved}` only "
+                        "after confirming the saved result's identity"
+                    )
             print(
                 f"{len(skipped)} saved upload(s) were kept because their "
                 "server/account/plan/session scope is unknown, malformed, or "
