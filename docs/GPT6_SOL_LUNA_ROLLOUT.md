@@ -1,0 +1,37 @@
+# #0132 — GPT-6 Sol and Luna staged integration
+
+This is a development candidate. Four isolated real trials have confirmed Sol/Luna availability; production release remains separately gated.
+
+## Contract and sources (checked 2026-09-23)
+
+- Exact IDs: `gpt-6-sol`, `gpt-6-luna`. No alias to GPT-5.6 and no historical repricing.
+- Benchmark effort lanes: Sol low/medium/high/xhigh/max/ultra; Luna low/medium/high/xhigh/max. Ultra is Codex orchestration, not an API reasoning effort. API `none` is not a benchmark lane in this rollout.
+- Standard API-equivalent $/million tokens, input/cache-read/cache-write/output: Sol short 2/.2/2.5/10, long 4/.4/5/15; Luna short .1/.01/.125/.5, long .2/.02/.25/.75. Long context applies per request only above 272000 input tokens.
+- Cache-write tokens must be independently derived from raw events. Missing evidence yields unknown cost, never zero or a borrowed older tariff. Subscription payments and Fast/Batch/Flex spend are not represented by this Standard comparison.
+- Sources: https://learn.chatgpt.com/docs/models ; https://developers.openai.com/api/docs/models/gpt-6-sol ; https://developers.openai.com/api/docs/models/gpt-6-luna ; https://developers.openai.com/api/docs/pricing .
+
+## Runtime
+
+Codex 0.155.1 is this candidate's runtime floor, NOT a proven upstream minimum. Ordinary Pier 0.3.0 installs the current exact stable npm version in the container layer, invalidating cached older versions. The four real ordinary-mode trials used Codex 0.156.0 (first two) and 0.156.1 (last two); they did not run an exact 0.155.1 binary. New clients reject older versions for these new models. The DRadar OTA is a Python client artifact; it does not contain the Codex binary. Codex is installed in the benchmark runtime separately. Host login/doctor installers are separate from that runtime.
+
+The official darwin-arm64 0.155.1 package passed npm SHA512 integrity and native `--version`; generated app-server schema was inspected without a model call. SHA256 of native executable: 8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e. Six-platform npm distributions exist; execution of all six binaries and six-platform OTA build verification remain release gates.
+
+The experimental managed-auth host credential authority remains pinned to its reviewed 0.154.0 native binary and unchanged custody/refresh contract. For GPT-6 Sol/Luna, new managed assignments pin their separate task container to Codex 0.155.1; older managed assignments retain 0.154.0. The server advertises and checks the model-specific container version and GPT-6 client capability before leasing and on continuation. The client checks the exact descriptor and container output. The official 0.155.1 app-server accepted a synthetic external ChatGPT token in an isolated temporary home without a provider request; fake-token success verifies protocol shape, not real account/model adoption or refresh behavior. The managed mode remains a bounded experimental cohort. Existing stores, users and in-flight work have not been modified.
+
+## Staged rollout and compatibility
+
+New configurations start `paused: true`; operator activation is a separate reviewed config change after real validation. Server capability `codex-gpt6-sol-luna-v1` gates new-model clients; old-model behavior remains. Both DeepSWE and Pompeii config generators include separate new identities. Frontend filters, labels, cards, colors, report ordering and paused state cover both generations.
+
+Server config in production is carried from the live release tree, not automatically replaced with this repository config. Deployment must apply an additive, reviewed live-config patch to BOTH benchmark config lists and load the correct tariff into the live price matrix; do not replace a live config with this example or copy production user data.
+
+Release sequence proposed: fixed-candidate independent QA and real four-case validation, then Server code/config/tariff, Web, CLI OTA, and finally reviewed activation. Recheck latest bases and #0131 overlap before serial merge/release; old clients remain gated until upgraded. Rollback starts by pausing only the new model lanes, then restore each recorded prior artifact/config. Never delete new-model history to roll back.
+
+## Validation boundaries
+
+Offline tests exercise real production parsers, request construction, assignment/upload endpoints and public cost consumption with synthetic local fixtures. Grade updates in the upload test are explicitly fixture mutations; they do NOT prove real grader or real model execution. Native `--version` and schema output are not a real trial.
+
+D0132-REAL-04 supersedes the earlier hard-dollar precondition: $5 per task and $20 total were observed stop thresholds, not guaranteed maximum charges. The site owner confirmed that Sol and Luna can now be called; the earlier unavailable-model report is historical. The authorized trials used one isolated ds0 subscription runner for Sol/Luna × DeepSWE/Pompeii at medium effort, one at a time, without refill or replay. Each claim required a fresh check of the actual container version, isolated server and account route, stop control, core quota, and absence of API-key or paid extra-usage fallback.
+
+All four one-claim private trials have now uploaded and received official isolated grades. DeepSWE: Luna reward 0, Sol reward 1. Pompeii adjacency F1: Luna 0.5714285714, Sol 0.9333333333. Each trial recorded the expected root model identity, complete token events and a source patch whose SHA256 matched the grading artifact. The final private DB has four graded submissions, no active leases, no pending upload, and no remaining trial container or auth snapshot. The four runs total $1.12780020 under the candidate's v20 Standard API-equivalent tariff; this is a comparison estimate, not a Codex subscription charge receipt. These grades prove the end-to-end isolated execution and grading paths, not a minimum quality threshold for either model.
+
+The ordinary CLI launcher selected a cached public OTA 0.5.223 artifact during the third trial. That artifact predates #0132 and lacks `codex-gpt6-sol-luna-v1`, so the unscoped assignment read appeared empty and an exact-batch read returned HTTP 426. The third and fourth trials used the private candidate source entry point with the same strict assignment boundary; they do not prove the public launcher route. #0136 subsequently published CLI 0.5.224 as signed OTA sequence 45. PR #398 now merges that baseline and proposes 0.5.225 with a signed zipapp handoff test showing an installed 0.5.224 launcher selecting the GPT-6 capable payload. Cross-feature QA, actual public OTA verification and normal release authorization remain separate gates. Do not rerun graded samples to test the packaging version.

@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,10 +14,11 @@ ROOT = Path(__file__).parents[1]
 
 
 def build_artifact(destination):
+    from dradar import __version__
     spec = importlib.util.spec_from_file_location('ota_build', ROOT / 'scripts/ota_release.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._build_zipapp(ROOT, destination, version='0.5.204', sequence=25,
+    module._build_zipapp(ROOT, destination, version=__version__, sequence=46,
                          commit='a' * 40, tree='b' * 40, target=('linux', 'x86_64'))
 
 
@@ -48,7 +50,8 @@ def test_real_zipapp_launcher_capabilities_and_doctor(tmp_path, agent):
     assert '.pyz/dradar/' in report['module']
     from dradar import providers as p
     expected = {p.CLAUDE_CAPABILITY, p.ANTIGRAVITY_CAPABILITY, p.DSH_FLASH_CAPABILITY,
-                p.ZCODE_CAPABILITY, p.CODEBUDDY_CAPABILITY, p.DEEPSEEK_CAPABILITY}
+                p.ZCODE_CAPABILITY, p.CODEBUDDY_CAPABILITY, p.DEEPSEEK_CAPABILITY,
+                p.GPT6_CAPABILITY}
     assert expected <= set(report['capabilities'])
     assert p.ANTIGRAVITY_FLASH_38_CAPABILITY not in report['capabilities']
     assert p.GROK_CAPABILITY not in report['capabilities']
@@ -95,6 +98,72 @@ def test_source_launcher_matches_zip_capabilities(tmp_path):
     zip_result, zipped = probe(artifact, tmp_path / 'zip')
     assert source_result.returncode == zip_result.returncode == 0
     assert source['capabilities'] == zipped['capabilities']
+    assert source['version'] == zipped['version'] == '0.5.225'
+    assert source['fleet_protocol_version'] == zipped['fleet_protocol_version'] == 10
+    from dradar import providers as p
+    assert p.GPT6_CAPABILITY in source['capabilities']
+
+
+def test_public_launcher_selects_signed_gpt6_ota_payload(tmp_path, monkeypatch):
+    """The ordinary launcher must hand off to the new signed payload."""
+    import httpx
+    from dradar import launcher
+    from dradar.ota import discovery
+    from test_ota_runtime import sign_document, signed_release
+
+    artifact = tmp_path / 'candidate.pyz'
+    build_artifact(artifact)
+    body = artifact.read_bytes()
+    document, trusted_keys = signed_release()
+    document.pop('signature')
+    document['release_id'] = 'dradar-cli-0.5.225-gpt6-fixture'
+    document['version'] = '0.5.225'
+    document['sequence'] = 46
+    for item in document['artifacts']:
+        item['size'] = len(body)
+        item['sha256'] = hashlib.sha256(body).hexdigest()
+    sign_document(document)
+
+    probe_dir = tmp_path / 'probe'
+    probe_dir.mkdir()
+    shutil.copyfile(ROOT / 'tests/ota_provider_probe.py', probe_dir / 'sitecustomize.py')
+    home = tmp_path / 'home'
+    report_path = tmp_path / 'report.json'
+    monkeypatch.setenv('PYTHONPATH', str(probe_dir))
+    monkeypatch.setenv('DRADAR_HOME', str(home))
+    monkeypatch.setenv('PROBE_ARTIFACT', str(artifact))
+    monkeypatch.setenv('PROBE_OUTPUT', str(report_path))
+    monkeypatch.setenv('PROBE_AGENT', 'claude-code')
+    monkeypatch.setenv('PROBE_AUTH', '1')
+    monkeypatch.setattr(launcher, 'HOME', home)
+    monkeypatch.setattr(discovery, 'TRUSTED_KEYS', trusted_keys)
+    # Model an installed public 0.5.224 launcher discovering the new release.
+    monkeypatch.setattr(discovery, '__version__', '0.5.224')
+
+    def response(request):
+        if str(request.url) == discovery.STABLE_URL:
+            return httpx.Response(200, json=document)
+        return httpx.Response(200, content=body)
+
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        monkeypatch.setattr(
+            launcher, 'discover_update',
+            lambda directory: discovery.discover_update(
+                directory, client=client, trusted_keys=trusted_keys,
+            ),
+        )
+        monkeypatch.setattr(sys, 'argv', ['dradar', 'doctor', '--agent', 'claude-code'])
+        assert launcher.main() == 0
+
+    report = json.loads(report_path.read_text())
+    from dradar.providers import GPT6_CAPABILITY
+    assert '.pyz/dradar/' in report['module']
+    assert report['version'] == '0.5.225'
+    assert report['fleet_protocol_version'] == 10
+    assert GPT6_CAPABILITY in report['capabilities']
+    assert GPT6_CAPABILITY in report['header'].split(',')
+    state = json.loads((home / 'ota/update-state.json').read_text())
+    assert state['state'] == 'committed'
 
 
 @pytest.mark.parametrize('resource,capabilities', [
@@ -145,7 +214,7 @@ def test_all_supported_harness_capabilities_source_and_zip(tmp_path):
                 p.DSH_VISION_TEXT_CAPABILITY, p.DEEPSEEK_CAPABILITY, p.DEEPSEEK_PRO_CAPABILITY,
                 p.DEEPSEEK_FLASH_41_CAPABILITY, p.DEEPSEEK_FLASH_OFF_CAPABILITY,
                 p.DEEPSEEK_PRO_OFF_CAPABILITY, p.DEEPSEEK_FLASH_41_OFF_CAPABILITY,
-                p.TASK_PACKAGE_SYNC_CAPABILITY}
+                p.TASK_PACKAGE_SYNC_CAPABILITY, p.GPT6_CAPABILITY}
     for name, source in [('source', ROOT / 'src'), ('zip', artifact)]:
         result, report = probe(source, tmp_path / name, all_ready=True)
         assert result.returncode == 0, result.stdout + result.stderr

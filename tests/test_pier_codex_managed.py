@@ -88,3 +88,16 @@ def test_controller_failure_retrieves_finished_worker_exception(tmp_path,monkeyp
         gc.collect();await asyncio.sleep(0)
         assert not unhandled
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('model', ['gpt-6-sol', 'gpt-6-luna'])
+def test_new_model_managed_adapter_requires_exact_container_runtime(tmp_path,model):
+    from dradar.pier_codex_managed import validate_codex_version_output
+    kwargs=dict(logs_dir=tmp_path,model_name='openai/'+model,
+        managed_config_file=str(tmp_path/'unused.json'),managed_bridge_file=str(tmp_path/'unused.cjs'))
+    with pytest.raises(ValueError,match='GPT-6 managed consumer'):
+        CodexManaged(version='0.154.0',**kwargs)
+    CodexManaged(version='0.155.1',**kwargs)
+    validate_codex_version_output('codex-cli 0.155.1\n','0.155.1')
+    with pytest.raises(RuntimeError,match='managed container version mismatch'):
+        validate_codex_version_output('codex-cli 0.154.0\n','0.155.1')

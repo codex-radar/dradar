@@ -29,6 +29,7 @@ from pathlib import Path
 
 import httpx
 
+from .gpt6 import GPT6_EFFORTS, GPT6_CODEX_VERSION
 from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
@@ -410,6 +411,23 @@ class LiveAccountTerminalError(RunnerError):
     #: from the event that confirmed it. The message text stays generic
     #: because the run loop re-classifies it.
     auth_signal: str | None = None
+
+
+def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True):
+    model = assignment.get("model", "")
+    if not isinstance(model, str):
+        raise RunnerError("assignment model must be a string")
+    if model not in GPT6_EFFORTS:
+        if model.startswith("gpt-6-") and model != "gpt-6-astra":
+            raise RunnerError(f"unsupported GPT-6 model: {model}")
+        return
+    if assignment.get("effort") not in GPT6_EFFORTS[model]:
+        raise RunnerError(f"unsupported effort for {model}: {assignment.get('effort')}")
+    if validate_version:
+        version = assignment.get("agent_version", "")
+        if (not isinstance(version, str) or not _STABLE_CODEX_VERSION_RE.fullmatch(version)
+                or tuple(map(int, version.split("."))) < tuple(map(int, GPT6_CODEX_VERSION.split(".")))):
+            raise RunnerError(f"{model} requires the DRadar candidate Codex runtime >= {GPT6_CODEX_VERSION}")
 
 
 def resolve_latest_codex_cli_version(
@@ -1575,6 +1593,7 @@ def build_pier_command(
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         cmd += ["--ae", f"{var}=trial@dradar.invalid"]
     if agent == "codex" and provider == DEFAULT_CODEX_PROVIDER:
+        _validate_gpt6_assignment(assignment)
         auth = None if managed else (provider_auth_path or codex_auth_path())
         if not managed and not auth.is_file():
             raise RunnerError(f"codex auth not found: {auth} (run `codex login` first)")
@@ -1601,8 +1620,8 @@ def build_pier_command(
                 "starting the task container"
             )
         if managed:
-            if version != "0.154.0":
-                raise RunnerError("managed runtime requires Codex 0.154.0")
+            if version != (GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"):
+                raise RunnerError("managed runtime version differs from the assigned model contract")
             cmd += ["--ak", f"managed_config_file={managed_auth_config}",
                     "--ak", f"managed_bridge_file={managed_bridge}",
                     "--ak", f"managed_package={managed_package}"]
@@ -4396,6 +4415,7 @@ def run_trial(
     )
     build_cache_mode = image_cache.normalize_build_cache_mode(build_cache_mode)
     if effective_agent == "codex":
+        _validate_gpt6_assignment(assignment, validate_version=False)
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER
         )
@@ -4418,7 +4438,7 @@ def run_trial(
                 f"{codex_cli_version}"
             )
         elif managed_auth_config is not None:
-            codex_cli_version = "0.154.0"
+            codex_cli_version = GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"
         else:
             # Resolve before creating the job, extending the lease, or starting
             # Pier. A registry outage therefore consumes no model quota and leaves

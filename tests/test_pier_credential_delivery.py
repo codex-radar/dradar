@@ -168,7 +168,9 @@ def test_codex_adapter_routes_stock_auth_upload_through_private_transport(tmp_pa
     monkeypatch.setattr(pier_codex.Codex,'run',run)
     monkeypatch.setattr(pier_codex.CodexRegistered,'exec_as_agent',Agent.exec_as_agent)
     monkeypatch.setattr(pier_codex.CodexRegistered,'exec_as_root',Agent.exec_as_root)
-    asyncio.run(object.__new__(pier_codex.CodexRegistered).run('task',env,None))
+    adapter = object.__new__(pier_codex.CodexRegistered)
+    adapter.model_name = 'gpt-5.5'
+    asyncio.run(adapter.run('task',env,None))
     assert env.mapped('/tmp/codex-secrets/auth.json').read_bytes()==source.read_bytes()
     assert env.uploads[0][0]!=source
     assert env.mapped('/tmp/codex-secrets').stat().st_mode & 0o777==0o700

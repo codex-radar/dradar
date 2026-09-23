@@ -147,6 +147,7 @@ def test_codex_model_is_not_called_when_baseline_validation_fails(source, monkey
     model = AsyncMock()
     monkeypatch.setattr(Codex, "run", model)
     adapter = object.__new__(CodexRegistered)
+    adapter.model_name = "gpt-5.5"
     with pytest.raises(ValueError, match="missing or ambiguous"):
         asyncio.run(adapter.run("ordinary fixture task", LocalEnvironment(repo), None))
     model.assert_not_called()
@@ -162,7 +163,9 @@ def test_codex_model_starts_only_after_full_commit_evidence(source, monkeypatch)
     monkeypatch.setattr(Codex, "run", mocked)
     # This baseline-only test deliberately bypasses the real auth constructor.
     monkeypatch.setattr(Codex, "_resolve_auth_json_path", lambda self: None)
-    asyncio.run(object.__new__(CodexRegistered).run("ordinary fixture task", LocalEnvironment(repo), None))
+    adapter = object.__new__(CodexRegistered)
+    adapter.model_name = "gpt-5.5"
+    asyncio.run(adapter.run("ordinary fixture task", LocalEnvironment(repo), None))
     mocked.assert_awaited_once()
 
 

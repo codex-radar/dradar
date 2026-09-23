@@ -13,8 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.environ['PROBE_ARTIFACT'])
-from dradar import providers as p, doctor as d, runner
+from dradar import __version__, providers as p, doctor as d, runner
 from dradar.ota import discovery
+from dradar.fleet import CONTROLLER_PROTOCOL_VERSION
 from dradar.api_client import ApiClient, CLIENT_CAPABILITIES_HEADER
 import httpx
 
@@ -48,6 +49,7 @@ stub(d, 'tasks_root_from_config', lambda *a: home)
 stub(d, '_probe', lambda *a: True)
 stub(d.shutil, 'which', lambda name: '/fixture/' + name)
 stub(d.egress, 'egress_proxy_preflight', lambda *a: (True, ''))
+stub(d, '_registry_reachability', lambda *a: True)
 stub(runner, 'ensure_pier', lambda: '/fixture/pier')
 stub(runner, '_resolve_user_tool', lambda name: '/fixture/' + name)
 stub(runner, '_pier_version', lambda *a: runner.PIER_VERSION)
@@ -72,7 +74,9 @@ def record():
         return httpx.Response(200, json={'nickname': 'fixture'})
     client = ApiClient('https://fixture.invalid', '', transport=httpx.MockTransport(response))
     client.whoami()
-    report = {'module': p.__file__, 'capabilities': list(client.capabilities),
+    report = {'module': p.__file__, 'version': __version__,
+              'fleet_protocol_version': CONTROLLER_PROTOCOL_VERSION,
+              'capabilities': list(client.capabilities),
               'header': captured[0].get(CLIENT_CAPABILITIES_HEADER.lower(), ''),
               'catalog_error': p.deepseek_catalog_error(),
               'files': {name: Path(p.__file__).with_name(name).is_file() for name in ('pier_claude.py', 'pier_antigravity.py')},

@@ -1,0 +1,144 @@
+"""Offline contracts only: no provider credentials, requests, or Docker runs."""
+import json
+import pytest
+from dradar.gpt6 import GPT6_EFFORTS, GPT6_CAPABILITY, GPT6_CODEX_VERSION
+from dradar import runner
+from dradar.providers import advertised_capabilities
+
+@pytest.mark.parametrize('benchmark', ['deep-swe', 'pompeii-adjacency'])
+@pytest.mark.parametrize('model,effort', [(m,e) for m,es in GPT6_EFFORTS.items() for e in es])
+def test_dispatch_preserves_model_effort_and_pins_install(tmp_path, monkeypatch, benchmark, model, effort):
+    monkeypatch.setattr(runner.shutil, 'which', lambda _: '/fixture/pier')
+    task=tmp_path/'task';task.mkdir()
+    (task/'task.toml').write_text('[agent]\ntimeout_sec = 7200\n')
+    auth=tmp_path/'auth.json';auth.write_text('{}')
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH',str(auth))
+    home=tmp_path/'home';home.mkdir()
+    a={'assignment_id':'fixture','task_id':'task','agent':'codex','model':model,
+       'effort':effort,'agent_version':GPT6_CODEX_VERSION,'benchmark_id':benchmark}
+    cmd=runner.build_pier_command(a,tmp_path,tmp_path/'jobs','fixture',home)
+    assert cmd[cmd.index('--model')+1]==model
+    assert f'reasoning_effort={effort}' in cmd
+    assert f'version={GPT6_CODEX_VERSION}' in cmd
+    assert '--disable-verification' in cmd
+    assert all('gpt-5.6-' not in value for value in cmd)
+    # Inspect the real installed Pier adapter, not a hand-written fake argv.
+    from pier.agents.installed.codex import Codex
+    agent=Codex(logs_dir=tmp_path/'logs',model_name=model,version=GPT6_CODEX_VERSION,reasoning_effort=effort)
+    assert any(f'@openai/codex@{GPT6_CODEX_VERSION}' in str(c) for c in agent.install_spec().steps)
+
+@pytest.mark.parametrize('model,effort,version', [
+    ('gpt-6-luna','ultra','0.155.1'),('gpt-6-sol','bogus','0.155.1'),
+    ('gpt-6-sol','medium','0.154.0'),('gpt-6-sol','medium','latest'),
+    ('gpt-6-sol-unknown','medium','0.155.1'),
+    ('gpt-6-foo','medium','0.155.1'),
+])
+def test_invalid_contract_rejected_before_execution(model,effort,version):
+    with pytest.raises(runner.RunnerError):
+        runner._validate_gpt6_assignment({'model':model,'effort':effort,'agent_version':version})
+
+def test_existing_model_contract_is_not_rewritten():
+    runner._validate_gpt6_assignment({'model':'gpt-5.6-sol','effort':'ultra','agent_version':'0.154.0'})
+
+def test_new_client_advertises_gpt6_contract():
+    assert GPT6_CAPABILITY in advertised_capabilities()
+
+@pytest.mark.parametrize('stdout,code,accepted', [
+    ('codex-cli 0.155.1',0,True),('known warning\ncodex-cli 0.155.1',0,True),
+    ('codex-cli 0.154.0',0,False),('codex-cli 0.155.1',1,False),
+    ('codex-cli 0.155.1\ncodex-cli 0.154.0',0,False),('',0,False),
+])
+def test_actual_container_binary_is_checked_before_model_execution(tmp_path, monkeypatch, stdout, code, accepted):
+    import asyncio
+    from types import SimpleNamespace
+    from dradar.pier_codex import CodexRegistered
+    agent=CodexRegistered(logs_dir=tmp_path,model_name='gpt-6-sol',version='0.155.1')
+    async def execute(environment,command,**kwargs):
+        assert command.endswith('codex --version')
+        return SimpleNamespace(stdout=stdout,return_code=code)
+    monkeypatch.setattr(agent,'exec_as_agent',execute)
+    if accepted:
+        asyncio.run(agent.verify_gpt6_runtime(object()))
+    else:
+        with pytest.raises(RuntimeError,match='container version'):
+            asyncio.run(agent.verify_gpt6_runtime(object()))
+
+
+def test_gpt6_subscription_guard_rejects_api_fallback_before_execution(tmp_path, monkeypatch):
+    from dradar.pier_codex import CodexRegistered
+    auth = tmp_path / 'auth.json'
+    auth.write_text(json.dumps({
+        'auth_mode': 'chatgpt', 'OPENAI_API_KEY': None,
+        'tokens': {'access_token': 'fixture-access'},
+    }))
+    auth.chmod(0o600)
+    agent = CodexRegistered(logs_dir=tmp_path, model_name='gpt-6-luna', version='0.155.1')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('CODEX_API_KEY', raising=False)
+    agent.verify_gpt6_subscription_auth(auth)
+
+    agent._extra_env['OPENAI_API_KEY'] = 'fixture-paid-key'
+    with pytest.raises(RuntimeError, match='subscription authentication') as error:
+        agent.verify_gpt6_subscription_auth(auth)
+    assert 'fixture-paid-key' not in str(error.value)
+    agent._extra_env.clear()
+
+    agent._extra_env['OPENAI_BASE_URL'] = 'https://paid-proxy.example'
+    with pytest.raises(RuntimeError, match='subscription authentication'):
+        agent.verify_gpt6_subscription_auth(auth)
+    agent._extra_env.clear()
+
+    auth.write_text(json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'fixture-paid-key'}))
+    with pytest.raises(RuntimeError, match='subscription authentication') as error:
+        agent.verify_gpt6_subscription_auth(auth)
+    assert 'fixture-paid-key' not in str(error.value)
+
+    auth.write_text('{}')
+    with pytest.raises(RuntimeError, match='subscription authentication'):
+        agent.verify_gpt6_subscription_auth(auth)
+
+
+def test_gpt6_stock_adapter_uses_validated_auth_snapshot(tmp_path, monkeypatch):
+    import asyncio
+    from dradar import pier_codex
+
+    auth = tmp_path / 'auth.json'
+    accepted = {'auth_mode': 'chatgpt', 'tokens': {'access_token': 'fixture-access'}}
+    auth.write_text(json.dumps(accepted))
+    auth.chmod(0o600)
+    agent = pier_codex.CodexRegistered(
+        logs_dir=tmp_path, model_name='gpt-6-sol', version='0.155.1',
+        extra_env={'CODEX_AUTH_JSON_PATH': str(auth)},
+    )
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('CODEX_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_BASE_URL', raising=False)
+    monkeypatch.delenv('OPENAI_API_BASE', raising=False)
+    original = agent.verify_gpt6_subscription_auth
+
+    def validate_then_replace(path):
+        snapshot = original(path)
+        auth.write_text(json.dumps({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'fixture-paid-key'}))
+        return snapshot
+
+    monkeypatch.setattr(agent, 'verify_gpt6_subscription_auth', validate_then_replace)
+    async def noop(*args, **kwargs):
+        return None
+    monkeypatch.setattr(agent, 'verify_gpt6_runtime', noop)
+    monkeypatch.setattr(pier_codex, 'verify_task_baseline', noop)
+    monkeypatch.setattr(pier_codex, 'register_worker', noop)
+    seen = []
+
+    async def stock_run(self, instruction, environment, context):
+        path = self._resolve_auth_json_path()
+        # Follow the real upload reader, including its symlink-component and
+        # owner-only checks. Path.read_text() missed macOS /var -> /private/var.
+        from dradar.credential_files import read_private_credential
+        seen.append(json.loads(read_private_credential(path)))
+        assert path in environment._sources
+
+    monkeypatch.setattr(pier_codex.Codex, 'run', stock_run)
+    asyncio.run(agent.run('fixture instruction', object(), None))
+    assert seen == [accepted]
+    assert agent._extra_env['CODEX_AUTH_JSON_PATH'] == str(auth)
+    assert json.loads(auth.read_text())['auth_mode'] == 'apikey'

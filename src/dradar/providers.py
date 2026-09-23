@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
+from .gpt6 import GPT6_CAPABILITY
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CAPABILITY,
@@ -2092,7 +2093,7 @@ def advertised_capabilities(
     # public task repository.  Servers activate this marker only when their
     # configured task package requires the new distribution path, allowing a
     # CLI-first rolling upgrade while old servers harmlessly ignore it.
-    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY]
+    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY]
     from .managed_auth_selection import load_selection, CAPABILITY as managed_capability
     from .auth_refresh import RefreshUnavailable
     try:
