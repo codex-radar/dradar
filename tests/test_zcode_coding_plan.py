@@ -257,6 +257,40 @@ def test_zcode_adapter_stages_builtin_config_only_when_required(
         assert config_uploads == []
 
 
+@pytest.mark.parametrize(
+    ("version", "ready"),
+    [("0.16.5", True), ("0.16.9", True), ("0.17.0", False)],
+)
+def test_zcode_status_uses_compatible_version_and_reports_observed_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], version: str, ready: bool,
+) -> None:
+    """#401: status agrees with setup and runner on supported CLI patches."""
+
+    runtime = _private(tmp_path / "zcode.cjs", "test-runtime")
+    monkeypatch.setattr(provider_config, "zcode_secret_path", lambda: tmp_path / "key")
+    monkeypatch.setattr(provider_config, "zcode_secret_error", lambda _path: None)
+    monkeypatch.setattr(provider_config, "zcode_api_key", lambda: "dummy-key")
+    monkeypatch.setattr(provider_config, "zcode_cli_path", lambda: str(runtime))
+    monkeypatch.setattr(provider_config, "zcode_cli_error", lambda _path: None)
+    monkeypatch.setattr(provider_config, "zcode_credential_source", lambda: "test")
+    monkeypatch.setattr(provider_config.shutil, "which", lambda _name: "/usr/bin/node")
+    monkeypatch.setattr(
+        provider_config.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=f"{version}\n", stderr="",
+        ),
+    )
+
+    assert provider_config._status_zcode(live=False) == (0 if ready else 1)
+    output = capsys.readouterr().out
+    if ready:
+        assert f"provider ready via test (value hidden, CLI {version}," in output
+        assert "dummy-key" not in output
+    else:
+        assert "compatible CLI 0.16.x required" in output
+
+
 def test_zcode_cli_rejects_incompatible_runtime_minor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
