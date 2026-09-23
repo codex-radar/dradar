@@ -644,11 +644,10 @@ def _exact_batch_lookup_error(
     if exc.status_code != 404 or exc.code != "claim_batch_not_found":
         return original
     try:
-        inventory = client.get_assignment_inventory()
+        from .leases import _all_active
+
+        active = _all_active(client)
     except (ApiError, AttributeError, ValueError, TypeError):
-        return original
-    active = inventory.get("active") if isinstance(inventory, dict) else None
-    if not isinstance(active, list):
         return original
     matching = [
         item for item in active
