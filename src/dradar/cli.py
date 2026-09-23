@@ -390,6 +390,10 @@ def main(argv: list[str] | None = None) -> int:
         "retry-upload",
         help="flush any trials that ran but failed to upload (also runs automatically before `go`)")
     p_retry.add_argument(
+        "--benchmark", metavar="BENCHMARK",
+        help="select the saved result's benchmark for this retry only (does not change login config)",
+    )
+    p_retry.add_argument(
         "--request-salvage", metavar="ASSIGNMENT_ID",
         help=(
             "explicitly request an upload-only owner for one saved "
