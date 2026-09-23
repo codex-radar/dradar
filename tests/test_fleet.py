@@ -522,6 +522,33 @@ def test_explicit_batch_benchmark_rejects_mismatched_assignment(monkeypatch):
         fleet._resolve_workers(2, BATCH_B, {"batches": {}}, benchmark="deep-swe")
 
 
+def test_explicit_batch_benchmark_overrides_saved_channel_for_exact_batch(monkeypatch):
+    class Client:
+        benchmark_id = "pompeii-adjacency"
+
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            assert self.benchmark_id == "deep-swe"
+            return {"active": [
+                {"assignment_id": "held-a", "benchmark_id": "deep-swe"},
+                {"assignment_id": "held-b", "benchmark_id": "deep-swe"},
+            ]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"benchmark": "pompeii-adjacency"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+    workers, _warnings, capacity = fleet._resolve_workers(
+        2, BATCH_B, {"batches": {}}, benchmark="deep-swe",
+    )
+    assert workers == 2
+    assert capacity["benchmark"] == "deep-swe"
+    assert capacity["held_tasks"] == 2
+
+
 def test_explicit_batch_benchmark_cannot_override_run_plan(monkeypatch):
     monkeypatch.setattr(
         fleet, "runtime_config", lambda _path: {"benchmark": "deep-swe"},
