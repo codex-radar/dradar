@@ -49,7 +49,7 @@ from .codebuddy_provider import (
     managed_codebuddy_home,
 )
 from .identity import _client
-from .local_config import HOME, _load_config, runtime_config
+from .local_config import DEFAULT_BENCHMARK, HOME, _load_config, runtime_config
 from .machine import acquire_run_lock
 from .providers import KIMI_CREDENTIAL_PATH_ENV
 
@@ -61,7 +61,8 @@ SCHEMA_VERSION = 1
 # Version 7 also keeps explicit worker counts free of legacy capacity probes.
 # Version 8 carries verified payloads and readable Windows lease identity.
 # Version 9 preflights each new pool in its own validated runtime environment.
-CONTROLLER_PROTOCOL_VERSION = 9
+# Version 10 pins the exact batch benchmark through preflight and every worker.
+CONTROLLER_PROTOCOL_VERSION = 10
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -638,16 +639,28 @@ def _active_batches(state: dict) -> dict[str, dict]:
 def _resolve_workers(
     requested: int | str, batch_id: str, state: dict,
     credentials_file: str | None = None,
+    benchmark: str | None = None,
 ) -> tuple[int, list[str], dict]:
     try:
         cfg = (
             runtime_config(credentials_file)
             if credentials_file else _load_config()
         )
+        if benchmark is not None:
+            if not isinstance(benchmark, str) or not benchmark.strip():
+                raise FleetError("invalid benchmark channel")
+            if credentials_file and cfg.get("benchmark") != benchmark:
+                raise FleetError("benchmark differs from the run-plan credential")
+            cfg["benchmark"] = benchmark
+        selected_benchmark = cfg.get("benchmark") or DEFAULT_BENCHMARK
+        if not isinstance(selected_benchmark, str) or not selected_benchmark.strip():
+            raise FleetError("invalid saved benchmark channel")
+        cfg["benchmark"] = selected_benchmark
         client = _client(cfg)
     except (SystemExit, ValueError) as exc:
         raise FleetError(str(exc)) from exc
     client.set_batch_id(batch_id)
+    client.benchmark_id = selected_benchmark
     reserved = sum(
         int(item.get("workers") or 0) for item in _active_batches(state).values()
     )
@@ -671,6 +684,13 @@ def _resolve_workers(
         active = assignments.get("active")
         if active is None:
             active = [assignments["assignment"]] if assignments.get("assignment") else []
+        if selected_benchmark and any(
+            (item.get("benchmark_id") != selected_benchmark
+             if benchmark is not None else
+             item.get("benchmark_id") not in (None, selected_benchmark))
+            for item in active
+        ):
+            raise FleetError("assignment benchmark differs from the selected batch benchmark")
         return workers, [], {
             "reserved_before": reserved,
             "account_limit": account_limit,
@@ -678,8 +698,19 @@ def _resolve_workers(
             "docker_cpus": None,
             "docker_memory_gib": None,
             "disk_free_gib": None,
+            "benchmark": selected_benchmark,
         }
     try:
+        if benchmark is not None and requested == "auto":
+            assignments = client.get_assignment()
+            active = assignments.get("active")
+            if active is None:
+                active = [assignments["assignment"]] if assignments.get("assignment") else []
+            if any(item.get("benchmark_id") != selected_benchmark
+                   for item in active):
+                raise FleetError(
+                    "assignment benchmark differs from the selected batch benchmark"
+                )
         report = inspect_capacity(client)
     except ApiError as exc:
         raise FleetError(f"cannot inspect exact batch {batch_id}: {exc}") from exc
@@ -714,6 +745,7 @@ def _resolve_workers(
         "docker_cpus": report.docker_cpus,
         "docker_memory_gib": report.docker_memory_gib,
         "disk_free_gib": report.disk_free_gib,
+        "benchmark": selected_benchmark,
     }
     return workers, warnings, metadata
 
@@ -759,6 +791,7 @@ def _resolve_workers_in_runtime(
     requested: int | str, batch_id: str, state: dict,
     credentials_file: str | None, runtime_executable: str,
     runtime_environment: Mapping[str, str],
+    benchmark: str | None = None,
 ) -> tuple[int, list[str], dict]:
     # Provider probes still include process-global libraries and auth helpers.
     # A short-lived child isolates them without temporarily changing os.environ
@@ -789,6 +822,7 @@ def _resolve_workers_in_runtime(
                     for key, item in _active_batches(state).items()
                 }},
                 "credentials_file": credentials_file,
+                "benchmark": benchmark,
             }),
             timeout=REQUEST_TIMEOUT_SECONDS - 5,
         )
@@ -827,7 +861,7 @@ def cmd_fleet_inspect_runtime(args) -> int:
         payload = json.load(sys.stdin)
         result = _resolve_workers(
             payload["workers"], payload["batch_id"], payload["state"],
-            payload.get("credentials_file"),
+            payload.get("credentials_file"), payload.get("benchmark"),
         )
     except (FleetError, ValueError, KeyError, TypeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
@@ -991,6 +1025,7 @@ def _spawn_pool(
     refill_model: str | None = None,
     refill_effort: str | None = None,
     credentials_file: str | None = None,
+    benchmark: str | None = None,
     runtime_executable: str | None = None,
     runtime_environment: Mapping[str, str] | None = None,
 ) -> tuple[subprocess.Popen, object]:
@@ -1006,6 +1041,8 @@ def _spawn_pool(
     ]
     if credentials_file:
         command.extend(("--credentials-file", credentials_file))
+    if benchmark:
+        command.extend(("--benchmark", benchmark))
     if refill:
         command.extend((
             "--refill", "--refill-to", str(workers),
@@ -1182,6 +1219,9 @@ def _handle_request(
                     "refill_model": request.get("refill_model"),
                     "refill_effort": request.get("refill_effort"),
                 }
+                if (request.get("benchmark") is not None
+                        and request["benchmark"] != current.get("benchmark")):
+                    raise FleetError("batch is already active with a different benchmark")
                 if any(
                     current.get(key) != value
                     for key, value in requested_shape.items()
@@ -1225,6 +1265,17 @@ def _handle_request(
             refill_effort = request.get("refill_effort")
             credentials_file = request.get("credentials_file")
             plan_id = request.get("plan_id")
+            benchmark = request.get("benchmark")
+            if benchmark is not None and (
+                not isinstance(benchmark, str) or not benchmark.strip()
+            ):
+                raise FleetError("invalid benchmark channel")
+            if current and current.get("status") in SETTLED_BATCH_STATUSES and request.get("retry"):
+                saved_benchmark = current.get("benchmark")
+                if benchmark is not None and saved_benchmark and benchmark != saved_benchmark:
+                    raise FleetError("retry benchmark differs from the saved batch")
+                if benchmark is None:
+                    benchmark = saved_benchmark
             if (
                 current
                 and current.get("status") in SETTLED_BATCH_STATUSES
@@ -1317,7 +1368,11 @@ def _handle_request(
             workers, warnings, capacity = _resolve_workers_in_runtime(
                 request.get("workers", "auto"), batch_id, state,
                 credentials_file, runtime_executable, runtime_environment,
+                benchmark,
             )
+            if benchmark is not None and capacity.get("benchmark") != benchmark:
+                raise FleetError("runtime benchmark differs from the requested batch")
+            benchmark = capacity.get("benchmark") or benchmark
             process, log_handle = _spawn_pool(
                 home, state, batch_id, workers,
                 refill=refill,
@@ -1326,6 +1381,7 @@ def _handle_request(
                 refill_model=refill_model,
                 refill_effort=refill_effort,
                 credentials_file=credentials_file,
+                benchmark=benchmark,
                 runtime_executable=runtime_executable,
                 runtime_environment=runtime_environment,
             )
@@ -1345,6 +1401,7 @@ def _handle_request(
                     "capacity": capacity,
                     "plan_id": plan_id,
                     "credentials_file": credentials_file,
+                    "benchmark": benchmark,
                     "refill": refill,
                     "max_tasks": max_tasks,
                     "refill_harness": refill_harness,
@@ -1754,6 +1811,7 @@ def cmd_fleet_add(args) -> int:
         response = add_batch(
             batch_id=args.batch_id,
             workers=args.workers,
+            benchmark=getattr(args, "benchmark", None),
             retry=bool(getattr(args, "retry", False)),
             refill=bool(args.refill),
             max_tasks=args.max_tasks,
@@ -1872,6 +1930,7 @@ def add_batch(
     *,
     batch_id: str,
     workers: int | str = "auto",
+    benchmark: str | None = None,
     retry: bool = False,
     refill: bool = False,
     max_tasks: int | None = None,
@@ -1892,6 +1951,7 @@ def add_batch(
     response = _request("add", {
         "batch_id": normalized,
         "workers": workers,
+        "benchmark": benchmark,
         "retry": retry,
         "refill": refill,
         "max_tasks": max_tasks,
