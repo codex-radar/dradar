@@ -221,6 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         "add", help="idempotently add one exact claimed batch to this machine")
     p_fleet_add.add_argument("--batch-id", required=True, type=_batch_id_value)
     p_fleet_add.add_argument(
+        "--benchmark", metavar="BENCHMARK",
+        help="benchmark channel of this exact claimed batch (default: saved channel)",
+    )
+    p_fleet_add.add_argument(
         "--workers", type=_workers_value, default="auto", metavar="N|auto",
         help="workers reserved for this batch (default: auto, accounting for the whole Fleet)",
     )
