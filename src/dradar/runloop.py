@@ -1953,17 +1953,19 @@ def _bundled_completed_outcome(
     }
 
 
-def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False):
+def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
+                  upload_only_recovery=False):
     pending.record(HOME, entry)
     try:
         if (entry.get("upload_blocked") and not request_salvage) or not Path(entry["trial_dir"]).exists():
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
+                upload_only_recovery=upload_only_recovery,
             )
         with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
-                log_snapshot=snapshot,
+                log_snapshot=snapshot, upload_only_recovery=upload_only_recovery,
             )
     except UnsafeArtifact as exc:
         blocked = dict(entry)
@@ -1979,6 +1981,7 @@ def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False):
 def _upload_trial_checked(
     client: ApiClient, entry: dict, *, ask_cleanup: bool = False,
     request_salvage: bool = False, log_snapshot: Path | None = None,
+    upload_only_recovery: bool = False,
 ) -> str:
     """Scrub + upload one trial's artifacts, described by a pending-ledger
     entry dict (assignment_id/nonce/task_id/trial_dir/meta/outcome/job_dir/
@@ -2103,6 +2106,8 @@ def _upload_trial_checked(
             print(f"patch contains secret-shaped content ({', '.join(labels)}) "
                   "outside safely redactable added lines, or redaction made the diff "
                   f"invalid; not uploaded. Raw evidence kept at {patch}")
+            if upload_only_recovery:
+                return "not-uploaded"
             pending.remove(
                 HOME, assignment_id,
                 scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2539,6 +2544,8 @@ def _upload_trial_checked(
                                     f"  {task_id}: lease expired before its saved "
                                     "upload could be reconciled; local evidence kept"
                                 )
+                                if upload_only_recovery:
+                                    return "expired"
                                 pending.remove(
                                     HOME, assignment_id,
                                     scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2620,8 +2627,11 @@ def _upload_trial_checked(
                         print(
                             f"  {task_id}: lease or claim batch expired before "
                             "upload recovery could be registered — the cell "
-                            "reopened, dropping it"
+                            + ("reopened; local evidence kept" if upload_only_recovery
+                               else "reopened, dropping it")
                         )
+                        if upload_only_recovery:
+                            return "expired"
                         pending.remove(
                             HOME, assignment_id,
                             scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2699,9 +2709,11 @@ def _upload_trial_checked(
                     print(
                         f"  {task_id}: the server requires a complete trajectory "
                         "bundle after rejecting/omitting this run's bundle; "
-                        "releasing the incompatible assignment instead of "
-                        "retrying forever"
+                        + ("keeping the recovery evidence for review" if upload_only_recovery
+                           else "releasing the incompatible assignment instead of retrying forever")
                     )
+                    if upload_only_recovery:
+                        return "rejected"
                     pending.remove(
                         HOME, assignment_id,
                         scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2717,17 +2729,21 @@ def _upload_trial_checked(
                     # Some earlier attempt actually landed server-side even
                     # though THIS process never saw the response — good news.
                     print(f"  {task_id}: already submitted (an earlier attempt landed) — clearing it")
-                    if not ask_cleanup:
+                    if not ask_cleanup and not upload_only_recovery:
                         archive_after_submit(HOME, entry)
                     pending.remove(
                         HOME, assignment_id,
                         scope_fingerprint=entry.get("scope_fingerprint"),
                     )
-                    cleanup_settled()
+                    if not upload_only_recovery:
+                        cleanup_settled()
                     return "submitted"
                 if exc.status_code == 410:
                     print(f"  {task_id}: lease expired, unsalvageable — the cell reopened "
-                          "for someone else, dropping it")
+                          + ("for someone else; local evidence kept" if upload_only_recovery
+                             else "for someone else, dropping it"))
+                    if upload_only_recovery:
+                        return "expired"
                     pending.remove(
                         HOME, assignment_id,
                         scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2742,8 +2758,11 @@ def _upload_trial_checked(
                     # Never bypass the secret gate by retrying a reduced
                     # optional-artifact set.
                     print(f"  {task_id}: the server rejected this upload for good ({exc}) — "
-                          "retrying can't fix it, dropping it from the retry queue "
-                          f"(local artifact path: {patch.parent.parent})")
+                          + ("local recovery evidence kept " if upload_only_recovery
+                             else "retrying can't fix it, dropping it from the retry queue ")
+                          + f"(local artifact path: {patch.parent.parent})")
+                    if upload_only_recovery:
+                        return "rejected"
                     pending.remove(
                         HOME, assignment_id,
                         scope_fingerprint=entry.get("scope_fingerprint"),
@@ -2758,13 +2777,14 @@ def _upload_trial_checked(
                       "(`dradar retry-upload`)")
                 return "upload-failed"
 
-    if not ask_cleanup:
+    if not ask_cleanup and not upload_only_recovery:
         archive_after_submit(HOME, entry)
     pending.remove(
         HOME, assignment_id,
         scope_fingerprint=entry.get("scope_fingerprint"),
     )
-    cleanup_settled()
+    if not upload_only_recovery:
+        cleanup_settled()
     exact_empty_submission = (
         ack.get("terminal_outcome") == "empty-submission"
         and ack.get("failure_kind") == "empty-submission"
@@ -2795,7 +2815,9 @@ def _upload_trial_checked(
         )
     else:
         print(f"submitted: {ack['submission_id']} (grading happens server-side)")
-    if job_dir and entry.get("keep", False):
+    if upload_only_recovery and job_dir:
+        print(f"  local recovery artifacts retained for verification: {job_dir}")
+    elif job_dir and entry.get("keep", False):
         try:
             local_jobs.mark_kept(HOME, job_dir)
         except ValueError:
@@ -4206,6 +4228,46 @@ def cmd_retry_upload(args) -> int:
         return 1
     print("all clear")
     return 0
+
+
+def recover_one_pending_upload(
+    *, assignment_id: str, benchmark: str, batch_id: str | None,
+    runner_session_id: str | None = None,
+) -> int:
+    """Replay exactly one durable result after the signed recovery gate.
+
+    The launcher owns the exclusive invocation lock for the entire call. This
+    function deliberately has no claim, model, salvage, or batch-rebind path.
+    Existing upload intent and server owner/lease fences remain authoritative.
+    """
+    if not benchmark or not benchmark.strip():
+        print("recovery rejected: benchmark is required")
+        return 2
+    cfg = {**_load_config(), "benchmark": benchmark}
+    client = _client(cfg)
+    if not getattr(client, "server", None) or not getattr(client, "account_scope", None):
+        print("recovery rejected: account scope is unavailable")
+        return 2
+    entries = pending.load(HOME)
+    matches = [
+        entry for entry in entries
+        if isinstance(entry, dict) and entry.get("assignment_id") == assignment_id
+    ]
+    if len(matches) != 1:
+        print("recovery rejected: assignment must name exactly one pending row")
+        return 2
+    entry = matches[0]
+    if entry.get("upload_blocked"):
+        print("recovery rejected: saved upload requires separate owner/artifact review")
+        return 1
+    if runner_session_id is not None and entry.get("runner_session_id") != runner_session_id:
+        print("recovery rejected: saved runner session does not match")
+        return 1
+    if not _pending_entry_matches_scope(client, entry, batch_id=batch_id):
+        print("recovery rejected: server/account/benchmark/batch scope does not match")
+        return 1
+    outcome = _upload_trial(client, entry, upload_only_recovery=True)
+    return 0 if outcome in {"submitted", "interrupted"} else 1
 
 
 def _active_by_id(client: ApiClient) -> dict[str, dict]:

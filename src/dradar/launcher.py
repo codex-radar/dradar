@@ -17,6 +17,12 @@ def _activate_if_idle(root):
 
 
 def main() -> int:
+    # A signed zipapp can perform one explicit upload recovery while an older
+    # committed bundle is held behind a durable pending-upload safe point.
+    # This path never activates the zipapp or changes the OTA pointers.
+    if sys.argv[1:2] == ["recover-upload"]:
+        from .ota.recovery import main as recovery_main
+        return recovery_main(sys.argv[2:])
     from .ota import discovery
     from .child_entrypoint import retain_inherited_windows_payload
     retain_inherited_windows_payload()
