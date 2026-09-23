@@ -91,6 +91,15 @@ def _patch_run(monkeypatch, outcome="submitted", ran=None):
                             lambda *a, **kw: ran.append(a[1]["assignment_id"]) or outcome)
 
 
+def test_forget_boundary_without_selected_lease_fails_closed(tmp_path, capsys):
+    client = FakeClient({"active": [], "free_pick": True})
+    args = _args(yes=True)
+    args.forget_assignment_boundary = True
+
+    assert runloop._go_menu(args, {}, client, tmp_path) == 1
+    assert "boundary was not reset" in capsys.readouterr().out
+
+
 def test_real_run_with_estimate_prints_quota_disclosure(monkeypatch, capsys, tmp_path: Path):
     _patch_run(monkeypatch)
     client = FakeClient({"assignment": ASSIGNMENT, "menu": None, "resumed": False})

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from dradar import cli, fleet, runloop
+from dradar.api_client import ApiError
 from dradar.capacity import CapacityReport
 
 
@@ -547,6 +548,58 @@ def test_explicit_batch_benchmark_overrides_saved_channel_for_exact_batch(monkey
     assert workers == 2
     assert capacity["benchmark"] == "deep-swe"
     assert capacity["held_tasks"] == 2
+
+
+def test_exact_batch_404_identifies_saved_benchmark_mismatch(monkeypatch):
+    class Client:
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            raise ApiError(
+                "server returned 404: active batch not found",
+                status_code=404, code="claim_batch_not_found",
+            )
+
+        def get_assignment_inventory(self):
+            return {"active": [
+                {"batch_id": BATCH_B, "benchmark_id": "deep-swe"},
+                {"batch_id": BATCH_B, "benchmark_id": "deep-swe"},
+            ]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"benchmark": "pompeii-adjacency"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+
+    with pytest.raises(fleet.FleetError, match="--benchmark deep-swe; no worker was started"):
+        fleet._resolve_workers(2, BATCH_B, {"batches": {}})
+
+
+def test_exact_batch_404_keeps_original_error_without_exact_inventory(monkeypatch):
+    class Client:
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            raise ApiError(
+                "server returned 404: active batch not found",
+                status_code=404, code="claim_batch_not_found",
+            )
+
+        def get_assignment_inventory(self):
+            return {"active": [{"batch_id": BATCH_A, "benchmark_id": "deep-swe"}]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"benchmark": "pompeii-adjacency"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+
+    with pytest.raises(fleet.FleetError, match="active batch not found") as error:
+        fleet._resolve_workers(2, BATCH_B, {"batches": {}})
+    assert "--benchmark" not in str(error.value)
 
 
 def test_legacy_config_without_benchmark_pins_deep_swe_default(monkeypatch):

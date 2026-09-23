@@ -4273,6 +4273,20 @@ def _prepare_assignment_boundary(
                 f"assignment boundary check failed: {exc}. No model was started. "
                 "Inspect the exact batch leases and saved boundary."
             )
+        if (
+            isinstance(exc, assignment_boundary.BoundaryError)
+            and str(exc).startswith(
+                "unfinished assignment(s) disappeared from active leases:"
+            )
+        ):
+            sys.exit(
+                f"assignment boundary check failed: {exc}. No model was "
+                "started. A missing local outcome does not prove the work "
+                "finished. Before using --forget-assignment-boundary, verify "
+                "the same radar account and every exact assignment ID have "
+                "a server-confirmed terminal submission, and that no runner "
+                "process or local upload/artifact remains unfinished."
+            )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
             "Inspect `dradar leases`; use --forget-assignment-boundary only "
@@ -5792,6 +5806,13 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                 args, client, desired_workers=target,
             )
     if not active:
+        if getattr(args, "forget_assignment_boundary", False):
+            print(
+                "assignment boundary was not reset: no compatible held "
+                "assignment was selected. Check the exact account, benchmark, "
+                "and batch before retrying; no model was started."
+            )
+            return 1
         return 0
     batch_ids = _prepared_batch_ids(active)
     mixed = bool(batch_ids)
@@ -7628,6 +7649,13 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
         args.allow_new_claims = False
     active, free_pick = _prepare_batch(args, client)
     if not active:
+        if getattr(args, "forget_assignment_boundary", False):
+            print(
+                "assignment boundary was not reset: no compatible held "
+                "assignment was selected. Check the exact account, benchmark, "
+                "and batch before retrying; no model was started."
+            )
+            return 1
         return 1 if precise_resume else 0
     if (not precise_resume
             and not getattr(args, "worker_child", False)

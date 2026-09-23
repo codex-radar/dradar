@@ -636,6 +636,43 @@ def _active_batches(state: dict) -> dict[str, dict]:
     }
 
 
+def _exact_batch_lookup_error(
+    client, batch_id: str, benchmark: str, exc: ApiError,
+) -> FleetError:
+    """Explain a saved benchmark mismatch without widening exact admission."""
+    original = FleetError(f"cannot inspect exact batch {batch_id}: {exc}")
+    if exc.status_code != 404 or exc.code != "claim_batch_not_found":
+        return original
+    try:
+        inventory = client.get_assignment_inventory()
+    except (ApiError, AttributeError, ValueError, TypeError):
+        return original
+    active = inventory.get("active") if isinstance(inventory, dict) else None
+    if not isinstance(active, list):
+        return original
+    matching = [
+        item for item in active
+        if isinstance(item, dict) and item.get("batch_id") == batch_id
+    ]
+    if not matching or any(
+        not isinstance(item.get("benchmark_id"), str)
+        or not item["benchmark_id"] for item in matching
+    ):
+        return original
+    benchmarks = {item["benchmark_id"] for item in matching}
+    if len(benchmarks) != 1:
+        return original
+    actual = next(iter(benchmarks))
+    if actual == benchmark:
+        return original
+    return FleetError(
+        f"cannot inspect exact batch {batch_id}: it is held under benchmark "
+        f"{actual!r}, while this command selected {benchmark!r}. "
+        f"Verify the exact batch, then pass --benchmark {actual}; "
+        "no worker was started"
+    )
+
+
 def _resolve_workers(
     requested: int | str, batch_id: str, state: dict,
     credentials_file: str | None = None,
@@ -672,7 +709,9 @@ def _resolve_workers(
             me = client.whoami()
             assignments = client.get_assignment()
         except ApiError as exc:
-            raise FleetError(f"cannot inspect exact batch {batch_id}: {exc}") from exc
+            raise _exact_batch_lookup_error(
+                client, batch_id, selected_benchmark, exc,
+            ) from exc
         account_limit = max(1, int(
             me.get("concurrent_limit") or me.get("claim_limit") or 1,
         ))
@@ -713,7 +752,9 @@ def _resolve_workers(
                 )
         report = inspect_capacity(client)
     except ApiError as exc:
-        raise FleetError(f"cannot inspect exact batch {batch_id}: {exc}") from exc
+        raise _exact_batch_lookup_error(
+            client, batch_id, selected_benchmark, exc,
+        ) from exc
     total_auto_limit = min(
         report.cpu_limit,
         report.memory_limit,

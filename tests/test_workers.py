@@ -767,6 +767,14 @@ def _patch_pool_setup(monkeypatch, active_count=5):
     )
 
 
+def test_forget_boundary_empty_worker_pool_fails_closed(monkeypatch, capsys):
+    _patch_pool_setup(monkeypatch, active_count=0)
+    args = _args(workers=1, forget_assignment_boundary=True)
+
+    assert runloop._run_worker_pool(args) == 1
+    assert "boundary was not reset" in capsys.readouterr().out
+
+
 def test_isolated_builder_preflight_fails_before_batch_or_worker_session(
     monkeypatch, capsys,
 ):
