@@ -914,8 +914,8 @@ def cmd_doctor(args) -> int:
             )
             if claude_ready:
                 _check(
-                    "Claude Sonnet 5 / Opus 5 — five native effort tiers ready",
-                    set(CLAUDE_MODELS) == {"claude-sonnet-5", "claude-opus-5"},
+                    "Claude Sonnet 5 / Opus 5 / Opus 5.5 — five native effort tiers ready",
+                    set(CLAUDE_MODELS) == {"claude-sonnet-5", "claude-opus-5", "claude-opus-5-5"},
                 )
         if grok_requested:
             all_ok &= _check(

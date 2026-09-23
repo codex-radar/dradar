@@ -241,14 +241,16 @@ macOS 官方登录通常写入 Keychain；只有 Keychain 登录而没有上述�
 `--live` 会调用模型，不能当作无消耗续签检查。旧 setup-token 不含可检查的 expiresAt，
 本地检查只能验证格式，无法据此保证令牌仍被官方接受。
 
-当前运行合同固定为 Claude Code `2.1.251`，前端展示两张模型卡片：
+当前 Opus 5.5 格子固定使用 Claude Code `2.1.280`；历史 Sonnet 5 和 Opus 5 格子保留
+`2.1.251` 运行合同。前端展示三张独立模型卡片：
 
 | 模型卡片 | 原生 effort 格子 |
 | --- | --- |
 | Claude Sonnet 5 | `low`、`medium`、`high`、`xhigh`、`max` |
 | Claude Opus 5 | `low`、`medium`、`high`、`xhigh`、`max` |
+| Claude Opus 5.5 | `low`、`medium`、`high`、`xhigh`、`max` |
 
-这十个格子都只允许网页显式领取，不进入默认自动推荐。凭证保存在 provider 专用的 `0600`
+这些格子都只允许网页显式领取，不进入默认自动推荐。凭证保存在 provider 专用的 `0600`
 私有文件中，不进入命令参数、任务目录、trajectory 或服务端请求；任务容器使用隔离配置和
 Claude Code safe mode，不加载宿主的 `CLAUDE.md`、skills、plugins、hooks、MCP、自定义命令
 或自定义 agents。榜单金额按服务器收到的真实 token 用量重新计算为官方 API 等价美元，

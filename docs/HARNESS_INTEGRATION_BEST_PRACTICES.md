@@ -24,11 +24,11 @@
 | --- | --- |
 | Harness | `claude-code` |
 | Provider | `anthropic-subscription` |
-| CLI | `2.1.251` |
-| 模型 | `claude-sonnet-5`、`claude-opus-5` |
+| CLI | Sonnet 5 / Opus 5 历史格子 `2.1.251`；Opus 5.5 `2.1.280` |
+| 模型 | `claude-sonnet-5`、`claude-opus-5`、`claude-opus-5-5` |
 | effort | `low`、`medium`、`high`、`xhigh`、`max` |
 | 认证 | Claude.ai subscription OAuth |
-| 初始发布 | 十格全部 `manual_only` |
+| 初始发布 | 十五格全部 `manual_only` |
 
 模型别名可以继续变化，服务端和客户端合同必须使用探测到的精确模型 ID。若官方文档与当前
 账号能力不一致，应保守关闭对应格子，不能用别名 fallback 伪装成功。
@@ -115,11 +115,11 @@ Claude Code 采用 `bypassPermissions` 保证容器内完整编码权限，并�
 Harness 是一级选择，模型是卡片，effort 是卡片内的格子。不要把两个模型合成一张“系列”
 卡，也不要为服务端没有发布的组合生成空壳格。
 
-本次 Claude 前端固定为两张卡片：Claude Sonnet 5 和 Claude Opus 5；每张卡都按一致顺序
+Claude 前端有三张卡片：Claude Sonnet 5、Claude Opus 5 和 Claude Opus 5.5；每张卡都按一致顺序
 展示五个 effort。实现要满足：
 
 - 只有服务端广告且客户端 capability 可满足的格子可领取；
-- 两张卡共享布局、状态色、历史曲线和 token/价格语义，不共享样本；
+- 三张卡共享布局、状态色、历史曲线和 token/价格语义，不共享样本；
 - Harness 选择高亮本组卡片，但不隐藏其他模型的对比信息；
 - 尚未判分、排队、运行、失败、冷却和已结算使用全站统一视觉语言；
 - 文案明确“订阅额度”与“API 等价美元”的区别；
