@@ -1278,10 +1278,9 @@ def _claim_auto(client: ApiClient, n: int) -> list[dict]:
 def _exit_for(exc: ApiError) -> None:
     """Exit on a dead-end ApiError in the run flow with a next step, not just
     the raw server error. 401 means the token was reset/clobbered — recoverable
-    without support. status_code None means the request never reached the
-    server (DNS/connect/timeout), so any held leases are untouched. Everything
-    else (e.g. 403 account suspended) carries the server's own explanation
-    verbatim."""
+    without support. status_code None means no complete HTTP response was
+    received; the server may still have processed the request. Everything else
+    (e.g. 403 account suspended) carries the server's own explanation verbatim."""
     if exc.status_code == 401:
         _signal_pool_abort(
             "DRadar account authentication failed", interrupt_siblings=False,
@@ -1302,6 +1301,13 @@ def _exit_for(exc: ApiError) -> None:
         sys.exit(f"{exc}\nthe server rate limit persisted after bounded retries; "
                  "the supervised pool will stop new checkout/backfill while "
                  "already-running siblings finish")
+    if exc.status_code is None:
+        raise SystemExit(
+            "DRadar API request ended without a complete HTTP response; the "
+            "server may have processed it. Check the current task state on "
+            "the radar page and with `dradar leases` before following the "
+            "supported recovery steps in your original run instructions."
+        ) from exc
     if exc.code == "runner_session_capacity_reached":
         _record_worker_precheckout_failure(exc.code)
         sys.exit(f"{exc}\nserver error code: {exc.code}")
@@ -1321,9 +1327,6 @@ def _exit_for(exc: ApiError) -> None:
             "`dradar provider setup antigravity`, then explicitly rearm any "
             "saved campaign with `dradar refill stop`"
         )
-    if exc.status_code is None:
-        sys.exit(f"{exc}\ncheck your connection — held leases stay active, and "
-                 "`dradar resume` continues where you left off")
     sys.exit(str(exc))
 
 
@@ -4710,8 +4713,19 @@ def _preflight_scoped_provider(args) -> None:
 
 def _publish_fleet_startup_failure(args, reason: object) -> None:
     """Best-effort structured failure for the Agent-facing startup contract."""
-    detail = " ".join(str(reason).split()).lower()
-    if "deep-swe" in detail or "task snapshot" in detail or "version pin" in detail:
+    api_error = reason.__cause__ if isinstance(reason, SystemExit) else reason
+    transport_failure = (
+        isinstance(api_error, ApiError) and api_error.status_code is None
+    )
+    detail = "" if transport_failure else " ".join(str(reason).split()).lower()
+    if transport_failure:
+        code = "api_connection_failed"
+        reason_code = "startup-network-unavailable"
+        message = (
+            "准备运行时未收到 DRadar 服务的完整响应；服务端可能已经处理请求。"
+            "请先检查网页上的本次任务状态，再按原运行说明中的受支持恢复步骤操作。"
+        )
+    elif "deep-swe" in detail or "task snapshot" in detail or "version pin" in detail:
         code = "task_environment_update_failed"
         reason_code = "startup-environment-not-ready"
         message = (
