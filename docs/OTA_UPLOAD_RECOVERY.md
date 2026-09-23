@@ -18,7 +18,16 @@ claiming work, starting a model, or requesting a new upload owner.
    0.5.229) with its **public** `update prepare --manifest SIGNED_JSON
    --trusted-key KEY_ID=RAW_PUBLIC_KEY` in a fresh, disposable physical
    `DRADAR_HOME`. The public key must be the production key already embedded in
-   that trusted CLI, not one supplied by the manifest. The old CLI performs
+   that trusted CLI, not one supplied by the manifest or candidate download.
+   For the 0.5.229 → 0.5.232 recovery, the trusted 0.5.229 bundle's
+   `dradar/ota/discovery.py` pins key ID
+   `dradar-ota-prod-2026-09-03-01`, raw key base64
+   `cNKyezPQwWVFv7rQua/e4mmQKho0OmgQvrLyR/R2otI=`, and raw-key SHA-256
+   `1356a2039269ca7563c80ae90d76f8ff8aaeb376abaad4a9fc315b75a872ba5a`.
+   Cross-check those bytes against the **old signed bundle** before passing a
+   raw key file to `update prepare`; reject an unfamiliar key ID or digest.
+   `update prepare` accepts caller-provided keys, so this equality check is a
+   required part of the trust chain. The old CLI then performs
    signature, rollout, compatibility, size and SHA-256 checks before running
    the candidate. Its discovery may also install the same signed version in
    this disposable home. Inspect `update status --json` and the release record

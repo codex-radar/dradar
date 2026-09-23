@@ -129,11 +129,17 @@ def test_legacy_row_without_owner_or_session_keeps_server_fence(tmp_path, monkey
 @pytest.mark.parametrize("owner_rejected", [False, True])
 def test_recovery_real_upload_intent_contract(tmp_path, monkeypatch, owner_rejected):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
-    trial_dir = _make_trial_dir(tmp_path)
+    job_dir = tmp_path / "work" / "jobs" / f"a{ASSIGNMENT}"
+    trial_dir = _make_trial_dir(job_dir, "task")
+    (trial_dir / "artifacts" / "result.json").write_text('{"synthetic":true}')
+    source_before = {
+        str(path.relative_to(job_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in trial_dir.rglob("*") if path.is_file()
+    }
     row = _entry(
         trial_dir, assignment_id=ASSIGNMENT, batch_id=BATCH,
         benchmark_id="deep-swe", runner_session_id="original-session",
-        owner_epoch=1, ledger_version=3,
+        owner_epoch=1, ledger_version=3, job_dir=str(job_dir), keep=False,
     )
     pending.record(tmp_path, row)
     paths = []
@@ -177,6 +183,11 @@ def test_recovery_real_upload_intent_contract(tmp_path, monkeypatch, owner_rejec
         assert result == 0
         assert paths == ["/api/v1/submission-upload-intents", "/api/v1/submissions"]
         assert pending.load(tmp_path) == []
+    assert job_dir.is_dir()
+    assert {
+        name: hashlib.sha256((job_dir / name).read_bytes()).hexdigest()
+        for name in source_before
+    } == source_before
 
 
 @pytest.mark.parametrize("failure_stage", ["intent_410", "submit_413"])

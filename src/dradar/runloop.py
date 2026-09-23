@@ -2815,7 +2815,9 @@ def _upload_trial_checked(
         )
     else:
         print(f"submitted: {ack['submission_id']} (grading happens server-side)")
-    if job_dir and entry.get("keep", False):
+    if upload_only_recovery and job_dir:
+        print(f"  local recovery artifacts retained for verification: {job_dir}")
+    elif job_dir and entry.get("keep", False):
         try:
             local_jobs.mark_kept(HOME, job_dir)
         except ValueError:
