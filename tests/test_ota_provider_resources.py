@@ -18,7 +18,7 @@ def build_artifact(destination):
     spec = importlib.util.spec_from_file_location('ota_build', ROOT / 'scripts/ota_release.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._build_zipapp(ROOT, destination, version=__version__, sequence=224,
+    module._build_zipapp(ROOT, destination, version=__version__, sequence=46,
                          commit='a' * 40, tree='b' * 40, target=('linux', 'x86_64'))
 
 
@@ -98,7 +98,8 @@ def test_source_launcher_matches_zip_capabilities(tmp_path):
     zip_result, zipped = probe(artifact, tmp_path / 'zip')
     assert source_result.returncode == zip_result.returncode == 0
     assert source['capabilities'] == zipped['capabilities']
-    assert source['version'] == zipped['version'] == '0.5.224'
+    assert source['version'] == zipped['version'] == '0.5.225'
+    assert source['fleet_protocol_version'] == zipped['fleet_protocol_version'] == 10
     from dradar import providers as p
     assert p.GPT6_CAPABILITY in source['capabilities']
 
@@ -115,9 +116,9 @@ def test_public_launcher_selects_signed_gpt6_ota_payload(tmp_path, monkeypatch):
     body = artifact.read_bytes()
     document, trusted_keys = signed_release()
     document.pop('signature')
-    document['release_id'] = 'dradar-cli-0.5.224-gpt6-fixture'
-    document['version'] = '0.5.224'
-    document['sequence'] = 5224
+    document['release_id'] = 'dradar-cli-0.5.225-gpt6-fixture'
+    document['version'] = '0.5.225'
+    document['sequence'] = 46
     for item in document['artifacts']:
         item['size'] = len(body)
         item['sha256'] = hashlib.sha256(body).hexdigest()
@@ -136,8 +137,8 @@ def test_public_launcher_selects_signed_gpt6_ota_payload(tmp_path, monkeypatch):
     monkeypatch.setenv('PROBE_AUTH', '1')
     monkeypatch.setattr(launcher, 'HOME', home)
     monkeypatch.setattr(discovery, 'TRUSTED_KEYS', trusted_keys)
-    # Model an installed public 0.5.223 launcher discovering the new release.
-    monkeypatch.setattr(discovery, '__version__', '0.5.223')
+    # Model an installed public 0.5.224 launcher discovering the new release.
+    monkeypatch.setattr(discovery, '__version__', '0.5.224')
 
     def response(request):
         if str(request.url) == discovery.STABLE_URL:
@@ -157,7 +158,8 @@ def test_public_launcher_selects_signed_gpt6_ota_payload(tmp_path, monkeypatch):
     report = json.loads(report_path.read_text())
     from dradar.providers import GPT6_CAPABILITY
     assert '.pyz/dradar/' in report['module']
-    assert report['version'] == '0.5.224'
+    assert report['version'] == '0.5.225'
+    assert report['fleet_protocol_version'] == 10
     assert GPT6_CAPABILITY in report['capabilities']
     assert GPT6_CAPABILITY in report['header'].split(',')
     state = json.loads((home / 'ota/update-state.json').read_text())

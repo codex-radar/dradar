@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.environ['PROBE_ARTIFACT'])
 from dradar import __version__, providers as p, doctor as d, runner
 from dradar.ota import discovery
+from dradar.fleet import CONTROLLER_PROTOCOL_VERSION
 from dradar.api_client import ApiClient, CLIENT_CAPABILITIES_HEADER
 import httpx
 
@@ -74,6 +75,7 @@ def record():
     client = ApiClient('https://fixture.invalid', '', transport=httpx.MockTransport(response))
     client.whoami()
     report = {'module': p.__file__, 'version': __version__,
+              'fleet_protocol_version': CONTROLLER_PROTOCOL_VERSION,
               'capabilities': list(client.capabilities),
               'header': captured[0].get(CLIENT_CAPABILITIES_HEADER.lower(), ''),
               'catalog_error': p.deepseek_catalog_error(),
