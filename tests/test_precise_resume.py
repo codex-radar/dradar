@@ -542,7 +542,7 @@ def test_assignment_option_is_resume_only(monkeypatch):
 def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
     monkeypatch, tmp_path,
 ):
-    assert runloop.__version__ == "0.5.229"
+    assert runloop.__version__ == "0.5.230"
     _setup(monkeypatch, tmp_path, circuit_version="0.5.226")
     first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
     automatic = _args(assignment=None, yes=True)
@@ -576,7 +576,7 @@ def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
     assert all(
         empty_submission_circuit.open_for(
             tmp_path, second, version, account_scope="fixture-account",
-        ) for version in ("0.5.226", "0.5.227", "0.5.228", "0.5.229")
+        ) for version in ("0.5.226", "0.5.227", "0.5.228", "0.5.229", "0.5.230")
     )
     assert not runloop._allow_explicit_empty_submission_retry(
         automatic, [second], client,
@@ -589,7 +589,7 @@ def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
 
 
 def test_upgrade_failed_retry_does_not_rearm_scope(monkeypatch, tmp_path):
-    assert runloop.__version__ == "0.5.229"
+    assert runloop.__version__ == "0.5.230"
     _setup(monkeypatch, tmp_path, circuit_version="0.5.226")
     first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
     args = _args()

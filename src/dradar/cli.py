@@ -570,8 +570,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument(
             "--forget-assignment-boundary", action="store_true",
-            help="explicitly discard a saved missing-assignment guard before "
-                 "starting a new boundary",
+            help="discard a saved missing-assignment guard only after checking "
+                 "same-account exact server terminal IDs and unfinished local work",
         )
         p.add_argument("--dev-agent", help=argparse.SUPPRESS)  # oracle/nop for pipeline tests
         p.add_argument(

@@ -29,6 +29,30 @@ def test_boundary_detects_unresolved_assignment_disappearing(tmp_path):
     assert path is not None and path.is_file()
 
 
+def test_old_terminal_without_local_outcomes_keeps_guard_and_explains_proof(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    old = [
+        {**_assignment("old-claude-1"), "batch_id": "old-batch"},
+        {**_assignment("old-claude-2"), "batch_id": "old-batch"},
+    ]
+    path = assignment_boundary.prepare(tmp_path, "deep-swe", old)
+    before = path.read_bytes()
+    args = SimpleNamespace(
+        refill=False, fleet_pool=False, assignment=None,
+        expect_assignment=None, forget_assignment_boundary=False,
+    )
+    client = SimpleNamespace(batch_id=None)
+
+    with pytest.raises(SystemExit, match="every exact assignment ID") as stopped:
+        runloop._prepare_assignment_boundary(
+            args, client, "deep-swe", [_assignment("new-gemini")],
+        )
+
+    assert "No model was started" in str(stopped.value)
+    assert path.read_bytes() == before
+
+
 def test_submitted_assignment_may_leave_active_leases(tmp_path):
     active = [_assignment("a1"), _assignment("a2")]
     path = assignment_boundary.prepare(tmp_path, "bench", active)
