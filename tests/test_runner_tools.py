@@ -886,6 +886,38 @@ def test_deep_swe_worktree_collector_empty_and_failure_paths(tmp_path):
         assert not patch_path.exists()
 
 
+def test_artifact_task_overlay_without_base_uses_root_commit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True,
+        ).strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    (repo / "answer.txt").write_text("before\n")
+    git("add", "answer.txt")
+    git("commit", "--quiet", "-m", "base")
+    (repo / "answer.txt").write_text("after\n")
+    git("add", "answer.txt")
+    git("commit", "--quiet", "-m", "answer")
+    task = tmp_path / "tasks/fixture-task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text("[metadata]\n")
+
+    with _artifact_tasks_overlay(
+        {"task_id": "fixture-task"}, task.parent, tmp_path / "work", "job",
+    ) as selected:
+        script = (selected / "fixture-task/pre_artifacts.sh").read_text()
+        script = script.replace("/app", str(repo))
+        script = script.replace("/logs/artifacts", str(tmp_path / "artifacts"))
+        subprocess.run(["sh", "-c", script], check=True)
+        assert b"+after" in (tmp_path / "artifacts/model.patch").read_bytes()
+
+
 def test_artifact_task_overlay_rejects_untrusted_base_ref(tmp_path):
     task_id = "task-1"
     task = tmp_path / "tasks" / task_id

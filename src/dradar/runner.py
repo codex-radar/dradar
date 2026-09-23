@@ -310,7 +310,11 @@ set -eu
 cd /app
 mkdir -p /logs/artifacts
 base_ref='__DRADAR_BASE_COMMIT__'
-base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
+if [ -n "$base_ref" ]; then
+  base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
+else
+  base=$(git -c safe.directory="$PWD" rev-list --max-parents=0 HEAD | tail -1)
+fi
 # Intent-to-add exposes new, non-ignored files to diff without staging their
 # contents. The final diff includes committed, staged, and unstaged changes.
 git -c safe.directory="$PWD" add -N -- .
