@@ -289,6 +289,38 @@ fi
 git -c safe.directory="$PWD" diff --binary "$base" HEAD > /logs/artifacts/model.patch
 """
 
+# The published DeepSWE hook below compares only the base commit with HEAD.
+# A completed agent may leave valid work staged or unstaged, so that hook can
+# upload an empty patch even when the final worktree contains an answer.
+# Match its complete body before replacing it; other task-owned hooks retain
+# their own collection contract.
+LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT = """#!/bin/bash
+# Capture the agent's committed work as the submission artifact: the diff
+# between the starting commit and the agent's final HEAD.
+set -uo pipefail
+cd /app || exit 0
+mkdir -p /logs/artifacts
+git config --global --add safe.directory /app 2>/dev/null || true
+git diff --binary __DRADAR_BASE_COMMIT__ HEAD > /logs/artifacts/model.patch 2>/dev/null || true
+echo "[pre_artifacts] captured $(wc -c < /logs/artifacts/model.patch) bytes"
+"""
+
+DEEP_SWE_WORKTREE_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
+set -eu
+cd /app
+mkdir -p /logs/artifacts
+base_ref='__DRADAR_BASE_COMMIT__'
+base=$(git -c safe.directory="$PWD" rev-parse --verify "${base_ref}^{commit}")
+# Intent-to-add exposes new, non-ignored files to diff without staging their
+# contents. The final diff includes committed, staged, and unstaged changes.
+git -c safe.directory="$PWD" add -N -- .
+tmp=$(mktemp /logs/artifacts/.model.patch.XXXXXX)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+git -c safe.directory="$PWD" diff --binary "$base" -- > "$tmp"
+mv -f "$tmp" /logs/artifacts/model.patch
+trap - EXIT HUP INT TERM
+"""
+
 # AGY's adapter owns export, including cancellation. Never regenerate here:
 # Pier may call this hook after an uncertain writer shutdown or export failure.
 ANTIGRAVITY_PRE_ARTIFACTS_SCRIPT = """#!/bin/sh
@@ -3675,9 +3707,21 @@ def _artifact_tasks_overlay(
     source = tasks_root / task_id
     if not source.is_dir():
         raise RunnerError(f"task directory is missing: {source}")
-    if (source / "pre_artifacts.sh").is_file():
-        yield tasks_root
-        return
+    existing_hook = source / "pre_artifacts.sh"
+    if existing_hook.is_file():
+        if existing_hook.is_symlink():
+            yield tasks_root
+            return
+        try:
+            existing_text = existing_hook.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            yield tasks_root
+            return
+        if not existing_text.startswith(
+            "#!/bin/bash\n# Capture the agent's committed work"
+        ):
+            yield tasks_root
+            return
     try:
         task_config = tomllib.loads(
             (source / "task.toml").read_text(encoding="utf-8")
@@ -3690,6 +3734,13 @@ def _artifact_tasks_overlay(
         and re.fullmatch(r"[0-9a-f]{4,40}", base_commit) is None
     ):
         raise RunnerError("task has an invalid metadata.base_commit_hash")
+    if existing_hook.is_file() and existing_text.replace("\r\n", "\n") != (
+        LEGACY_DEEP_SWE_PRE_ARTIFACTS_SCRIPT.replace(
+            "__DRADAR_BASE_COMMIT__", base_commit
+        )
+    ):
+        yield tasks_root
+        return
     short_commit = bool(base_commit and len(base_commit) < 40)
     if short_commit:
         repository_url = task_config.get("metadata", {}).get("repository_url")
@@ -3708,7 +3759,9 @@ def _artifact_tasks_overlay(
         overlay_task = overlay_root / task_id
         shutil.copytree(source, overlay_task, symlinks=True)
         hook = overlay_task / "pre_artifacts.sh"
-        collector = DSH_PRE_ARTIFACTS_SCRIPT.replace(
+        if hook.exists() or hook.is_symlink():
+            hook.unlink()
+        collector = DEEP_SWE_WORKTREE_PRE_ARTIFACTS_SCRIPT.replace(
                 "__DRADAR_BASE_COMMIT__", base_commit
             )
         if short_commit:
