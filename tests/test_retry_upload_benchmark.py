@@ -140,3 +140,21 @@ def test_empty_benchmark_does_not_attempt_upload(tmp_path, monkeypatch):
     )
     assert runloop.cmd_retry_upload(SimpleNamespace(benchmark="  ")) == 2
     assert len(pending.load(tmp_path)) == 1
+
+
+def test_benchmark_hint_does_not_recommend_ordinary_retry_for_blocked_row(
+    tmp_path, monkeypatch, capsys,
+):
+    _setup(tmp_path, monkeypatch)
+    pending.record(tmp_path, {
+        **_entry(_client()), "upload_blocked": "owner_superseded",
+    })
+    monkeypatch.setattr(
+        runloop, "_upload_trial",
+        lambda *_args: pytest.fail("wrong benchmark must stay local"),
+    )
+    assert runloop.cmd_retry_upload(SimpleNamespace(benchmark=None)) == 1
+    output = capsys.readouterr().out
+    assert "saved upload benchmark 'deep-swe'" in output
+    assert "blocked and requires explicit review" in output
+    assert "retry with `dradar retry-upload --benchmark deep-swe`" not in output
