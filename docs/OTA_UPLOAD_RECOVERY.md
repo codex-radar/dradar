@@ -32,6 +32,10 @@ claiming work, starting a model, or requesting a new upload owner.
    the candidate. Its discovery may also install the same signed version in
    this disposable home. Inspect `update status --json` and the release record
    there; require the pinned version, sequence, target and package digest.
+   If automatic discovery committed that exact release before `prepare` runs,
+   `prepare` can report `anti_rollback_sequence`; accept this only when the
+   scratch signed release record and package digest prove the pinned identity.
+   The message alone is not verification.
    **Do not run `update prepare` in the real home:** an older candidate is
    already staged there. All scratch OTA mutations stay in the disposable
    home, which contains no real pending result.
