@@ -4262,6 +4262,7 @@ def _prepare_assignment_boundary(
             batch_id=scoped_batch_id,
             expected_ids=getattr(args, "expect_assignment", None),
             forget_existing=getattr(args, "forget_assignment_boundary", False),
+            require_matching_metadata=precise,
         )
     except (assignment_boundary.BoundaryError, ApiError, ValueError, OSError) as exc:
         if precise:
@@ -7664,6 +7665,12 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
         ):
             print("selected assignment changed after confirmation; no model was started")
             return 1
+        # Confirmation can stay open while a held sibling disappears or its
+        # identity changes. Reconcile the entire authenticated batch again
+        # before the selected assignment reaches the model start gate.
+        _prepare_assignment_boundary(
+            args, client, cfg["benchmark"], fresh_active,
+        )
         args._precise_retry_assignment_id = fresh["assignment_id"]
         return _run_batch(args, client, tasks_root, [fresh], telemetry=telemetry)
     # Non-interactive free-pick runs go through the parallel-safe checkout

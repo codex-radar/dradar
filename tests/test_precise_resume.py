@@ -167,6 +167,33 @@ def test_precise_boundary_rechecks_after_initial_admission(monkeypatch, tmp_path
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("fresh", [
+    lambda first, second: [first],
+    lambda first, second: [first, {**second, "model": "grok-4.6"}],
+])
+def test_precise_resume_rechecks_full_batch_after_confirmation(
+    monkeypatch, tmp_path, fresh,
+):
+    _setup(monkeypatch, tmp_path)
+    first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
+    client = ExactBatchClient([[first, second], fresh(first, second)])
+    ran = []
+    monkeypatch.setattr(
+        runloop, "_run_and_submit",
+        lambda _client, assignment, *_a, **_kw:
+        ran.append(assignment["assignment_id"]) or "submitted",
+    )
+
+    with pytest.raises(SystemExit, match="assignment boundary check failed"):
+        runloop._go_menu(_args(), {"benchmark": "deep-swe"}, client, tmp_path)
+
+    path = assignment_boundary.state_path(tmp_path, "deep-swe", BATCH)
+    assert set(assignment_boundary.reconcile(path, [first, second]).expected_ids) == {
+        FIRST, SECOND,
+    }
+    assert ran == []
+
+
 def test_precise_boundary_retains_legacy_guard_for_same_batch(monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
@@ -179,6 +206,44 @@ def test_precise_boundary_retains_legacy_guard_for_same_batch(monkeypatch, tmp_p
         )
     assert legacy.read_bytes() == before
     assert not assignment_boundary.state_path(tmp_path, "deep-swe", BATCH).exists()
+
+
+def test_precise_boundary_rejects_model_change_inside_same_legacy_batch(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    current = [_luna_held(FIRST, "csstree"), _luna_held(SECOND, "yaegi")]
+    old = [
+        {**item, "model": "grok-4.6", "effort": "high"}
+        for item in current
+    ]
+    legacy = assignment_boundary.prepare(tmp_path, "deep-swe", old)
+    before = legacy.read_bytes()
+
+    with pytest.raises(SystemExit, match=f"identity differs.*{FIRST}|identity differs.*{SECOND}"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([current]), "deep-swe",
+        )
+    assert legacy.read_bytes() == before
+    assert not assignment_boundary.state_path(tmp_path, "deep-swe", BATCH).exists()
+
+
+def test_precise_boundary_rejects_identity_change_inside_scoped_batch(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    current = [_luna_held(FIRST, "csstree"), _luna_held(SECOND, "yaegi")]
+    old = [{**current[0], "task_id": "other-task"}, current[1]]
+    scoped = assignment_boundary.prepare(
+        tmp_path, "deep-swe", old, batch_id=BATCH,
+    )
+    before = scoped.read_bytes()
+
+    with pytest.raises(SystemExit, match="identity differs"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([current]), "deep-swe",
+        )
+    assert scoped.read_bytes() == before
 
 
 def test_precise_boundary_rejects_legacy_without_attribution(monkeypatch, tmp_path):
@@ -249,8 +314,9 @@ def test_precise_boundary_rejects_inherited_path(monkeypatch, tmp_path):
         )
 
 
+@pytest.mark.parametrize("fresh_kind", ["full", "missing", "changed"])
 def test_precise_resume_cli_entry_uses_full_batch_boundary_without_model(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, fresh_kind,
 ):
     _setup(monkeypatch, tmp_path)
     legacy = assignment_boundary.prepare(
@@ -261,7 +327,12 @@ def test_precise_resume_cli_entry_uses_full_batch_boundary_without_model(
     empty_submission_circuit.record_empty(
         tmp_path, first, runloop.__version__, account_scope="fixture-account",
     )
-    client = ExactBatchClient([[first, second]])
+    fresh = {
+        "full": [first, second],
+        "missing": [first],
+        "changed": [first, {**second, "model": "grok-4.6"}],
+    }[fresh_kind]
+    client = ExactBatchClient([[first, second], [first, second], fresh])
     ran = []
 
     class Telemetry:
@@ -299,11 +370,17 @@ def test_precise_resume_cli_entry_uses_full_batch_boundary_without_model(
         ran.extend(item["assignment_id"] for item in selected) or 1,
     )
 
-    assert cli.main([
+    command = [
         "resume", "--benchmark", "deep-swe", "--batch-id", BATCH,
         "--assignment", FIRST,
-    ]) == 1
-    assert ran == [FIRST]
+    ]
+    if fresh_kind == "full":
+        assert cli.main(command) == 1
+        assert ran == [FIRST]
+    else:
+        with pytest.raises(SystemExit, match="assignment boundary check failed"):
+            cli.main(command)
+        assert ran == []
     assert client.reads >= 3
     path = assignment_boundary.state_path(tmp_path, "deep-swe", BATCH)
     assert assignment_boundary.reconcile(path, [first, second]).expected_ids == {FIRST, SECOND}
