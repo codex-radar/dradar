@@ -18,7 +18,7 @@ def build_artifact(destination):
     spec = importlib.util.spec_from_file_location('ota_build', ROOT / 'scripts/ota_release.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._build_zipapp(ROOT, destination, version=__version__, sequence=46,
+    module._build_zipapp(ROOT, destination, version=__version__, sequence=47,
                          commit='a' * 40, tree='b' * 40, target=('linux', 'x86_64'))
 
 
@@ -119,6 +119,11 @@ def test_public_launcher_selects_signed_gpt6_ota_payload(tmp_path, monkeypatch):
     document['release_id'] = 'dradar-cli-0.5.226-gpt6-fixture'
     document['version'] = '0.5.226'
     document['sequence'] = 47
+    with zipfile.ZipFile(artifact) as packaged:
+        package_release = json.loads(packaged.read('dradar/_ota_build.json'))
+    assert (package_release['version'], package_release['sequence']) == (
+        document['version'], document['sequence'],
+    )
     for item in document['artifacts']:
         item['size'] = len(body)
         item['sha256'] = hashlib.sha256(body).hexdigest()
