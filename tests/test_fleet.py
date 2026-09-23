@@ -69,6 +69,16 @@ def test_cli_parses_exact_post_seed_refill_campaign(monkeypatch):
     assert seen[0].refill_effort == "high"
 
 
+def test_cli_parses_exact_batch_benchmark(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "cmd_fleet_add", lambda args: seen.append(args) or 0)
+    assert cli.main([
+        "fleet", "add", "--batch-id", BATCH_A,
+        "--benchmark", "deep-swe", "--workers", "2",
+    ]) == 0
+    assert seen[0].benchmark == "deep-swe"
+
+
 def test_fleet_add_is_idempotent_for_one_batch(tmp_path, monkeypatch):
     fleet._prepare_dirs(tmp_path)
     state = fleet._initial_state("controller-1", None)
@@ -88,11 +98,12 @@ def test_fleet_add_is_idempotent_for_one_batch(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         fleet, "_resolve_workers_in_runtime",
-        lambda *_args: (2, [], {"account_limit": 5, "held_tasks": 2}),
+        lambda *_args: (2, [], {"account_limit": 5, "held_tasks": 2,
+                               "benchmark": "deep-swe"}),
     )
 
-    def spawn(*_args, **_kwargs):
-        spawned.append(True)
+    def spawn(*_args, **kwargs):
+        spawned.append(kwargs.get("benchmark"))
         return Process(), io.StringIO()
 
     monkeypatch.setattr(fleet, "_spawn_pool", spawn)
@@ -101,13 +112,14 @@ def test_fleet_add_is_idempotent_for_one_batch(tmp_path, monkeypatch):
         "controller_protocol_version": fleet.CONTROLLER_PROTOCOL_VERSION,
         "runtime_executable": sys.executable,
         "command": "add", "batch_id": BATCH_A, "workers": 2,
+        "benchmark": "deep-swe",
     }
     second = dict(first, request_id="request-2")
 
     fleet._handle_request(tmp_path, state, processes, logs, first)
     fleet._handle_request(tmp_path, state, processes, logs, second)
 
-    assert spawned == [True]
+    assert spawned == ["deep-swe"]
     assert set(processes) == {BATCH_A}
     response = json.loads(
         (fleet._root(tmp_path) / fleet.RESPONSE_DIR / "request-2.json").read_text()
@@ -115,6 +127,7 @@ def test_fleet_add_is_idempotent_for_one_batch(tmp_path, monkeypatch):
     assert response["ok"] is True
     assert response["already_active"] is True
     assert response["batch"]["workers"] == 2
+    assert response["batch"]["benchmark"] == "deep-swe"
 
 
 def test_later_harness_pool_uses_only_its_requesting_agent_executable_paths(
@@ -490,6 +503,53 @@ def test_fixed_fleet_workers_ignore_resource_estimates_and_local_reservations(
     assert metadata["docker_cpus"] is None
 
 
+def test_explicit_batch_benchmark_rejects_mismatched_assignment(monkeypatch):
+    class Client:
+        benchmark_id = "pompeii-adjacency"
+
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def whoami(self):
+            return {"concurrent_limit": 5}
+
+        def get_assignment(self):
+            return {"active": [{"assignment_id": "held", "benchmark_id": "pompeii-adjacency"}]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"benchmark": "pompeii-adjacency"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+    with pytest.raises(fleet.FleetError, match="assignment benchmark differs"):
+        fleet._resolve_workers(2, BATCH_B, {"batches": {}}, benchmark="deep-swe")
+
+
+def test_explicit_batch_benchmark_cannot_override_run_plan(monkeypatch):
+    monkeypatch.setattr(
+        fleet, "runtime_config", lambda _path: {"benchmark": "deep-swe"},
+    )
+    with pytest.raises(fleet.FleetError, match="run-plan credential"):
+        fleet._resolve_workers(
+            2, BATCH_B, {"batches": {}},
+            credentials_file="/private/plan.json", benchmark="pompeii-adjacency",
+        )
+
+
+def test_auto_worker_probe_rejects_explicit_benchmark_mismatch(monkeypatch):
+    class Client:
+        def set_batch_id(self, value):
+            assert value == BATCH_B
+
+        def get_assignment(self):
+            return {"active": [{"benchmark_id": "pompeii-adjacency"}]}
+
+    monkeypatch.setattr(fleet, "_load_config", lambda: {"benchmark": "pompeii-adjacency"})
+    monkeypatch.setattr(fleet, "_client", lambda _cfg: Client())
+    monkeypatch.setattr(fleet, "inspect_capacity", lambda _client: pytest.fail(
+        "mismatched benchmark must stop before the capacity probe",
+    ))
+    with pytest.raises(fleet.FleetError, match="assignment benchmark differs"):
+        fleet._resolve_workers("auto", BATCH_B, {"batches": {}}, benchmark="deep-swe")
+
+
 @pytest.mark.parametrize("workers", (0, 41, 6))
 def test_fixed_fleet_workers_still_reject_invalid_or_unauthorized_count(
     monkeypatch, workers,
@@ -532,6 +592,7 @@ def test_pool_command_is_exact_batch_resume_without_claim_or_refill(
 
     _process, log = fleet._spawn_pool(
         tmp_path, state, BATCH_A, 2,
+        benchmark="deep-swe",
         runtime_environment={"GROK_CLI_PATH": str(requested_grok)},
     )
     log.close()
@@ -539,6 +600,7 @@ def test_pool_command_is_exact_batch_resume_without_claim_or_refill(
     assert captured["command"][3:5] == ["resume", "-y"]
     assert captured["command"][captured["command"].index("--batch-id") + 1] == BATCH_A
     assert captured["command"][captured["command"].index("--workers") + 1] == "2"
+    assert captured["command"][captured["command"].index("--benchmark") + 1] == "deep-swe"
     assert "--refill" not in captured["command"]
     assert "--auto" not in captured["command"]
     assert captured["env"][fleet.POOL_BATCH_ENV] == BATCH_A
@@ -547,6 +609,18 @@ def test_pool_command_is_exact_batch_resume_without_claim_or_refill(
     assert captured["env"][fleet.POOL_STARTUP_FILE_ENV] == str(
         fleet._pool_startup_path(tmp_path, BATCH_A)
     )
+
+
+def test_fleet_parent_forwards_benchmark_to_each_worker():
+    args = argparse.Namespace(
+        keep=False, archive_session=False, allow_task_drift=False,
+        dev_agent=None, benchmark="deep-swe", batch_id=BATCH_A,
+        credentials_file=None, refill=False,
+        _environment_build_timeout_multiplier=None, _build_cache_mode=None,
+    )
+    command = runloop._worker_command(args)
+    assert command[command.index("--benchmark") + 1] == "deep-swe"
+    assert command[command.index("--batch-id") + 1] == BATCH_A
 
 
 def test_pool_is_not_running_until_exact_parent_acknowledges_readiness(
@@ -1298,6 +1372,53 @@ def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
     }
     assert state["batches"][BATCH_A]["plan_id"] == "plan-retry"
     assert state["batches"][BATCH_A]["credentials_file"] == str(credentials)
+
+
+def test_retry_reuses_saved_benchmark_and_rejects_conflict(tmp_path, monkeypatch):
+    fleet._prepare_dirs(tmp_path)
+    state = fleet._initial_state("controller-1", None)
+    state["status"] = "active"
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A, "status": "stopped", "workers": 2,
+        "benchmark": "deep-swe",
+    }
+    captured = []
+
+    class Process:
+        pid = 654
+
+        def poll(self):
+            return None
+
+    def resolve(*args):
+        captured.append(("probe", args[-1]))
+        return 2, [], {"benchmark": "deep-swe"}
+
+    def spawn(*_args, **kwargs):
+        captured.append(("spawn", kwargs["benchmark"]))
+        return Process(), io.StringIO()
+
+    monkeypatch.setattr(fleet, "_resolve_workers_in_runtime", resolve)
+    monkeypatch.setattr(fleet, "_spawn_pool", spawn)
+    request = {
+        "request_id": "retry-benchmark", "controller_id": "controller-1",
+        "controller_protocol_version": fleet.CONTROLLER_PROTOCOL_VERSION,
+        "runtime_executable": sys.executable, "command": "add",
+        "batch_id": BATCH_A, "workers": 2, "retry": True,
+    }
+    fleet._handle_request(tmp_path, state, {}, {}, request)
+    assert captured == [("probe", "deep-swe"), ("spawn", "deep-swe")]
+    assert state["batches"][BATCH_A]["benchmark"] == "deep-swe"
+
+    state["batches"][BATCH_A]["status"] = "stopped"
+    fleet._handle_request(tmp_path, state, {}, {}, dict(
+        request, request_id="retry-conflict", benchmark="pompeii-adjacency",
+    ))
+    response = json.loads((fleet._root(tmp_path) / fleet.RESPONSE_DIR
+                           / "retry-conflict.json").read_text())
+    assert response["ok"] is False
+    assert "benchmark" in response["error"]
+    assert len(captured) == 2
 
 
 def test_retry_rejects_incomplete_saved_run_plan_identity(tmp_path, monkeypatch):
