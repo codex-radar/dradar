@@ -465,8 +465,8 @@ def test_assignment_option_is_resume_only(monkeypatch):
 def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
     monkeypatch, tmp_path,
 ):
-    assert runloop.__version__ == "0.5.226"
-    _setup(monkeypatch, tmp_path, circuit_version="0.5.225")
+    assert runloop.__version__ == "0.5.227"
+    _setup(monkeypatch, tmp_path, circuit_version="0.5.226")
     first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
     automatic = _args(assignment=None, yes=True)
     client = ExactBatchClient([[first, second]])
@@ -499,7 +499,7 @@ def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
     assert all(
         empty_submission_circuit.open_for(
             tmp_path, second, version, account_scope="fixture-account",
-        ) for version in ("0.5.225", "0.5.226")
+        ) for version in ("0.5.226", "0.5.227")
     )
     assert not runloop._allow_explicit_empty_submission_retry(
         automatic, [second], client,
@@ -512,8 +512,8 @@ def test_upgrade_keeps_old_circuit_and_precise_retry_one_shot(
 
 
 def test_upgrade_failed_retry_does_not_rearm_scope(monkeypatch, tmp_path):
-    assert runloop.__version__ == "0.5.226"
-    _setup(monkeypatch, tmp_path, circuit_version="0.5.225")
+    assert runloop.__version__ == "0.5.227"
+    _setup(monkeypatch, tmp_path, circuit_version="0.5.226")
     first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
     args = _args()
 
@@ -527,20 +527,20 @@ def test_upgrade_failed_retry_does_not_rearm_scope(monkeypatch, tmp_path):
         ExactBatchClient([[first, second], [first, second]]), tmp_path,
     ) == 1
     assert empty_submission_circuit.open_for(
-        tmp_path, second, "0.5.226", account_scope="fixture-account",
+        tmp_path, second, "0.5.227", account_scope="fixture-account",
     )
 
 
 def test_upgrade_scope_matching_preserves_account_and_model_isolation(tmp_path):
     first = _held(FIRST, "csstree")
     empty_submission_circuit.record_empty(
-        tmp_path, first, "0.5.225", account_scope="account-a",
+        tmp_path, first, "0.5.226", account_scope="account-a",
     )
     assert empty_submission_circuit.open_for(
-        tmp_path, first, "0.5.226", account_scope="account-a",
+        tmp_path, first, "0.5.227", account_scope="account-a",
     )
     assert empty_submission_circuit.open_for_claim(
-        tmp_path, first, "0.5.226", account_scope="account-a",
+        tmp_path, first, "0.5.227", account_scope="account-a",
     )
     for changed, account in (
         (first, "account-b"),
@@ -548,26 +548,26 @@ def test_upgrade_scope_matching_preserves_account_and_model_isolation(tmp_path):
         ({**first, "effort": "high"}, "account-a"),
     ):
         assert not empty_submission_circuit.open_for(
-            tmp_path, changed, "0.5.226", account_scope=account,
+            tmp_path, changed, "0.5.227", account_scope=account,
         )
     other_model = {**first, "model": "gpt-6-luna"}
     empty_submission_circuit.record_empty(
-        tmp_path, other_model, "0.5.226", account_scope="account-a",
+        tmp_path, other_model, "0.5.227", account_scope="account-a",
     )
     empty_submission_circuit.record_empty(
-        tmp_path, first, "0.5.225", account_scope="account-b",
+        tmp_path, first, "0.5.226", account_scope="account-b",
     )
     empty_submission_circuit.record_success(
-        tmp_path, first, "0.5.226", account_scope="account-a",
+        tmp_path, first, "0.5.227", account_scope="account-a",
     )
     assert not empty_submission_circuit.open_for(
-        tmp_path, first, "0.5.225", account_scope="account-a",
+        tmp_path, first, "0.5.226", account_scope="account-a",
     )
     assert empty_submission_circuit.open_for(
-        tmp_path, other_model, "0.5.226", account_scope="account-a",
+        tmp_path, other_model, "0.5.227", account_scope="account-a",
     )
     assert empty_submission_circuit.open_for(
-        tmp_path, first, "0.5.226", account_scope="account-b",
+        tmp_path, first, "0.5.227", account_scope="account-b",
     )
 
 
@@ -575,7 +575,7 @@ def test_precise_selector_without_old_or_new_protection_fails_closed(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
-    monkeypatch.setattr(runloop, "__version__", "0.5.226")
+    monkeypatch.setattr(runloop, "__version__", "0.5.227")
     first = _held(FIRST, "csstree")
     assert runloop._select_precise_resume_assignment(
         _args(), ExactBatchClient([[first]]), [first], "deep-swe",
