@@ -4187,8 +4187,14 @@ def _prepare_assignment_boundary(
     active: list[dict] | None = None,
 ) -> Path | None:
     """Validate/create the immutable non-refill assignment campaign set."""
+    precise = bool(getattr(args, "assignment", None))
     inherited = _assignment_boundary_path(args)
-    if inherited is not None:
+    if precise and os.environ.get(_ASSIGNMENT_BOUNDARY_ENV):
+        sys.exit(
+            "assignment boundary check failed: precise resume cannot inherit "
+            "an assignment boundary path. No model was started."
+        )
+    if inherited is not None and not precise:
         args._assignment_boundary_path = str(inherited)
         return inherited
     if getattr(args, "refill", False):
@@ -4199,9 +4205,46 @@ def _prepare_assignment_boundary(
         except ApiError as exc:
             _exit_for(exc)
     try:
+        batch_id = getattr(client, "batch_id", None)
+        if precise:
+            if batch_id != getattr(args, "batch_id", None) or not batch_id:
+                raise assignment_boundary.BoundaryError(
+                    "precise resume client is not scoped to the requested batch"
+                )
+            if any(
+                not isinstance(item, dict)
+                or item.get("batch_id") != batch_id
+                or item.get("benchmark_id") != benchmark_id
+                for item in active
+            ):
+                raise assignment_boundary.BoundaryError(
+                    "precise resume inventory crosses the requested batch or benchmark"
+                )
+            legacy_path = assignment_boundary.state_path(HOME, benchmark_id)
+            legacy_batches = assignment_boundary.admitted_batches(legacy_path)
+            if legacy_path.exists():
+                if not legacy_batches:
+                    raise assignment_boundary.BoundaryError(
+                        "legacy assignment boundary has unknown batch attribution; "
+                        "inspect the saved boundary before resuming"
+                    )
+                legacy_report = assignment_boundary.reconcile(legacy_path, active)
+                active_ids = {item.get("assignment_id") for item in active}
+                if (
+                    batch_id not in legacy_batches
+                    and legacy_report.expected_ids & active_ids
+                ):
+                    raise assignment_boundary.BoundaryError(
+                        "legacy assignment boundary overlaps the requested batch "
+                        "despite different recorded batch attribution"
+                    )
+            # A known unrelated legacy campaign remains untouched. If this
+            # batch belongs to that campaign, retain its original protection.
+            scoped_batch_id = None if batch_id in legacy_batches else batch_id
+        else:
+            scoped_batch_id = batch_id if getattr(args, "fleet_pool", False) else None
         saved_path = assignment_boundary.state_path(
-            HOME, benchmark_id,
-            getattr(client, "batch_id", None) if getattr(args, "fleet_pool", False) else None,
+            HOME, benchmark_id, scoped_batch_id,
         )
         batches = assignment_boundary.admitted_batches(saved_path)
         if len(batches) > 1:
@@ -4214,18 +4257,19 @@ def _prepare_assignment_boundary(
             HOME,
             benchmark_id,
             active,
-            # Preserve the pre-Fleet boundary path for legacy invocations so
-            # an upgrade cannot silently bypass unresolved local state. Fleet
-            # parents need a per-batch path because several exact batches are
-            # intentionally live under one machine coordinator.
-            batch_id=(
-                getattr(client, "batch_id", None)
-                if getattr(args, "fleet_pool", False) else None
-            ),
+            # Preserve legacy campaigns that include this exact batch; new
+            # precise campaigns and Fleet parents use an exact-batch path.
+            batch_id=scoped_batch_id,
             expected_ids=getattr(args, "expect_assignment", None),
             forget_existing=getattr(args, "forget_assignment_boundary", False),
+            require_matching_metadata=precise,
         )
     except (assignment_boundary.BoundaryError, ApiError, ValueError, OSError) as exc:
+        if precise:
+            sys.exit(
+                f"assignment boundary check failed: {exc}. No model was started. "
+                "Inspect the exact batch leases and saved boundary."
+            )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
             "Inspect `dradar leases`; use --forget-assignment-boundary only "
@@ -7621,6 +7665,12 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
         ):
             print("selected assignment changed after confirmation; no model was started")
             return 1
+        # Confirmation can stay open while a held sibling disappears or its
+        # identity changes. Reconcile the entire authenticated batch again
+        # before the selected assignment reaches the model start gate.
+        _prepare_assignment_boundary(
+            args, client, cfg["benchmark"], fresh_active,
+        )
         args._precise_retry_assignment_id = fresh["assignment_id"]
         return _run_batch(args, client, tasks_root, [fresh], telemetry=telemetry)
     # Non-interactive free-pick runs go through the parallel-safe checkout

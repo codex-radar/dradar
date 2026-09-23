@@ -237,6 +237,7 @@ def prepare(
     batch_id: str | None = None,
     expected_ids: list[str] | None = None,
     forget_existing: bool = False,
+    require_matching_metadata: bool = False,
 ) -> Path | None:
     """Open or create a campaign boundary and reject any unresolved loss."""
     path = state_path(home, benchmark_id, batch_id)
@@ -264,6 +265,19 @@ def prepare(
             if state is not None and state.get("batch_id") != batch_id:
                 raise BoundaryError("saved assignment boundary has a batch mismatch")
             if state is not None:
+                if require_matching_metadata:
+                    for assignment_id in state["expected"].keys() & active.keys():
+                        saved = state["expected"][assignment_id]
+                        current = active[assignment_id]
+                        if any(
+                            saved.get(field) != current.get(field)
+                            or not saved.get(field)
+                            for field in ("batch_id", "task_id", "model", "effort")
+                        ):
+                            raise BoundaryError(
+                                "saved assignment identity differs from the current "
+                                f"lease: {assignment_id}"
+                            )
                 report = _report(state, set(active))
                 if report.complete:
                     path.unlink(missing_ok=True)
