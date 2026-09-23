@@ -1,9 +1,9 @@
 """Public, signed zipapp entry for one upload while normal OTA is blocked.
 
-This is only the second half of the trust chain. The operator first uses the
-already installed, trusted CLI's public ``update prepare`` in a disposable
-home to verify and obtain this package. We verify the signed package again
-against the real home's committed anti-rollback baseline before any upload.
+This is only the second half of the trust chain. The operator first uses an
+already trusted CLI's public OTA path in a disposable home to verify and
+obtain this package. We verify the signed package again against the real
+home's committed anti-rollback baseline before any upload.
 """
 
 from __future__ import annotations
