@@ -1,6 +1,6 @@
 # #0132 — GPT-6 Sol and Luna staged integration
 
-This is a development candidate, not a release approval or proof of real model availability.
+This is a development candidate. Four isolated real trials have confirmed Sol/Luna availability; production release remains separately gated.
 
 ## Contract and sources (checked 2026-09-23)
 
@@ -12,7 +12,7 @@ This is a development candidate, not a release approval or proof of real model a
 
 ## Runtime
 
-The stable npm/GitHub release inspected is Codex 0.155.1, used as this candidate's runtime floor, NOT a proven upstream minimum. Ordinary Pier 0.3.0 already installs an exact resolved npm version in the container layer, invalidating cached older versions. New clients reject older versions for these new models. The DRadar OTA is a Python client artifact; it does not contain the Codex binary. Codex is installed in the benchmark runtime separately. Host login/doctor installers are separate from that runtime.
+Codex 0.155.1 is this candidate's runtime floor, NOT a proven upstream minimum. Ordinary Pier 0.3.0 installs the current exact stable npm version in the container layer, invalidating cached older versions. The four real ordinary-mode trials used Codex 0.156.0 (first two) and 0.156.1 (last two); they did not run an exact 0.155.1 binary. New clients reject older versions for these new models. The DRadar OTA is a Python client artifact; it does not contain the Codex binary. Codex is installed in the benchmark runtime separately. Host login/doctor installers are separate from that runtime.
 
 The official darwin-arm64 0.155.1 package passed npm SHA512 integrity and native `--version`; generated app-server schema was inspected without a model call. SHA256 of native executable: 8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e. Six-platform npm distributions exist; execution of all six binaries and six-platform OTA build verification remain release gates.
 
@@ -30,4 +30,8 @@ Release sequence proposed: fixed-candidate independent QA and real four-case val
 
 Offline tests exercise real production parsers, request construction, assignment/upload endpoints and public cost consumption with synthetic local fixtures. Grade updates in the upload test are explicitly fixture mutations; they do NOT prove real grader or real model execution. Native `--version` and schema output are not a real trial.
 
-D0132-REAL-04 supersedes the earlier hard-dollar precondition: $5 per task and $20 total are observed stop thresholds, not guaranteed maximum charges. The site owner later confirmed that Sol and Luna can now be called; the earlier unavailable-model report is historical. The authorized trial is limited to one isolated ds0 subscription runner, four Sol/Luna × DeepSWE/Pompeii attempts at medium effort, one at a time, without refill or replay. Before the first attempt, the operator must verify the actual container version, isolated server and account route, stop control, core quota, and that the runner has no API-key or paid extra-usage fallback. No trial, real grading, returned-model identity, complete actual usage, or production release has yet been verified.
+D0132-REAL-04 supersedes the earlier hard-dollar precondition: $5 per task and $20 total were observed stop thresholds, not guaranteed maximum charges. The site owner confirmed that Sol and Luna can now be called; the earlier unavailable-model report is historical. The authorized trials used one isolated ds0 subscription runner for Sol/Luna × DeepSWE/Pompeii at medium effort, one at a time, without refill or replay. Each claim required a fresh check of the actual container version, isolated server and account route, stop control, core quota, and absence of API-key or paid extra-usage fallback.
+
+All four one-claim private trials have now uploaded and received official isolated grades. DeepSWE: Luna reward 0, Sol reward 1. Pompeii adjacency F1: Luna 0.5714285714, Sol 0.9333333333. Each trial recorded the expected root model identity, complete token events and a source patch whose SHA256 matched the grading artifact. The final private DB has four graded submissions, no active leases, no pending upload, and no remaining trial container or auth snapshot. The four runs total $1.12780020 under the candidate's v20 Standard API-equivalent tariff; this is a comparison estimate, not a Codex subscription charge receipt. These grades prove the end-to-end isolated execution and grading paths, not a minimum quality threshold for either model.
+
+The ordinary CLI launcher selected a cached public OTA 0.5.223 artifact during the third trial. That artifact predates #0132 and lacks `codex-gpt6-sol-luna-v1`, so the unscoped assignment read appeared empty and an exact-batch read returned HTTP 426. The third and fourth trials used the private candidate source entry point with the same strict assignment boundary; they do not prove the public launcher route. PR #398 currently carries a candidate 0.5.224 package and a signed zipapp handoff test showing an installed 0.5.223 launcher selecting that new GPT-6 capable payload. #0136 is scheduled to publish 0.5.224 first, so #398 must be based on main after that release, use the next available version, repeat cross-feature QA and public OTA selection tests, then obtain normal release authorization. Do not rerun graded samples to test the packaging version.
