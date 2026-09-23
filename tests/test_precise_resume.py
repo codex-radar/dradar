@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dradar import empty_submission_circuit, runloop
+from dradar import assignment_boundary, empty_submission_circuit, runloop
 from dradar import cli
 from dradar.cli import _assignment_id_value
 
@@ -13,6 +13,8 @@ from dradar.cli import _assignment_id_value
 BATCH = "b5fee058c5f54476a6023bc87e43fb30"
 FIRST = "1c3c1f83869e4b28988311115f19e72c"
 SECOND = "21343bdb20334837a6317764a880e02b"
+OLD_BATCH = "22be49862ac94c95916fcc2237961382"
+OLD_ASSIGNMENT = "e1bf9d9882fd498da16bd21d39efca88"
 
 
 def _held(assignment_id, task_id):
@@ -103,6 +105,209 @@ def _run(monkeypatch, client, tmp_path, args=None):
         args or _args(), {"benchmark": "deep-swe"}, client, tmp_path,
     )
     return rc, ran
+
+
+def _old_grok_assignment():
+    return {
+        "assignment_id": OLD_ASSIGNMENT,
+        "batch_id": OLD_BATCH,
+        "task_id": "testem-per-launcher-reports",
+        "model": "grok-4.6",
+        "effort": "high",
+    }
+
+
+def _luna_held(assignment_id, task_id):
+    return {**_held(assignment_id, task_id), "model": "gpt-6-luna"}
+
+
+def test_precise_boundary_keeps_unrelated_legacy_batch_intact(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    old_path = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [_old_grok_assignment()],
+    )
+    old_bytes = old_path.read_bytes()
+    active = [_luna_held(FIRST, "csstree"), _luna_held(SECOND, "yaegi")]
+    args = _args()
+    client = ExactBatchClient([active])
+
+    path = runloop._prepare_assignment_boundary(args, client, "deep-swe")
+
+    assert client.reads == 1
+    assert path == assignment_boundary.state_path(tmp_path, "deep-swe", BATCH)
+    assert set(assignment_boundary.reconcile(path, active).expected_ids) == {FIRST, SECOND}
+    assert old_path.read_bytes() == old_bytes
+
+
+def test_precise_boundary_rejects_missing_sibling_in_current_batch(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    first, second = _luna_held(FIRST, "csstree"), _luna_held(SECOND, "yaegi")
+    path = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [first, second], batch_id=BATCH,
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(SystemExit, match=f"disappeared.*{SECOND}"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[first]]), "deep-swe",
+        )
+    assert path.read_bytes() == before
+
+
+def test_precise_boundary_rechecks_after_initial_admission(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
+    args = _args()
+    client = ExactBatchClient([[first, second]])
+    path = runloop._prepare_assignment_boundary(args, client, "deep-swe")
+    before = path.read_bytes()
+
+    with pytest.raises(SystemExit, match=f"disappeared.*{SECOND}"):
+        runloop._prepare_assignment_boundary(args, client, "deep-swe", [first])
+    assert path.read_bytes() == before
+
+
+def test_precise_boundary_retains_legacy_guard_for_same_batch(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    first, second = _held(FIRST, "csstree"), _held(SECOND, "yaegi")
+    legacy = assignment_boundary.prepare(tmp_path, "deep-swe", [first, second])
+    before = legacy.read_bytes()
+
+    with pytest.raises(SystemExit, match=f"disappeared.*{SECOND}"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[first]]), "deep-swe",
+        )
+    assert legacy.read_bytes() == before
+    assert not assignment_boundary.state_path(tmp_path, "deep-swe", BATCH).exists()
+
+
+def test_precise_boundary_rejects_legacy_without_attribution(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    legacy = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [{"assignment_id": OLD_ASSIGNMENT}],
+    )
+    before = legacy.read_bytes()
+
+    with pytest.raises(SystemExit, match="unknown batch attribution"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[_held(FIRST, "csstree")]]), "deep-swe",
+        )
+    assert legacy.read_bytes() == before
+
+
+def test_precise_boundary_rejects_corrupt_legacy(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    legacy = assignment_boundary.state_path(tmp_path, "deep-swe")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("not-json")
+
+    with pytest.raises(SystemExit, match="missing or invalid"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[_held(FIRST, "csstree")]]), "deep-swe",
+        )
+    assert legacy.read_text() == "not-json"
+
+
+def test_precise_boundary_rejects_legacy_id_overlap_with_other_batch(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    legacy = assignment_boundary.prepare(
+        tmp_path, "deep-swe",
+        [{**_old_grok_assignment(), "assignment_id": FIRST}],
+    )
+    before = legacy.read_bytes()
+
+    with pytest.raises(SystemExit, match="overlaps the requested batch"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[_held(FIRST, "csstree")]]), "deep-swe",
+        )
+    assert legacy.read_bytes() == before
+
+
+@pytest.mark.parametrize("bad_item", [
+    {"batch_id": OLD_BATCH}, {"benchmark_id": "other"},
+])
+def test_precise_boundary_rejects_cross_scope_inventory(
+    monkeypatch, tmp_path, bad_item,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    active = [_held(FIRST, "csstree"), {**_held(SECOND, "yaegi"), **bad_item}]
+    with pytest.raises(SystemExit, match="inventory crosses"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([active]), "deep-swe",
+        )
+    assert not assignment_boundary.state_path(tmp_path, "deep-swe", BATCH).exists()
+
+
+def test_precise_boundary_rejects_inherited_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(runloop._ASSIGNMENT_BOUNDARY_ENV, str(tmp_path / "other.json"))
+    with pytest.raises(SystemExit, match="cannot inherit"):
+        runloop._prepare_assignment_boundary(
+            _args(), ExactBatchClient([[_held(FIRST, "csstree")]]), "deep-swe",
+        )
+
+
+def test_precise_resume_cli_entry_uses_full_batch_boundary_without_model(
+    monkeypatch, tmp_path,
+):
+    _setup(monkeypatch, tmp_path)
+    legacy = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [_old_grok_assignment()],
+    )
+    old_bytes = legacy.read_bytes()
+    first, second = _luna_held(FIRST, "csstree"), _luna_held(SECOND, "yaegi")
+    empty_submission_circuit.record_empty(
+        tmp_path, first, runloop.__version__, account_scope="fixture-account",
+    )
+    client = ExactBatchClient([[first, second]])
+    ran = []
+
+    class Telemetry:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def bind_batch(self, *args):
+            pass
+
+        def start(self):
+            pass
+
+        def set_phase(self, *args):
+            pass
+
+        def close(self, *args):
+            pass
+
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {"benchmark": "deep-swe"})
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
+    monkeypatch.setattr(runloop, "RunnerTelemetry", Telemetry)
+    monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
+    monkeypatch.setattr(runloop, "sweep_orphan_compose", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_maintain_image_cache", lambda *_a, **_kw: False)
+    monkeypatch.setattr(runloop, "ensure_benchmark_task_pack", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
+    monkeypatch.setattr(runloop, "ensure_pier", lambda: None)
+    monkeypatch.setattr(runloop, "_ensure_egress_runtime", lambda **_kw: None)
+    monkeypatch.setattr(runloop, "_mark_pending_scope_required", lambda _client: None)
+    monkeypatch.setattr(
+        runloop, "_run_batch",
+        lambda _args, _client, _tasks_root, selected, **_kw:
+        ran.extend(item["assignment_id"] for item in selected) or 1,
+    )
+
+    assert cli.main([
+        "resume", "--benchmark", "deep-swe", "--batch-id", BATCH,
+        "--assignment", FIRST,
+    ]) == 1
+    assert ran == [FIRST]
+    assert client.reads >= 3
+    path = assignment_boundary.state_path(tmp_path, "deep-swe", BATCH)
+    assert assignment_boundary.reconcile(path, [first, second]).expected_ids == {FIRST, SECOND}
+    assert legacy.read_bytes() == old_bytes
 
 
 def test_precise_resume_runs_only_confirmed_held_assignment(monkeypatch, tmp_path, capsys):
