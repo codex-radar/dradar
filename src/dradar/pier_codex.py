@@ -70,7 +70,13 @@ class CodexRegistered(Codex):
         account_id = tokens.get("account_id")
         identity = self._jwt_claims(tokens.get("id_token"))
         access = self._jwt_claims(tokens.get("access_token"))
-        email = identity.get("email")
+        profile = identity.get("https://api.openai.com/profile")
+        profile_email = profile.get("email") if isinstance(profile, dict) else None
+        email = identity.get("email") or profile_email
+        if (isinstance(identity.get("email"), str)
+                and isinstance(profile_email, str)
+                and identity["email"].casefold() != profile_email.casefold()):
+            raise ValueError("conflicting account email claims")
         if (not isinstance(account_id, str) or not account_id
                 or not isinstance(identity.get("sub"), str) or not identity["sub"]
                 or not isinstance(email, str) or not email
