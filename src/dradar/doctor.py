@@ -10,6 +10,9 @@ import tempfile
 from pathlib import Path
 
 from . import __version__, docker_runtime, egress, net_probe, runner
+from .artifact_boundary import (
+    UnsafeArtifact, artifact_preflight_message, preflight_artifact_platform,
+)
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CLI_VERSION,
@@ -21,7 +24,7 @@ from .codebuddy_provider import (
     managed_codebuddy_home,
 )
 from .identity import _client
-from .local_config import _load_config, tasks_root_from_config
+from .local_config import HOME, _load_config, tasks_root_from_config
 from .providers import (
     ANTIGRAVITY_AGENT,
     ANTIGRAVITY_CLI_VERSION,
@@ -717,6 +720,13 @@ def cmd_doctor(args) -> int:
         ota_ok,
         "; ".join(ota_notes) if ota_notes else None,
     )
+
+    try:
+        preflight_artifact_platform(HOME / "work")
+    except UnsafeArtifact as exc:
+        all_ok &= _check("artifact work path", False, artifact_preflight_message(exc))
+    else:
+        all_ok &= _check("artifact work path", True)
 
     docker = shutil.which("docker")
     all_ok &= _check("docker CLI", bool(docker), hints["cli"])

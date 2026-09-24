@@ -32,7 +32,7 @@ import httpx
 from .gpt6 import GPT6_EFFORTS, GPT6_CODEX_VERSION
 from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
-    preflight_artifact_platform, PLATFORM_PREFLIGHT_MESSAGE,
+    preflight_artifact_platform, artifact_preflight_message,
 )
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
@@ -4449,7 +4449,7 @@ def run_trial(
     try:
         preflight_artifact_platform(work_dir)
     except UnsafeArtifact as exc:
-        raise RunnerError(PLATFORM_PREFLIGHT_MESSAGE) from exc
+        raise RunnerError(artifact_preflight_message(exc)) from exc
     if assignment.get("auth_runtime") not in (None, "codex-managed-at-v1"):
         raise RunnerError("unsupported authentication runtime")
     effective_agent = dev_agent or assignment["agent"]
