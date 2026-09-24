@@ -169,6 +169,12 @@ dradar login --server https://api.codexradar.com --token <YOUR_TOKEN> \
 dradar doctor
 ```
 
+从众测网页领取前检查环境时，使用 `dradar doctor --agent codex --website-run`
+（其他运行工具替换 `--agent` 值）。网页运行码在领取后才提供，`--website-run`
+会明确跳过传统持久 Token 登录检查；它不会验证尚未取得的运行码。
+Docker、Pier、运行工具及题库等失败项仍会使体检失败。运行码由后续
+`dradar run --plan` 在启动时验证。普通 `dradar doctor` 仍检查持久登录。
+
 DRadar 不假设代理软件、端口或 Docker 实现。无代理配置时按直连检查；需要代理时可使用
 跨平台的 DRadar 专用接口。多数情况下只需配置一个地址，它会同时用于宿主机上的
 OAuth/模型访问检查、Docker 构建和 Pier 容器联网：

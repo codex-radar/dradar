@@ -135,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
         ), default=None,
         help="check only the dependencies required by this agent",
     )
+    p_doc.add_argument(
+        "--website-run", action="store_true",
+        help="prepare for a website-claimed run without a persistent DRadar login",
+    )
     p_doc.set_defaults(func=cmd_doctor)
 
     p_diagnostics = sub.add_parser(

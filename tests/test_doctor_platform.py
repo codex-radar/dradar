@@ -164,6 +164,23 @@ def test_doctor_macos_hints_unchanged(monkeypatch, capsys):
     assert "brew install codex" in out
 
 
+def test_website_run_skips_only_persistent_server_login(monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "_platform", lambda: "macos")
+    monkeypatch.setattr(doctor, "deepseek_opted_in", lambda: False)
+    monkeypatch.setattr(doctor.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(doctor, "_load_config", lambda: {})
+
+    rc = doctor.cmd_doctor(SimpleNamespace(agent="codex", website_run=True))
+    out = capsys.readouterr().out
+
+    assert rc == 1  # Missing Docker and Codex still block setup.
+    assert "[skip] server login" in out
+    assert "website run code is supplied after claiming" in out
+    assert "[FAIL] docker CLI" in out
+    assert "[FAIL] codex CLI" in out
+    assert "dradar doctor --agent codex --website-run" in out
+
+
 def test_doctor_native_windows_runs_real_preflight_with_native_hints(
     monkeypatch, capsys,
 ):
