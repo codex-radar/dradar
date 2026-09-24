@@ -4386,15 +4386,18 @@ def _prepare_assignment_boundary(
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was "
                 "started. A missing local outcome does not prove the work "
-                "finished. Before using --forget-assignment-boundary, verify "
-                "the same radar account and every exact assignment ID have "
-                "a server-confirmed terminal submission, and that no runner "
-                "process or local upload/artifact remains unfinished."
+                "finished. For locally failed work that the server confirms "
+                "expired without submission, run `dradar boundary recover` "
+                "with every exact --accept-expired-assignment ID. It checks "
+                "the account, pending uploads, local results and processes, "
+                "then archives the old boundary after your confirmation. "
+                "For other states, inspect `dradar leases` and seek private "
+                "review before resuming."
             )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
-            "Inspect `dradar leases`; use --forget-assignment-boundary only "
-            "after intentionally accepting the missing assignment(s)."
+            "Inspect `dradar leases`; use `dradar boundary recover` only "
+            "for verified expired, unsubmitted failures."
         )
     if path is not None:
         args._assignment_boundary_path = str(path)
@@ -4924,6 +4927,12 @@ def _publish_fleet_startup_failure(args, reason: object) -> None:
 
 
 def cmd_go(args) -> int:
+    if getattr(args, "forget_assignment_boundary", False):
+        sys.exit(
+            "--forget-assignment-boundary is no longer an unchecked recovery "
+            "shortcut. For locally failed, expired, unsubmitted work, use "
+            "`dradar boundary recover` with every exact assignment ID."
+        )
     try:
         args.batch_id = normalize_batch_id(getattr(args, "batch_id", None))
     except ValueError as exc:
