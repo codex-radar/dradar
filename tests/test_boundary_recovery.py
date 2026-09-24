@@ -65,6 +65,20 @@ def test_expired_failed_recovery_archives_boundary_and_keeps_jobs(tmp_path, monk
     assert fresh == path
 
 
+def test_task_repository_files_are_not_mistaken_for_pier_artifacts(tmp_path, monkeypatch):
+    path, args = fixture(tmp_path, monkeypatch)
+    trial = next((tmp_path / "work" / "jobs").rglob("trial"))
+    source = trial / "repo" / "artifacts"
+    source.mkdir(parents=True)
+    (source / "model.patch").write_text("task fixture, not Pier output")
+    (source.parent / "state.json").write_text(json.dumps({"complete": True}))
+    monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {A},{B}")
+
+    assert boundary_recovery.cmd_boundary_recover(args) == 0
+    assert not path.exists()
+    assert (source / "model.patch").is_file()
+
+
 def test_cli_boundary_recover_requires_exact_ids(monkeypatch):
     captured = []
     monkeypatch.setattr(cli, "cmd_boundary_recover", lambda args: captured.append(args) or 0)
@@ -92,7 +106,8 @@ def test_recovery_blocks_without_changing_ledger_or_jobs(tmp_path, monkeypatch, 
     if problem == "pending":
         (tmp_path / "pending_uploads.json").write_text(json.dumps([{"assignment_id": A}]))
     if problem == "patch":
-        next((tmp_path / "work" / "jobs").rglob("trial")).joinpath("model.patch").write_text("diff")
+        next((tmp_path / "work" / "jobs").rglob("trial")).joinpath(
+            "artifacts", "model.patch").write_text("diff")
     if problem == "finished":
         next((tmp_path / "work" / "jobs").rglob("result.json")).write_text(
             json.dumps({"finished_at": "2026-09-03T10:07:00Z"}))

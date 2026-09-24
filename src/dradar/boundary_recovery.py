@@ -55,40 +55,52 @@ def _check_jobs(home: Path, expected: set[str]) -> list[Path]:
         if job.assignment_id not in expected:
             continue
         kept.append(job.job_dir)
-        # A result with a finished run, a patch, or a trajectory may still be
-        # uploaded or salvaged even when the old lease expired. Keep the guard.
-        for path in job.job_dir.rglob("*"):
-            if path.is_symlink():
-                raise RecoveryBlocked("a local job has a symlink; inspect its artifacts manually")
-            if not path.is_file():
-                continue
-            if "artifacts" in path.parts:
-                raise RecoveryBlocked("a local job still has possible upload artifacts")
-            if path.name.endswith(".patch"):
-                raise RecoveryBlocked("a local job still has possible upload artifacts")
-            if path.name == "result.json":
-                try:
-                    result = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                    raise RecoveryBlocked("a local result is unreadable; inspect it manually") from exc
-                execution = result.get("agent_execution") if isinstance(result, dict) else None
-                if (
-                    not isinstance(result, dict)
-                    or result.get("finished_at") is not None
-                    or (isinstance(execution, dict) and execution.get("finished_at") is not None)
-                ):
+        trial = job.trial_dir
+        if trial is None or trial.is_symlink():
+            raise RecoveryBlocked("an old local job has an ambiguous trial directory")
+        artifacts = trial / "artifacts"
+        host_output = trial / ".dradar" / "host-output"
+        if (artifacts.is_symlink() or (trial / ".dradar").is_symlink()
+                or host_output.is_symlink()):
+            raise RecoveryBlocked("an old artifact directory is a symlink")
+        if (artifacts.exists() and not artifacts.is_dir()) or (
+            host_output.exists() and not host_output.is_dir()
+        ):
+            raise RecoveryBlocked("an old artifact directory has an unknown path type")
+        if artifacts.is_dir() and any(artifacts.iterdir()):
+            raise RecoveryBlocked("a local job still has possible upload artifacts")
+        patch = host_output / "model.patch"
+        if patch.exists() or patch.is_symlink():
+            raise RecoveryBlocked("a local job still has possible upload artifacts")
+        result_path = trial / "result.json"
+        if result_path.is_symlink():
+            raise RecoveryBlocked("a local result is a symlink")
+        if result_path.exists():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RecoveryBlocked("a local result is unreadable; inspect it manually") from exc
+            execution = result.get("agent_execution") if isinstance(result, dict) else None
+            if (
+                not isinstance(result, dict)
+                or result.get("finished_at") is not None
+                or (isinstance(execution, dict) and execution.get("finished_at") is not None)
+            ):
+                raise RecoveryBlocked("a local job may have a completed result")
+            for key in ("completed", "n_completed", "num_completed"):
+                value = result.get(key, 0)
+                if not isinstance(value, (int, float)) or value > 0:
                     raise RecoveryBlocked("a local job may have a completed result")
-                for key in ("completed", "n_completed", "num_completed"):
-                    value = result.get(key, 0)
-                    if not isinstance(value, (int, float)) or value > 0:
-                        raise RecoveryBlocked("a local job may have a completed result")
-            if path.name == "state.json":
-                try:
-                    state = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                    raise RecoveryBlocked("a local artifact state is unreadable") from exc
-                if not isinstance(state, dict) or state.get("complete") is True:
-                    raise RecoveryBlocked("a local artifact state reports completed work")
+        state_path = host_output / "state.json"
+        if state_path.is_symlink():
+            raise RecoveryBlocked("a local artifact state is a symlink")
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RecoveryBlocked("a local artifact state is unreadable") from exc
+            if not isinstance(state, dict) or state.get("complete") is True:
+                raise RecoveryBlocked("a local artifact state reports completed work")
     return kept
 
 
