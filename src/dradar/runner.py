@@ -777,6 +777,10 @@ def _ensure_codex_agent_module(home: Path) -> Path:
             "Codex Pier adapter is missing; reinstall or upgrade dradar"
         )
     _ensure_worker_event_module(home)
+    rpc_source = importlib.resources.files("dradar").joinpath("auth_codex_rpc.py")
+    _materialize_shared_file(
+        home / "_dradar_auth_codex_rpc.py", rpc_source.read_bytes(),
+    )
     return _materialize_shared_file(
         home / CODEX_AGENT_MODULE_FILENAME, source.read_bytes(),
     )

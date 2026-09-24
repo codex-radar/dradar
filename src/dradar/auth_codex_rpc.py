@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import selectors
 import signal
+import shutil
 import subprocess
 import time
 
@@ -42,6 +43,34 @@ class CodexAccountRpc:
         The caller's durable pending intent must precede a read of managed auth:
         refresh=False can still perform native proactive renewal when expired.
         """
+        account = self._read_account(auth_home, refresh=refresh, timeout=timeout)
+        if account is None:
+            return 'missing'
+        mode = account.get('type')
+        return mode if mode in ('chatgpt', 'apiKey') else 'other'
+
+    def subscription_status(self, auth_home: Path, *, expected_email: str,
+                            timeout: float = 15) -> str:
+        """Classify a native account read without exposing its identity or plan."""
+        if not isinstance(expected_email, str) or not expected_email:
+            raise AccountRpcError('invalid_rpc_request')
+        account = self._read_account(auth_home, refresh=False, timeout=timeout)
+        if account is None or account.get('type') != 'chatgpt':
+            return 'not_chatgpt'
+        email = account.get('email')
+        if not isinstance(email, str) or email.casefold() != expected_email.casefold():
+            return 'identity_mismatch'
+        # Only plans with a documented Codex GPT-6 subscription rollout.
+        if account.get('planType') not in {
+            'plus', 'pro', 'team', 'business', 'enterprise', 'edu',
+            'edu_plus', 'edu_pro', 'ent26',
+            'enterprise_cbp_automation', 'enterprise_cbp_usage_based',
+        }:
+            return 'plan_ineligible'
+        return 'eligible'
+
+    def _read_account(self, auth_home: Path, *, refresh: bool,
+                      timeout: float) -> dict | None:
         if os.name == 'nt':
             raise AccountRpcError('runtime_transport_unverified')
         if type(refresh) is not bool or type(timeout) not in (int, float) or not 0 < timeout <= 120:
@@ -57,10 +86,16 @@ class CodexAccountRpc:
         except (OSError, ValueError):
             raise AccountRpcError('runtime_pin_mismatch') from None
         deadline = time.monotonic() + timeout
+        # The official npm launcher is a /usr/bin/env node script on several
+        # hosts. Keep only that interpreter directory, not the caller's PATH.
+        node = shutil.which('node')
+        runtime_path = os.defpath
+        if node:
+            runtime_path = str(Path(node).resolve().parent) + os.pathsep + runtime_path
         try:
             proc = subprocess.Popen([str(executable), 'app-server'],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env={**_network_environment(), 'PATH': os.defpath, 'HOME': str(auth_home), 'CODEX_HOME': str(auth_home)},
+                env={**_network_environment(), 'PATH': runtime_path, 'HOME': str(auth_home), 'CODEX_HOME': str(auth_home)},
                 cwd=auth_home, start_new_session=True, bufsize=0)
         except OSError:
             raise AccountRpcError('runtime_unavailable') from None
@@ -121,11 +156,10 @@ class CodexAccountRpc:
                     raise AccountRpcError('invalid_rpc_response')
                 account = result['account']
                 if account is None:
-                    return 'missing'
+                    return None
                 if not isinstance(account, dict):
                     raise AccountRpcError('invalid_rpc_response')
-                mode = account.get('type')
-                return mode if mode in ('chatgpt', 'apiKey') else 'other'
+                return account
         except (OSError, ValueError):
             raise AccountRpcError('account_rpc_transport_failed') from None
         finally:
