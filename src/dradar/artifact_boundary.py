@@ -35,8 +35,30 @@ def _supported():
 
 
 
+def _preflight_work_root(root):
+    """Give an early hint; TrialFiles still enforces the real FD boundary."""
+    path = Path(root).absolute()
+    if '..' in path.parts:
+        raise UnsafeArtifact('work_root_unsafe')
+    current = Path(path.anchor)
+    for name in path.parts[1:]:
+        current /= name
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            # The runner may create the remaining private directories. The
+            # later TrialFiles open checks every component again.
+            break
+        except OSError as exc:
+            raise UnsafeArtifact('work_root_unreadable') from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise UnsafeArtifact('work_root_symlink')
+        if not stat.S_ISDIR(info.st_mode):
+            raise UnsafeArtifact('work_root_not_directory')
+
+
 def preflight_artifact_platform(root=None):
-    """Refuse unsupported execution before an agent consumes paid quota."""
+    """Refuse unsupported paths before an agent consumes paid quota."""
     _supported()
     if os.name == 'nt':
         try:
@@ -44,6 +66,8 @@ def preflight_artifact_platform(root=None):
         except ModuleNotFoundError:
             from dradar.artifact_boundary_win import WinAPI
         WinAPI(UnsafeArtifact).require_ntfs(root or tempfile.gettempdir())
+    elif root is not None:
+        _preflight_work_root(root)
 
 
 PLATFORM_PREFLIGHT_MESSAGE = (
@@ -51,6 +75,19 @@ PLATFORM_PREFLIGHT_MESSAGE = (
     'Windows requires a fixed local NTFS volume and native boundary support. Do not start a paid run '
     'or clear existing upload blocks; see docs/ARTIFACT_BOUNDARY_RECOVERY.md.'
 )
+
+WORK_ROOT_PREFLIGHT_MESSAGE = (
+    'The local DRadar work path crosses a symlink or a non-directory. '
+    'Use the physical path of the same private DRADAR_HOME directory '
+    '(on macOS, /tmp is /private/tmp), then rerun doctor or the original '
+    'website plan. Do not claim the task again. No agent was started.'
+)
+
+
+def artifact_preflight_message(exc):
+    if str(exc).startswith('work_root_'):
+        return WORK_ROOT_PREFLIGHT_MESSAGE
+    return PLATFORM_PREFLIGHT_MESSAGE
 
 
 def _parts(path):

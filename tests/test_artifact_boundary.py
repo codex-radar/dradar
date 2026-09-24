@@ -297,6 +297,30 @@ def test_platform_guard_precedes_go_and_direct_runner_work(tmp_path, monkeypatch
         runner.run_trial({}, tmp_path, tmp_path)
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX work-root boundary')
+def test_symlinked_work_root_stops_before_paid_agent(tmp_path):
+    from dradar import runner
+
+    physical = tmp_path / 'physical'
+    physical.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(physical, target_is_directory=True)
+    (physical / 'work').mkdir()
+
+    with pytest.raises(boundary.UnsafeArtifact, match='work_root_symlink'):
+        boundary.preflight_artifact_platform(alias / 'work')
+    with pytest.raises(runner.RunnerError, match='physical path.*No agent was started'):
+        runner.run_trial({}, tmp_path, alias / 'work')
+
+    boundary.preflight_artifact_platform(physical / 'work')
+    (physical / 'trial').mkdir()
+    with boundary.TrialFiles(physical / 'trial'):
+        pass
+    with pytest.raises(boundary.UnsafeArtifact, match='unsafe_directory'):
+        with boundary.TrialFiles(alias / 'trial'):
+            pass
+
+
 def test_dsh_upload_uses_same_snapshot_as_bundle(trial, monkeypatch):
     from dradar import runloop
     (trial / 'artifacts').mkdir()

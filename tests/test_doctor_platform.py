@@ -181,6 +181,27 @@ def test_website_run_skips_only_persistent_server_login(monkeypatch, capsys):
     assert "dradar doctor --agent codex --website-run" in out
 
 
+def test_website_doctor_reports_symlinked_work_root_before_claim(
+    monkeypatch, capsys, tmp_path,
+):
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(physical, target_is_directory=True)
+    monkeypatch.setattr(doctor, "HOME", alias)
+    monkeypatch.setattr(doctor, "_platform", lambda: "macos")
+    monkeypatch.setattr(doctor.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(doctor, "_load_config", lambda: {})
+
+    rc = doctor.cmd_doctor(SimpleNamespace(agent="codex", website_run=True))
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "[FAIL] artifact work path" in out
+    assert "physical path of the same private DRADAR_HOME" in out
+    assert "No agent was started" in out
+
+
 def test_doctor_native_windows_runs_real_preflight_with_native_hints(
     monkeypatch, capsys,
 ):
