@@ -971,7 +971,9 @@ def publish_pool_startup_failure(
     path = _validated_pool_startup_target(home, batch_id)
     with _locked(_pool_startup_lock_path(home, batch_id)):
         existing = _read_json(path)
-        if existing and existing.get("status") == "ready":
+        # The first concrete failure is the useful diagnosis. A later generic
+        # cmd_go fallback must not replace it after the pool exits.
+        if existing and existing.get("status") in {"ready", "failed"}:
             return False
         safe_code = str(error_code)[:80]
         safe_message = " ".join(str(user_message).split())[:500]

@@ -811,6 +811,62 @@ def test_isolated_builder_preflight_fails_before_batch_or_worker_session(
     assert "exit=1" in output
 
 
+def test_fleet_builder_preflight_reports_cause_without_state_change_fallback(
+    tmp_path, monkeypatch,
+):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda *_a, **_k: None)
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    fleet._prepare_dirs(tmp_path)
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setenv(fleet.CONTROLLER_ID_ENV, "controller-1")
+    monkeypatch.setenv(fleet.POOL_BATCH_ENV, batch_id)
+    monkeypatch.setenv(
+        fleet.POOL_STARTUP_FILE_ENV,
+        str(fleet._pool_startup_path(tmp_path, batch_id)),
+    )
+    monkeypatch.setattr(fleet, "controller_matches", lambda *_args: True)
+
+    class Recorder:
+        def __init__(self, _home, _client):
+            pass
+
+        def try_record(self, *_args, **_kwargs):
+            pass
+
+        def flush(self, **_kwargs):
+            return 0
+
+    monkeypatch.setattr(runloop, "FlightRecorder", Recorder)
+    monkeypatch.setattr(
+        runloop.image_cache,
+        "preflight_trial_builder",
+        lambda *_args, **_kwargs: runloop.image_cache.TrialBuilderPreflight(
+            False, 1, "base_image_metadata", "registry_timeout",
+            "timed out", (),
+        ),
+    )
+    monkeypatch.setattr(
+        runloop, "_prepare_batch",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preflight must stop before batch preparation"
+        ),
+    )
+    args = _args(workers=2, fleet_pool=True, batch_id=batch_id)
+
+    assert runloop._run_worker_pool(args) == runloop._ENVIRONMENT_BUILD_FAILED_EXIT_CODE
+    path = fleet._pool_startup_path(tmp_path, batch_id)
+    specific = fleet._read_json(path)
+    assert specific["error_code"] == "isolated_builder_preflight_failed"
+    assert "base_image_metadata" in specific["user_message"]
+    assert "registry_timeout" in specific["user_message"]
+    assert "题目状态" not in specific["user_message"]
+    assert runloop._publish_fleet_startup_failure(
+        args, "pool ended before startup acknowledgement"
+    ) is None
+    assert fleet._read_json(path) == specific
+
+
 def test_pool_children_inherit_the_preflighted_https_mirror_snapshot(monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=2)
     monkeypatch.setattr(
