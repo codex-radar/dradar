@@ -1082,7 +1082,12 @@ def cmd_doctor(args) -> int:
             f"{tasks_root}",
         )
 
-    if cfg.get("server") and cfg.get("token"):
+    if getattr(args, "website_run", False):
+        _skip(
+            "server login",
+            "website run code is supplied after claiming and checked when the run starts",
+        )
+    elif cfg.get("server") and cfg.get("token"):
         try:
             me = _client(cfg).whoami()
             all_ok &= _check(f"server login ({me['nickname']})", True)
@@ -1091,10 +1096,11 @@ def cmd_doctor(args) -> int:
     else:
         all_ok &= _check("server login", False, "dradar login --server <url> --token <token>")
 
-    retry = (
-        f"dradar doctor --agent {selected_agent}"
-        if selected_agent else "dradar doctor"
-    )
+    retry = "dradar doctor"
+    if selected_agent:
+        retry += f" --agent {selected_agent}"
+    if getattr(args, "website_run", False):
+        retry += " --website-run"
     print("all checks passed" if all_ok else f"fix the FAIL items above, then re-run: {retry}")
     return 0 if all_ok else 1
 
