@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -81,7 +82,35 @@ def _check_jobs(home: Path, expected: set[str]) -> list[Path]:
                     value = result.get(key, 0)
                     if not isinstance(value, (int, float)) or value > 0:
                         raise RecoveryBlocked("a local job may have a completed result")
+            if path.name == "state.json":
+                try:
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RecoveryBlocked("a local artifact state is unreadable") from exc
+                if not isinstance(state, dict) or state.get("complete") is True:
+                    raise RecoveryBlocked("a local artifact state reports completed work")
     return kept
+
+
+def _looks_like_runner_process(command: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return True  # An unparseable command cannot prove a runner is absent.
+    if "--worker-child" in parts:
+        return True
+    actions = {"go", "resume", "run", "fleet"}
+    if not actions.intersection(parts):
+        return False
+    if any(
+        Path(part).name in {"dradar", "dradar.exe", "dradar.cli"}
+        or "dradar/" in part
+        for part in parts
+    ):
+        return True
+    # The signed OTA launcher can execute Python from an anonymous fd: its
+    # process command line contains only /dev/fd/N and the CLI action.
+    return any(part.startswith("/dev/fd/") for part in parts)
 
 
 def _check_processes(home: Path) -> None:
@@ -100,7 +129,7 @@ def _check_processes(home: Path) -> None:
             if not match or int(match.group(1)) == os.getpid():
                 continue
             command = match.group(2)
-            if re.search(r"(?:^|[/\s])dradar(?:\s|$).*(?:\s)(?:go|resume|run|fleet)(?:\s|$)", command):
+            if _looks_like_runner_process(command):
                 raise RecoveryBlocked("another DRadar runner process may be active")
     else:  # Windows cannot inspect other processes' arguments with tasklist.
         raise RecoveryBlocked("process inspection is unavailable on this platform")

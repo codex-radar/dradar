@@ -77,7 +77,7 @@ def test_legacy_forget_option_is_rejected_before_any_run():
         runloop.cmd_go(SimpleNamespace(forget_assignment_boundary=True))
 
 
-@pytest.mark.parametrize("problem", ["wrong-id", "wrong-account", "submitted", "released", "wrong-benchmark", "pending", "patch", "finished", "nested-finished", "process", "decline"])
+@pytest.mark.parametrize("problem", ["wrong-id", "wrong-account", "submitted", "released", "wrong-benchmark", "pending", "patch", "finished", "nested-finished", "complete-state", "process", "decline"])
 def test_recovery_blocks_without_changing_ledger_or_jobs(tmp_path, monkeypatch, problem):
     server_ids = (A,) if problem == "wrong-account" else (A, B)
     path, args = fixture(
@@ -100,6 +100,12 @@ def test_recovery_blocks_without_changing_ledger_or_jobs(tmp_path, monkeypatch, 
         next((tmp_path / "work" / "jobs").rglob("result.json")).write_text(
             json.dumps({"finished_at": None, "agent_execution": {
                 "finished_at": "2026-09-03T10:07:00Z"}}))
+    if problem == "complete-state":
+        trial = next((tmp_path / "work" / "jobs").rglob("trial"))
+        output = trial / ".dradar" / "host-output"
+        output.mkdir(parents=True)
+        (output / "state.json").write_text(json.dumps({"complete": True}))
+        (output / "trajectory.json").write_text("{}")
     if problem == "process":
         monkeypatch.setattr(
             boundary_recovery, "_check_processes",
@@ -125,3 +131,21 @@ def test_recovery_rechecks_ledger_after_confirmation(tmp_path, monkeypatch):
     assert boundary_recovery.cmd_boundary_recover(args) == 1
     assert path.exists()
     assert not list(path.parent.glob(f"{path.stem}.recovered-*.json"))
+
+
+@pytest.mark.parametrize("command", [
+    "dradar go --pick task:model:low",
+    "/opt/cli/bin/dradar resume --worker-child",
+    "python -m dradar.cli resume --worker-child",
+    "/usr/bin/python3 /dev/fd/9 resume --batch-id batch",
+])
+def test_process_inspection_detects_cli_and_ota_runners(tmp_path, monkeypatch, command):
+    monkeypatch.setattr(boundary_recovery.fleet, "controller_is_active", lambda _home: False)
+
+    def fake_run(args, **_kw):
+        assert args[0] == "ps"
+        return SimpleNamespace(stdout=f"999999 {command}\n")
+
+    monkeypatch.setattr(boundary_recovery.subprocess, "run", fake_run)
+    with pytest.raises(boundary_recovery.RecoveryBlocked, match="runner process"):
+        boundary_recovery._check_processes(tmp_path)
