@@ -16,13 +16,19 @@ def _jwt(claims):
     return "fixture." + body + ".signature"
 
 
-def _auth(tmp_path, *, mode=None, expiry=None, account="account-a", api_key=None):
+def _auth(tmp_path, *, mode=None, expiry=None, account="account-a", api_key=None,
+          profile_only=False, conflicting_email=False):
     path = tmp_path / "auth.json"
+    identity = {"sub": "stable-user-a",
+                "https://api.openai.com/auth": {"chatgpt_account_id": "account-a"}}
+    if profile_only or conflicting_email:
+        identity["https://api.openai.com/profile"] = {"email": "user@example.invalid"}
+    if not profile_only:
+        identity["email"] = "other@example.invalid" if conflicting_email else "user@example.invalid"
     value = {
         "tokens": {
             "account_id": account,
-            "id_token": _jwt({"sub": "stable-user-a", "email": "user@example.invalid",
-                              "https://api.openai.com/auth": {"chatgpt_account_id": "account-a"}}),
+            "id_token": _jwt(identity),
             "access_token": _jwt({"exp": expiry or int(time.time()) + 3600,
                                   "https://api.openai.com/auth": {"chatgpt_account_id": "account-a"}}),
             "refresh_token": "fixture-refresh",
@@ -61,8 +67,9 @@ def _official_fixture(tmp_path, monkeypatch, account):
 
 
 @pytest.mark.parametrize("mode", [None, "missing"])
-def test_official_pro_account_admits_same_snapshot_without_rewriting_source(tmp_path, monkeypatch, mode):
-    path = _auth(tmp_path, mode=mode)
+@pytest.mark.parametrize("profile_only", [False, True])
+def test_official_pro_account_admits_same_snapshot_without_rewriting_source(tmp_path, monkeypatch, mode, profile_only):
+    path = _auth(tmp_path, mode=mode, profile_only=profile_only)
     original = path.read_bytes()
     marker = _official_fixture(tmp_path, monkeypatch,
                                {"type": "chatgpt", "email": "user@example.invalid", "planType": "pro"})
@@ -96,6 +103,16 @@ def test_missing_login_api_key_mismatch_and_ineligible_plan_fail_closed(tmp_path
 ])
 def test_local_api_key_or_inconsistent_stable_account_never_calls_rpc(tmp_path, monkeypatch, mode, key, account):
     path = _auth(tmp_path, mode=mode, api_key=key, account=account)
+    marker = _official_fixture(tmp_path, monkeypatch,
+                               {"type": "chatgpt", "email": "user@example.invalid", "planType": "pro"})
+    agent = pier_codex.CodexRegistered(logs_dir=tmp_path, model_name="gpt-6-sol", version="0.155.1")
+    with pytest.raises(RuntimeError, match="subscription authentication"):
+        agent.verify_gpt6_subscription_auth(path)
+    assert not marker.exists()
+
+
+def test_conflicting_email_claims_fail_before_native_read(tmp_path, monkeypatch):
+    path = _auth(tmp_path, conflicting_email=True)
     marker = _official_fixture(tmp_path, monkeypatch,
                                {"type": "chatgpt", "email": "user@example.invalid", "planType": "pro"})
     agent = pier_codex.CodexRegistered(logs_dir=tmp_path, model_name="gpt-6-sol", version="0.155.1")
