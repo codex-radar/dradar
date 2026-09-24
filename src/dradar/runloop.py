@@ -5894,6 +5894,27 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                 )
                 if builder_preflight.detail:
                     print(builder_preflight.detail)
+                if fleet_pool:
+                    # This failure happens before batch preparation and worker
+                    # creation. Publish its actual cause before cmd_go's generic
+                    # no-startup-ack fallback can mislabel it as a changed task.
+                    try:
+                        fleet.publish_pool_startup_failure(
+                            HOME,
+                            args.batch_id,
+                            error_code="isolated_builder_preflight_failed",
+                            user_message=(
+                                "本机并行运行所需的隔离 BuildKit 预检未通过"
+                                f"（阶段 {builder_preflight.stage}，"
+                                f"原因 {builder_preflight.failure_code or 'unknown'}）；"
+                                "没有题目开始执行，已领取任务仍保留。"
+                                "请查看本机启动输出中的预检诊断，修复后按原运行说明重试。"
+                            ),
+                            retryable=True,
+                        )
+                    except (fleet.FleetError, OSError, ValueError):
+                        # Keep the original preflight result authoritative.
+                        pass
                 print(
                     "no worker was started; check Docker registry access or its "
                     "credential-free HTTPS mirror, then run `dradar resume`"
