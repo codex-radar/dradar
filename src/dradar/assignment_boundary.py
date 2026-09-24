@@ -229,6 +229,30 @@ def admitted_batches(path: Path) -> list[str]:
             return list(dict.fromkeys(values))
 
 
+def snapshot(path: Path) -> tuple[dict, str]:
+    """Read an unfinished boundary and a digest for a later checked archive."""
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if state is None:
+                raise BoundaryError("assignment boundary state is missing or invalid")
+            raw = path.read_bytes()
+            return state, hashlib.sha256(raw).hexdigest()
+
+
+def archive_if_unchanged(path: Path, digest: str) -> Path:
+    """Retire a verified boundary without destroying its diagnostic record."""
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if state is None or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise BoundaryError("saved assignment boundary changed during recovery")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            archived = path.with_name(f"{path.stem}.recovered-{stamp}.json")
+            os.replace(path, archived)
+            return archived
+
+
 def prepare(
     home: Path,
     benchmark_id: str,

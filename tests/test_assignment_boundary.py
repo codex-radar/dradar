@@ -44,12 +44,13 @@ def test_old_terminal_without_local_outcomes_keeps_guard_and_explains_proof(
     )
     client = SimpleNamespace(batch_id=None)
 
-    with pytest.raises(SystemExit, match="every exact assignment ID") as stopped:
+    with pytest.raises(SystemExit, match="dradar boundary recover") as stopped:
         runloop._prepare_assignment_boundary(
             args, client, "deep-swe", [_assignment("new-gemini")],
         )
 
     assert "No model was started" in str(stopped.value)
+    assert "expired without submission" in str(stopped.value)
     assert path.read_bytes() == before
 
 

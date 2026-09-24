@@ -528,6 +528,27 @@ def test_account_inventory_read_is_explicit_and_not_batch_scoped():
     assert "batch_id=" not in seen[0]
 
 
+def test_exact_assignment_recovery_status_uses_benchmark_and_account_token():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"assignment_id": "a" * 32,
+                                         "status": "expired", "has_submission": False})
+
+    client = ApiClient(
+        "https://api.example.com", "drt_test",
+        transport=httpx.MockTransport(handler), benchmark_id="deep-swe",
+    )
+    assert client.assignment_recovery_status("a" * 32)["status"] == "expired"
+    assert "/assignments/" + "a" * 32 + "/recovery-status" in str(seen[0].url)
+    assert "benchmark=deep-swe" in str(seen[0].url)
+    assert seen[0].headers["authorization"] == "Bearer drt_test"
+    with pytest.raises(ValueError):
+        client.assignment_recovery_status("../../other")
+    assert len(seen) == 1
+
+
 @pytest.mark.parametrize("tier", ("plus", "pro-5x", "pro-20x"))
 def test_scoped_refill_claim_sends_authorized_points_tier(tier):
     seen = {}

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import time
 import urllib.parse
 import uuid
@@ -541,6 +542,15 @@ class ApiClient:
         """
         path = self._benchmark_path("/api/v1/assignment")
         return self._get(self._query_path(path, "inventory", "true"))
+
+    def assignment_recovery_status(self, assignment_id: str) -> dict[str, Any]:
+        """Read one exact owned assignment's durable terminal/submission state."""
+        if not isinstance(assignment_id, str) or not re.fullmatch(
+            r"[0-9a-f]{32}", assignment_id,
+        ):
+            raise ValueError("assignment ID must be 32 lowercase hex characters")
+        path = f"/api/v1/assignments/{assignment_id}/recovery-status"
+        return self._get(self._benchmark_path(path))
 
     def _negotiate_managed_auth_runtime(self, *, task_id=None, model=None, effort=None, assignment_id=None, expected_cohort_id=None):
         from .managed_auth_selection import load_selection, selection_requested, PROFILE, CAPABILITY, TRIAL_CAPABILITY, trial_platform_ready

@@ -784,6 +784,26 @@ dradar release --all --force -y             # 高风险：无确认释放全部
 默认不会释放 `running`。只有确认本地 Pier/Codex 已经停止、服务端状态仍卡住时才使用
 `--force`，否则任务可能仍在消耗额度，却被重新开放给其他人。
 
+### 旧任务失败后过期，阻断新领取
+
+若 `go` 报告旧范围记录中的任务已从有效租约消失，先用 `dradar leases` 核对当前账号和
+精确 assignment ID。只有旧范围内**每一题**本地记录为 `failed`，服务端对同一账号返回
+`expired` 且无提交，待上传队列没有对应条目，本地没有完整结果或仍在运行的进程时，
+才使用明确恢复入口：
+
+```bash
+dradar boundary recover \
+  --accept-expired-assignment <OLD_ASSIGNMENT_ID_1> \
+  --accept-expired-assignment <OLD_ASSIGNMENT_ID_2>
+```
+
+命令会再次显示账号与精确 ID，并要求逐字输入确认短语。通过后旧范围记录归档到原目录，
+失败任务目录和日志保留；再重新运行原来的 `dradar go --pick ...` 命令。它不会释放租约、
+上传结果或补发奖励。命令按精确 ID 查询服务端历史终态，不受最近十条失效记录的窗口
+限制。若查不到同账号的旧 ID，或发现可上传成果、待上传项、在途进程及无法读取的证据，
+命令会拒绝恢复；请通过私密渠道向
+维护者提供精确 ID 与脱敏诊断，不要公开凭据或原始轨迹。
+
 ## Checkpoint 功能已退役
 
 CLI 不再生成、扫描或恢复任务 checkpoint，也不再提供 `checkpoints` / `checkpoint discard`
