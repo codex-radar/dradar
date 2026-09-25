@@ -769,6 +769,50 @@ def test_cleanup_unconfirmed_quarantines_slot_without_marking_lease_stopped(
     assert "worker slot is quarantined" in output
 
 
+@pytest.mark.parametrize("reason_code", [
+    "worker-registration-process-exited",
+    "worker-registration-timeout",
+])
+def test_registration_cause_survives_cleanup_quarantine(
+    monkeypatch, tmp_path: Path, reason_code,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    cause = RunnerError("PRIVATE_MARKER build detail", report_code=reason_code)
+
+    def fail(*_args, **_kwargs):
+        raise runloop.RunnerCleanupUnconfirmedError(
+            "PRIVATE_MARKER cleanup detail"
+        ) from cause
+
+    monkeypatch.setattr(runloop, "run_trial", fail)
+    stopped = []
+    monkeypatch.setattr(
+        runloop, "_mark_stopped_quietly",
+        lambda *_args, **_kwargs: stopped.append(True),
+    )
+    reports = []
+    monkeypatch.setattr(
+        runloop, "_report_failure_quietly",
+        lambda _client, _assignment, **kwargs: reports.append(kwargs),
+    )
+    client = SubmitClient({})
+
+    outcome = runloop._run_and_submit(
+        client, ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "cleanup-unconfirmed"
+    assert stopped == []
+    assert client.submissions == []
+    assert reports == [
+        {"phase": "runner", "failure_kind": "runner_failed",
+         "failure_code": reason_code},
+        {"phase": "cleanup", "failure_kind": "cleanup-unconfirmed",
+         "failure_code": "cleanup-unconfirmed"},
+    ]
+    assert "PRIVATE_MARKER" not in repr(reports)
+
+
 def test_task_retryable_failure_isolates_assignment_without_pool_abort(
     monkeypatch, tmp_path: Path, capsys,
 ):

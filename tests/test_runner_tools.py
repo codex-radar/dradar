@@ -2797,6 +2797,39 @@ def test_registration_names_missing_codex_native_dependency(tmp_path, monkeypatc
     assert exc.value.report_code == "codex_platform_dependency_missing"
 
 
+@pytest.mark.parametrize("exit_code,expected_code", [
+    (1, "worker-registration-process-exited"),
+    (None, "worker-registration-timeout"),
+])
+def test_registration_failure_reports_fixed_stage_without_log_text(
+    tmp_path, monkeypatch, exit_code, expected_code,
+):
+    from types import SimpleNamespace
+
+    log = tmp_path / "build.log"
+    log.write_text("PRIVATE_MARKER registry response\n")
+    clock = iter((0, runner_mod.WORKER_REGISTRATION_GRACE_SEC + 1))
+    monkeypatch.setattr(runner_mod, "time", SimpleNamespace(
+        monotonic=lambda: next(clock),
+        sleep=lambda _seconds: pytest.fail("registration probe should be bounded"),
+    ))
+
+    class Pier:
+        def poll(self):
+            return exit_code
+
+    with pytest.raises(runner_mod.RunnerError) as raised:
+        runner_mod._wait_for_worker_registration(
+            Pier(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=1.0,
+            worker_event_source=lambda: None,
+            log_path=log,
+        )
+    assert type(raised.value) is runner_mod.RunnerError
+    assert raised.value.report_code == expected_code
+    assert "PRIVATE_MARKER" not in raised.value.report_code
+
+
 def test_checkout_cooldown_distinguishes_waiting_from_checked_out():
     from datetime import datetime, timedelta, timezone
     from dradar import runloop
