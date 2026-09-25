@@ -20,7 +20,9 @@ from dradar.telemetry import RunnerTelemetry
 def fixture(tmp_path, monkeypatch, fault="normal"):
     monkeypatch.setenv("NO_PROXY", "*")
     state = {"paths": [], "seqs": [], "events": [], "closed": False,
-             "started": False, "hb": 0, "flight": 0}
+             "started": False, "hb": 0, "flight": 0,
+             "start_received": threading.Event(), "close_received": threading.Event(),
+             "late_done": threading.Event(), "late_status": None}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -52,16 +54,28 @@ def fixture(tmp_path, monkeypatch, fault="normal"):
                     return
                 body = {"acknowledged_event_ids": [] if fault == "wrong_ack" else ids}
             elif self.path.endswith("/started"):
-                state["started"] = True
-                body = {"ok": True, "owner_epoch": 1}
+                state["start_received"].set()
+                if fault == "cancel_late":
+                    assert state["close_received"].wait(5)
+                    state["late_status"] = 409 if state["closed"] else 200
+                    state["started"] = not state["closed"]
+                    state["late_done"].set()
+                    status = state["late_status"]
+                    body = {"ok": status == 200}
+                else:
+                    state["started"] = True
+                    body = {"ok": True, "owner_epoch": 1}
                 if fault in ("start_disconnect", "close_disconnect"):
                     self.connection.shutdown(socket.SHUT_RDWR)
                     return
             elif self.path.endswith("/close"):
                 state["closed"] = True
+                state["close_received"].set()
                 if fault == "close_disconnect":
                     self.connection.shutdown(socket.SHUT_RDWR)
                     return
+            elif self.path.endswith("/stopped"):
+                state["started"] = False
             raw = json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Length", str(len(raw)))
