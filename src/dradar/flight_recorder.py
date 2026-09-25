@@ -130,7 +130,7 @@ ATTRIBUTE_KEYS = frozenset({
 REASON_CODES = frozenset({
     "api_error", "transport_error", "completed", "paused", "interrupted",
     "error", "explicit_force", "explicit_safe", "user_force", "user",
-    "build_flake", "provider_failed", "submitted", "artifact-staging-failed",
+    "build_flake", "codex_install_failed", "provider_failed", "submitted", "artifact-staging-failed",
     "upload-blocked", "upload-failed", "pending_upload", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
     "update_manifest_invalid", "update_policy_rejected",
@@ -143,6 +143,7 @@ REASON_CODES = frozenset({
     "startup-permission-denied", "startup-local-storage-error",
     "startup-network-unavailable", "startup-environment-not-ready",
     "startup-runtime-not-ready", "startup-state-changed",
+    "startup-retry-cooldown",
     "startup-unknown", "startup-mixed",
     "runner_session_capacity_reached", "provider_capability_required",
 })

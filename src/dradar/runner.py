@@ -11,6 +11,7 @@ import importlib.resources
 import json
 import math
 import os
+import platform
 import re
 import signal
 import shutil
@@ -449,6 +450,175 @@ class LiveAccountTerminalError(RunnerError):
     auth_signal: str | None = None
 
 
+class CodexInstallError(RunnerError):
+    """The selected Codex package cannot start before any model work."""
+
+
+def _codex_linux_platforms() -> tuple[str, ...]:
+    requested = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
+    if requested in {"linux/amd64", "linux/x86_64"}:
+        return ("linux-x64",)
+    if requested in {"linux/arm64", "linux/aarch64"}:
+        return ("linux-arm64",)
+    architecture = platform.machine().lower()
+    if architecture in {"x86_64", "amd64"}:
+        targets = ["linux-x64"]
+    elif architecture in {"aarch64", "arm64"}:
+        # An arm64 Docker host can run an x64-only benchmark base image under
+        # emulation (the observed DeepSWE image does exactly this). Check both
+        # native artifacts before declaring the wrapper installable.
+        targets = ["linux-arm64", "linux-x64"]
+    else:
+        raise CodexInstallError(
+            f"Codex Docker runtime has no supported Linux package for {architecture!r}; "
+            "the model was not started"
+        )
+    return tuple(targets)
+
+
+def _codex_task_platform(task_path: Path) -> str:
+    """Resolve the task image's Linux architecture before selecting npm bits."""
+    try:
+        task = tomllib.loads((task_path / "task.toml").read_text(encoding="utf-8"))
+        image = task["environment"]["docker_image"]
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
+        raise CodexInstallError(
+            "could not read the task Docker image; no model was started"
+        ) from exc
+    if not isinstance(image, str) or not image or len(image) > 512 or (
+        image.startswith("-") or any(char.isspace() for char in image)
+    ):
+        raise CodexInstallError("invalid task Docker image; no model was started")
+    commands = (
+        ["docker", "image", "inspect", image, "--format", "{{json .}}"],
+        ["docker", "buildx", "imagetools", "inspect", "--format", "{{json .Image}}", image],
+    )
+    manifest = None
+    for command in commands:
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True, timeout=20)
+            if proc.returncode == 0:
+                manifest = json.loads(proc.stdout)
+                break
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            continue
+    if not isinstance(manifest, dict):
+        raise CodexInstallError(
+            "could not verify the task Docker image architecture; no model "
+            "was started. Check Docker and network, then retry the original "
+            "run instructions."
+        )
+    architecture = manifest.get("Architecture") or manifest.get("architecture")
+    os_name = manifest.get("Os") or manifest.get("os")
+    if architecture is None:
+        requested = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
+        if not requested:
+            try:
+                proc = subprocess.run(
+                    ["docker", "info", "--format", "{{.Architecture}}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                requested = "linux/" + proc.stdout.strip().lower()
+            except (OSError, subprocess.TimeoutExpired):
+                requested = ""
+        requested = requested.replace("linux/x86_64", "linux/amd64").replace(
+            "linux/aarch64", "linux/arm64"
+        )
+        architecture = requested.removeprefix("linux/")
+        if requested not in manifest:
+            raise CodexInstallError(
+                "the task Docker image does not support the selected Docker "
+                "platform; no model was started"
+            )
+        os_name = "linux"
+    if os_name != "linux":
+        raise CodexInstallError("the task Docker image is not Linux; no model was started")
+    override = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
+    if override and architecture is not None:
+        requested_arch = override.removeprefix("linux/").split("/")[0]
+        if (requested_arch.replace("x86_64", "amd64").replace("aarch64", "arm64")
+                != architecture.replace("x86_64", "amd64").replace("aarch64", "arm64")):
+            raise CodexInstallError(
+                "the task Docker image does not match DOCKER_DEFAULT_PLATFORM; "
+                "no model was started"
+            )
+    if architecture in {"amd64", "x86_64"}:
+        return "linux-x64"
+    if architecture in {"arm64", "aarch64"}:
+        return "linux-arm64"
+    raise CodexInstallError(
+        "the task Docker image uses an unsupported architecture; no model was started"
+    )
+
+
+def _verify_codex_platform_package(
+    version: str, targets: tuple[str, ...] | None = None,
+    *, allow_transport_failure: bool = False,
+) -> bool:
+    """Check the actual native tarball, not just npm's wrapper dist-tag.
+
+    npm may silently skip a failed optional dependency and return success.
+    The range stream verifies the selected architecture's published artifact
+    without downloading the large native binary on the host.
+    """
+    package_url = f"https://registry.npmjs.org/@openai%2Fcodex/{version}"
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    try:
+        wrapper = httpx.get(package_url, headers=headers, timeout=10.0)
+        wrapper.raise_for_status()
+        dependencies = wrapper.json().get("optionalDependencies", {})
+        for target in (targets or _codex_linux_platforms()):
+            alias = f"@openai/codex-{target}"
+            platform_version = f"{version}-{target}"
+            platform_url = (
+                f"https://registry.npmjs.org/@openai%2Fcodex/{platform_version}"
+            )
+            if not isinstance(dependencies, dict) or dependencies.get(alias) != (
+                f"npm:@openai/codex@{platform_version}"
+            ):
+                raise ValueError(f"the {target} native package alias is absent")
+            native = httpx.get(platform_url, headers=headers, timeout=10.0)
+            native.raise_for_status()
+            dist = native.json().get("dist", {})
+            expected = (
+                "https://registry.npmjs.org/@openai/codex/-/"
+                f"codex-{platform_version}.tgz"
+            )
+            if not isinstance(dist, dict) or dist.get("tarball") != expected:
+                raise ValueError(f"the {target} native tarball is not published")
+            with httpx.stream(
+                "GET", expected,
+                headers={**headers, "Range": "bytes=0-1"},
+                timeout=10.0, follow_redirects=True,
+            ) as response:
+                response.raise_for_status()
+                prefix = b"".join(
+                    chunk for _, chunk in zip(
+                        range(2), response.iter_bytes(chunk_size=1),
+                    )
+                )
+                if response.status_code not in {200, 206} or prefix != b"\x1f\x8b":
+                    raise ValueError(f"the {target} native tarball is unavailable")
+    except httpx.TransportError as exc:
+        if allow_transport_failure:
+            return False
+        raise CodexInstallError(
+            "could not reach npm to verify the selected Codex platform "
+            "package. No model was started. Check registry access, then "
+            "retry the original run instructions with the held assignment.",
+            report_code="codex_platform_package_unavailable",
+        ) from exc
+    except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        raise CodexInstallError(
+            f"Codex CLI {version} was announced but a required Linux Docker "
+            "platform package is not downloadable yet. No model was started. "
+            "Wait for the npm platform artifact, then retry the original "
+            "run instructions with the held assignment; do not claim a new cell.",
+            report_code="codex_platform_package_unavailable",
+        ) from exc
+    return True
+
+
 def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True):
     model = assignment.get("model", "")
     if not isinstance(model, str):
@@ -469,6 +639,7 @@ def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True
 def resolve_latest_codex_cli_version(
     server_version: str | None = None,
     server_version_verified: bool = False,
+    platform_targets: tuple[str, ...] | None = None,
 ) -> str:
     """Resolve npm's current stable Codex CLI tag to an exact version.
 
@@ -515,6 +686,7 @@ def resolve_latest_codex_cli_version(
                 raise ValueError(
                     f"npm returned a non-stable or malformed version: {version!r}"
                 )
+            _verify_codex_platform_package(version, platform_targets)
             return version
         except (httpx.HTTPError, ValueError) as exc:
             last_error = exc
@@ -523,14 +695,26 @@ def resolve_latest_codex_cli_version(
             # every volunteer's local proxy/TLS path a single point of failure
             # without trusting a static or stale server config value.
             if trusted_server_version:
+                if not _verify_codex_platform_package(
+                    trusted_server_version, platform_targets,
+                    allow_transport_failure=True,
+                ):
+                    print(
+                        "npm platform artifact could not be checked from this "
+                        "host; using the freshly verified server version. "
+                        "Docker must still pass `codex --version` before the "
+                        "model starts."
+                    )
                 return trusted_server_version
             if attempt < CODEX_VERSION_LOOKUP_ATTEMPTS:
                 time.sleep(0.5 * attempt)
-    raise RunnerError(
+    raise CodexInstallError(
         "could not verify npm's latest stable Codex CLI version after "
         f"{CODEX_VERSION_LOOKUP_ATTEMPTS} attempts; refusing to start an "
         "outdated agent container so no model quota is consumed. Check access "
-        "to registry.npmjs.org, then run `dradar resume`."
+        "to registry.npmjs.org, then retry the original run instructions "
+        "with the held assignment after its retry cooldown.",
+        report_code="codex_version_unverified",
     ) from last_error
 
 
@@ -4205,6 +4389,8 @@ def _wait_for_worker_registration(
     worker_event_source: Callable[[], object | None] | None = None,
     expected_session_id: str | None = None,
     log_path: Path | None = None,
+    job_dir: Path | None = None,
+    codex_version: str | None = None,
 ) -> dict:
     """Wait for a bounded, structured Pier lifecycle record.
 
@@ -4214,6 +4400,29 @@ def _wait_for_worker_registration(
     """
 
     def registration_error(message: str) -> RunnerError:
+        if job_dir is not None and codex_version is not None:
+            for path in list(job_dir.glob("*__*/exception.txt"))[:4]:
+                try:
+                    raw = read_trial_file(
+                        job_dir, path.relative_to(job_dir), max_bytes=2 * 1024 * 1024,
+                    )
+                except (OSError, UnsafeArtifact, ValueError):
+                    continue
+                if (
+                    any(
+                        f"Missing optional dependency @openai/codex-{target}"
+                        in raw.decode("utf-8", "replace")
+                        for target in _codex_linux_platforms()
+                    )
+                ):
+                    return CodexInstallError(
+                        f"Codex CLI {codex_version} installed without its Linux "
+                        "platform binary. The model was not started. Check the "
+                        "npm platform artifact and Docker network, then retry "
+                        "the original run instructions with the held assignment "
+                        "after its retry cooldown; do not claim a new cell.",
+                        report_code="codex_platform_dependency_missing",
+                    )
         if log_path is None:
             return RunnerError(message)
         tail = _tail(log_path)
@@ -4486,6 +4695,12 @@ def run_trial(
     build_cache_mode = image_cache.normalize_build_cache_mode(build_cache_mode)
     if effective_agent == "codex":
         _validate_gpt6_assignment(assignment, validate_version=False)
+        platform_kwargs = {}
+        task_manifest = tasks_root / str(assignment["task_id"]) / "task.toml"
+        if managed_auth_config is None and task_manifest.is_file():
+            platform_kwargs["platform_targets"] = (
+                _codex_task_platform(task_manifest.parent),
+            )
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER
         )
@@ -4498,6 +4713,7 @@ def run_trial(
             codex_cli_version = resolve_latest_codex_cli_version(
                 assignment.get("agent_version"),
                 bool(assignment.get("agent_version_verified")),
+                **platform_kwargs,
             )
             codex_cli_version = _deepseek_codex_version({
                 **assignment,
@@ -4516,6 +4732,7 @@ def run_trial(
             codex_cli_version = resolve_latest_codex_cli_version(
                 assignment.get("agent_version"),
                 bool(assignment.get("agent_version_verified")),
+                **platform_kwargs,
             )
             print(f"verified latest stable Codex CLI: {codex_cli_version}")
         effective_assignment = {
@@ -4882,6 +5099,10 @@ def run_trial(
                         worker_event_source=worker_event_source,
                         expected_session_id=assignment.get("_runner_session_id"),
                         log_path=log_path,
+                        job_dir=jobs_dir / job_name,
+                        codex_version=(
+                            codex_cli_version if effective_agent == "codex" else None
+                        ),
                     )
                     if on_worker_registered is not None:
                         on_worker_registered(event)

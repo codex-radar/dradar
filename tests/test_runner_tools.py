@@ -1097,6 +1097,7 @@ def test_run_trial_uses_artifact_overlay_for_verifier_collect_pack(
         '[metadata]\nbase_commit_hash = "' + base_commit + '"\n'
         '[[verifier.collect]]\ncommand = "collect model.patch"\n'
     )
+    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda _path: "linux-x64")
     captured = _fake_pier(monkeypatch, tmp_path)
 
     art = run_trial(_assignment("codex"), tmp_path, tmp_path)
@@ -2507,6 +2508,7 @@ class _NpmResponse:
 
 def test_resolve_latest_codex_cli_version_uses_uncached_stable_tag(monkeypatch):
     seen = {}
+    monkeypatch.setattr(runner_mod, "_verify_codex_platform_package", lambda version, targets: seen.setdefault("native", (version, targets)))
 
     def get(url, **kwargs):
         seen["url"] = url
@@ -2519,6 +2521,7 @@ def test_resolve_latest_codex_cli_version_uses_uncached_stable_tag(monkeypatch):
     assert seen["url"] == runner_mod.CODEX_NPM_LATEST_URL
     assert seen["headers"]["Cache-Control"] == "no-cache"
     assert seen["follow_redirects"] is True
+    assert seen["native"] == ("0.145.0", None)
 
 
 @pytest.mark.parametrize("version", ["latest", "0.146.0-alpha.1", "", None])
@@ -2548,14 +2551,18 @@ def test_resolve_latest_codex_cli_version_fails_closed_after_network_errors(
     monkeypatch.setattr(runner_mod.httpx, "get", fail)
     monkeypatch.setattr(runner_mod.time, "sleep", lambda _: None)
 
-    with pytest.raises(RunnerError, match="no model quota is consumed"):
+    with pytest.raises(runner_mod.CodexInstallError, match="no model quota is consumed") as exc:
         runner_mod.resolve_latest_codex_cli_version()
     assert len(calls) == runner_mod.CODEX_VERSION_LOOKUP_ATTEMPTS
+    assert exc.value.report_code == "codex_version_unverified"
+    assert "retry the original run instructions" in str(exc.value)
+    assert "dradar resume" not in str(exc.value)
 
 
 def test_resolve_latest_codex_cli_version_accepts_fresh_server_fallback(
         monkeypatch):
     calls = []
+    monkeypatch.setattr(runner_mod, "_verify_codex_platform_package", lambda version, targets, **_kwargs: calls.append(("native", version, targets)) or True)
 
     def fail(*args, **kwargs):
         calls.append(True)
@@ -2569,7 +2576,208 @@ def test_resolve_latest_codex_cli_version_accepts_fresh_server_fallback(
     assert runner_mod.resolve_latest_codex_cli_version(
         "0.145.0", server_version_verified=True,
     ) == "0.145.0"
-    assert calls == [True]
+    assert calls == [True, ("native", "0.145.0", None)]
+
+
+@pytest.mark.parametrize("machine,target", [
+    ("x86_64", "linux-x64"), ("aarch64", "linux-arm64"),
+])
+def test_codex_platform_probe_reads_native_tarball(monkeypatch, machine, target):
+    from contextlib import nullcontext
+
+    version = "0.157.0"
+    targets = (target,) if target == "linux-x64" else ("linux-arm64", "linux-x64")
+    tarball = f"https://registry.npmjs.org/@openai/codex/-/codex-{version}-{targets[-1]}.tgz"
+    seen = []
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: machine)
+    monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+
+    def get(url, **_kwargs):
+        seen.append(url)
+        if url.endswith("/0.157.0"):
+            return _NpmResponse({"optionalDependencies": {
+                f"@openai/codex-{item}": f"npm:@openai/codex@{version}-{item}"
+                for item in targets
+            }})
+        requested = url.rsplit("/", 1)[-1]
+        return _NpmResponse({"dist": {"tarball": (
+            f"https://registry.npmjs.org/@openai/codex/-/codex-{requested}.tgz"
+        )}})
+
+    def stream(method, url, **kwargs):
+        seen.append(url)
+        assert method == "GET"
+        assert kwargs["headers"]["Range"] == "bytes=0-1"
+        return nullcontext(runner_mod.httpx.Response(
+            206, content=b"\x1f\x8b", request=runner_mod.httpx.Request("GET", url),
+        ))
+
+    monkeypatch.setattr(runner_mod.httpx, "get", get)
+    monkeypatch.setattr(runner_mod.httpx, "stream", stream)
+    runner_mod._verify_codex_platform_package(version)
+    assert seen[-1] == tarball
+
+
+def test_codex_platform_probe_refuses_missing_tarball_before_pier(monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(runner_mod.httpx, "get", lambda url, **_kwargs: _NpmResponse(
+        {"optionalDependencies": {
+            "@openai/codex-linux-x64": "npm:@openai/codex@0.157.0-linux-x64",
+        }} if url.endswith("/0.157.0") else {"dist": {"tarball": (
+            "https://registry.npmjs.org/@openai/codex/-/codex-0.157.0-linux-x64.tgz"
+        )}},
+    ))
+    monkeypatch.setattr(runner_mod.httpx, "stream", lambda _method, url, **_kwargs: nullcontext(
+        runner_mod.httpx.Response(404, request=runner_mod.httpx.Request("GET", url)),
+    ))
+    with pytest.raises(runner_mod.CodexInstallError, match="not downloadable yet") as exc:
+        runner_mod._verify_codex_platform_package("0.157.0")
+    assert exc.value.report_code == "codex_platform_package_unavailable"
+    with pytest.raises(runner_mod.CodexInstallError):
+        runner_mod._verify_codex_platform_package(
+            "0.157.0", allow_transport_failure=True,
+        )
+
+
+def test_fresh_server_pin_allows_unknown_host_transport_but_not_missing_package(monkeypatch):
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(runner_mod.httpx, "get", lambda *_a, **_k: (
+        (_ for _ in ()).throw(runner_mod.httpx.ConnectError("host proxy unavailable"))
+    ))
+    assert runner_mod._verify_codex_platform_package(
+        "0.157.0", allow_transport_failure=True,
+    ) is False
+
+
+def test_codex_platform_probe_includes_docker_override(monkeypatch):
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "x86_64")
+    monkeypatch.setenv("DOCKER_DEFAULT_PLATFORM", "linux/arm64")
+    assert runner_mod._codex_linux_platforms() == ("linux-arm64",)
+
+
+def test_codex_platform_probe_uses_only_overridden_amd64_on_arm_host(monkeypatch):
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
+    assert runner_mod._codex_linux_platforms() == ("linux-x64",)
+
+
+def test_codex_task_platform_uses_image_arch_not_arm_host(tmp_path, monkeypatch):
+    import json
+
+    (tmp_path / "task.toml").write_text(
+        '[environment]\ndocker_image = "registry.example/test:1"\n'
+    )
+    monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "arm64")
+    calls = []
+
+    def run(cmd, **_kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return runner_mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        return runner_mod.subprocess.CompletedProcess(
+            cmd, 0, json.dumps({"architecture": "amd64", "os": "linux"}), "",
+        )
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", run)
+    assert runner_mod._codex_task_platform(tmp_path) == "linux-x64"
+    assert calls[1][:3] == ["docker", "buildx", "imagetools"]
+
+
+def test_codex_task_platform_selects_native_arm_from_multiarch(tmp_path, monkeypatch):
+    import json
+
+    (tmp_path / "task.toml").write_text(
+        '[environment]\ndocker_image = "registry.example/test:2"\n'
+    )
+    monkeypatch.setenv("DOCKER_DEFAULT_PLATFORM", "linux/arm64")
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda cmd, **_kwargs: (
+        runner_mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        if cmd[:3] == ["docker", "image", "inspect"] else
+        runner_mod.subprocess.CompletedProcess(cmd, 0, json.dumps({
+            "linux/amd64": {"architecture": "amd64", "os": "linux"},
+            "linux/arm64": {"architecture": "arm64", "os": "linux"},
+        }), "")
+    ))
+    assert runner_mod._codex_task_platform(tmp_path) == "linux-arm64"
+
+
+@pytest.mark.parametrize("provider", [None, runner_mod.DEEPSEEK_PROVIDER])
+def test_run_trial_probes_actual_image_for_each_codex_provider(
+        tmp_path, monkeypatch, provider):
+    task_dir = tmp_path / "abs-module-cache-flags"
+    task_dir.mkdir()
+    (task_dir / "task.toml").write_text(
+        '[environment]\ndocker_image = "registry.example/amd64:1"\n'
+    )
+    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda path: (
+        "linux-x64" if path == task_dir else pytest.fail("wrong task path")
+    ))
+    observed = []
+
+    def resolve(*args, **kwargs):
+        observed.append(kwargs.get("platform_targets"))
+        raise RunnerError("stop before Pier")
+
+    monkeypatch.setattr(runner_mod, "resolve_latest_codex_cli_version", resolve)
+    assignment = _assignment("codex")
+    if provider is not None:
+        assignment["provider"] = provider
+        assignment["model"] = runner_mod.DEEPSEEK_MODEL
+        assignment["effort"] = "high"
+    with pytest.raises(RunnerError, match="stop before Pier"):
+        run_trial(assignment, tmp_path, tmp_path)
+    assert observed == [("linux-x64",)]
+
+
+def test_registration_names_missing_codex_native_dependency(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_mod, "_codex_linux_platforms", lambda: ("linux-x64",))
+    job = tmp_path / "job"
+    trial = job / "task__run"
+    trial.mkdir(parents=True, mode=0o700)
+    job.chmod(0o700)
+    trial.chmod(0o700)
+    (trial / "exception.txt").write_text(
+        "Error: Missing optional dependency @openai/codex-linux-x64"
+    )
+
+    class Exited:
+        def poll(self):
+            return 1
+
+    with pytest.raises(runner_mod.CodexInstallError, match="platform binary") as exc:
+        runner_mod._wait_for_worker_registration(
+            Exited(), tmp_path / "events.jsonl",
+            environment_build_timeout_multiplier=3.0,
+            worker_event_source=lambda: None,
+            job_dir=job,
+            codex_version="0.157.0",
+        )
+    assert exc.value.report_code == "codex_platform_dependency_missing"
+
+
+def test_checkout_cooldown_distinguishes_waiting_from_checked_out():
+    from datetime import datetime, timedelta, timezone
+    from dradar import runloop
+
+    future = (datetime.now(timezone.utc) + timedelta(minutes=4)).isoformat()
+    old_server = {"assignment": None, "held": 1, "unstarted": 0}
+    waiting = [{"retry_after": future, "started_at": None, "run_session_id": None}]
+    assert runloop._checkout_retry_time(old_server, waiting).isoformat() == future
+    assert runloop._checkout_retry_time(
+        {**old_server, "next_retry_at": future}, [],
+    ).isoformat() == future
+    assert runloop._checkout_retry_time(
+        old_server, [{**waiting[0], "started_at": future}],
+    ) is None
+    assert runloop._checkout_retry_time(
+        old_server, [{**waiting[0], "run_session_id": "other"}],
+    ) is None
+    assert runloop._checkout_retry_time(
+        {**old_server, "concurrency_limit": 1}, waiting,
+    ) is None
 
 
 def test_run_trial_overrides_stale_server_pin_before_start(

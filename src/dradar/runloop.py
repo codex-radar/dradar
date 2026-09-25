@@ -100,7 +100,7 @@ from .providers import (
 )
 from .runner import (
     CODEX_TRAJECTORY_BUNDLE_SCHEMA, DIAG_ADVICE,
-    BuildFlakeError, RunnerError,
+    BuildFlakeError, CodexInstallError, RunnerError,
     RunnerCleanupUnconfirmedError, RunnerTaskRetryableError,
     POMPEII_BENCHMARK_ID,
     POMPEII_FINALIZATION_RESERVE_SEC, POMPEII_SOFT_BUDGET_SEC,
@@ -209,6 +209,7 @@ _PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
     "startup-environment-not-ready",
     "startup-runtime-not-ready",
     "startup-state-changed",
+    "startup-retry-cooldown",
     "startup-unknown",
     "startup-mixed",
     "runner_session_capacity_reached",
@@ -3225,8 +3226,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                       "no quota was consumed — retrying once automatically...")
                 continue
             print(f"trial failed: {safe_exc}\n"
-                  "the build failed twice — check your network/proxy and re-run "
-                  "`dradar resume` (still free: the agent never started), or "
+                  "the build failed twice — check your network/proxy and retry "
+                  "the original run instructions after the assignment cooldown "
+                  "(still free: the agent never started), or "
                   "use `dradar release` if you do not want to keep the cell")
             _signal_pool_abort(
                 _ENVIRONMENT_BUILD_ABORT_PREFIX
@@ -3306,6 +3308,13 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
             return "assignment-isolated" if stopped else "cleanup-unconfirmed"
         except RunnerError as exc:
+            if isinstance(exc, CodexInstallError) and telemetry is not None:
+                _record_flight_event(
+                    telemetry, "build_failed", component="build",
+                    assignment_id=assignment["assignment_id"],
+                    reason_code="codex_install_failed",
+                    attributes={"attempt": attempt},
+                )
             failure_kind = classify_exception_message(str(exc))
             terminal_outcome = _terminal_failure_outcome(failure_kind)
             if attempt == 1 and _retryable_zcode_network_failure(assignment, exc):
@@ -3336,9 +3345,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     failure_code="retry-cleanup-unconfirmed",
                 )
                 return "cleanup-unconfirmed"
-            print(f"trial failed: {exc}\n"
-                  "use `dradar resume` to retry later, or `dradar release` to "
-                  "give the cell back")
+            if isinstance(exc, CodexInstallError):
+                print(f"trial failed: {exc}\n"
+                      "retry the original run instructions with this held "
+                      "assignment after its retry cooldown")
+            else:
+                print(f"trial failed: {exc}\n"
+                      "use `dradar resume` to retry later, or `dradar release` "
+                      "to give the cell back")
             if failure_kind == "auth":
                 from .auth_failure import auth_failure_sentence
                 print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
@@ -6603,17 +6617,26 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                 startup_reason = "startup-mixed"
             else:
                 startup_reason = "precheckout-exit"
-            publish_startup_failure(
-                (
-                    "worker_precheckout_exhausted"
-                    if backfill_exhausted else "local_runner_never_ready"
-                ),
-                (
-                    "所有本地 worker 都在完成注册和首个题目 checkout 前退出；"
-                    "题目仍然保留，请检查本机日志后重试。"
-                ),
-                reason_code=startup_reason,
-            )
+            if startup_reason == "startup-retry-cooldown":
+                publish_startup_failure(
+                    "assignment_retry_cooldown",
+                    "题目仍在本次运行计划中，前一次本地失败后的安全冷却尚未结束；"
+                    "没有模型开始执行。请在本机日志所示时间后用原运行说明重试，"
+                    "不要重新领取题目。",
+                    reason_code=startup_reason,
+                )
+            else:
+                publish_startup_failure(
+                    (
+                        "worker_precheckout_exhausted"
+                        if backfill_exhausted else "local_runner_never_ready"
+                    ),
+                    (
+                        "所有本地 worker 都在完成注册和首个题目 checkout 前退出；"
+                        "题目仍然保留，请检查本机日志后重试。"
+                    ),
+                    reason_code=startup_reason,
+                )
     cleanup_abort_file()
     environment_build_failures = [
         (slot, rc) for slot, rc in returncodes
@@ -6932,6 +6955,23 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
     return 0 if ok else 1
 
 
+def _checkout_retry_time(data: dict, active: list[dict]) -> datetime | None:
+    """Prefer the server's exact cooldown; support a single-cell older server."""
+    retry_at = data.get("next_retry_at")
+    if ("next_retry_at" not in data and len(active) == 1
+            and not data.get("concurrency_limit")):
+        cell = active[0]
+        if not cell.get("started_at") and not cell.get("run_session_id"):
+            retry_at = cell.get("retry_after")
+    try:
+        retry_time = datetime.fromisoformat(retry_at) if isinstance(retry_at, str) else None
+    except ValueError:
+        return None
+    if retry_time is None or retry_time.tzinfo is None:
+        return None
+    return retry_time if retry_time > datetime.now(timezone.utc) else None
+
+
 def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                        active: list[dict],
                        telemetry: RunnerTelemetry | None = None) -> int | None:
@@ -7046,6 +7086,16 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             if getattr(args, "refill", False):
                 refill_plan.complete_if_empty(HOME, int(data.get("held") or 0))
             if not results:
+                retry_time = _checkout_retry_time(data, active)
+                if retry_time is not None:
+                    print(
+                        "held assignment is waiting after the previous local "
+                        f"failure until {retry_time.isoformat()}; no model was "
+                        "started. Run the original plan again after that time. "
+                        "Do not claim a new cell."
+                    )
+                    _record_worker_precheckout_failure("startup-retry-cooldown")
+                    return 1
                 print("nothing left to start — every held cell is already "
                       "checked out (another session?) or submitted. "
                       "`dradar leases` shows exactly what is still held.")
@@ -7171,8 +7221,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             )
             print(
                 "stopping this worker before the next checkout after repeated "
-                "environment setup failures. Fix Docker/network/Pier, then run "
-                "`dradar resume`."
+                "environment setup failures. Fix Docker/network/Pier, then "
+                "retry the original run instructions with held assignments "
+                "after their retry cooldown."
             )
             results.append(outcome)
             break

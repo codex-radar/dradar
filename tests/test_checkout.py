@@ -3,6 +3,7 @@
 racing over a shared batch snapshot)."""
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import dradar.runloop as runloop
@@ -74,6 +75,33 @@ class RecordingTelemetry(StubTelemetry):
 
     def record_event(self, event_type, *, component, **kwargs):
         self.events.append((event_type, component, kwargs))
+
+
+def test_checkout_cooldown_shows_retry_time_without_starting_provider(
+        monkeypatch, capsys, tmp_path):
+    cell = {**_cell("cooling"), "started_at": None, "run_session_id": None}
+    retry_at = (datetime.now(timezone.utc) + timedelta(minutes=4)).isoformat()
+    cell["retry_after"] = retry_at
+    client = CheckoutClient(
+        {"active": [cell], "free_pick": True},
+        [{"assignment": None, "held": 1, "unstarted": 0,
+          "next_retry_at": retry_at}],
+    )
+    reasons = []
+    monkeypatch.setattr(
+        runloop, "_record_worker_precheckout_failure",
+        lambda reason: reasons.append(reason) or True,
+    )
+    monkeypatch.setattr(
+        runloop, "_run_and_submit",
+        lambda *_a, **_k: pytest.fail("provider must not start during cooldown"),
+    )
+    assert runloop._run_checkout_loop(_args(), client, tmp_path, [cell]) == 1
+    assert reasons == ["startup-retry-cooldown"]
+    assert client.checkout_exclusions == [set()]
+    output = capsys.readouterr().out
+    assert retry_at in output
+    assert "Do not claim a new cell" in output
 
 
 def test_persisted_empty_submission_blocks_new_batch_before_checkout(
