@@ -471,7 +471,8 @@ def _codex_linux_platforms() -> tuple[str, ...]:
     else:
         raise CodexInstallError(
             f"Codex Docker runtime has no supported Linux package for {architecture!r}; "
-            "the model was not started"
+            "the model was not started",
+            report_code="codex_host_platform_unsupported",
         )
     return tuple(targets)
 
@@ -483,12 +484,16 @@ def _codex_task_platform(task_path: Path) -> str:
         image = task["environment"]["docker_image"]
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
         raise CodexInstallError(
-            "could not read the task Docker image; no model was started"
+            "could not read the task Docker image; no model was started",
+            report_code="codex_task_image_unavailable",
         ) from exc
     if not isinstance(image, str) or not image or len(image) > 512 or (
         image.startswith("-") or any(char.isspace() for char in image)
     ):
-        raise CodexInstallError("invalid task Docker image; no model was started")
+        raise CodexInstallError(
+            "invalid task Docker image; no model was started",
+            report_code="codex_task_image_invalid",
+        )
     commands = (
         ["docker", "image", "inspect", image, "--format", "{{json .}}"],
         ["docker", "buildx", "imagetools", "inspect", "--format", "{{json .Image}}", image],
@@ -506,7 +511,8 @@ def _codex_task_platform(task_path: Path) -> str:
         raise CodexInstallError(
             "could not verify the task Docker image architecture; no model "
             "was started. Check Docker and network, then retry the original "
-            "run instructions."
+            "run instructions.",
+            report_code="codex_task_image_unavailable",
         )
     architecture = manifest.get("Architecture") or manifest.get("architecture")
     os_name = manifest.get("Os") or manifest.get("os")
@@ -528,11 +534,15 @@ def _codex_task_platform(task_path: Path) -> str:
         if requested not in manifest:
             raise CodexInstallError(
                 "the task Docker image does not support the selected Docker "
-                "platform; no model was started"
+                "platform; no model was started",
+                report_code="codex_task_platform_unsupported",
             )
         os_name = "linux"
     if os_name != "linux":
-        raise CodexInstallError("the task Docker image is not Linux; no model was started")
+        raise CodexInstallError(
+            "the task Docker image is not Linux; no model was started",
+            report_code="codex_task_platform_unsupported",
+        )
     override = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
     if override and architecture is not None:
         requested_arch = override.removeprefix("linux/").split("/")[0]
@@ -540,14 +550,16 @@ def _codex_task_platform(task_path: Path) -> str:
                 != architecture.replace("x86_64", "amd64").replace("aarch64", "arm64")):
             raise CodexInstallError(
                 "the task Docker image does not match DOCKER_DEFAULT_PLATFORM; "
-                "no model was started"
+                "no model was started",
+                report_code="codex_task_platform_unsupported",
             )
     if architecture in {"amd64", "x86_64"}:
         return "linux-x64"
     if architecture in {"arm64", "aarch64"}:
         return "linux-arm64"
     raise CodexInstallError(
-        "the task Docker image uses an unsupported architecture; no model was started"
+        "the task Docker image uses an unsupported architecture; no model was started",
+        report_code="codex_task_platform_unsupported",
     )
 
 
