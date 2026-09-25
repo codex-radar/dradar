@@ -481,16 +481,49 @@ def _codex_linux_platforms() -> tuple[str, ...]:
     return tuple(targets)
 
 
-def _codex_task_platform(task_path: Path) -> str:
-    """Resolve the task image's Linux architecture before selecting npm bits."""
+def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
+    """Choose npm checks without requiring a prebuilt image for build tasks."""
     try:
         task = tomllib.loads((task_path / "task.toml").read_text(encoding="utf-8"))
-        image = task["environment"]["docker_image"]
+        environment = task.get("environment", {})
+        if not isinstance(environment, dict):
+            raise TypeError("environment must be a table")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
         raise CodexInstallError(
-            "could not read the task Docker image; no model was started",
-            report_code="codex_task_image_unavailable",
+            "could not read the task environment configuration; no model was started",
+            report_code="codex_task_environment_invalid",
         ) from exc
+    if "docker_image" not in environment:
+        dockerfile = task_path / "environment" / "Dockerfile"
+        try:
+            valid_source = (
+                dockerfile.is_file()
+                and dockerfile.resolve().is_relative_to(task_path.resolve())
+                and bool(dockerfile.read_bytes().strip())
+            )
+        except OSError:
+            valid_source = False
+        if not valid_source:
+            raise CodexInstallError(
+                "task needs a prebuilt Docker image or a nonempty task-local "
+                "environment/Dockerfile; no model was started",
+                report_code="codex_task_environment_invalid",
+            )
+        requested = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
+        if environment.get("os", "linux") != "linux" or requested not in {
+            "", "linux/amd64", "linux/x86_64", "linux/arm64", "linux/aarch64",
+        }:
+            raise CodexInstallError(
+                "the task build requires a supported Linux Docker platform; "
+                "no model was started",
+                report_code="codex_task_platform_unsupported",
+            )
+        # No task image exists yet. Keep the normal Pier/BuildKit Dockerfile
+        # build and native installer checks; do not infer FROM tags or pull a
+        # guessed image. Check the existing host/override target set (both
+        # native and emulated npm binaries on arm64) before entering that build.
+        return _codex_linux_platforms()
+    image = environment["docker_image"]
     if not isinstance(image, str) or not image or len(image) > 512 or (
         image.startswith("-") or any(char.isspace() for char in image)
     ):
@@ -558,9 +591,9 @@ def _codex_task_platform(task_path: Path) -> str:
                 report_code="codex_task_platform_unsupported",
             )
     if architecture in {"amd64", "x86_64"}:
-        return "linux-x64"
+        return ("linux-x64",)
     if architecture in {"arm64", "aarch64"}:
-        return "linux-arm64"
+        return ("linux-arm64",)
     raise CodexInstallError(
         "the task Docker image uses an unsupported architecture; no model was started",
         report_code="codex_task_platform_unsupported",
@@ -4744,9 +4777,7 @@ def run_trial(
         platform_kwargs = {}
         task_manifest = tasks_root / str(assignment["task_id"]) / "task.toml"
         if managed_auth_config is None and task_manifest.is_file():
-            platform_kwargs["platform_targets"] = (
-                _codex_task_platform(task_manifest.parent),
-            )
+            platform_kwargs["platform_targets"] = _codex_task_platforms(task_manifest.parent)
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER
         )

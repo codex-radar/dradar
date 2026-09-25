@@ -1097,7 +1097,7 @@ def test_run_trial_uses_artifact_overlay_for_verifier_collect_pack(
         '[metadata]\nbase_commit_hash = "' + base_commit + '"\n'
         '[[verifier.collect]]\ncommand = "collect model.patch"\n'
     )
-    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda _path: "linux-x64")
+    monkeypatch.setattr(runner_mod, "_codex_task_platforms", lambda _path: ("linux-x64",))
     captured = _fake_pier(monkeypatch, tmp_path)
 
     art = run_trial(_assignment("codex"), tmp_path, tmp_path)
@@ -2674,13 +2674,13 @@ def test_codex_install_unsupported_host_has_fixed_report_code(monkeypatch):
 def test_codex_task_image_preflight_has_fixed_report_codes(tmp_path, monkeypatch):
     monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
     with pytest.raises(runner_mod.CodexInstallError) as missing:
-        runner_mod._codex_task_platform(tmp_path)
-    assert missing.value.report_code == "codex_task_image_unavailable"
+        runner_mod._codex_task_platforms(tmp_path)
+    assert missing.value.report_code == "codex_task_environment_invalid"
 
     task_file = tmp_path / "task.toml"
     task_file.write_text('[environment]\ndocker_image = "invalid image"\n')
     with pytest.raises(runner_mod.CodexInstallError) as invalid:
-        runner_mod._codex_task_platform(tmp_path)
+        runner_mod._codex_task_platforms(tmp_path)
     assert invalid.value.report_code == "codex_task_image_invalid"
 
     task_file.write_text('[environment]\ndocker_image = "registry.example/test:1"\n')
@@ -2688,7 +2688,7 @@ def test_codex_task_image_preflight_has_fixed_report_codes(tmp_path, monkeypatch
         runner_mod.subprocess.CompletedProcess(cmd, 1, "", "PRIVATE_MARKER")
     ))
     with pytest.raises(runner_mod.CodexInstallError) as unavailable:
-        runner_mod._codex_task_platform(tmp_path)
+        runner_mod._codex_task_platforms(tmp_path)
     assert unavailable.value.report_code == "codex_task_image_unavailable"
     assert "PRIVATE_MARKER" not in str(unavailable.value)
 
@@ -2698,7 +2698,7 @@ def test_codex_task_image_preflight_has_fixed_report_codes(tmp_path, monkeypatch
         )
     ))
     with pytest.raises(runner_mod.CodexInstallError) as platform_error:
-        runner_mod._codex_task_platform(tmp_path)
+        runner_mod._codex_task_platforms(tmp_path)
     assert platform_error.value.report_code == "codex_task_platform_unsupported"
 
 
@@ -2721,7 +2721,7 @@ def test_codex_task_platform_uses_image_arch_not_arm_host(tmp_path, monkeypatch)
         )
 
     monkeypatch.setattr(runner_mod.subprocess, "run", run)
-    assert runner_mod._codex_task_platform(tmp_path) == "linux-x64"
+    assert runner_mod._codex_task_platforms(tmp_path) == ("linux-x64",)
     assert calls[1][:3] == ["docker", "buildx", "imagetools"]
 
 
@@ -2740,7 +2740,7 @@ def test_codex_task_platform_selects_native_arm_from_multiarch(tmp_path, monkeyp
             "linux/arm64": {"architecture": "arm64", "os": "linux"},
         }), "")
     ))
-    assert runner_mod._codex_task_platform(tmp_path) == "linux-arm64"
+    assert runner_mod._codex_task_platforms(tmp_path) == ("linux-arm64",)
 
 
 @pytest.mark.parametrize("provider", [None, runner_mod.DEEPSEEK_PROVIDER])
@@ -2751,8 +2751,8 @@ def test_run_trial_probes_actual_image_for_each_codex_provider(
     (task_dir / "task.toml").write_text(
         '[environment]\ndocker_image = "registry.example/amd64:1"\n'
     )
-    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda path: (
-        "linux-x64" if path == task_dir else pytest.fail("wrong task path")
+    monkeypatch.setattr(runner_mod, "_codex_task_platforms", lambda path: (
+        ("linux-x64",) if path == task_dir else pytest.fail("wrong task path")
     ))
     observed = []
 
@@ -3262,3 +3262,74 @@ def test_real_runner_interrupt_to_durable_pending_and_upload_only_recovery(
     client = ScopedClient({})
     assert runloop._upload_trial(client, row) == 'interrupted'
     assert len(client.submissions) == 1 and pending.load(home) == []
+
+@pytest.mark.parametrize(('host', 'override', 'expected'), [
+    ('arm64', '', ('linux-arm64', 'linux-x64')),
+    ('x86_64', '', ('linux-x64',)),
+    ('arm64', 'linux/amd64', ('linux-x64',)),
+    ('arm64', 'linux/arm64', ('linux-arm64',)),
+])
+def test_codex_dockerfile_uses_existing_native_package_targets(
+        tmp_path, monkeypatch, host, override, expected):
+    (tmp_path / 'environment').mkdir()
+    (tmp_path / 'environment/Dockerfile').write_text('FROM fixture:base\nRUN true\n')
+    (tmp_path / 'task.toml').write_text('[environment]\nos="linux"\n')
+    monkeypatch.setattr(runner_mod.platform, 'machine', lambda: host)
+    monkeypatch.setenv('DOCKER_DEFAULT_PLATFORM', override)
+    monkeypatch.setattr(runner_mod.subprocess, 'run', lambda *a, **kw: pytest.fail(
+        'Dockerfile tasks must use the existing controlled build, not inspect a guessed image'))
+    assert runner_mod._codex_task_platforms(tmp_path) == expected
+
+
+@pytest.mark.parametrize('configuration', [
+    '[environment]\n', 'environment="bad"\n', '[environment\n',
+    '[environment]\ndocker_image=42\n', '[environment]\ndocker_image=""\n',
+])
+def test_codex_task_rejects_invalid_sources(tmp_path, monkeypatch, configuration):
+    (tmp_path / 'task.toml').write_text(configuration)
+    monkeypatch.setattr(runner_mod.subprocess, 'run', lambda *a, **kw: pytest.fail('no Docker'))
+    with pytest.raises(runner_mod.CodexInstallError):
+        runner_mod._codex_task_platforms(tmp_path)
+
+
+@pytest.mark.parametrize('source', ['empty', 'external', 'windows', 'override'])
+def test_codex_dockerfile_rejects_invalid_build_source(tmp_path, monkeypatch, source):
+    task = tmp_path / 'task'
+    (task / 'environment').mkdir(parents=True)
+    (task / 'task.toml').write_text('[environment]\nos="' + (
+        'windows' if source == 'windows' else 'linux') + '"\n')
+    dockerfile = task / 'environment/Dockerfile'
+    if source == 'external':
+        outside = tmp_path / 'outside'; outside.write_text('FROM fixture\n')
+        dockerfile.symlink_to(outside)
+    else:
+        dockerfile.write_text(' ' if source == 'empty' else 'FROM fixture\n')
+    monkeypatch.setenv('DOCKER_DEFAULT_PLATFORM', 'windows/amd64' if source == 'override' else '')
+    with pytest.raises(runner_mod.CodexInstallError):
+        runner_mod._codex_task_platforms(task)
+
+
+def test_run_trial_dockerfile_reaches_package_verification_before_build(tmp_path, monkeypatch):
+    task = tmp_path / 'abs-module-cache-flags'
+    (task / 'environment').mkdir(parents=True)
+    (task / 'task.toml').write_text('[environment]\nos="linux"\n')
+    (task / 'environment/Dockerfile').write_text('FROM fixture:base\n')
+    monkeypatch.setenv('DOCKER_DEFAULT_PLATFORM', 'linux/arm64')
+    checked = []
+    def resolve(*args, **kwargs):
+        checked.append(kwargs['platform_targets'])
+        raise runner_mod.CodexInstallError('native package unavailable')
+    monkeypatch.setattr(runner_mod, 'resolve_latest_codex_cli_version', resolve)
+    monkeypatch.setattr(runner_mod.image_cache, 'prepare_trial_builder',
+                        lambda *a, **kw: pytest.fail('must verify npm before build'))
+    with pytest.raises(runner_mod.CodexInstallError, match='native package unavailable'):
+        run_trial(_assignment('codex'), tmp_path, tmp_path / 'work')
+    assert checked == [('linux-arm64',)]
+
+
+def test_codex_dockerfile_accepts_default_environment_schema(tmp_path, monkeypatch):
+    (tmp_path / 'task.toml').write_text('schema_version="1.2"\n')
+    (tmp_path / 'environment').mkdir()
+    (tmp_path / 'environment/Dockerfile').write_text('FROM fixture:base\n')
+    monkeypatch.setenv('DOCKER_DEFAULT_PLATFORM', 'linux/arm64')
+    assert runner_mod._codex_task_platforms(tmp_path) == ('linux-arm64',)
