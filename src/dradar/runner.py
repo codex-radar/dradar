@@ -708,12 +708,13 @@ def resolve_latest_codex_cli_version(
                 return trusted_server_version
             if attempt < CODEX_VERSION_LOOKUP_ATTEMPTS:
                 time.sleep(0.5 * attempt)
-    raise RunnerError(
+    raise CodexInstallError(
         "could not verify npm's latest stable Codex CLI version after "
         f"{CODEX_VERSION_LOOKUP_ATTEMPTS} attempts; refusing to start an "
         "outdated agent container so no model quota is consumed. Check access "
         "to registry.npmjs.org, then retry the original run instructions "
-        "with the held assignment after its retry cooldown."
+        "with the held assignment after its retry cooldown.",
+        report_code="codex_version_unverified",
     ) from last_error
 
 

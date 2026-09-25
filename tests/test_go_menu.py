@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from dradar import runloop
+import dradar.runner as runner_mod
 from dradar.api_client import ApiError
 from dradar.providers import (
     DEEPSEEK_CATALOG_SHA256,
@@ -1455,6 +1456,31 @@ def test_codex_install_failure_preserves_scoped_run_plan_advice(
             "platform package unavailable; no model was started",
             report_code="codex_platform_package_unavailable",
         )),
+    )
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
+    outcome = runloop._run_and_submit(
+        SubmitClient({}), ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+    output = capsys.readouterr().out
+    assert outcome == "failed"
+    assert "retry the original run instructions" in output
+    assert "dradar resume" not in output
+
+
+def test_codex_registry_lookup_failure_preserves_scoped_run_plan_advice(
+    monkeypatch, capsys, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runner_mod.httpx, "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            runner_mod.httpx.ConnectError("registry unavailable")
+        ),
+    )
+    monkeypatch.setattr(runner_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: runner_mod.resolve_latest_codex_cli_version(),
     )
     monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
     outcome = runloop._run_and_submit(

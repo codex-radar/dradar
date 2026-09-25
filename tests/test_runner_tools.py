@@ -2551,9 +2551,10 @@ def test_resolve_latest_codex_cli_version_fails_closed_after_network_errors(
     monkeypatch.setattr(runner_mod.httpx, "get", fail)
     monkeypatch.setattr(runner_mod.time, "sleep", lambda _: None)
 
-    with pytest.raises(RunnerError, match="no model quota is consumed") as exc:
+    with pytest.raises(runner_mod.CodexInstallError, match="no model quota is consumed") as exc:
         runner_mod.resolve_latest_codex_cli_version()
     assert len(calls) == runner_mod.CODEX_VERSION_LOOKUP_ATTEMPTS
+    assert exc.value.report_code == "codex_version_unverified"
     assert "retry the original run instructions" in str(exc.value)
     assert "dradar resume" not in str(exc.value)
 
