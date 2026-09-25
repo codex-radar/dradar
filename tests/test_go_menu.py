@@ -1490,6 +1490,44 @@ def test_runner_error_reports_safe_worker_registration_code(
     }]
 
 
+def test_registration_detail_reaches_failure_report_without_exception_text(
+    monkeypatch, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RunnerError(
+            "SECRET_EXCEPTION_BODY",
+            report_code="worker-registration-process-exited",
+            report_detail={
+                "session_id": "a" * 32,
+                "registration_result": "process_exited",
+                "process_exit_code": 17,
+            },
+        )),
+    )
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
+    reports = []
+    monkeypatch.setattr(
+        runloop, "_report_failure_quietly",
+        lambda _client, _assignment, **kwargs: reports.append(kwargs),
+    )
+    outcome = runloop._run_and_submit(
+        SubmitClient({}), ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+    assert outcome == "failed"
+    assert reports == [{
+        "phase": "runner", "failure_kind": "runner_failed",
+        "failure_code": "worker-registration-process-exited",
+        "report_detail": {
+            "session_id": "a" * 32,
+            "registration_result": "process_exited",
+            "process_exit_code": 17,
+        },
+    }]
+    assert "SECRET" not in repr(reports)
+
+
 def test_codex_install_failure_preserves_scoped_run_plan_advice(
     monkeypatch, capsys, tmp_path: Path,
 ):
