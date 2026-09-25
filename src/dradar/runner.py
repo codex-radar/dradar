@@ -485,7 +485,7 @@ def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
     """Choose npm checks without requiring a prebuilt image for build tasks."""
     try:
         task = tomllib.loads((task_path / "task.toml").read_text(encoding="utf-8"))
-        environment = task["environment"]
+        environment = task.get("environment", {})
         if not isinstance(environment, dict):
             raise TypeError("environment must be a table")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:

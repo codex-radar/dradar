@@ -3325,3 +3325,11 @@ def test_run_trial_dockerfile_reaches_package_verification_before_build(tmp_path
     with pytest.raises(runner_mod.CodexInstallError, match='native package unavailable'):
         run_trial(_assignment('codex'), tmp_path, tmp_path / 'work')
     assert checked == [('linux-arm64',)]
+
+
+def test_codex_dockerfile_accepts_default_environment_schema(tmp_path, monkeypatch):
+    (tmp_path / 'task.toml').write_text('schema_version="1.2"\n')
+    (tmp_path / 'environment').mkdir()
+    (tmp_path / 'environment/Dockerfile').write_text('FROM fixture:base\n')
+    monkeypatch.setenv('DOCKER_DEFAULT_PLATFORM', 'linux/arm64')
+    assert runner_mod._codex_task_platforms(tmp_path) == ('linux-arm64',)
