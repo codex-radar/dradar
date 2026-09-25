@@ -59,6 +59,7 @@ class RunnerTelemetry:
         self.session_id = uuid.uuid4().hex
         self._lock = threading.Lock()
         self._send_lock = threading.Lock()
+        self._registration_diagnostic_local = threading.local()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -178,7 +179,10 @@ class RunnerTelemetry:
         kwargs.setdefault("session_id", self.session_id)
         return self.flight_recorder.try_record(event_type, component=component, **kwargs)
 
-    def _flush_flight_events(self, *, required_event_id: str | None = None) -> int:
+    def _flush_flight_events(
+        self, *, required_event_id: str | None = None,
+        diagnostic_out: dict[str, object] | None = None,
+    ) -> int:
         """Flush only this runner's bound batch/session evidence.
 
         The recorder queue is shared across plans and processes.  Do not let a
@@ -194,11 +198,14 @@ class RunnerTelemetry:
             batch_id = self._batch_id
             session_id = self.session_id
         if not batch_id:
+            if diagnostic_out is not None:
+                diagnostic_out["registration_result"] = "flight_no_scope"
             return 0
         return recorder.flush(
             batch_id=batch_id,
             session_id=session_id,
             required_event_id=required_event_id,
+            diagnostic_out=diagnostic_out,
         )
 
     def set_phase(
@@ -254,10 +261,13 @@ class RunnerTelemetry:
         *,
         propagate_errors: bool = False,
         required_event_id: str | None = None,
+        diagnostic_out: dict[str, object] | None = None,
     ) -> int:
         """Send once and return the server-selected next interval."""
         with self._send_lock:
             if self._disabled:
+                if diagnostic_out is not None:
+                    diagnostic_out["registration_result"] = "heartbeat_disabled"
                 return self._interval
             try:
                 self.record_event("heartbeat_sent", component="heartbeat")
@@ -269,7 +279,16 @@ class RunnerTelemetry:
                     self._disabled = True
                     with self._lock:
                         self._last_heartbeat_accepted = False
+                    if diagnostic_out is not None:
+                        diagnostic_out["registration_result"] = "heartbeat_disabled"
                     return self._interval
+                if diagnostic_out is not None:
+                    diagnostic_out["registration_result"] = (
+                        "heartbeat_http_error" if type(exc.status_code) is int
+                        else "heartbeat_transport_error"
+                    )
+                    if type(exc.status_code) is int and 100 <= exc.status_code <= 599:
+                        diagnostic_out["ack_http_status"] = exc.status_code
                 self._failures += 1
                 self.record_event(
                     "heartbeat_failed", component="heartbeat",
@@ -285,6 +304,8 @@ class RunnerTelemetry:
                     raise
                 return self._interval
             except Exception:
+                if diagnostic_out is not None:
+                    diagnostic_out["registration_result"] = "heartbeat_transport_error"
                 self._failures += 1
                 self.record_event(
                     "heartbeat_failed", component="heartbeat",
@@ -322,7 +343,10 @@ class RunnerTelemetry:
             self.record_event("heartbeat_acknowledged", component="heartbeat")
             self._last_flight_events_acked = self._flush_flight_events(
                 required_event_id=required_event_id,
+                diagnostic_out=diagnostic_out,
             )
+            if diagnostic_out is not None and not self._last_heartbeat_accepted:
+                diagnostic_out["registration_result"] = "heartbeat_rejected"
             self._show_notices(response)
             if response.get("stop_requested") is True:
                 self._stop_requested = True
@@ -370,22 +394,40 @@ class RunnerTelemetry:
         Legacy/disabled heartbeat endpoints fail closed and return ``False``;
         the caller must not charge the execution lease in that case.
         """
+        diagnostic: dict[str, object] = {"session_id": self.session_id}
+        if required_event_id is not None:
+            diagnostic["worker_event_id"] = required_event_id
+        self._registration_diagnostic_local.value = diagnostic
         if self._disabled:
+            diagnostic["registration_result"] = "heartbeat_disabled"
             return False
         self._send_once(
             propagate_errors=True,
             required_event_id=required_event_id,
+            diagnostic_out=diagnostic,
         )
         with self._lock:
             if not self._last_heartbeat_accepted:
+                diagnostic.setdefault("registration_result", "heartbeat_rejected")
                 return False
             if self.flight_recorder is None:
+                diagnostic["registration_result"] = "recorder_missing"
                 return required_event_id is None
             if required_event_id is not None:
-                return required_event_id in self.flight_recorder.last_acknowledged_event_ids
+                acknowledged = required_event_id in self.flight_recorder.last_acknowledged_event_ids
+                if not acknowledged and diagnostic.get("registration_result") == "flight_target_acknowledged":
+                    diagnostic["registration_result"] = "flight_ack_cache_missing"
+                elif not acknowledged:
+                    diagnostic.setdefault("registration_result", "flight_unknown")
+                return acknowledged
             # A production recorder must always bind the exact lifecycle event;
             # an unspecified ID would silently downgrade to heartbeat-only.
             return False
+
+    @property
+    def worker_registration_diagnostic(self) -> dict[str, object]:
+        """Only facts from this worker thread's latest strict handshake."""
+        return dict(getattr(self._registration_diagnostic_local, "value", {}))
 
     def _loop(self) -> None:
         while not self._stop.is_set():

@@ -20,11 +20,30 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .api_client import ApiError
 
 
 SCHEMA = "dradar-failure-report-v1"
 _SAFE_ATOM = re.compile(r"^[A-Za-z0-9._:@+-]{1,128}$")
-_DETAIL_KEYS = {"task_id", "benchmark_id", "model", "effort", "agent", "outcome"}
+_DETAIL_KEYS = {
+    "task_id", "benchmark_id", "model", "effort", "agent", "outcome",
+    "session_id", "worker_event_id", "registration_result",
+    "registration_elapsed_sec", "process_exit_code", "process_signal",
+    "ack_http_status",
+}
+REGISTRATION_RESULTS = frozenset({
+    "process_exited", "registration_timeout", "heartbeat_disabled",
+    "heartbeat_http_error", "heartbeat_transport_error", "heartbeat_rejected",
+    "recorder_missing", "flight_no_client", "flight_remote_disabled",
+    "flight_no_scope", "flight_no_pending", "flight_target_not_pending",
+    "flight_http_error", "flight_transport_error", "flight_invalid_response",
+    "flight_target_not_acknowledged", "flight_ack_persist_error",
+    "flight_local_read_error", "flight_ack_cache_missing",
+    "flight_target_acknowledged", "flight_unknown",
+})
+_REGISTRATION_DETAIL_KEYS = _DETAIL_KEYS - {
+    "task_id", "benchmark_id", "model", "effort", "agent", "outcome",
+}
 
 
 def _now() -> str:
@@ -47,6 +66,26 @@ def _safe(value: Any, *, maximum: int = 128) -> str | None:
     return text if _SAFE_ATOM.fullmatch(text) else None
 
 
+def _safe_detail(key: str, value: Any) -> str | None:
+    if key not in _DETAIL_KEYS:
+        return None
+    if key in {"session_id", "worker_event_id"}:
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else None
+    if key == "registration_result":
+        return value if isinstance(value, str) and value in REGISTRATION_RESULTS else None
+    limits = {"registration_elapsed_sec": (0, 3600), "process_exit_code": (0, 255),
+              "process_signal": (1, 64), "ack_http_status": (100, 599)}
+    if key in limits:
+        low, high = limits[key]
+        if type(value) is int and low <= value <= high:
+            return str(value)
+        if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]{0,3}", value):
+            number = int(value)
+            return value if low <= number <= high else None
+        return None
+    return _safe(value)
+
+
 def build_report(
     *,
     source: str,
@@ -58,10 +97,9 @@ def build_report(
 ) -> dict[str, Any]:
     clean_detail: dict[str, str] = {}
     for key, value in (detail or {}).items():
-        if key in _DETAIL_KEYS:
-            clean = _safe(value)
-            if clean is not None:
-                clean_detail[key] = clean
+        clean = _safe_detail(key, value)
+        if clean is not None:
+            clean_detail[key] = clean
     payload: dict[str, Any] = {
         "schema": SCHEMA,
         "report_key": uuid.uuid4().hex,
@@ -90,6 +128,27 @@ def _wire_payload(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
+def _send_compatible(client, record: dict[str, Any]) -> None:
+    payload = _wire_payload(record)
+    try:
+        client.report_runner_failure(payload)
+    except ApiError as exc:
+        # An older server rejects the new optional detail keys with 422. Keep
+        # the same report key and submit its original safe base fields once;
+        # the registration gate itself never depends on failure reporting.
+        detail = payload.get("detail")
+        if exc.status_code != 422 or not isinstance(detail, dict) or not (
+            detail.keys() & _REGISTRATION_DETAIL_KEYS
+        ):
+            raise
+        legacy = dict(payload)
+        legacy["detail"] = {
+            key: value for key, value in detail.items()
+            if key not in _REGISTRATION_DETAIL_KEYS
+        }
+        client.report_runner_failure(legacy)
+
+
 def _store(home: Path, record: dict[str, Any]) -> None:
     directory = _queue_dir(home)
     directory.mkdir(parents=True, exist_ok=True)
@@ -105,7 +164,7 @@ def _store(home: Path, record: dict[str, Any]) -> None:
 
 def submit_or_queue(client, home: Path, payload: dict[str, Any]) -> str:
     try:
-        client.report_runner_failure(_wire_payload(payload))
+        _send_compatible(client, payload)
     except Exception:
         record = dict(payload)
         record["_attempts"] = int(record.get("_attempts", 0)) + 1
@@ -142,7 +201,7 @@ def flush_pending(client, home: Path) -> dict[str, int]:
             continue
         path = directory / f"{key}.json"
         try:
-            client.report_runner_failure(_wire_payload(record))
+            _send_compatible(client, record)
         except Exception:
             record["_attempts"] = int(record.get("_attempts", 0)) + 1
             record["_last_attempt_at"] = _now()

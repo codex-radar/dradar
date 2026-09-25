@@ -420,6 +420,7 @@ class RunnerError(RuntimeError):
     def __init__(
         self, *args: object, failure_diagnostic: dict[str, object] | None = None,
         report_code: str | None = None,
+        report_detail: dict[str, object] | None = None,
     ) -> None:
         super().__init__(*args)
         self.failure_diagnostic = failure_diagnostic
@@ -427,6 +428,9 @@ class RunnerError(RuntimeError):
         # This is intentionally separate from failure_diagnostic, whose schema
         # is consumed by the assignment stop endpoint.
         self.report_code = report_code
+        # Only failure_reports.build_report's strict allowlist can leave the
+        # client. Never derive this from the exception message or Pier output.
+        self.report_detail = report_detail or {}
 
 
 class RunnerCleanupUnconfirmedError(RunnerError):
@@ -4411,7 +4415,10 @@ def _wait_for_worker_registration(
     build failure remains actionable.
     """
 
-    def registration_error(message: str, *, report_code: str) -> RunnerError:
+    def registration_error(
+        message: str, *, report_code: str,
+        report_detail: dict[str, object] | None = None,
+    ) -> RunnerError:
         if job_dir is not None and codex_version is not None:
             for path in list(job_dir.glob("*__*/exception.txt"))[:4]:
                 try:
@@ -4436,12 +4443,14 @@ def _wait_for_worker_registration(
                         report_code="codex_platform_dependency_missing",
                     )
         if log_path is None:
-            return RunnerError(message, report_code=report_code)
+            return RunnerError(message, report_code=report_code,
+                               report_detail=report_detail)
         tail = _tail(log_path)
         detail = f"{message} (see {log_path})"
         if tail:
             detail += f"\nlast lines of the log:\n{tail}"
-        return RunnerError(detail, report_code=report_code)
+        return RunnerError(detail, report_code=report_code,
+                           report_detail=report_detail)
 
     event_offset = 0
     # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
@@ -4485,12 +4494,28 @@ def _wait_for_worker_registration(
                 "profile": parsed.profile,
                 "occurred_at_ms": parsed.occurred_at_ms,
             }
-        if proc.poll() is not None:
+        # Only a successful poll returning an actual exit status can be
+        # labeled process_exited. A poll exception follows the existing
+        # exception/cleanup path and is never misreported as an exit.
+        exit_status = proc.poll()
+        if exit_status is not None:
+            report_detail: dict[str, object] = {
+                "registration_result": "process_exited",
+                "registration_elapsed_sec": min(3600, max(0, int(time.monotonic() - started))),
+            }
+            if isinstance(expected_session_id, str):
+                report_detail["session_id"] = expected_session_id
+            if type(exit_status) is int:
+                if 0 <= exit_status <= 255:
+                    report_detail["process_exit_code"] = exit_status
+                elif -64 <= exit_status < 0:
+                    report_detail["process_signal"] = -exit_status
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
                 + _build_stall_diagnosis(log_path, last_reason),
                 report_code="worker-registration-process-exited",
+                report_detail=report_detail,
             )
         now = time.monotonic()
         if now >= deadline:

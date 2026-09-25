@@ -946,6 +946,7 @@ def _report_failure_quietly(
     failure_kind: str,
     failure_code: str | None = None,
     outcome: str | None = None,
+    report_detail: dict[str, object] | None = None,
 ) -> None:
     """Send only bounded incident facts and never disrupt task recovery."""
     from . import failure_reports
@@ -958,6 +959,8 @@ def _report_failure_quietly(
     }
     if outcome is not None:
         detail["outcome"] = outcome
+    if report_detail:
+        detail.update(report_detail)
     payload = failure_reports.build_report(
         source="cli",
         phase=phase,
@@ -3109,6 +3112,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                         "environment remains in preparation and no runtime "
                         "lease was started",
                         report_code="worker-registration-unacknowledged",
+                        report_detail=telemetry.worker_registration_diagnostic,
                     )
                 if telemetry.stop_requested:
                     raise RunnerError(
@@ -3122,9 +3126,15 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 worker_event_id=worker_event_id if telemetry else None,
             )
         except ApiError as exc:
+            registration_detail = (
+                telemetry.worker_registration_diagnostic
+                if telemetry is not None and bind_stage == "worker-registration"
+                else None
+            )
             raise RunnerError(
                 f"server ownership bind failed before model start: {exc}",
                 report_code=_api_failure_report_code(bind_stage, exc),
+                report_detail=registration_detail,
             ) from exc
         ownership_state = "bound"
         if response.get("owner_epoch") is not None:
@@ -3273,6 +3283,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 _report_failure_quietly(
                     client, assignment, phase="runner",
                     failure_kind="runner_failed", failure_code=cause.report_code,
+                    **({"report_detail": cause.report_detail} if cause.report_detail else {}),
                 )
             _report_failure_quietly(
                 client, assignment, phase="cleanup",
@@ -3375,6 +3386,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
                     or failure_kind or "runner_failed"
                 ),
+                **({"report_detail": exc.report_detail} if exc.report_detail else {}),
             )
             if not stopped:
                 print("server stop was not confirmed; quarantining this worker slot")

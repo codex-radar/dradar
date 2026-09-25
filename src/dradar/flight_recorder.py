@@ -633,6 +633,7 @@ class FlightRecorder:
         batch_id: str | None = None,
         session_id: str | None = None,
         required_event_id: str | None = None,
+        diagnostic_out: dict[str, object] | None = None,
         _auth_only: bool = False,
         _auth_version: int = 1,
     ) -> int:
@@ -654,7 +655,17 @@ class FlightRecorder:
         behind the 100-event upload limit.  It is never selected when it falls
         outside the requested scope.
         """
-        if self.client is None or self._remote_disabled:
+        def note(result: str, status: object = None) -> None:
+            if diagnostic_out is not None:
+                diagnostic_out["registration_result"] = result
+                if type(status) is int and 100 <= status <= 599:
+                    diagnostic_out["ack_http_status"] = status
+
+        if self.client is None:
+            note("flight_no_client")
+            return 0
+        if self._remote_disabled:
+            note("flight_remote_disabled")
             return 0
         # A session-only (or required-event-only) scope cannot prove the plan
         # or account boundary.  In particular, never replay a legacy
@@ -663,6 +674,7 @@ class FlightRecorder:
         if batch_id is None and (
             session_id is not None or required_event_id is not None
         ):
+            note("flight_no_scope")
             return 0
         record_failure = (lambda *args, **kwargs: None) if _auth_only else self._record_flush_failure
         with self._lock:
@@ -670,6 +682,7 @@ class FlightRecorder:
                 with _exclusive_file_lock(self.lock_path):
                     pending = self._load(self.pending_path)
                     if not pending:
+                        note("flight_no_pending")
                         return 0
                     scoped = [
                         event for event in pending
@@ -679,6 +692,7 @@ class FlightRecorder:
                     scoped = [event for event in scoped
                               if ((event.get("event_type") == "update_observed" if _auth_version==3 else event.get("event_type") == ("auth_observed_v2" if _auth_version==2 else "auth_observed")) if _auth_only else (event.get("event_type") not in {"auth_observed","auth_observed_v2"} and not event.get("event_type", "").startswith("update_")))]
                     if not scoped:
+                        note("flight_target_not_pending")
                         return 0
                     if required_event_id is not None:
                         required = next(
@@ -704,6 +718,7 @@ class FlightRecorder:
                 # must never turn a heartbeat into a worker crash; strict
                 # worker registration will fail closed when no receipt exists.
                 record_failure("local_storage_error", 0)
+                note("flight_local_read_error")
                 return 0
             try:
                 sender=getattr(self.client,"auth_flight_events",self.client.flight_events) if _auth_only else self.client.flight_events
@@ -718,6 +733,10 @@ class FlightRecorder:
                 record_failure(
                     reason, len(pending), http_status=status,
                 )
+                note(
+                    "flight_http_error" if type(status) is int else "flight_transport_error",
+                    status,
+                )
                 if status == 404 and not _auth_only:
                     self._remote_disabled = True
                 return 0
@@ -731,12 +750,14 @@ class FlightRecorder:
                 # satisfy the strict worker-registration handshake.
                 if not isinstance(raw_acknowledged, list):
                     record_failure("invalid_response", len(pending))
+                    note("flight_invalid_response")
                     return 0
                 if any(
                     not self._valid_event_id(event_id)
                     for event_id in raw_acknowledged
                 ):
                     record_failure("invalid_response", len(pending))
+                    note("flight_invalid_response")
                     return 0
                 acknowledged = {
                     event_id for event_id in raw_acknowledged
@@ -746,12 +767,16 @@ class FlightRecorder:
                 # A malformed response is not evidence of acceptance.  Keep
                 # the durable pending event and let a later retry reconcile it.
                 record_failure("invalid_response", len(pending))
+                note("flight_invalid_response")
                 return 0
             if not acknowledged:
                 record_failure(
                     "unacknowledged_response", len(pending),
                 )
+                note("flight_target_not_acknowledged")
                 return 0
+            if required_event_id is not None and required_event_id not in acknowledged:
+                note("flight_target_not_acknowledged")
             try:
                 with _exclusive_file_lock(self.lock_path):
                     # Another process may have recorded or flushed events while
@@ -770,11 +795,14 @@ class FlightRecorder:
                 record_failure(
                     "local_storage_error", len(pending),
                 )
+                note("flight_ack_persist_error")
                 return 0
             # Keep the local cache for callers that inspect this recorder, and
             # also persist receipts so a sibling process can prove that its
             # exact worker_registered event was accepted.
             self._last_acknowledged_event_ids.update(acknowledged)
+            if required_event_id is None or required_event_id in acknowledged:
+                note("flight_target_acknowledged")
             if not _auth_only:
                 self._record_flush_success()
             return len(acknowledged)
