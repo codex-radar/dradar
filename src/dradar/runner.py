@@ -4411,7 +4411,7 @@ def _wait_for_worker_registration(
     build failure remains actionable.
     """
 
-    def registration_error(message: str) -> RunnerError:
+    def registration_error(message: str, *, report_code: str) -> RunnerError:
         if job_dir is not None and codex_version is not None:
             for path in list(job_dir.glob("*__*/exception.txt"))[:4]:
                 try:
@@ -4436,12 +4436,12 @@ def _wait_for_worker_registration(
                         report_code="codex_platform_dependency_missing",
                     )
         if log_path is None:
-            return RunnerError(message)
+            return RunnerError(message, report_code=report_code)
         tail = _tail(log_path)
         detail = f"{message} (see {log_path})"
         if tail:
             detail += f"\nlast lines of the log:\n{tail}"
-        return RunnerError(detail)
+        return RunnerError(detail, report_code=report_code)
 
     event_offset = 0
     # #0034 contract: preparation/sidecar waiting is exactly 30 minutes;
@@ -4489,7 +4489,8 @@ def _wait_for_worker_registration(
             raise registration_error(
                 "Pier exited before the structured worker_registered signal; "
                 "runtime lease was not started"
-                + _build_stall_diagnosis(log_path, last_reason)
+                + _build_stall_diagnosis(log_path, last_reason),
+                report_code="worker-registration-process-exited",
             )
         now = time.monotonic()
         if now >= deadline:
@@ -4498,7 +4499,8 @@ def _wait_for_worker_registration(
                 f"exceeded its {_duration(WORKER_REGISTRATION_GRACE_SEC)} "
                 "grace window without worker_registered, so no runtime lease "
                 "was started and no quota was consumed"
-                + _build_stall_diagnosis(log_path, last_reason)
+                + _build_stall_diagnosis(log_path, last_reason),
+                report_code="worker-registration-timeout",
             )
         # Environment build runs before the post-registration heartbeat, so
         # this loop was the one place where a volunteer saw nothing at all.
