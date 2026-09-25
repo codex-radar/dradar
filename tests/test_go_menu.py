@@ -28,7 +28,7 @@ from dradar.providers import (
     GROK_MODEL,
     GROK_PROVIDER,
 )
-from dradar.runner import RunnerError, TrialArtifacts
+from dradar.runner import CodexInstallError, RunnerError, TrialArtifacts
 
 ASSIGNMENT = {
     "assignment_id": "a1", "task_id": "t1", "model": "m", "effort": "e",
@@ -1443,6 +1443,27 @@ def test_runner_error_reports_safe_worker_registration_code(
         "failure_kind": "runner_failed",
         "failure_code": "worker-registration-http-502",
     }]
+
+
+def test_codex_install_failure_preserves_scoped_run_plan_advice(
+    monkeypatch, capsys, tmp_path: Path,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CodexInstallError(
+            "platform package unavailable; no model was started",
+            report_code="codex_platform_package_unavailable",
+        )),
+    )
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
+    outcome = runloop._run_and_submit(
+        SubmitClient({}), ASSIGNMENT, tmp_path, _args(), "abc123",
+    )
+    output = capsys.readouterr().out
+    assert outcome == "failed"
+    assert "retry the original run instructions" in output
+    assert "dradar resume" not in output
 
 
 @pytest.mark.parametrize(

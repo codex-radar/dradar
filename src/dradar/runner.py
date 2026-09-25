@@ -455,6 +455,11 @@ class CodexInstallError(RunnerError):
 
 
 def _codex_linux_platforms() -> tuple[str, ...]:
+    requested = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
+    if requested in {"linux/amd64", "linux/x86_64"}:
+        return ("linux-x64",)
+    if requested in {"linux/arm64", "linux/aarch64"}:
+        return ("linux-arm64",)
     architecture = platform.machine().lower()
     if architecture in {"x86_64", "amd64"}:
         targets = ["linux-x64"]
@@ -468,11 +473,6 @@ def _codex_linux_platforms() -> tuple[str, ...]:
             f"Codex Docker runtime has no supported Linux package for {architecture!r}; "
             "the model was not started"
         )
-    requested = os.environ.get("DOCKER_DEFAULT_PLATFORM", "").lower()
-    if requested in {"linux/amd64", "linux/x86_64"} and "linux-x64" not in targets:
-        targets.append("linux-x64")
-    if requested in {"linux/arm64", "linux/aarch64"} and "linux-arm64" not in targets:
-        targets.append("linux-arm64")
     return tuple(targets)
 
 
@@ -712,7 +712,8 @@ def resolve_latest_codex_cli_version(
         "could not verify npm's latest stable Codex CLI version after "
         f"{CODEX_VERSION_LOOKUP_ATTEMPTS} attempts; refusing to start an "
         "outdated agent container so no model quota is consumed. Check access "
-        "to registry.npmjs.org, then run `dradar resume`."
+        "to registry.npmjs.org, then retry the original run instructions "
+        "with the held assignment after its retry cooldown."
     ) from last_error
 
 
@@ -4694,9 +4695,10 @@ def run_trial(
     if effective_agent == "codex":
         _validate_gpt6_assignment(assignment, validate_version=False)
         platform_kwargs = {}
-        if assignment.get("benchmark_id") == "deep-swe" and managed_auth_config is None:
+        task_manifest = tasks_root / str(assignment["task_id"]) / "task.toml"
+        if managed_auth_config is None and task_manifest.is_file():
             platform_kwargs["platform_targets"] = (
-                _codex_task_platform(tasks_root / str(assignment["task_id"])),
+                _codex_task_platform(task_manifest.parent),
             )
         codex_provider = (
             assignment_codex_provider(assignment) or DEFAULT_CODEX_PROVIDER

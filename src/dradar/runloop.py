@@ -3226,8 +3226,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                       "no quota was consumed — retrying once automatically...")
                 continue
             print(f"trial failed: {safe_exc}\n"
-                  "the build failed twice — check your network/proxy and re-run "
-                  "`dradar resume` (still free: the agent never started), or "
+                  "the build failed twice — check your network/proxy and retry "
+                  "the original run instructions after the assignment cooldown "
+                  "(still free: the agent never started), or "
                   "use `dradar release` if you do not want to keep the cell")
             _signal_pool_abort(
                 _ENVIRONMENT_BUILD_ABORT_PREFIX
@@ -3344,9 +3345,14 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     failure_code="retry-cleanup-unconfirmed",
                 )
                 return "cleanup-unconfirmed"
-            print(f"trial failed: {exc}\n"
-                  "use `dradar resume` to retry later, or `dradar release` to "
-                  "give the cell back")
+            if isinstance(exc, CodexInstallError):
+                print(f"trial failed: {exc}\n"
+                      "retry the original run instructions with this held "
+                      "assignment after its retry cooldown")
+            else:
+                print(f"trial failed: {exc}\n"
+                      "use `dradar resume` to retry later, or `dradar release` "
+                      "to give the cell back")
             if failure_kind == "auth":
                 from .auth_failure import auth_failure_sentence
                 print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
@@ -7215,8 +7221,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             )
             print(
                 "stopping this worker before the next checkout after repeated "
-                "environment setup failures. Fix Docker/network/Pier, then run "
-                "`dradar resume`."
+                "environment setup failures. Fix Docker/network/Pier, then "
+                "retry the original run instructions with held assignments "
+                "after their retry cooldown."
             )
             results.append(outcome)
             break

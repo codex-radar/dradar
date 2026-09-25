@@ -1097,6 +1097,7 @@ def test_run_trial_uses_artifact_overlay_for_verifier_collect_pack(
         '[metadata]\nbase_commit_hash = "' + base_commit + '"\n'
         '[[verifier.collect]]\ncommand = "collect model.patch"\n'
     )
+    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda _path: "linux-x64")
     captured = _fake_pier(monkeypatch, tmp_path)
 
     art = run_trial(_assignment("codex"), tmp_path, tmp_path)
@@ -2550,9 +2551,11 @@ def test_resolve_latest_codex_cli_version_fails_closed_after_network_errors(
     monkeypatch.setattr(runner_mod.httpx, "get", fail)
     monkeypatch.setattr(runner_mod.time, "sleep", lambda _: None)
 
-    with pytest.raises(RunnerError, match="no model quota is consumed"):
+    with pytest.raises(RunnerError, match="no model quota is consumed") as exc:
         runner_mod.resolve_latest_codex_cli_version()
     assert len(calls) == runner_mod.CODEX_VERSION_LOOKUP_ATTEMPTS
+    assert "retry the original run instructions" in str(exc.value)
+    assert "dradar resume" not in str(exc.value)
 
 
 def test_resolve_latest_codex_cli_version_accepts_fresh_server_fallback(
@@ -2650,7 +2653,13 @@ def test_fresh_server_pin_allows_unknown_host_transport_but_not_missing_package(
 def test_codex_platform_probe_includes_docker_override(monkeypatch):
     monkeypatch.setattr(runner_mod.platform, "machine", lambda: "x86_64")
     monkeypatch.setenv("DOCKER_DEFAULT_PLATFORM", "linux/arm64")
-    assert runner_mod._codex_linux_platforms() == ("linux-x64", "linux-arm64")
+    assert runner_mod._codex_linux_platforms() == ("linux-arm64",)
+
+
+def test_codex_platform_probe_uses_only_overridden_amd64_on_arm_host(monkeypatch):
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
+    assert runner_mod._codex_linux_platforms() == ("linux-x64",)
 
 
 def test_codex_task_platform_uses_image_arch_not_arm_host(tmp_path, monkeypatch):
@@ -2692,6 +2701,34 @@ def test_codex_task_platform_selects_native_arm_from_multiarch(tmp_path, monkeyp
         }), "")
     ))
     assert runner_mod._codex_task_platform(tmp_path) == "linux-arm64"
+
+
+@pytest.mark.parametrize("provider", [None, runner_mod.DEEPSEEK_PROVIDER])
+def test_run_trial_probes_actual_image_for_each_codex_provider(
+        tmp_path, monkeypatch, provider):
+    task_dir = tmp_path / "abs-module-cache-flags"
+    task_dir.mkdir()
+    (task_dir / "task.toml").write_text(
+        '[environment]\ndocker_image = "registry.example/amd64:1"\n'
+    )
+    monkeypatch.setattr(runner_mod, "_codex_task_platform", lambda path: (
+        "linux-x64" if path == task_dir else pytest.fail("wrong task path")
+    ))
+    observed = []
+
+    def resolve(*args, **kwargs):
+        observed.append(kwargs.get("platform_targets"))
+        raise RunnerError("stop before Pier")
+
+    monkeypatch.setattr(runner_mod, "resolve_latest_codex_cli_version", resolve)
+    assignment = _assignment("codex")
+    if provider is not None:
+        assignment["provider"] = provider
+        assignment["model"] = runner_mod.DEEPSEEK_MODEL
+        assignment["effort"] = "high"
+    with pytest.raises(RunnerError, match="stop before Pier"):
+        run_trial(assignment, tmp_path, tmp_path)
+    assert observed == [("linux-x64",)]
 
 
 def test_registration_names_missing_codex_native_dependency(tmp_path, monkeypatch):
