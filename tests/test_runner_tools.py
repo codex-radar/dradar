@@ -2663,6 +2663,45 @@ def test_codex_platform_probe_uses_only_overridden_amd64_on_arm_host(monkeypatch
     assert runner_mod._codex_linux_platforms() == ("linux-x64",)
 
 
+def test_codex_install_unsupported_host_has_fixed_report_code(monkeypatch):
+    monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+    monkeypatch.setattr(runner_mod.platform, "machine", lambda: "private-host-arch")
+    with pytest.raises(runner_mod.CodexInstallError) as exc:
+        runner_mod._codex_linux_platforms()
+    assert exc.value.report_code == "codex_host_platform_unsupported"
+
+
+def test_codex_task_image_preflight_has_fixed_report_codes(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+    with pytest.raises(runner_mod.CodexInstallError) as missing:
+        runner_mod._codex_task_platform(tmp_path)
+    assert missing.value.report_code == "codex_task_image_unavailable"
+
+    task_file = tmp_path / "task.toml"
+    task_file.write_text('[environment]\ndocker_image = "invalid image"\n')
+    with pytest.raises(runner_mod.CodexInstallError) as invalid:
+        runner_mod._codex_task_platform(tmp_path)
+    assert invalid.value.report_code == "codex_task_image_invalid"
+
+    task_file.write_text('[environment]\ndocker_image = "registry.example/test:1"\n')
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda cmd, **_kwargs: (
+        runner_mod.subprocess.CompletedProcess(cmd, 1, "", "PRIVATE_MARKER")
+    ))
+    with pytest.raises(runner_mod.CodexInstallError) as unavailable:
+        runner_mod._codex_task_platform(tmp_path)
+    assert unavailable.value.report_code == "codex_task_image_unavailable"
+    assert "PRIVATE_MARKER" not in str(unavailable.value)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", lambda cmd, **_kwargs: (
+        runner_mod.subprocess.CompletedProcess(
+            cmd, 0, '{"architecture":"amd64","os":"windows"}', ""
+        )
+    ))
+    with pytest.raises(runner_mod.CodexInstallError) as platform_error:
+        runner_mod._codex_task_platform(tmp_path)
+    assert platform_error.value.report_code == "codex_task_platform_unsupported"
+
+
 def test_codex_task_platform_uses_image_arch_not_arm_host(tmp_path, monkeypatch):
     import json
 

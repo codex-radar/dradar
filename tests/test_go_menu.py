@@ -1467,6 +1467,49 @@ def test_codex_install_failure_preserves_scoped_run_plan_advice(
     assert "dradar resume" not in output
 
 
+@pytest.mark.parametrize("error,expected_code", [
+    (CodexInstallError("PRIVATE_MARKER registry_timeout"), "codex_install_failed"),
+    (CodexInstallError(
+        "PRIVATE_MARKER registry_timeout",
+        report_code="codex_platform_package_unavailable",
+    ), "codex_platform_package_unavailable"),
+    (CodexInstallError(
+        "PRIVATE_MARKER registry_timeout",
+        report_code="codex_version_unverified",
+    ), "codex_version_unverified"),
+    (CodexInstallError(
+        "PRIVATE_MARKER registry_timeout",
+        report_code="codex_platform_dependency_missing",
+    ), "codex_platform_dependency_missing"),
+    (RunnerError("PRIVATE_MARKER registry_timeout"), "runner_failed"),
+])
+def test_codex_install_report_fallback_does_not_parse_exception_text(
+    monkeypatch, tmp_path: Path, error, expected_code,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
+    monkeypatch.setattr(
+        runloop, "run_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(runloop, "_mark_stopped_quietly", lambda *_a, **_k: True)
+    reports = []
+    monkeypatch.setattr(
+        runloop, "_report_failure_quietly",
+        lambda _client, _assignment, **kwargs: reports.append(kwargs),
+    )
+
+    outcome = runloop._run_and_submit(
+        SubmitClient({}), dict(ASSIGNMENT), tmp_path, _args(), "abc123",
+    )
+
+    assert outcome == "failed"
+    assert reports == [{
+        "phase": "runner", "failure_kind": "runner_failed",
+        "failure_code": expected_code,
+    }]
+    assert "PRIVATE_MARKER" not in repr(reports)
+
+
 def test_codex_registry_lookup_failure_preserves_scoped_run_plan_advice(
     monkeypatch, capsys, tmp_path: Path,
 ):

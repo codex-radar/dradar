@@ -3372,6 +3372,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 failure_kind=failure_kind or "runner_failed",
                 failure_code=(
                     exc.report_code or diagnostic.get("failure_code")
+                    or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
                     or failure_kind or "runner_failed"
                 ),
             )
