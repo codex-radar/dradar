@@ -2869,6 +2869,9 @@ def _mark_stopped_quietly(
     they are still surfaced: silently losing this transition can strand a
     lease as apparently resumable after its runner disappeared.
     """
+    if isinstance(assignment, dict) and assignment.get("_registration_start_uncertain"):
+        print("warning: registration start outcome is uncertain; session close was not confirmed; worker slot remains quarantined")
+        return False
     assignment_id = (
         assignment if isinstance(assignment, str) else assignment["assignment_id"]
     )
@@ -3078,6 +3081,20 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 "the assignment for another model attempt"
             )
         bind_stage = "worker-registration"
+        window = (_worker_event or {}).get("_registration_window")
+        if window is not None:
+            try:
+                if telemetry is None:
+                    raise ApiError("worker registration telemetry unavailable")
+                window.bind(client, telemetry, assignment)
+            except ApiError as exc:
+                raise RunnerError(
+                    "worker registration did not complete within its confirmed lifetime",
+                    report_code=_api_failure_report_code(window.stage, exc),
+                    report_detail=telemetry.worker_registration_diagnostic if telemetry else None,
+                ) from exc
+            ownership_state = "bound"
+            return
         try:
             if telemetry is not None:
                 # Popen only proves that the local Pier parent exists.  Bind
@@ -3151,6 +3168,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 attributes={"provider": assignment.get("agent") or "codex"},
             )
             telemetry.flush()
+
+    bind_owner._uses_registration_window = True
 
     def auth_observed(attributes):
         values=dict(attributes)

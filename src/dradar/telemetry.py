@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from .api_client import ApiClient, ApiError
-from .flight_recorder import FlightRecorder
+from .flight_recorder import FlightRecorder, _checked_lock
 
 
 def platform_family() -> str:
@@ -238,8 +238,8 @@ class RunnerTelemetry:
             )
             self._wake.set()
 
-    def _payload(self) -> dict:
-        with self._lock:
+    def _payload(self, *, registration_check=None) -> dict:
+        with _checked_lock(self._lock, registration_check):
             self._seq += 1
             return {
                 "protocol_version": 3,

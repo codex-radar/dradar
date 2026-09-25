@@ -853,7 +853,7 @@ def codex_auth_path() -> Path:
     return Path(os.environ.get("CODEX_AUTH_JSON_PATH", Path.home() / ".codex" / "auth.json"))
 
 
-def _materialize_shared_file(path: Path, data: bytes, mode: int = 0o600) -> Path:
+def _materialize_shared_file(path: Path, data: bytes, mode: int = 0o600, *, check=None) -> Path:
     """Publish deterministic runner input without exposing partial contents.
 
     ``HOME / work`` is shared by supervised workers.  A direct ``write_text``
@@ -863,10 +863,14 @@ def _materialize_shared_file(path: Path, data: bytes, mode: int = 0o600) -> Path
     the same directory and make ``os.replace`` the single publication point.
     """
 
+    if check is not None:
+        check()
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         info = path.lstat()
         if stat.S_ISREG(info.st_mode) and path.read_bytes() == data:
+            if check is not None:
+                check()
             if os.name != "nt":
                 os.chmod(path, mode)
             return path
@@ -884,6 +888,8 @@ def _materialize_shared_file(path: Path, data: bytes, mode: int = 0o600) -> Path
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        if check is not None:
+            check()
         os.replace(tmp, path)
     except BaseException:
         if fd >= 0:
@@ -4493,6 +4499,7 @@ def _wait_for_worker_registration(
                 "context": parsed.context,
                 "profile": parsed.profile,
                 "occurred_at_ms": parsed.occurred_at_ms,
+                "start_deadline": parsed.start_deadline,
             }
         # Only a successful poll returning an actual exit status can be
         # labeled process_exited. A poll exception follows the existing
@@ -5121,6 +5128,7 @@ def run_trial(
                 env=env,
                 **_pier_process_options(),
             )
+            registration_window = None
             try:
                 if on_worker_registered is None and worker_event_source is None:
                     # Legacy unit callers that do not request ownership binding
@@ -5143,16 +5151,25 @@ def run_trial(
                             codex_cli_version if effective_agent == "codex" else None
                         ),
                     )
+                    if getattr(on_worker_registered, "_uses_registration_window", False):
+                        from .registration import RegistrationWindow
+                        registration_window = RegistrationWindow(
+                            event.get("start_deadline"), lambda: proc.poll() is None)
+                        event["_registration_window"] = registration_window
                     if on_worker_registered is not None:
                         on_worker_registered(event)
                     if start_gate is not None:
                         if proc.poll() is not None:
                             raise RunnerError("worker exited before ownership confirmation")
                         _materialize_shared_file(start_gate, json.dumps(dict(
-                            start_identity, expires_at=time.monotonic() + WORKER_START_WAIT_SEC,
-                        )).encode())
+                            start_identity, expires_at=(registration_window.deadline
+                                if registration_window else time.monotonic() + WORKER_START_WAIT_SEC),
+                        )).encode(), check=registration_window.check if registration_window else None)
                     if managed_auth_config is not None:
-                        _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}')
+                        _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}',
+                            check=registration_window.check if registration_window else None)
+                    if registration_window is not None:
+                        registration_window.finish()
                 # Start the local watchdog only after server ownership bind and
                 # the structured worker event. No model runtime is charged to
                 # image build/provider bootstrap.
@@ -5201,6 +5218,8 @@ def run_trial(
                         print(f"  … {int((now - started) / 60)} min elapsed — "
                               f"{_last_activity(log_path)}")
             except BaseException as exc:
+                if registration_window is not None:
+                    registration_window.abort()
                 cancellation.protect_finalization(
                     cancelled=isinstance(exc, (KeyboardInterrupt, EOFError)),
                 )
@@ -5233,6 +5252,10 @@ def run_trial(
                         + "; ".join(cleanup_errors),
                         job_dir=jobs_dir / job_name,
                     ) from exc
+                from .api_client import ApiError
+                if isinstance(exc, ApiError) and getattr(on_worker_registered, "_uses_registration_window", False):
+                    exc = RunnerError("worker registration lifetime was not confirmed",
+                                      report_code="worker-registration-unacknowledged")
                 if isinstance(exc, (RunnerError, KeyboardInterrupt, EOFError)):
                     # A watchdog timeout is terminal for this process, but Pier
                     # may already have harvested a patch, trajectory and token
