@@ -72,6 +72,33 @@ def test_adapter_resources_are_materialized_without_network(package_sources, tmp
     assert 'PASS' in result.stdout
 
 
+def test_stale_worker_helper_replaced_from_zipapp(package_sources, tmp_path):
+    probe = r'''
+import importlib.resources, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from dradar import runner
+home = Path(sys.argv[2]); home.mkdir(mode=0o700)
+cached = home / '_dradar_worker_events.py'
+cached.write_text('def emit_worker_registered(**kwargs): return True\n')
+cached.chmod(0o600)
+runner._ensure_worker_event_module(home)
+expected = importlib.resources.files('dradar').joinpath('worker_events.py').read_bytes()
+assert cached.read_bytes() == expected and b'start_deadline' in expected
+sys.path.insert(0, str(home))
+import _dradar_worker_events as worker
+assert 'start_deadline' in worker.WorkerRegistered.__dataclass_fields__
+print('stale-helper-replaced PASS')
+'''
+    result = subprocess.run(
+        [sys.executable, '-c', probe, str(package_sources['zipapp']), str(tmp_path/'output')],
+        env=dict(os.environ, PYTHONPATH='', PYTHONDONTWRITEBYTECODE='1',
+                 DRADAR_HOME=str(tmp_path/'fixture-home')),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'stale-helper-replaced PASS' in result.stdout
+
+
 DEEPSEEK_CONSTRUCTOR_PROBE = r'''
 import sys, socket, importlib, importlib.resources
 from pathlib import Path
