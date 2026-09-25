@@ -204,9 +204,13 @@ class CodexManaged(Codex):
                 state = await self._metadata(environment, root, 'status.json')
                 self._retain_status(state)
                 if state and state.get('state') == 'ready' and not registered:
-                    emit_worker_registered(runtime='pier', context='agent', profile='codex_managed_at')
+                    if not emit_worker_registered(runtime='pier', context='agent',
+                                                  profile='codex_managed_at', start_deadline=deadline):
+                        raise RuntimeError('managed worker registration was not persisted')
                     registered = True
                 if registered and not permitted:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('managed start timeout')
                     permit = os.environ.get('DRADAR_MANAGED_START_PERMIT')
                     if not permit:
                         raise RuntimeError('managed host start permit missing')
@@ -215,6 +219,8 @@ class CodexManaged(Codex):
                         permission = json.loads(read(Path(permit)))
                         if permission != {'schema': 'dradar.managed_start.v1'}:
                             raise RuntimeError('managed host start permit invalid')
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError('managed start timeout')
                         await self._publish(environment, root, 'start.json', {'schema': permission['schema'], 'generation': material.revision})
                         permitted = True
                 if not permitted and time.monotonic() > deadline:

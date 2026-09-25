@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ class WorkerRegistered:
     context: str
     profile: str
     occurred_at_ms: int
+    start_deadline: float | None = None
 
     @property
     def event_id(self) -> str:
@@ -67,7 +69,10 @@ def parse_worker_event(value: str | bytes | dict[str, Any]) -> WorkerRegistered 
         if not isinstance(item, str) or len(item) > 48 or not item.replace("_", "").isalnum():
             item = "unknown"
         categories.append(item)
-    return WorkerRegistered(session_id, seq, *categories, occurred)
+    deadline = data.get("start_deadline")
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        return None
+    return WorkerRegistered(session_id, seq, *categories, occurred, deadline)
 
 
 class WorkerRegistrationTracker:
@@ -94,7 +99,7 @@ class WorkerRegistrationTracker:
         return {"result": "unknown", "reason_code": "unobserved_timeout" if timed_out else "build_timeout", "duration_ms": None}
 
 
-def emit_worker_registered(*, runtime: str = "pier", context: str = "agent", profile: str = "provider") -> bool:
+def emit_worker_registered(*, runtime: str = "pier", context: str = "agent", profile: str = "provider", start_deadline: float | None = None) -> bool:
     """Atomically append a minimal registration event to the sidecar.
 
     The adapter runs in Pier's host process, so a private host file is shared
@@ -117,6 +122,8 @@ def emit_worker_registered(*, runtime: str = "pier", context: str = "agent", pro
         "occurred_at_ms": int(time.time() * 1000),
         **values,
     }
+    if start_deadline is not None:
+        payload["start_deadline"] = start_deadline
     session = payload["session_id"]
     if not isinstance(session, str) or not (8 <= len(session) <= 64):
         return False
@@ -213,9 +220,12 @@ async def register_worker(*, runtime="pier", context="agent", profile="provider"
             raise ValueError("invalid identity")
     except (KeyError, TypeError, ValueError):
         raise RuntimeError("invalid worker start gate") from None
-    if not emit_worker_registered(runtime=runtime, context=context, profile=profile):
-        raise RuntimeError("worker registration was not persisted")
+    # Host parent and host adapter share the system monotonic clock (Python
+    # >=3.11, including macOS/Windows). Never derive a budget from wall time.
     deadline = time.monotonic() + WORKER_START_WAIT_SEC
+    if not emit_worker_registered(runtime=runtime, context=context, profile=profile,
+                                  start_deadline=deadline):
+        raise RuntimeError("worker registration was not persisted")
     while True:
         now = time.monotonic()
         if now >= deadline:

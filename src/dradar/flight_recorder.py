@@ -42,7 +42,26 @@ _PROCESS_LOCK = threading.Lock()
 
 
 @contextmanager
-def _exclusive_file_lock(path: Path) -> Iterator[None]:
+def _checked_lock(lock, check=None):
+    """Registration alone polls a deadline; ordinary recorder calls are unchanged."""
+    if check is None:
+        with lock:
+            yield
+        return
+    while True:
+        check()
+        if lock.acquire(blocking=False):
+            break
+        time.sleep(0.01)
+    try:
+        check()
+        yield
+    finally:
+        lock.release()
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path, *, check=None) -> Iterator[None]:
     """Serialize recorder read/modify/write cycles across processes.
 
     The lock is deliberately a separate, never-replaced file.  The JSONL files
@@ -52,10 +71,10 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
     dependency; a crashed process releases either kernel lock automatically.
     """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     locked = False
     windows_lock = False
-    with _PROCESS_LOCK:
+    with _checked_lock(_PROCESS_LOCK, check):
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             if os.fstat(fd).st_size == 0:
                 os.write(fd, b"\0")
@@ -63,11 +82,27 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
             try:
                 import fcntl
 
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                while True:
+                    if check is not None:
+                        check()
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if check else 0))
+                        break
+                    except BlockingIOError:
+                        time.sleep(0.01)
             except ImportError:  # pragma: no cover - Windows CI
                 import msvcrt
 
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                while True:
+                    if check is not None:
+                        check()
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK if check else msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:
+                        if check is None:
+                            raise
+                        time.sleep(0.01)
                 windows_lock = True
             locked = True
             yield
@@ -565,9 +600,10 @@ class FlightRecorder:
         reason_code: str | None = None,
         attributes: dict[str, Any] | None = None,
         occurred_at: str | None = None,
+        _registration_check=None,
     ) -> dict[str, Any]:
-        with self._lock:
-            with _exclusive_file_lock(self.lock_path):
+        with _checked_lock(self._lock, _registration_check):
+            with _exclusive_file_lock(self.lock_path, check=_registration_check):
                 self._seq += 1
                 event = {
                     "schema_version": SCHEMA_VERSION,
@@ -590,6 +626,8 @@ class FlightRecorder:
                 pending = self._load(self.pending_path)
                 self._write(self.events_path, [*history, event])
                 self._write(self.pending_path, [*pending, event])
+                if _registration_check is not None:
+                    _registration_check()
                 return event
 
     def try_record(self, event_type: str, **kwargs) -> dict[str, Any] | None:
