@@ -121,6 +121,7 @@ class FakeClient:
 
     def mark_stopped(self, assignment_id, **_kwargs):
         self.stopped.append(assignment_id)
+        return {"ok": True}
 
 
 def _make_trial_dir(tmp_path: Path, name: str = "t") -> Path:
@@ -2978,10 +2979,32 @@ def test_patch_statistics_failure_preserves_completed_upload_for_retry(tmp_path,
 ])
 def test_cleanup_session_field_compatibility(fields, expected):
     calls = []
-    client = SimpleNamespace(mark_stopped=lambda aid, **kw: calls.append(kw))
+    def mark_stopped(aid, **kw):
+        calls.append(kw)
+        return {"ok": True}
+
+    client = SimpleNamespace(mark_stopped=mark_stopped)
     assert runloop._mark_stopped_quietly(client, {"assignment_id": "synthetic", "owner_epoch": 7, **fields})
     assert calls[0]["session_id"] == expected
     assert calls[0]["owner_epoch"] == 7
+
+
+@pytest.mark.parametrize("response", [None, {}, {"ok": False}, {"ok": 1}])
+def test_cleanup_requires_explicit_success_ack(monkeypatch, response):
+    calls = []
+
+    def mark_stopped(aid, **kw):
+        calls.append(aid)
+        return response
+
+    monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        runloop, "_record_worker_returned_assignment",
+        lambda _aid: pytest.fail("must not record return without server ACK"),
+    )
+    client = SimpleNamespace(mark_stopped=mark_stopped)
+    assert not runloop._mark_stopped_quietly(client, {"assignment_id": "synthetic"})
+    assert calls == ["synthetic"] * 3
 
 
 def test_cleanup_conflicting_sessions_does_not_send():
