@@ -142,6 +142,9 @@ def associate_request(home: Path, scope: str, generation: str, batch: str, *, au
         if state.get("batch_id") not in (None, batch):
             raise IntentStopped("the exchanged request changed its local batch")
         state["batch_id"] = batch
+        state["batch_binding_sha256"] = hashlib.sha256(
+            (scope + ":" + generation + ":" + batch).encode()
+        ).hexdigest()
         _atomic_json(path, state)
         return local_generation
 
@@ -157,4 +160,10 @@ def stop_request(home: Path, scope: str) -> None:
         except IntentStopped:
             return  # A damaged/absent run record cannot prevent cancellation.
         if state.get("batch_id"):
-            stop(home, state["batch_id"])
+            try:
+                batch = normalize_batch_id(state["batch_id"])
+            except (TypeError, ValueError):
+                return  # Still continue the command's exact cached-plan stop.
+            expected = hashlib.sha256((scope + ":" + state["generation"] + ":" + batch).encode()).hexdigest()
+            if state.get("batch_binding_sha256") == expected:
+                stop(home, batch)
