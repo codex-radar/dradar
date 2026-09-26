@@ -282,3 +282,79 @@ def test_pre_resume_failure_never_executes_child(tmp_path, failed_gate):
             _winapi.CloseHandle(process)
         kernel.CloseHandle(job)
     assert not marker.exists()
+
+
+def test_nested_jobs_bind_before_resume_and_stop_only_their_child(tmp_path):
+    """Exercise the Windows runner's possible enclosing Job plus an exact child Job."""
+    import _winapi
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel.IsProcessInJob.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL),
+    ]
+    kernel.IsProcessInJob.restype = wintypes.BOOL
+    kernel.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel.ResumeThread.restype = wintypes.DWORD
+    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateJobObject.restype = wintypes.BOOL
+    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateProcess.restype = wintypes.BOOL
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    marker = tmp_path / "nested-executed"
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(45)"])
+    outer = kernel.CreateJobObjectW(None, None)
+    inner = kernel.CreateJobObjectW(None, None)
+    assert outer and inner
+    process = thread = None
+    bound_outer = bound_inner = False
+    try:
+        code = (
+            "from pathlib import Path; import sys,time; "
+            "Path(sys.argv[1]).write_text('ran'); time.sleep(45)"
+        )
+        process, thread, _pid, _tid = _winapi.CreateProcess(
+            sys.executable,
+            subprocess.list2cmdline([sys.executable, "-c", code, str(marker)]),
+            None, None, False, 0x00000004, None, None,
+            subprocess.STARTUPINFO(),
+        )
+        assert kernel.AssignProcessToJobObject(outer, process), ctypes.get_last_error()
+        bound_outer = True
+        assert kernel.AssignProcessToJobObject(inner, process), ctypes.get_last_error()
+        bound_inner = True
+        for job in (outer, inner):
+            member = wintypes.BOOL()
+            assert kernel.IsProcessInJob(process, job, ctypes.byref(member))
+            assert member.value
+        assert kernel.ResumeThread(thread) != 0xFFFFFFFF
+        deadline = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists()
+        assert kernel.TerminateJobObject(inner, 1), ctypes.get_last_error()
+        assert kernel.WaitForSingleObject(process, 5000) == 0
+        assert unrelated.poll() is None
+    finally:
+        if process is not None:
+            if bound_inner:
+                kernel.TerminateJobObject(inner, 1)
+            elif bound_outer:
+                kernel.TerminateJobObject(outer, 1)
+            else:
+                kernel.TerminateProcess(process, 1)
+        if thread is not None:
+            _winapi.CloseHandle(thread)
+        if process is not None:
+            _winapi.CloseHandle(process)
+        kernel.CloseHandle(inner)
+        kernel.CloseHandle(outer)
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
