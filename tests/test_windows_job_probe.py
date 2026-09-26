@@ -104,6 +104,9 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
     assert job, ctypes.get_last_error()
     limits = ExtendedLimitInformation()
     limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE; no breakaway
+    assert not kernel.SetInformationJobObject(
+        wintypes.HANDLE(0xBAD), 9, ctypes.byref(limits), ctypes.sizeof(limits),
+    )
     assert kernel.SetInformationJobObject(
         job, 9, ctypes.byref(limits), ctypes.sizeof(limits),
     ), ctypes.get_last_error()
@@ -115,6 +118,13 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
     devnull = open(os.devnull, "rb")
     inherited = []
     try:
+        with pytest.raises(OSError):
+            _winapi.CreateProcess(
+                str(tmp_path / "missing-executable.exe"), "missing-executable.exe",
+                None, None, False, 0x00000004, None, None,
+                subprocess.STARTUPINFO(),
+            )
+        assert not marker.exists()
         current = _winapi.GetCurrentProcess()
         for handle in (
             msvcrt.get_osfhandle(devnull.fileno()),
@@ -150,6 +160,7 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
             time.sleep(0.02)
         assert marker.exists(), "suspended parent did not spawn descendant after resume"
         assert kernel.WaitForSingleObject(process, 10000) == 0, "parent did not exit"
+        assert _winapi.GetExitCodeProcess(process) == 0
         assert json.loads(marker.read_text())["cwd"] == str(tmp_path)
         assert json.loads(marker.read_text())["env"] == "exact-job"
         log.flush()
@@ -165,6 +176,15 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         ), ctypes.get_last_error()
         assert accounting.TotalProcesses >= 2
         assert accounting.ActiveProcesses >= 1, "descendant escaped after parent exit"
+        assert unrelated.poll() is None
+
+        # A failed query or terminate call cannot be interpreted as proof of
+        # cleanup. Keep the real Job handle and retry through the exact handle.
+        assert not kernel.QueryInformationJobObject(
+            wintypes.HANDLE(0xBAD), 1, ctypes.byref(accounting),
+            ctypes.sizeof(accounting), ctypes.byref(returned),
+        )
+        assert not kernel.TerminateJobObject(wintypes.HANDLE(0xBAD), 1)
         assert unrelated.poll() is None
 
         assert kernel.TerminateJobObject(job, 1), ctypes.get_last_error()
@@ -197,3 +217,68 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         devnull.close()
         unrelated.terminate()
         unrelated.wait(timeout=5)
+
+
+@pytest.mark.parametrize("failed_gate", ["assign", "membership", "resume"])
+def test_pre_resume_failure_never_executes_child(tmp_path, failed_gate):
+    """Failure at any post-create gate kills the suspended child before code runs."""
+    import _winapi
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel.IsProcessInJob.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL),
+    ]
+    kernel.IsProcessInJob.restype = wintypes.BOOL
+    kernel.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel.ResumeThread.restype = wintypes.DWORD
+    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateJobObject.restype = wintypes.BOOL
+    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateProcess.restype = wintypes.BOOL
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    marker = tmp_path / "must-not-run"
+    job = kernel.CreateJobObjectW(None, None)
+    assert job
+    process = thread = None
+    bound = False
+    try:
+        code = "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('ran')"
+        process, thread, _pid, _tid = _winapi.CreateProcess(
+            sys.executable,
+            subprocess.list2cmdline([sys.executable, "-c", code, str(marker)]),
+            None, None, False, 0x00000004, None, None,
+            subprocess.STARTUPINFO(),
+        )
+        if failed_gate == "assign":
+            assert not kernel.AssignProcessToJobObject(wintypes.HANDLE(0xBAD), process)
+        else:
+            assert kernel.AssignProcessToJobObject(job, process), ctypes.get_last_error()
+            bound = True
+            if failed_gate == "membership":
+                member = wintypes.BOOL()
+                assert not kernel.IsProcessInJob(
+                    process, wintypes.HANDLE(0xBAD), ctypes.byref(member),
+                )
+            else:
+                assert kernel.ResumeThread(wintypes.HANDLE(0xBAD)) == 0xFFFFFFFF
+    finally:
+        if process is not None:
+            if bound:
+                assert kernel.TerminateJobObject(job, 1), ctypes.get_last_error()
+            else:
+                assert kernel.TerminateProcess(process, 1), ctypes.get_last_error()
+            assert kernel.WaitForSingleObject(process, 5000) == 0
+        if thread is not None:
+            _winapi.CloseHandle(thread)
+        if process is not None:
+            _winapi.CloseHandle(process)
+        kernel.CloseHandle(job)
+    assert not marker.exists()
