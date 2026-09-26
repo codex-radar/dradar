@@ -6,9 +6,18 @@ import sys
 from .local_config import HOME
 from .ota.integration import (_run_windows_candidate, load_trusted_keys, ota_root,
                               activate_prepared_update, runloop_safe_point)
-from .ota.state import UpdateController, UpdateLock
+from .ota.state import UpdateController, UpdateLock, UpdateLockBusy
 from .ota.activity import active_invocations, register_invocation
 from .ota.discovery import discover_update, start_periodic_discovery
+
+
+# Fleet can start many descendants at once. A launch must wait for its turn
+# through the update gate; expiry fails closed before any CLI work begins.
+_LAUNCH_LOCK_TIMEOUT_SECONDS = 60
+
+
+def _launch_lock(root):
+    return UpdateLock(root / "launch.lock", timeout_seconds=_LAUNCH_LOCK_TIMEOUT_SECONDS)
 
 
 def _activate_if_idle(root):
@@ -41,9 +50,13 @@ def main() -> int:
             return bundled_main()
         # The child owns an independent activity lease as well: if the outer
         # launcher crashes, its still-running child must continue blocking OTA.
-        with UpdateLock(ota_root(HOME) / "launch.lock", timeout_seconds=1):
-            child_activity = register_invocation(ota_root(HOME))
-            child_activity.__enter__()
+        try:
+            with _launch_lock(ota_root(HOME)):
+                child_activity = register_invocation(ota_root(HOME))
+                child_activity.__enter__()
+        except (UpdateLockBusy, OSError) as exc:
+            print(f"DRadar could not register this CLI process for a safe update: {exc}", file=sys.stderr)
+            return 75
         try:
             from .cli import main as bundled_main
             return bundled_main()
@@ -57,13 +70,19 @@ def main() -> int:
     activity = None
     artifact = None
     try:
-        with UpdateLock(root / "launch.lock", timeout_seconds=0):
-            keys = load_trusted_keys(HOME)
-            if keys and not active_invocations(root):
-                controller = UpdateController(root, trusted_keys=keys)
-                with controller.transaction():
-                    controller.recover_on_launcher_start()
-                _activate_if_idle(root)
+        with _launch_lock(root):
+            # Select the signed runtime under the same gate as registration.
+            # A contender must not skip selection and silently run old code.
+            keys = None
+            try:
+                keys = load_trusted_keys(HOME)
+                if keys and not active_invocations(root):
+                    controller = UpdateController(root, trusted_keys=keys)
+                    with controller.transaction():
+                        controller.recover_on_launcher_start()
+                    _activate_if_idle(root)
+            except (OSError, ValueError, RuntimeError):
+                keys = None
             activity = register_invocation(root)
             activity.__enter__()
             if keys:
@@ -71,13 +90,9 @@ def main() -> int:
                     artifact = UpdateController(root, trusted_keys=keys).launch_artifact()
                 except (OSError, ValueError, RuntimeError):
                     artifact = None
-    except (OSError, ValueError, RuntimeError):
-        # Do not start unregistered work that a concurrent updater might miss.
-        # Registration retries briefly via the same launch gate, no networking.
-        with UpdateLock(root / "launch.lock", timeout_seconds=1):
-            if activity is None:
-                activity = register_invocation(root)
-                activity.__enter__()
+    except (UpdateLockBusy, OSError) as exc:
+        print(f"DRadar could not register this CLI process for a safe update: {exc}", file=sys.stderr)
+        return 75
     periodic_stop = start_periodic_discovery(HOME)
     try:
         if artifact is not None:
