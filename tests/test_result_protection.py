@@ -125,3 +125,17 @@ def test_symlink_job_is_fenced_without_following_it(tmp_path):
     root.mkdir(parents=True)
     (root / ("a" + AID)).symlink_to(external, target_is_directory=True)
     assert local_jobs.protected_assignment_ids(tmp_path) == {AID}
+
+
+def test_incomplete_upload_metadata_is_preserved_without_replay(tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client, _ = client_and_assignment()
+    entry = {"assignment_id": AID, "batch_id": BID,
+             "scope_fingerprint": runloop._pending_scope_fingerprint(client, batch_id=BID)}
+    pending.record(tmp_path, entry)
+    path = tmp_path / "pending_uploads.json"
+    before = path.read_bytes()
+    with pytest.raises(pending.PendingLedgerError):
+        runloop._upload_trial(client, entry)
+    assert path.read_bytes() == before
+    assert runloop._pool_ready_work_count(client, desired_workers=1) == 0

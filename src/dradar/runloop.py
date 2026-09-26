@@ -1973,6 +1973,7 @@ def _bundled_completed_outcome(
 
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
                   upload_only_recovery=False):
+    pending.require_uploadable(entry)
     pending.record(HOME, entry)
     try:
         if (pending.is_cleanup_quarantine(entry)

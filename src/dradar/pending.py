@@ -163,6 +163,21 @@ def is_cleanup_quarantine(entry: object) -> bool:
     )
 
 
+def require_uploadable(entry: dict) -> None:
+    """Check replay shape without rewriting an incomplete safety record."""
+    if is_cleanup_quarantine(entry) or entry.get("upload_blocked"):
+        return
+    if any(not isinstance(entry.get(key), str) or not entry[key]
+           for key in ("assignment_id", "nonce", "task_id", "trial_dir")) or (
+        entry.get("meta") is not None and not isinstance(entry["meta"], dict)
+    ):
+        raise PendingLedgerError(
+            "Saved result metadata is incomplete; the pending record was kept "
+            "unchanged. Verify the original assignment and artifact metadata "
+            "before upload recovery. No model work is safe for this record."
+        )
+
+
 def assignment_ids(home: Path) -> set[str]:
     """Assignments with saved results or cleanup fences that must not rerun.
 
