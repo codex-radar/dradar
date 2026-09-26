@@ -163,6 +163,11 @@ def _flaky_pier(monkeypatch, work_dir, fail_times, log_line, make_patch=True):
         ),
     )
     monkeypatch.setattr(runner_mod.subprocess, "Popen", FakePopen)
+    # These tests classify the log after a completed fake process. Physical
+    # process/container cleanup is exercised in test_runner_exit_evidence.
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner_mod, "_cleanup_exited_pier_runtime", lambda *a:
+                        (False, SimpleNamespace(running=False)))
     return captured
 
 
@@ -226,6 +231,26 @@ def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
     assert "<redacted>" in args._docker_cleanup_blocked
 
 
+def test_build_retry_observes_stop_between_attempts(monkeypatch, tmp_path):
+    from dradar import run_intent
+    from test_go_menu import ASSIGNMENT, SubmitClient
+    home, batch = tmp_path / "home", "a" * 32
+    monkeypatch.setattr(runloop, "HOME", home)
+    generation = run_intent.begin(home, batch)
+    monkeypatch.setenv(run_intent.BATCH_ENV, batch)
+    monkeypatch.setenv(run_intent.GENERATION_ENV, generation)
+    calls = []
+    def flaky(*args, **kwargs):
+        calls.append("trial")
+        run_intent.stop(home, batch)
+        raise BuildFlakeError("controlled build failure")
+    monkeypatch.setattr(runloop, "run_trial", flaky)
+    monkeypatch.setattr(runloop.image_cache, "remove_trial_builder", lambda *a, **k: (True, None))
+    tag = runloop._run_and_submit(SubmitClient({}), dict(ASSIGNMENT), tmp_path, _args(), "abc")
+    assert tag == "local-stop-requested"
+    assert calls == ["trial"]
+
+
 def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
@@ -244,7 +269,10 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
     monkeypatch.setattr(runloop, "run_trial", always_flaky)
     client = SubmitClient({})
     stopped = []
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    def confirmed_stop(aid, **kw):
+        stopped.append((aid, kw))
+        return {"ok": True}
+    client.mark_stopped = confirmed_stop
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
     assert tag == "environment-build-failed"
     assert stopped == [(
@@ -419,7 +447,7 @@ def test_zcode_retry_never_rebinds_when_stop_is_unconfirmed(
         "abc",
     )
 
-    assert outcome == "failed"
+    assert outcome == "cleanup-unconfirmed"
     assert counts == {
         "run_trial": 1,
         "mark_started": 1,

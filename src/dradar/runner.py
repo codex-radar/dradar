@@ -23,7 +23,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Callable
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -4845,6 +4845,8 @@ def run_trial(
     audit = ExecutionAudit(assignment, work_dir, execution_observer)
     try:
         audit.emit("entered", execution_started=False)
+        from . import run_intent
+        run_intent.require_worker(work_dir.parent)
         return _run_trial(
             assignment, tasks_root, work_dir, dev_agent=dev_agent,
             on_started=on_started, on_worker_registered=on_worker_registered,
@@ -5308,21 +5310,26 @@ def _run_trial(
             # tell "working" from "wedged" without docker-exec'ing into the
             # container (volunteer report, 2026-07-13). Once a minute, print
             # elapsed time plus the newest pier log line.
-            if execution_audit is not None:
-                execution_audit.pending(job_name, jobs_dir / job_name)
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    cwd=work_dir,
-                    env=env,
-                    **_pier_process_options(),
-                )
-            except OSError:
+            from . import run_intent
+            # Preparation may outlive a stop. Check again at the actual local
+            # launch, using the same short lock as stop publication; all remote
+            # work and provider registration stay outside this lock.
+            with run_intent.worker_launch_guard(work_dir.parent):
                 if execution_audit is not None:
-                    execution_audit.spawn_failed = True
-                raise
+                    execution_audit.pending(job_name, jobs_dir / job_name)
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        cwd=work_dir,
+                        env=env,
+                        **_pier_process_options(),
+                    )
+                except OSError:
+                    if execution_audit is not None:
+                        execution_audit.spawn_failed = True
+                    raise
             registration_window = None
             try:
                 if execution_audit is not None:
@@ -5356,16 +5363,10 @@ def _run_trial(
                         event["_registration_window"] = registration_window
                     if on_worker_registered is not None:
                         on_worker_registered(event)
-                    from . import run_intent
-                    intent_batch = os.environ.get(run_intent.BATCH_ENV)
-                    intent_generation = os.environ.get(run_intent.GENERATION_ENV)
                     # Remote registration is complete before this short lock.
                     # A stop published while it was pending must win before
                     # either ordinary or managed provider permission is written.
-                    launch_guard = (
-                        run_intent.launch_guard(work_dir.parent, intent_batch, intent_generation)
-                        if intent_batch or intent_generation else nullcontext())
-                    with launch_guard:
+                    with run_intent.worker_launch_guard(work_dir.parent):
                         if start_gate is not None:
                             if proc.poll() is not None:
                                 raise RunnerError("worker exited before ownership confirmation")

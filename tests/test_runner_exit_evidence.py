@@ -328,8 +328,9 @@ def test_late_registration_cannot_publish_permission_after_stop(runtime, monkeyp
 
 def test_permission_write_and_local_finish_share_guard_but_network_does_not(runtime, monkeypatch):
     from dradar import run_intent, registration
+    generation = run_intent.begin(runtime["work"].parent, "a" * 32)
     monkeypatch.setenv(run_intent.BATCH_ENV, "a" * 32)
-    monkeypatch.setenv(run_intent.GENERATION_ENV, "b" * 32)
+    monkeypatch.setenv(run_intent.GENERATION_ENV, generation)
     locked = []
     @contextmanager
     def guard(home, batch, generation):
@@ -340,6 +341,11 @@ def test_permission_write_and_local_finish_share_guard_but_network_does_not(runt
         finally:
             locked.pop()
     monkeypatch.setattr(run_intent, "launch_guard", guard)
+    original_popen = runner.subprocess.Popen
+    def popen(*args, **kwargs):
+        assert locked
+        return original_popen(*args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
     class Window:
         deadline = time.monotonic() + 30
         def __init__(self, *a, defer_abort=False): assert defer_abort
@@ -358,3 +364,25 @@ def test_permission_write_and_local_finish_share_guard_but_network_does_not(runt
     monkeypatch.setattr(runner, "_materialize_shared_file", materialize)
     run(runtime, on_worker_registered=registration_callback)
     assert runtime["events"][-1]["event"] == "confirmed_absent"
+
+
+@pytest.mark.parametrize("stop_during_preparation", [False, True])
+def test_stop_before_local_launch_has_no_child_and_keeps_no_launch_evidence(
+    runtime, monkeypatch, stop_during_preparation,
+):
+    from dradar import run_intent
+    home, batch = runtime["work"].parent, "a" * 32
+    generation = run_intent.begin(home, batch)
+    monkeypatch.setenv(run_intent.BATCH_ENV, batch)
+    monkeypatch.setenv(run_intent.GENERATION_ENV, generation)
+    if stop_during_preparation:
+        def command(*args, **kwargs):
+            run_intent.stop(home, batch)
+            return ["fake-pier"]
+        monkeypatch.setattr(runner, "build_pier_command", command)
+    else:
+        run_intent.stop(home, batch)
+    with pytest.raises(run_intent.IntentStopped):
+        run(runtime)
+    assert "popen" not in runtime["calls"]
+    assert [e["event"] for e in runtime["events"]] == ["entered", "never_started"]

@@ -147,3 +147,29 @@ def test_unknown_receipt_shape_never_releases(tmp_path, bad_field, bad_value):
     with pytest.raises(journal.CapacityEvidenceError):
         journal.reconcile_file(local.path, server)
     assert "release" not in server.calls
+
+
+def test_known_generation_rejects_inconsistent_receipt_without_poisoning_recovery(tmp_path):
+    local = prepare(tmp_path)
+    local.bind_generation(3)
+    assert local.seal(close_seq=1, reason="completed")
+    before = local.path.read_bytes()
+    class InconsistentServer(ReceiptServer):
+        def runner_session_receipt(self, *args, **kwargs):
+            return {**super().runner_session_receipt(*args, **kwargs), "device_generation": 4}
+    server = InconsistentServer()
+    with pytest.raises(journal.CapacityEvidenceError, match="different reservation generation"):
+        journal.reconcile_file(local.path, server)
+    assert server.calls == ["receipt"]
+    assert local.path.read_bytes() == before
+    assert journal.reconcile_file(local.path, ReceiptServer())
+
+
+def test_telemetry_persists_credential_generation_before_admission(tmp_path):
+    from dradar.telemetry import RunnerTelemetry
+    server = ReceiptServer()
+    server.credential_generation = 3
+    telemetry = RunnerTelemetry(server, home=tmp_path, jitter=False)
+    saved = journal._read(telemetry.capacity_journal.path)
+    assert saved["device_generation"] == 3
+    assert server.calls == []

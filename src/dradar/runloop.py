@@ -3218,6 +3218,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
 
     art = None
     for attempt in (1, 2):
+        try:
+            run_intent.require_worker(HOME)
+        except run_intent.IntentStopped:
+            print("a local stop cancelled this attempt before launch")
+            return "local-stop-requested"
         assignment["_runner_attempt"]=attempt
         execution_observer = None
         journal = getattr(telemetry, "capacity_journal", None)
@@ -3251,6 +3256,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 if art is None:
                     remove_builder()
             break
+        except run_intent.IntentStopped:
+            print("a local stop cancelled this attempt before launch")
+            return "local-stop-requested"
         except BuildFlakeError as exc:
             if telemetry:
                 _record_flight_event(telemetry,

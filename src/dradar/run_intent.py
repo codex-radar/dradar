@@ -126,6 +126,18 @@ def require_worker(home: Path) -> None:
         require(home, batch, generation)
 
 
+@contextmanager
+def worker_launch_guard(home: Path):
+    """Order a worker's final local launch with durable stop publication."""
+    batch = os.environ.get(BATCH_ENV)
+    generation = os.environ.get(GENERATION_ENV)
+    if batch or generation:
+        with launch_guard(home, batch, generation):
+            yield
+    else:
+        yield
+
+
 def request_scope(run_code: str) -> str:
     """Opaque local cancellation identity, available before token exchange."""
     return "request-" + hashlib.sha256(run_code.encode()).hexdigest()

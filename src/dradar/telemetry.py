@@ -93,6 +93,11 @@ class RunnerTelemetry:
             capacity_journal.CapacityJournal(home, session_id=self.session_id, server=server)
             if home is not None and isinstance(server, str) and server else None
         )
+        generation = getattr(client, "credential_generation", None)
+        if self.capacity_journal is not None and generation is not None:
+            # This exact credential already pins new session admission. Save
+            # that authority before the first heartbeat or recovery receipt.
+            self.capacity_journal.bind_generation(generation)
 
     @property
     def stop_requested(self) -> bool:
