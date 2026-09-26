@@ -2,6 +2,7 @@
 
 import ctypes
 from ctypes import wintypes
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -27,6 +28,38 @@ class BasicAccounting(ctypes.Structure):
     ]
 
 
+class BasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class IoCounters(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in (
+        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+    )]
+
+
+class ExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", BasicLimitInformation),
+        ("IoInfo", IoCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
 def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tmp_path):
     import _winapi
 
@@ -35,6 +68,10 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
     kernel.CreateJobObjectW.restype = wintypes.HANDLE
     kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
     kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    kernel.SetInformationJobObject.restype = wintypes.BOOL
     kernel.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
     kernel.IsProcessInJob.restype = wintypes.BOOL
     kernel.ResumeThread.argtypes = [wintypes.HANDLE]
@@ -55,20 +92,28 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
 
     marker = tmp_path / "child-pid.txt"
     code = (
-        "import subprocess,sys,time; from pathlib import Path; "
+        "import json,os,subprocess,sys,time; from pathlib import Path; "
         "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(45)']); "
-        "Path(sys.argv[1]).write_text(str(p.pid))"
+        "Path(sys.argv[1]).write_text(json.dumps({"
+        "'child_pid':p.pid,'cwd':os.getcwd(),"
+        "'env':os.environ.get('DRADAR_JOB_PROBE')}))"
     )
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(45)"])
     job = kernel.CreateJobObjectW(None, None)
     assert job, ctypes.get_last_error()
+    limits = ExtendedLimitInformation()
+    limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE; no breakaway
+    assert kernel.SetInformationJobObject(
+        job, 9, ctypes.byref(limits), ctypes.sizeof(limits),
+    ), ctypes.get_last_error()
     process = thread = None
     bound = False
     try:
         process, thread, _pid, _tid = _winapi.CreateProcess(
             sys.executable,
             subprocess.list2cmdline([sys.executable, "-c", code, str(marker)]),
-            None, None, False, 0x00000004, None, None,
+            None, None, False, 0x00000004,
+            dict(os.environ, DRADAR_JOB_PROBE="exact-job"), str(tmp_path),
             subprocess.STARTUPINFO(),
         )
         assert kernel.AssignProcessToJobObject(job, process), ctypes.get_last_error()
@@ -83,6 +128,8 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
             time.sleep(0.02)
         assert marker.exists(), "suspended parent did not spawn descendant after resume"
         assert kernel.WaitForSingleObject(process, 10000) == 0, "parent did not exit"
+        assert json.loads(marker.read_text())["cwd"] == str(tmp_path)
+        assert json.loads(marker.read_text())["env"] == "exact-job"
         accounting = BasicAccounting()
         returned = wintypes.DWORD()
         assert kernel.QueryInformationJobObject(
