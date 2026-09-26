@@ -701,6 +701,7 @@ class ApiClient:
         effort: str,
         refill_to: int,
         max_tasks: int,
+        refill_mode: str | None = None,
     ) -> dict[str, Any]:
         """Idempotently create the server-authoritative multi-machine plan."""
         payload = {
@@ -712,10 +713,15 @@ class ApiClient:
             "refill_to": refill_to,
             "max_tasks": max_tasks,
         }
+        if refill_mode is not None:
+            payload["refill_mode"] = refill_mode
         return self._post(
             "/api/v1/refill-campaign/configure",
             json=payload,
         )
+
+    def refill_campaign_capabilities(self) -> dict[str, Any]:
+        return self._get("/api/v1/refill-campaign/capabilities")
 
     def refill_campaign_status(self, batch_id: str) -> dict[str, Any]:
         path = self._query_path(

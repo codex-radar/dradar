@@ -312,6 +312,86 @@ def test_shared_campaign_status_mismatch_fails_closed(tmp_path: Path, monkeypatc
         refill.refill_once(tmp_path, Client())
 
 
+def test_explicit_rolling_campaign_refills_one_server_confirmed_gap(
+    tmp_path: Path, monkeypatch,
+):
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setenv(refill.PLAN_SCOPE_ENV, batch_id)
+    seeds = [{**_assignment(f"seed-{index}"), "batch_id": batch_id}
+             for index in range(2)]
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=2, max_tasks=3,
+        quota_tier="plus", max_estimated_quota_pct=None, active=seeds,
+        refill_harness="codex", refill_model="m", refill_effort="e",
+        server_campaign_id=batch_id, refill_mode="rolling_submitted",
+    )
+
+    class Client(RefillClient):
+        def __init__(self):
+            super().__init__([seeds[1]])
+            self.campaign = {
+                "batch_id": batch_id, "status": "active", "harness": "codex",
+                "model": "m", "effort": "e", "refill_to": 2, "max_tasks": 3,
+                "planned": 2, "held": 1, "seed_pending": 1,
+                "rolling_credits": 1,
+                "refill_mode": "rolling_submitted", "stop_reason": None,
+            }
+
+        def refill_campaign_status(self, requested_batch_id):
+            assert requested_batch_id == batch_id
+            return {"campaign": dict(self.campaign)}
+
+        def table(self):
+            return {
+                "combos": [{"agent": "codex", "model": "m", "effort": "e"}],
+                "cells": {"new-0|m|e": {"st": "open", "cost": 1.0}},
+                "tier_windows_usd": WINDOWS,
+            }
+
+        def claim_assignment(self, task_id, model, effort, *,
+                             refill_campaign_id=None, tier=None):
+            assert refill_campaign_id == batch_id
+            result = super().claim_assignment(task_id, model, effort)
+            self.campaign["planned"] += 1
+            self.campaign["held"] += 1
+            self.campaign["rolling_credits"] -= 1
+            self.campaign["status"] = "draining"
+            return result
+
+    client = Client()
+    first = refill.refill_once(tmp_path, client)
+    assert first["claimed"] == 1
+    assert client.campaign["seed_pending"] == 1
+    assert client.campaign["planned"] == 3
+    second = refill.refill_once(tmp_path, client)
+    assert second["claimed"] == 0
+
+
+def test_rolling_campaign_missing_mode_fails_closed(tmp_path: Path, monkeypatch):
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setenv(refill.PLAN_SCOPE_ENV, batch_id)
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=1, max_tasks=2,
+        quota_tier="plus", max_estimated_quota_pct=None, active=[],
+        refill_harness="codex", refill_model="m", refill_effort="e",
+        server_campaign_id=batch_id, refill_mode="rolling_submitted",
+    )
+
+    class OldServer:
+        def get_assignment(self):
+            return {"active": [], "free_pick": True}
+
+        def refill_campaign_status(self, _batch_id):
+            return {"campaign": {
+                "batch_id": batch_id, "status": "active", "harness": "codex",
+                "model": "m", "effort": "e", "refill_to": 1, "max_tasks": 2,
+                "planned": 0, "held": 0, "seed_pending": 0,
+            }}
+
+    with pytest.raises(refill.RefillError, match="invalid exact refill campaign"):
+        refill.refill_once(tmp_path, OldServer())
+
+
 def test_shared_campaign_accepts_server_dsh_wire_alias_for_local_scope():
     batch_id = "550e8400e29b41d4a716446655440000"
     plan = {
@@ -636,6 +716,44 @@ def test_fleet_setup_registers_server_authoritative_seed_campaign(
         "max_tasks": 3,
     }]
     assert refill.load(tmp_path)["server_campaign_id"] == batch_id
+
+
+def test_rolling_setup_requires_read_only_server_capability_before_configure(
+    tmp_path: Path, monkeypatch,
+):
+    batch_id = "550e8400e29b41d4a716446655440000"
+    selected = {
+        **_assignment("seed"), "batch_id": batch_id,
+        "agent": "kimi-code", "model": "k3", "effort": "high",
+    }
+
+    class OldServer(RefillClient):
+        def __init__(self):
+            super().__init__([selected])
+            self.configure_calls = 0
+
+        def refill_campaign_capabilities(self):
+            raise ApiError("not found", status_code=404)
+
+        def configure_refill_campaign(self, **_values):
+            self.configure_calls += 1
+            return {"campaign": {"batch_id": batch_id}}
+
+    client = OldServer()
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(refill.PLAN_SCOPE_ENV, batch_id)
+    args = argparse.Namespace(
+        refill=True, refill_to=1, refill_mode="rolling-submitted",
+        auto=None, yes=True, max_tasks=3, quota_tier="plus",
+        max_estimated_quota_pct=None, refill_harness="kimi-code",
+        refill_model="k3", refill_effort="high", refill_order="cost",
+        parallel=False, fleet_pool=True, batch_id=batch_id,
+    )
+
+    with pytest.raises(refill.RefillError, match="no campaign was configured"):
+        runloop._setup_refill(args, client, [selected], True)
+    assert client.configure_calls == 0
+    assert refill.load(tmp_path) is None
 
 
 def test_normal_setup_replaces_stale_plan_before_refilling(
