@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, local_jobs, pending
 from .agent_schema import cmd_schema
 from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
@@ -707,6 +707,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except (KeyboardInterrupt, EOFError):
         # single choke point for every command: Ctrl-C during a run (the
         # batch banner promises it's safe) or EOF from piped/non-tty stdin

@@ -62,14 +62,16 @@ def test_remove_is_idempotent(tmp_path: Path):
     assert pending.load(tmp_path) == []
 
 
-def test_load_tolerates_corrupt_file(tmp_path: Path):
+def test_load_rejects_corrupt_file(tmp_path: Path):
     (tmp_path / "pending_uploads.json").write_text("{ not json")
-    assert pending.load(tmp_path) == []
+    with pytest.raises(pending.PendingLedgerError):
+        pending.load(tmp_path)
 
 
-def test_load_tolerates_non_list_json(tmp_path: Path):
+def test_load_rejects_non_list_json(tmp_path: Path):
     (tmp_path / "pending_uploads.json").write_text('{"oops": "not a list"}')
-    assert pending.load(tmp_path) == []
+    with pytest.raises(pending.PendingLedgerError):
+        pending.load(tmp_path)
 
 
 def test_save_is_atomic_failed_commit_does_not_corrupt_existing_ledger(tmp_path: Path, monkeypatch):
@@ -611,9 +613,9 @@ def test_pending_retry_isolated_by_server_account_and_plan_scope(
     assert touched == ["from-b"]
     remaining = pending.load(tmp_path)
     assert [entry["assignment_id"] for entry in remaining] == ["shared-assignment"]
-    # Scope-aware fencing must not let an old account/plan row block this
-    # account's worker registration or checkout path.
-    assert "shared-assignment" not in runloop._pending_assignment_ids_for_client(
+    # Upload scope remains exact; an old row still fences the same assignment
+    # against another paid solve after a token or account change.
+    assert "shared-assignment" in runloop._pending_assignment_ids_for_client(
         client_b, batch_id=batch_b,
     )
 
@@ -787,7 +789,7 @@ def test_personal_client_skips_invalid_batch_but_preserves_evidence(
     assert pending.load(tmp_path)[0]["assignment_id"] == "malformed"
 
 
-def test_retry_upload_keeps_malformed_ledger_rows_without_crashing(
+def test_retry_upload_rejects_malformed_ledger_without_overwriting(
     tmp_path: Path, monkeypatch, capsys,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -797,11 +799,9 @@ def test_retry_upload_keeps_malformed_ledger_rows_without_crashing(
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
     monkeypatch.setattr(runloop, "_client", lambda _cfg: client)
 
-    assert runloop.cmd_retry_upload(None) == 1
+    with pytest.raises(pending.PendingLedgerError):
+        runloop.cmd_retry_upload(None)
     assert json.loads((tmp_path / "pending_uploads.json").read_text()) == raw_rows
-    output = capsys.readouterr().out
-    assert "malformed pending ledger row" in output
-    assert "unknown, malformed" in output
 
 
 def test_batch_helper_rejects_same_uuid_from_foreign_account(
@@ -2107,7 +2107,7 @@ def test_stale_generation_409_is_not_misread_as_already_submitted(
     assert len(pending.load(tmp_path)) == 1
 
 
-def test_upload_410_means_expired_clears_ledger(tmp_path: Path, monkeypatch):
+def test_upload_410_preserves_result_and_fence(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
     pending.record(tmp_path, _entry(trial_dir))
@@ -2117,7 +2117,8 @@ def test_upload_410_means_expired_clears_ledger(tmp_path: Path, monkeypatch):
     client = FakeClient(expired)
     outcome = runloop._upload_trial(client, _entry(trial_dir))
     assert outcome == "expired"
-    assert pending.load(tmp_path) == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "lease_expired"
+    assert trial_dir.is_dir()
 
 
 def test_transient_failure_with_409_in_message_is_not_misread_as_conflict(tmp_path: Path, monkeypatch):
@@ -2166,7 +2167,7 @@ def test_secret_in_added_patch_line_is_redacted_and_uploaded(tmp_path: Path, mon
     assert client.stopped == []
 
 
-def test_secret_in_patch_context_is_not_uploaded_and_assignment_is_stopped(
+def test_secret_in_patch_context_is_protected_without_reopening_assignment(
         tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = tmp_path / "t"
@@ -2176,9 +2177,10 @@ def test_secret_in_patch_context_is_not_uploaded_and_assignment_is_stopped(
         "--- a/app.py\n+++ b/app.py\n@@ -1 +1,2 @@\n"
         " ghp_ABCDEFghijkl0123456789ABCDEFghijkl0123\n+safe = True\n")
     client = FakeClient(lambda _aid: {"submission_id": "s1"})
-    assert runloop._upload_trial(client, _entry(trial_dir)) == "not-uploaded"
+    assert runloop._upload_trial(client, _entry(trial_dir)) == "upload-blocked"
     assert client.calls == []
-    assert client.stopped == ["a1"]
+    assert client.stopped == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "secret_guard"
 
 
 def test_missing_patch_stays_retryable_without_stopping_assignment(tmp_path: Path, monkeypatch):
@@ -2581,18 +2583,18 @@ def _raise(status):
     return behavior
 
 
-def test_definitively_rejected_upload_drops_ledger_entry(tmp_path: Path, monkeypatch, capsys):
+def test_definitively_rejected_upload_retains_blocked_ledger_entry(tmp_path: Path, monkeypatch, capsys):
     """A 413 cannot succeed with the same bytes on a later retry."""
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     trial_dir = _make_trial_dir(tmp_path)
     client = FakeClient(_raise(413))
     outcome = runloop._upload_trial(client, _entry(trial_dir))
     assert outcome == "rejected"
-    assert pending.load(tmp_path) == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "payload_too_large"
     out = capsys.readouterr().out
-    assert "retrying can't fix it" in out
+    assert "kept for review" in out
     assert str(trial_dir) in out  # the local files are named, not vaporized
-    assert client.stopped == ["a1"]
+    assert client.stopped == []
 
 
 def test_zcode_pompeii_preflight_names_binary_file_before_submit(
@@ -2688,7 +2690,8 @@ def test_definitive_rejection_preserves_checkpoint_job(tmp_path: Path, monkeypat
     assert job.is_dir()
     assert (job / local_jobs.KEEP_MARKER).is_file()
     assert (job / local_jobs.TERMINAL_MARKER).is_file()
-    assert client.stopped == [aid]
+    assert client.stopped == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "payload_too_large"
 
 
 def test_bundle_422_retries_completed_result_without_optional_bundle(
@@ -2749,8 +2752,8 @@ def test_bundle_rejection_then_required_fallback_is_terminal(
     client = IncompatibleServerClient(lambda _aid: None)
     assert runloop._upload_trial(client, _entry(trial_dir)) == "rejected"
     assert client.calls == [True, False]
-    assert pending.load(tmp_path) == []
-    assert client.stopped == ["a1"]
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "trajectory_bundle_required"
+    assert client.stopped == []
     assert trial_dir.is_dir()
 
 
@@ -2776,8 +2779,8 @@ def test_persisted_bundle_omission_required_by_server_is_terminal(
     client = StrictServerClient(lambda _aid: None)
     assert runloop._upload_trial(client, entry) == "rejected"
     assert client.calls == [False]
-    assert pending.load(tmp_path) == []
-    assert client.stopped == ["a1"]
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "trajectory_bundle_required"
+    assert client.stopped == []
 
 
 def test_oversized_projected_request_omits_bundle_before_submit(
@@ -2869,8 +2872,8 @@ def test_bundle_edge_413_is_terminal_if_reduced_request_is_still_too_large(
     client = AlwaysOversizedClient(lambda _aid: None)
     assert runloop._upload_trial(client, _entry(trial_dir)) == "rejected"
     assert client.calls == [True, False]
-    assert pending.load(tmp_path) == []
-    assert client.stopped == ["a1"]
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "payload_too_large"
+    assert client.stopped == []
 
 
 def test_bundle_422_persists_downgrade_when_fallback_transport_fails(

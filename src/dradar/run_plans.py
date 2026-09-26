@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
+from . import local_jobs, pending
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .local_config import HOME, _load_config
 from .agent_actions import ActionValidationError, validate_actions, validate_envelope
@@ -1874,6 +1875,13 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
             response = operation()
     except RunPlanClientError as exc:
         _output(args, _local_error_response(exc))
+        return 1
+    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError):
+        _output(args, _local_error_response(RunPlanClientError(
+            "local_result_evidence_unreadable",
+            "本机成果记录无法核验，已停止新增运行并保留原文件。请先检查成果记录；仍可使用 stop 停止任务。",
+            agent_action="notify_only",
+        )))
         return 1
     except ApiError as exc:
         response = _api_error_response(exc)

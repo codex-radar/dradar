@@ -2015,8 +2015,8 @@ def _upload_trial_checked(
     The entry is recorded in the local pending-upload ledger BEFORE artifact
     staging or the submit attempt, so a process death during either handoff
     can't orphan a completed, quota-burning trial.
-    Every exit settles it: success, 409 "already submitted", and 410 remove
-    the entry; fencing conflicts and transient errors keep it for retry. The
+    Confirmed success removes the entry; terminal rejections retain a blocked
+    result, and fencing conflicts/transient errors keep it for recovery. The
     raw source patch is preserved separately until server acknowledgement;
     scrubbing writes to a fresh tempdir, so a later retry re-scrubs from the
     same byte-verified original."""
@@ -2081,9 +2081,10 @@ def _upload_trial_checked(
             # External developer/test job roots are never cleanup authority.
             pass
 
-    def settle_terminal_local_failure() -> None:
-        """Keep evidence but make a non-retryable local result runnable again."""
-        _mark_stopped_quietly(client, entry)
+    def protect_terminal_result(reason: str) -> None:
+        """A rejected paid result remains a durable model-start fence."""
+        entry["upload_blocked"] = reason
+        pending.record(HOME, entry)
         if job_dir and job_dir.is_dir():
             try:
                 local_jobs.mark_kept(HOME, job_dir, terminal=True)
@@ -2137,14 +2138,11 @@ def _upload_trial_checked(
             print(f"patch contains secret-shaped content ({', '.join(labels)}) "
                   "outside safely redactable added lines, or redaction made the diff "
                   f"invalid; not uploaded. Raw evidence kept at {patch}")
-            if upload_only_recovery:
-                return "not-uploaded"
-            pending.remove(
-                HOME, assignment_id,
-                scope_fingerprint=entry.get("scope_fingerprint"),
-            )
-            settle_terminal_local_failure()
-            return "not-uploaded"
+            entry["secret_guard_labels"] = labels
+            protect_terminal_result("secret_guard")
+            print("  upload blocked; inspect the preserved result. Automatic "
+                  "retry and model rerun are disabled; credential scanning remains required.")
+            return "upload-blocked"
         print(f"patch contained secret-shaped content "
               f"({', '.join(redacted_labels)}); uploading a structurally validated "
               "redacted copy. The raw patch stays local.")
@@ -2658,16 +2656,9 @@ def _upload_trial_checked(
                         print(
                             f"  {task_id}: lease or claim batch expired before "
                             "upload recovery could be registered — the cell "
-                            + ("reopened; local evidence kept" if upload_only_recovery
-                               else "reopened, dropping it")
+                            + "reopened; local evidence kept for review"
                         )
-                        if upload_only_recovery:
-                            return "expired"
-                        pending.remove(
-                            HOME, assignment_id,
-                            scope_fingerprint=entry.get("scope_fingerprint"),
-                        )
-                        cleanup_settled()
+                        protect_terminal_result("lease_expired")
                         return "expired"
                     if exc.status_code == 409 and exc.code == "upload_owner_superseded":
                         entry["upload_blocked"] = "owner_superseded"
@@ -2735,21 +2726,14 @@ def _upload_trial_checked(
                     # An older/strict server can reject the optional bundle
                     # and then reject the one-shot reduced request for not
                     # carrying that same bundle.  No retry can change this
-                    # completed payload.  Reopen the cell instead of pinning
-                    # a paid worker slot behind an immortal pending entry.
+                    # completed payload. Keep a non-retryable result fence;
+                    # a protocol mismatch does not authorize another solve.
                     print(
                         f"  {task_id}: the server requires a complete trajectory "
                         "bundle after rejecting/omitting this run's bundle; "
-                        + ("keeping the recovery evidence for review" if upload_only_recovery
-                           else "releasing the incompatible assignment instead of retrying forever")
+                        "keeping the recovery evidence for review"
                     )
-                    if upload_only_recovery:
-                        return "rejected"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
-                    )
-                    settle_terminal_local_failure()
+                    protect_terminal_result("trajectory_bundle_required")
                     print(
                         "  rejected artifacts kept for diagnosis: "
                         f"{patch.parent.parent}"
@@ -2770,16 +2754,8 @@ def _upload_trial_checked(
                         cleanup_settled()
                     return "submitted"
                 if exc.status_code == 410:
-                    print(f"  {task_id}: lease expired, unsalvageable — the cell reopened "
-                          + ("for someone else; local evidence kept" if upload_only_recovery
-                             else "for someone else, dropping it"))
-                    if upload_only_recovery:
-                        return "expired"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
-                    )
-                    cleanup_settled()
+                    print(f"  {task_id}: lease expired; local evidence kept for review")
+                    protect_terminal_result("lease_expired")
                     return "expired"
                 if (exc.status_code in (404, 413)
                         or _is_patch_secret_rejection(exc)):
@@ -2788,17 +2764,13 @@ def _upload_trial_checked(
                     # large, or a patch the server still considers unsafe.
                     # Never bypass the secret gate by retrying a reduced
                     # optional-artifact set.
-                    print(f"  {task_id}: the server rejected this upload for good ({exc}) — "
-                          + ("local recovery evidence kept " if upload_only_recovery
-                             else "retrying can't fix it, dropping it from the retry queue ")
-                          + f"(local artifact path: {patch.parent.parent})")
-                    if upload_only_recovery:
-                        return "rejected"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    print(f"  {task_id}: the server rejected this upload ({exc}); "
+                          f"local evidence kept for review at {patch.parent.parent}")
+                    protect_terminal_result(
+                        "server_secret_guard" if _is_patch_secret_rejection(exc)
+                        else "assignment_unknown" if exc.status_code == 404
+                        else "payload_too_large"
                     )
-                    settle_terminal_local_failure()
                     print(f"  rejected artifacts kept for diagnosis: {patch.parent.parent}")
                     return "rejected"
                 # Unknown 422 responses are not proof that the completed work
@@ -3082,8 +3054,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
         else:
             print(
-                "refusing to start: this assignment already has a durable completed "
-                "result pending upload; run `dradar retry-upload`"
+                "refusing to start: this assignment has saved results or a safety "
+                "record. Run `dradar retry-upload` to inspect upload recovery; "
+                "preserve the jobs directory and do not delete the record to rerun."
             )
         return "pending-upload"
     work_dir = HOME / "work"
@@ -4064,9 +4037,11 @@ def _pending_assignment_ids_for_client(
     the paid model work or a potentially live quarantined writer. Unlike
     upload replay, this helper intentionally does not require a live session ID.
     """
-    return {
+    # Scope authorizes upload, not another paid solve. A token change or a
+    # legacy row with no scope cannot erase an existing assignment fence.
+    return local_jobs.protected_assignment_ids(HOME) | {
         str(entry["assignment_id"])
-        for entry in _pending_fence_entries_for_client(client, batch_id=batch_id)
+        for entry in pending.load(HOME)
         if entry.get("assignment_id")
     }
 
@@ -4204,6 +4179,15 @@ def cmd_retry_upload(args) -> int:
     client = _client(cfg)
     entries = pending.load(HOME)
     if not entries:
+        protected = local_jobs.protected_assignment_ids(HOME)
+        if protected:
+            print(
+                f"Found {len(protected)} preserved local assignment(s) with no "
+                "pending upload record. Their submission and ownership must be "
+                "reconciled before recovery. Keep the jobs directory; no model "
+                "was rerun and no artifact was uploaded."
+            )
+            return 1
         print("nothing pending — every trial you've run has been uploaded")
         return 0
     salvage_assignment_id = getattr(args, "request_salvage", None)
