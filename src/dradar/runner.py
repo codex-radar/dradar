@@ -36,6 +36,7 @@ from .artifact_boundary import (
     preflight_artifact_platform, artifact_preflight_message,
 )
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
+from .windows_job import WindowsJobError, WindowsJobProcess
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .credential_files import is_claude_metered_auth
 from .codebuddy_provider import (
@@ -4204,6 +4205,14 @@ _PIER_RUNTIME_PROJECT_RE = re.compile(
 def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
     """TERM then KILL the isolated Pier process group; return if KILL was used."""
 
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            proc.terminate_tree()
+            proc.wait(timeout=2)
+        except (WindowsJobError, subprocess.TimeoutExpired) as exc:
+            raise RunnerError("Windows Pier Job could not be terminated") from exc
+        return True
+
     pid = getattr(proc, "pid", None)
     group_signalled = False
     if os.name != "nt" and isinstance(pid, int) and pid > 0:
@@ -4264,6 +4273,12 @@ def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
 
 def _confirm_pier_process_tree_stopped(proc: subprocess.Popen) -> None:
     """A sent signal is not proof that the isolated provider tree exited."""
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            proc.confirm_tree_stopped()
+        except WindowsJobError as exc:
+            raise RunnerError("Windows Pier Job process-tree exit could not be confirmed") from exc
+        return
     pid = getattr(proc, "pid", None)
     if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
         raise RunnerError("provider process-tree exit cannot be confirmed on this runtime")
@@ -4283,6 +4298,16 @@ def _confirm_pier_process_tree_stopped(proc: subprocess.Popen) -> None:
 
 def _cleanup_exited_pier_process_group(proc: subprocess.Popen) -> bool:
     """Reap helpers left in Pier's isolated POSIX group after its leader exits."""
+
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            if proc.active_processes() == 0:
+                return False
+            proc.terminate_tree()
+            proc.confirm_tree_stopped()
+        except WindowsJobError as exc:
+            raise RunnerError("Windows Pier Job residue could not be audited") from exc
+        return True
 
     pid = getattr(proc, "pid", None)
     if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
@@ -4755,6 +4780,49 @@ def _pier_process_options() -> dict:
     return {"start_new_session": False}
 
 
+def _spawn_pier_process(cmd, log, work_dir: Path, env: dict, *, job_dir: Path):
+    """Bind Windows Pier to an exact Job before its first instruction runs."""
+    if os.name == "nt":
+        try:
+            return WindowsJobProcess.spawn(cmd, stdout=log, cwd=work_dir, env=env)
+        except WindowsJobError as exc:
+            if exc.cleanup_unknown:
+                raise RunnerCleanupUnconfirmedError(
+                    "Windows Pier startup cleanup is unconfirmed; result is unknown",
+                    job_dir=job_dir,
+                ) from exc
+            raise RunnerError("Windows Pier could not be safely started") from exc
+    return subprocess.Popen(
+        cmd, stdout=log, stderr=subprocess.STDOUT,
+        cwd=work_dir, env=env, **_pier_process_options(),
+    )
+
+
+def _finalize_pier_process(proc, job_dir: Path) -> None:
+    """Audit the Windows Job and its exact Docker containers on every exit."""
+    if not isinstance(proc, WindowsJobProcess):
+        return
+    cleanup_errors = []
+    try:
+        proc.close_checked()
+    except WindowsJobError as cleanup_error:
+        cleanup_errors.append(str(cleanup_error))
+    try:
+        container_cleanup = _cleanup_terminated_pier_containers(job_dir)
+        if container_cleanup.running:
+            cleanup_errors.append(
+                "exact-job container was still running after Pier exit"
+            )
+    except RunnerError as cleanup_error:
+        cleanup_errors.append(str(cleanup_error))
+    if cleanup_errors:
+        raise RunnerCleanupUnconfirmedError(
+            "Windows Pier process-tree cleanup is unconfirmed; result is unknown "
+            "(" + "; ".join(cleanup_errors) + ")",
+            job_dir=job_dir,
+        )
+
+
 @cancellation.scoped
 def run_trial(
     assignment: dict,
@@ -5187,13 +5255,8 @@ def run_trial(
             # tell "working" from "wedged" without docker-exec'ing into the
             # container (volunteer report, 2026-07-13). Once a minute, print
             # elapsed time plus the newest pier log line.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                cwd=work_dir,
-                env=env,
-                **_pier_process_options(),
+            proc = _spawn_pier_process(
+                cmd, log, work_dir, env, job_dir=jobs_dir / job_name,
             )
             registration_window = None
             try:
@@ -5333,6 +5396,8 @@ def run_trial(
                     terminal_error = exc
                 else:
                     raise
+            finally:
+                _finalize_pier_process(proc, jobs_dir / job_name)
         cancellation.protect_finalization()
         if start_gate is not None:
             start_gate.unlink(missing_ok=True)
