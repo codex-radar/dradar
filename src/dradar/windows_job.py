@@ -222,6 +222,9 @@ class WindowsJobProcess:
         devnull = None
         bound = False
         resumed = False
+        resume_attempted = False
+        failure = None
+        created = None
         try:
             job = api.create()
             api.configure(job)
@@ -234,10 +237,30 @@ class WindowsJobProcess:
             api.assign(job, process)
             bound = True
             api.confirm_member(job, process)
+            resume_attempted = True
             api.resume(thread)
             resumed = True
-            return cls(args, pid, process, job, api)
+            created = cls(args, pid, process, job, api)
         except BaseException as exc:
+            failure = exc
+        release_errors = []
+        for handle in handles:
+            try:
+                _winapi.CloseHandle(handle)
+            except BaseException as exc:
+                release_errors.append(exc)
+        if devnull is not None:
+            try:
+                devnull.close()
+            except BaseException as exc:
+                release_errors.append(exc)
+        if thread is not None:
+            try:
+                _winapi.CloseHandle(thread)
+            except BaseException as exc:
+                release_errors.append(exc)
+
+        if failure is not None or release_errors:
             cleanup_unknown = False
             if process is not None:
                 try:
@@ -251,31 +274,26 @@ class WindowsJobProcess:
                         cleanup_unknown = True
                 except BaseException:
                     cleanup_unknown = True
-            if isinstance(exc, WindowsJobError):
-                message = str(exc)
-            else:
-                message = f"Windows Pier process creation failed ({type(exc).__name__})"
-            raise WindowsJobError(
-                message, cleanup_unknown=cleanup_unknown or resumed,
-            ) from exc
-        finally:
-            for handle in handles:
-                _winapi.CloseHandle(handle)
-            if devnull is not None:
-                devnull.close()
-            if thread is not None:
-                _winapi.CloseHandle(thread)
-            if not resumed:
-                if process is not None:
+                try:
                     _winapi.CloseHandle(process)
-                if job is not None:
-                    try:
-                        api.close(job)  # KILL_ON_JOB_CLOSE is the final fallback
-                    except WindowsJobError as exc:
-                        raise WindowsJobError(
-                            "Windows Pier Job handle close failed after startup rejection",
-                            cleanup_unknown=True,
-                        ) from exc
+                except BaseException:
+                    cleanup_unknown = True
+            if job is not None:
+                try:
+                    api.close(job)  # KILL_ON_JOB_CLOSE is the final fallback
+                except BaseException:
+                    cleanup_unknown = True
+            if isinstance(failure, WindowsJobError):
+                message = str(failure)
+            elif failure is not None:
+                message = f"Windows Pier process creation failed ({type(failure).__name__})"
+            else:
+                message = "Windows Pier startup handle release failed"
+            raise WindowsJobError(
+                message, cleanup_unknown=cleanup_unknown or resume_attempted,
+            ) from (failure or release_errors[0])
+        assert created is not None
+        return created
 
     def poll(self) -> int | None:
         import _winapi
@@ -345,7 +363,10 @@ class WindowsJobProcess:
             except BaseException:
                 pass
         finally:
-            _winapi.CloseHandle(self._process)
+            try:
+                _winapi.CloseHandle(self._process)
+            except BaseException as exc:
+                problem = problem or f"Windows Pier process handle close failed ({type(exc).__name__})"
             try:
                 self._api.close(self._job)
             except BaseException as exc:

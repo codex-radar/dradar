@@ -91,9 +91,70 @@ def test_spawn_gate_failure_never_resumes_model(tmp_path, monkeypatch, gate):
                 [sys.executable, "-c", code, str(marker)],
                 stdout=log, cwd=tmp_path, env=dict(os.environ),
             )
-    assert not caught.value.cleanup_unknown
+    assert caught.value.cleanup_unknown == (gate == "resume")
     assert not marker.exists()
     monkeypatch.setattr(windows_job._JobApi, gate, original)
+
+
+def test_release_failure_after_resume_kills_exact_job_and_quarantines(tmp_path, monkeypatch):
+    marker = tmp_path / "started"
+    code = "from pathlib import Path;import sys,time;Path(sys.argv[1]).write_text('started');time.sleep(45)"
+    import _winapi
+    original = _winapi.CloseHandle
+    failed = False
+    terminations = []
+    original_terminate = windows_job._JobApi.terminate
+
+    def record_terminate(self, job):
+        terminations.append(job)
+        return original_terminate(self, job)
+
+    def fail_once(handle):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("injected startup handle close")
+        return original(handle)
+
+    monkeypatch.setattr(_winapi, "CloseHandle", fail_once)
+    monkeypatch.setattr(windows_job._JobApi, "terminate", record_terminate)
+    with (tmp_path / "pier.log").open("w+b") as log:
+        with pytest.raises(windows_job.WindowsJobError) as caught:
+            windows_job.WindowsJobProcess.spawn(
+                [sys.executable, "-c", code, str(marker)],
+                stdout=log, cwd=tmp_path, env=dict(os.environ),
+            )
+    assert failed
+    assert terminations
+    assert caught.value.cleanup_unknown
+
+
+def test_process_handle_close_error_still_closes_job(tmp_path, monkeypatch):
+    import _winapi
+    with (tmp_path / "pier.log").open("w+b") as log:
+        proc = windows_job.WindowsJobProcess.spawn(
+            [sys.executable, "-c", "pass"], stdout=log, cwd=tmp_path,
+            env=dict(os.environ),
+        )
+        assert proc.wait(timeout=5) == 0
+        original = _winapi.CloseHandle
+        failed = False
+
+        def fail_process_once(handle):
+            nonlocal failed
+            if handle == proc._process and not failed:
+                failed = True
+                raise OSError("injected process handle close")
+            return original(handle)
+
+        monkeypatch.setattr(_winapi, "CloseHandle", fail_process_once)
+        with pytest.raises(windows_job.WindowsJobError) as caught:
+            proc.close_checked()
+        assert failed
+        assert caught.value.cleanup_unknown
+        assert proc._closed
+        # The injected error did not close this handle; the test owns it now.
+        original(proc._process)
 
 
 def test_unknown_query_and_termination_are_not_reported_as_clean(tmp_path, monkeypatch):

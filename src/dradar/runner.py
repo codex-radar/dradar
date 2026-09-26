@@ -4787,8 +4787,14 @@ def _spawn_pier_process(cmd, log, work_dir: Path, env: dict, *, job_dir: Path):
             return WindowsJobProcess.spawn(cmd, stdout=log, cwd=work_dir, env=env)
         except WindowsJobError as exc:
             if exc.cleanup_unknown:
+                cleanup_errors = []
+                try:
+                    _cleanup_terminated_pier_containers(job_dir)
+                except RunnerError as cleanup_error:
+                    cleanup_errors.append(str(cleanup_error))
                 raise RunnerCleanupUnconfirmedError(
-                    "Windows Pier startup cleanup is unconfirmed; result is unknown",
+                    "Windows Pier startup cleanup is unconfirmed; result is unknown"
+                    + (" (" + "; ".join(cleanup_errors) + ")" if cleanup_errors else ""),
                     job_dir=job_dir,
                 ) from exc
             raise RunnerError("Windows Pier could not be safely started") from exc
@@ -5401,7 +5407,9 @@ def run_trial(
         cancellation.protect_finalization()
         if start_gate is not None:
             start_gate.unlink(missing_ok=True)
-        if terminal_error is None and effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT):
+        if (terminal_error is None
+                and not isinstance(proc, WindowsJobProcess)
+                and effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT)):
             process_residue, cleanup = _cleanup_exited_pier_runtime(
                 proc, jobs_dir / job_name,
             )
