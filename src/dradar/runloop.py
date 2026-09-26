@@ -7690,6 +7690,23 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                 raise refill_plan.RefillError(
                     "private run-plan credentials lack an authorized points tier"
                 )
+        if refill_mode == "rolling_submitted":
+            try:
+                capabilities = client.refill_campaign_capabilities()
+            except (ApiError, AttributeError) as exc:
+                raise refill_plan.RefillError(
+                    "server has not confirmed rolling refill support; no campaign was configured"
+                ) from exc
+            if (
+                not isinstance(capabilities, dict)
+                or type(capabilities.get("schema_version")) is not int
+                or capabilities["schema_version"] != 1
+                or not isinstance(capabilities.get("refill_modes"), list)
+                or "rolling_submitted" not in capabilities["refill_modes"]
+            ):
+                raise refill_plan.RefillError(
+                    "server has not confirmed rolling refill support; no campaign was configured"
+                )
         try:
             campaign_options = dict(
                 batch_id=args.batch_id,

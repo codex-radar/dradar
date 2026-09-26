@@ -720,6 +720,9 @@ class ApiClient:
             json=payload,
         )
 
+    def refill_campaign_capabilities(self) -> dict[str, Any]:
+        return self._get("/api/v1/refill-campaign/capabilities")
+
     def refill_campaign_status(self, batch_id: str) -> dict[str, Any]:
         path = self._query_path(
             "/api/v1/refill-campaign/status", "batch_id", batch_id,

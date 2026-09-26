@@ -718,6 +718,44 @@ def test_fleet_setup_registers_server_authoritative_seed_campaign(
     assert refill.load(tmp_path)["server_campaign_id"] == batch_id
 
 
+def test_rolling_setup_requires_read_only_server_capability_before_configure(
+    tmp_path: Path, monkeypatch,
+):
+    batch_id = "550e8400e29b41d4a716446655440000"
+    selected = {
+        **_assignment("seed"), "batch_id": batch_id,
+        "agent": "kimi-code", "model": "k3", "effort": "high",
+    }
+
+    class OldServer(RefillClient):
+        def __init__(self):
+            super().__init__([selected])
+            self.configure_calls = 0
+
+        def refill_campaign_capabilities(self):
+            raise ApiError("not found", status_code=404)
+
+        def configure_refill_campaign(self, **_values):
+            self.configure_calls += 1
+            return {"campaign": {"batch_id": batch_id}}
+
+    client = OldServer()
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setenv(refill.PLAN_SCOPE_ENV, batch_id)
+    args = argparse.Namespace(
+        refill=True, refill_to=1, refill_mode="rolling-submitted",
+        auto=None, yes=True, max_tasks=3, quota_tier="plus",
+        max_estimated_quota_pct=None, refill_harness="kimi-code",
+        refill_model="k3", refill_effort="high", refill_order="cost",
+        parallel=False, fleet_pool=True, batch_id=batch_id,
+    )
+
+    with pytest.raises(refill.RefillError, match="no campaign was configured"):
+        runloop._setup_refill(args, client, [selected], True)
+    assert client.configure_calls == 0
+    assert refill.load(tmp_path) is None
+
+
 def test_normal_setup_replaces_stale_plan_before_refilling(
     tmp_path: Path, monkeypatch, capsys,
 ):
