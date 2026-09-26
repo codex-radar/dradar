@@ -149,6 +149,54 @@ def test_exact_batch_resume_rejects_changed_saved_task_identity(
     assert target.read_bytes() == before
 
 
+def test_exact_batch_resume_rejects_external_inherited_boundary(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    old = {**_assignment("old"), "batch_id": "old-batch"}
+    held = {**_assignment("held"), "batch_id": "target-batch",
+            "benchmark_id": "deep-swe"}
+    legacy = assignment_boundary.prepare(tmp_path, "deep-swe", [old])
+    original = legacy.read_bytes()
+    monkeypatch.setenv(runloop._ASSIGNMENT_BOUNDARY_ENV, str(legacy))
+
+    with pytest.raises(SystemExit, match="cannot inherit an external boundary"):
+        runloop._prepare_assignment_boundary(
+            _exact_resume_args("target-batch", "held"),
+            SimpleNamespace(batch_id="target-batch"), "deep-swe", [held],
+        )
+    assert legacy.read_bytes() == original
+    assert not assignment_boundary.state_path(
+        tmp_path, "deep-swe", "target-batch",
+    ).exists()
+
+
+def test_exact_batch_worker_inherits_only_admitted_boundary(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    held = {**_assignment("held"), "batch_id": "target-batch",
+            "benchmark_id": "deep-swe"}
+    target = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [held], batch_id="target-batch",
+    )
+    monkeypatch.setenv(runloop._ASSIGNMENT_BOUNDARY_ENV, str(target))
+    args = _exact_resume_args("target-batch", "held")
+    args.worker_child = True
+    assert runloop._prepare_assignment_boundary(
+        args, SimpleNamespace(batch_id="target-batch"), "deep-swe", [held],
+    ) == target
+
+    args._assignment_boundary_path = None
+    other = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [{**held, "batch_id": "other-batch"}],
+        batch_id="other-batch",
+    )
+    monkeypatch.setenv(runloop._ASSIGNMENT_BOUNDARY_ENV, str(other))
+    with pytest.raises(SystemExit, match="does not admit the requested batch"):
+        runloop._prepare_assignment_boundary(
+            args, SimpleNamespace(batch_id="target-batch"), "deep-swe", [held],
+        )
+
+
 def test_submitted_assignment_may_leave_active_leases(tmp_path):
     active = [_assignment("a1"), _assignment("a2")]
     path = assignment_boundary.prepare(tmp_path, "bench", active)

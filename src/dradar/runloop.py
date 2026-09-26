@@ -4351,6 +4351,33 @@ def _prepare_assignment_boundary(
             "an assignment boundary path. No model was started."
         )
     if inherited is not None and not precise:
+        if exact_batch_resume:
+            batch_id = args.batch_id
+            env_path = os.environ.get(_ASSIGNMENT_BOUNDARY_ENV)
+            if env_path and not getattr(args, "worker_child", False):
+                sys.exit(
+                    "assignment boundary check failed: an explicit batch resume "
+                    "cannot inherit an external boundary path. No model was started."
+                )
+            try:
+                scoped_path = assignment_boundary.state_path(
+                    HOME, benchmark_id, batch_id,
+                )
+                legacy_path = assignment_boundary.state_path(HOME, benchmark_id)
+                batches = assignment_boundary.admitted_batches(inherited)
+                if (
+                    inherited not in (scoped_path, legacy_path)
+                    or batch_id not in batches
+                    or (inherited == scoped_path and batches != [batch_id])
+                ):
+                    raise assignment_boundary.BoundaryError(
+                        "inherited boundary does not admit the requested batch"
+                    )
+            except (assignment_boundary.BoundaryError, OSError, ValueError) as exc:
+                sys.exit(
+                    f"assignment boundary check failed: {exc}. "
+                    "No model was started."
+                )
         args._assignment_boundary_path = str(inherited)
         return inherited
     if getattr(args, "refill", False):
