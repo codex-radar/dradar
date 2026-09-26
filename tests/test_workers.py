@@ -541,6 +541,21 @@ def test_worker_command_never_forwards_auto_selection():
     assert "go" not in command
 
 
+def test_rolling_fleet_worker_child_uses_saved_plan_mode(monkeypatch):
+    command = runloop._worker_command(_args(
+        refill=True, refill_to=2, max_tasks=3, fleet_pool=True,
+        refill_mode="rolling-submitted",
+    ))
+    assert "--refill-mode" not in command
+    assert "--fleet-pool" not in command
+    assert "--refill" in command
+    monkeypatch.setattr(runloop, "_load_config", lambda: pytest.fail(
+        "worker-child passed mode validation",
+    ))
+    with pytest.raises(pytest.fail.Exception, match="passed mode validation"):
+        cli.main(command[command.index("resume"):])
+
+
 def test_worker_command_forwards_archive_opt_in_only():
     assert "--archive-session" not in runloop._worker_command(_args())
     assert "--archive-session" in runloop._worker_command(

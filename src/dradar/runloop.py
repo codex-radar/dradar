@@ -5467,8 +5467,6 @@ def _worker_command(args) -> list[str]:
             command.extend(("--refill-effort", args.refill_effort))
         if getattr(args, "refill_order", None):
             command.extend(("--refill-order", args.refill_order))
-        if getattr(args, "refill_mode", None):
-            command.extend(("--refill-mode", args.refill_mode))
     return command
 
 
