@@ -23,6 +23,8 @@ from . import __version__
 from .api_client import ApiError
 
 
+from .registration_diagnostics import DIAGNOSTIC_KEYS, START_CODES, safe_value, valid_diagnostic
+
 SCHEMA = "dradar-failure-report-v1"
 _SAFE_ATOM = re.compile(r"^[A-Za-z0-9._:@+-]{1,128}$")
 _DETAIL_KEYS = {
@@ -76,7 +78,7 @@ def valid_image_detail(detail, *, source, phase, failure_code):
             return False
     return True
 
-_DETAIL_KEYS |= IMAGE_DETAIL_KEYS
+_DETAIL_KEYS |= IMAGE_DETAIL_KEYS | DIAGNOSTIC_KEYS
 REGISTRATION_RESULTS = frozenset({
     "process_exited", "registration_timeout", "heartbeat_disabled",
     "heartbeat_http_error", "heartbeat_transport_error", "heartbeat_rejected",
@@ -115,6 +117,8 @@ def _safe(value: Any, *, maximum: int = 128) -> str | None:
 def _safe_detail(key: str, value: Any) -> str | None:
     if key not in _DETAIL_KEYS:
         return None
+    if key in DIAGNOSTIC_KEYS:
+        return safe_value(key, value)
     if key in IMAGE_DETAIL_KEYS:
         if key.endswith("_result"):
             return value if isinstance(value, str) and value in IMAGE_RESULTS else None
@@ -158,6 +162,8 @@ def build_report(
             clean_detail[key] = clean
     if not valid_image_detail(clean_detail, source=source, phase=phase, failure_code=failure_code):
         clean_detail = {k: v for k, v in clean_detail.items() if k not in IMAGE_DETAIL_KEYS}
+    if not valid_diagnostic(clean_detail, source=source, phase=phase, failure_code=failure_code):
+        clean_detail = {k: v for k, v in clean_detail.items() if k not in DIAGNOSTIC_KEYS}
     payload: dict[str, Any] = {
         "schema": SCHEMA,
         "report_key": uuid.uuid4().hex,
@@ -186,6 +192,50 @@ def _wire_payload(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
+def _valid_report_details(payload):
+    detail = payload.get("detail", {})
+    if not all(_safe_detail(k, v) == v for k, v in detail.items()):
+        return False
+    if not valid_diagnostic(detail, source=payload.get("source"), phase=payload.get("phase"),
+                            failure_code=payload.get("failure_code")):
+        return False
+    if not valid_image_detail(detail, source=payload.get("source"), phase=payload.get("phase"),
+                              failure_code=payload.get("failure_code")):
+        return False
+    legacy_keys = _REGISTRATION_DETAIL_KEYS - DIAGNOSTIC_KEYS
+    if detail.keys() & legacy_keys:
+        result = detail.get("registration_result")
+        if payload.get("source") != "cli" or result not in REGISTRATION_RESULTS:
+            return False
+        if payload.get("failure_code") in START_CODES:
+            return _valid_start_ack_payload(payload)
+        if not str(payload.get("failure_code", "")).startswith("worker-registration-"):
+            return False
+        process = result in {"process_exited", "registration_timeout"}
+        if process and detail.keys() & {"worker_event_id", "ack_http_status"}:
+            return False
+        if result == "registration_timeout" and detail.keys() & {"process_exit_code", "process_signal"}:
+            return False
+        if {"process_exit_code", "process_signal"} <= detail.keys():
+            return False
+        if not process and detail.keys() & {"process_exit_code", "process_signal", "registration_elapsed_sec"}:
+            return False
+    return True
+
+
+def _valid_start_ack_payload(payload):
+    detail = payload.get("detail", {})
+    if (payload.get("source") != "cli" or payload.get("phase") != "runner"
+            or payload.get("failure_code") not in START_CODES
+            or detail.get("registration_result") not in REGISTRATION_RESULTS - {
+                "process_exited", "registration_timeout"}
+            or any(k in detail for k in ("process_exit_code", "process_signal", "registration_elapsed_sec"))):
+        return False
+    return (all(_safe_detail(k, v) == v for k, v in detail.items())
+            and valid_diagnostic(detail, source=payload["source"], phase=payload["phase"],
+                                 failure_code=payload["failure_code"]))
+
+
 def _send_compatible(client, record: dict[str, Any]) -> None:
     payload = _wire_payload(record)
     try:
@@ -194,14 +244,20 @@ def _send_compatible(client, record: dict[str, Any]) -> None:
         detail = payload.get("detail")
         if not isinstance(detail, dict):
             raise
-        if detail.keys() & IMAGE_DETAIL_KEYS:
-            # Only the exact structured rejection supports this downgrade.
-            if (exc.status_code != 422 or not isinstance(exc.payload, dict)
-                    or exc.payload.get("detail") != "failure report detail has unsupported fields"):
-                raise
+        if exc.status_code != 422 or not isinstance(exc.payload, dict):
+            raise
+        if not _valid_report_details(payload):
+            raise
+        rejection = exc.payload.get("detail")
+        unsupported = rejection == "failure report detail has unsupported fields"
+        if detail.keys() & IMAGE_DETAIL_KEYS and unsupported:
             remove = IMAGE_DETAIL_KEYS
-        elif exc.status_code == 422 and detail.keys() & _REGISTRATION_DETAIL_KEYS:
-            # Preserve existing registration compatibility, separately.
+        elif detail.keys() & _REGISTRATION_DETAIL_KEYS and (
+            unsupported or (
+                rejection == "invalid registration failure detail"
+                and _valid_start_ack_payload(payload)
+            )
+        ):
             remove = _REGISTRATION_DETAIL_KEYS
         else:
             raise
