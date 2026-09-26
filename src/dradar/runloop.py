@@ -5154,6 +5154,14 @@ def cmd_go(args) -> int:
         try:
             _preflight_scoped_provider(args)
             result = _run_worker_pool(args)
+        except (KeyboardInterrupt, EOFError) as exc:
+            # The pool parent returns from cmd_go before the single-worker
+            # cleanup block. A user interrupt belongs to this parent, not to
+            # any child it signals while shutting down.
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, "interrupted by user")
+            _publish_fleet_startup_failure(args, exc)
+            raise
         except BaseException as exc:
             _publish_fleet_startup_failure(args, exc)
             raise

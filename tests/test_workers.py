@@ -628,6 +628,28 @@ def test_refill_error_owner_preserves_transport_but_stops_auth(
     assert refill.load(tmp_path)["status"] == expected_status
 
 
+def test_pool_parent_user_interrupt_stops_shared_refill_plan(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=2, max_tasks=10,
+        quota_tier="plus", max_estimated_quota_pct=None, active=[],
+        refill_harness="codex", refill_model="gpt-6-sol",
+        refill_effort="low",
+    )
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
+    monkeypatch.setattr(runloop, "_run_worker_pool", lambda _args: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(runloop, "_publish_fleet_startup_failure", lambda *_a: None)
+    with pytest.raises(KeyboardInterrupt):
+        runloop.cmd_go(_args(
+            workers=2, auto=None, refill=True, refill_to=2,
+            max_tasks=10,
+        ))
+    assert refill.load(tmp_path)["status"] == "stopped"
+    assert refill.load(tmp_path)["stop_reason"] == "interrupted by user"
+
+
 @pytest.mark.parametrize(
     ("worker_child", "expected_rc", "expected_checkout", "expected_retry"),
     ((True, 0, True, False), (False, 0, True, True)),
