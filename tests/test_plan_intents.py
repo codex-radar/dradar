@@ -416,3 +416,75 @@ def test_fingerprint_matches_full_server_shape_and_secret_digest():
     stop_full = dict(stop, schema_version=1, operation="stop", decision_token_sha256=None)
     assert intents.fingerprint("stop", stop) == hashlib.sha256(intents.canonical(stop_full)).hexdigest()
     assert intents.fingerprint("start", dict(request, decision_token="other")) != expected
+
+
+@pytest.mark.parametrize('operation,payload', [('start', START), ('stop', STOP)])
+def test_newly_observed_revision_can_read_same_action_without_resending(tmp_path, operation, payload):
+    client = Client()
+    first = execute(tmp_path, client, operation=operation, request=payload)
+    path, = files(tmp_path)
+    original = json.loads(path.read_text())['request']
+    result = execute(tmp_path, client, operation=operation, request=payload,
+                     expected_revision=8, explicit_retry=True)
+    assert result['intent_id'] == first['intent_id']
+    assert result['current_effective'] is True
+    assert len(client.posts) == len(client.gets) == 1
+    assert json.loads(path.read_text())['request'] == original
+    assert original['expected_intent_revision'] == 7
+
+
+def test_pending_lost_ack_can_settle_after_identity_observes_applied_revision(tmp_path):
+    client = Client()
+    path = uncertain(tmp_path, client)
+    original = json.loads(path.read_text())['request']
+    client.remote[path.stem] = receipt('start', original)
+    result = execute(tmp_path, client, expected_revision=8, explicit_retry=True)
+    assert result['intent_id'] == path.stem and result['current_effective'] is True
+    assert len(client.posts) == 1
+    assert json.loads(path.read_text())['request'] == original
+
+
+def test_new_revision_does_not_turn_historical_receipt_into_launch_authority(tmp_path):
+    client = Client()
+    first = execute(tmp_path, client)
+    body = client.remote[first['intent_id']]
+    body.update(current_effective=False, device_intent_revision=9)
+    body['envelope'] = dict(status='stopped', agent_action='stop_runner')
+    result = execute(tmp_path, client, expected_revision=9, explicit_retry=True)
+    assert not result['current_effective'] and result['envelope']['agent_action'] == 'stop_runner'
+    assert len(client.posts) == 1
+
+
+def test_changed_generation_is_still_a_different_request_on_receipt_read(tmp_path):
+    client = Client()
+    execute(tmp_path, client)
+    with pytest.raises(ApiError) as info:
+        execute(tmp_path, client, expected_revision=8, request=dict(START, expected_generation=4))
+    assert info.value.code == 'intent_request_conflict' and len(client.posts) == 1
+
+
+def test_known_capacity_rejection_allows_distinct_bounded_action_not_implicit_rewrite(tmp_path):
+    client = Client()
+    def reject(operation, request):
+        body = receipt(operation, request, status='rejected', error_code='concurrency_capacity_reserved')
+        client.remote[request['intent_id']] = deepcopy(body)
+        return body
+    client.send_hook = reject
+    with pytest.raises(ApiError) as info:
+        execute(tmp_path, client)
+    assert info.value.payload['intent_status'] == 'rejected'
+    assert info.value.payload['device_intent_revision'] == 7
+    old_path, = files(tmp_path)
+    original = old_path.read_bytes()
+    with pytest.raises(ApiError):
+        execute(tmp_path, client, request=dict(START, concurrency=1), explicit_retry=True)
+    assert len(client.posts) == 1
+    client.send_hook = None
+    accepted = execute(tmp_path, client, request=dict(START, concurrency=1),
+                       local_intent='local-launch-1:capacity-adjustment-1')
+    assert accepted['intent_id'] != old_path.stem and len(client.posts) == 2
+    assert client.posts[1][1]['expected_intent_revision'] == 7
+    # The original rejection remains a separate immutable request/outcome.
+    saved = json.loads(old_path.read_text())
+    assert saved['request'] == json.loads(original)['request']
+    assert saved['receipt']['intent_status'] == 'rejected'

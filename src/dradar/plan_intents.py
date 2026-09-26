@@ -217,11 +217,10 @@ def _is_exact_unknown(exc, record):
             and value.get("retry_same_intent_only") is True)
 
 
-def _request_matches(record, payload, expected_revision, local_intent):
+def _request_matches(record, payload, local_intent):
     original = {k: v for k, v in record["request"].items()
                 if k not in {"intent_id", "expected_intent_revision"}}
-    return (original == payload and record["request"]["expected_intent_revision"] == expected_revision
-            and record["local_intent"] == local_intent)
+    return original == payload and record["local_intent"] == local_intent
 
 
 def execute(home: Path, client, *, operation: str, request: dict,
@@ -234,6 +233,8 @@ def execute(home: Path, client, *, operation: str, request: dict,
     known terminal outcome permits a later, distinct local action. ``new_intent``
     replaces only a confirmed decision_required request (e.g. a new challenge or
     its explicit answer); it never supersedes unknown, applied or rejected work.
+    A caller observing a newer revision may read its original exact receipt;
+    only a mutation retry requires the original expected revision as well.
     """
     if type(explicit_retry) is not bool or type(new_intent) is not bool:
         raise _error("intent_request_invalid", "Intent options must be booleans.")
@@ -287,12 +288,13 @@ def execute(home: Path, client, *, operation: str, request: dict,
                 _save(path, record)
                 break
             record, path = existing[0]
-        matches = _request_matches(record, payload, expected_revision, local_intent)
+        matches = _request_matches(record, payload, local_intent)
         try:
             response = read_receipt(path, client)
         except ApiError as exc:
             if (_is_exact_unknown(exc, record) and record["status"] == "pending"
-                    and explicit_retry and matches and not new_intent):
+                    and explicit_retry and matches and not new_intent
+                    and record["request"]["expected_intent_revision"] == expected_revision):
                 break
             raise
         if new_intent:
