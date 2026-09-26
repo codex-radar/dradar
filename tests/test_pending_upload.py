@@ -1223,7 +1223,7 @@ def test_salvaged_owner_superseded_during_intent_clears_stale_rebind(
     assert retry.calls == ["a1"]
 
 
-def test_expired_intent_registration_is_terminal_for_only_that_run(
+def test_expired_intent_registration_preserves_result_and_admission_fence(
     tmp_path: Path, monkeypatch,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -1243,7 +1243,9 @@ def test_expired_intent_registration_is_terminal_for_only_that_run(
 
     assert outcome == "expired"
     assert client.calls == []
-    assert pending.load(tmp_path) == []
+    assert pending.load(tmp_path)[0]["upload_blocked"] == "lease_expired"
+    assert pending.assignment_ids(tmp_path) == {"a1"}
+    assert trial_dir.exists()
 
 
 def test_old_server_without_intent_endpoint_keeps_completed_work_for_upgrade(

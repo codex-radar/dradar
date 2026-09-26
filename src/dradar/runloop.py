@@ -1973,7 +1973,7 @@ def _bundled_completed_outcome(
 
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
                   upload_only_recovery=False):
-    pending.require_uploadable(entry)
+    pending.require_uploadable(entry, request_salvage=request_salvage)
     pending.record(HOME, entry)
     try:
         if (pending.is_cleanup_quarantine(entry)
@@ -4438,7 +4438,7 @@ def _confirm_exact_batch_submissions(
     for aid in sorted(missing):
         row = client.assignment_recovery_status(aid)
         saved = expected[aid]
-        if not isinstance(row, dict) or any(
+        if not isinstance(row, dict) or row.get("has_submission") is not True or any(
             row.get(key) != value for key, value in (
                 ("assignment_id", aid),
                 ("batch_id", batch_id),
@@ -4447,7 +4447,6 @@ def _confirm_exact_batch_submissions(
                 ("model", saved["model"]),
                 ("effort", saved["effort"]),
                 ("status", "submitted"),
-                ("has_submission", True),
             )
         ):
             raise assignment_boundary.BoundaryError(

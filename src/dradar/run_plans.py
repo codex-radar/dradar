@@ -1333,13 +1333,12 @@ def _recover_plan_uploads(
             receipt = client.assignment_recovery_status(aid)
         except (ApiError, AttributeError):
             continue
-        if isinstance(receipt, dict) and all(
+        if isinstance(receipt, dict) and receipt.get("has_submission") is True and all(
             receipt.get(key) == expected for key, expected in (
                 ("assignment_id", aid), ("batch_id", batch_id),
                 ("benchmark_id", plan["benchmark_id"]),
                 ("task_id", saved.get("task_id")), ("model", saved.get("model")),
                 ("effort", saved.get("effort")), ("status", "submitted"),
-                ("has_submission", True),
             )
         ):
             unmatched.remove(aid)

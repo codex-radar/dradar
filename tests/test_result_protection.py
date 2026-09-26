@@ -139,3 +139,23 @@ def test_incomplete_upload_metadata_is_preserved_without_replay(tmp_path, monkey
         runloop._upload_trial(client, entry)
     assert path.read_bytes() == before
     assert runloop._pool_ready_work_count(client, desired_workers=1) == 0
+
+
+@pytest.mark.parametrize("key,value", [
+    ("owner_epoch", "bad"), ("owner_epoch", {}), ("owner_epoch", True),
+    ("owner_epoch", -1), ("resume_generation", None),
+    ("resume_generation", "0"), ("job_dir", []), ("runner_session_id", 42),
+    ("keep", "false"), ("upload_intent", []),
+])
+def test_malformed_replay_field_does_not_rewrite_ledger(tmp_path, monkeypatch, key, value):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client, _ = client_and_assignment()
+    entry = {"assignment_id": AID, "nonce": "nonce", "task_id": "t1",
+             "trial_dir": str(tmp_path / "work" / "jobs" / ("a" + AID) / "t1"),
+             key: value}
+    pending.record(tmp_path, entry)
+    path = tmp_path / "pending_uploads.json"
+    original = path.read_bytes()
+    with pytest.raises(pending.PendingLedgerError):
+        runloop._upload_trial(client, entry)
+    assert path.read_bytes() == original

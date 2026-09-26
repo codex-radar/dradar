@@ -163,14 +163,33 @@ def is_cleanup_quarantine(entry: object) -> bool:
     )
 
 
-def require_uploadable(entry: dict) -> None:
+def require_uploadable(entry: dict, *, request_salvage: bool = False) -> None:
     """Check replay shape without rewriting an incomplete safety record."""
-    if is_cleanup_quarantine(entry) or entry.get("upload_blocked"):
-        return
-    if any(not isinstance(entry.get(key), str) or not entry[key]
-           for key in ("assignment_id", "nonce", "task_id", "trial_dir")) or (
-        entry.get("meta") is not None and not isinstance(entry["meta"], dict)
+    if is_cleanup_quarantine(entry) or (
+        entry.get("upload_blocked")
+        and not (request_salvage and entry.get("upload_blocked") == "owner_superseded")
     ):
+        return
+    required_strings = ("assignment_id", "nonce", "task_id", "trial_dir")
+    optional_strings = ("job_dir", "runner_session_id", "batch_id",
+                        "scope_fingerprint", "outcome")
+    epochs = ("owner_epoch", "resume_generation")
+    invalid = (
+        any(not isinstance(entry.get(key), str) or not entry[key]
+            for key in required_strings)
+        or any(key in entry and entry[key] is not None
+               and (not isinstance(entry[key], str) or not entry[key])
+               for key in optional_strings)
+        or any(key in entry and (type(entry[key]) is not int
+                                or not 0 <= entry[key] < 2 ** 63)
+               for key in epochs)
+        or (entry.get("meta") is not None and not isinstance(entry["meta"], dict))
+        or any(key in entry and type(entry[key]) is not bool
+               for key in ("keep", "omit_trajectory_bundle"))
+        or any(entry.get(key) is not None and not isinstance(entry[key], dict)
+               for key in ("upload_intent", "salvaged_from", "salvage_rebind"))
+    )
+    if invalid:
         raise PendingLedgerError(
             "Saved result metadata is incomplete; the pending record was kept "
             "unchanged. Verify the original assignment and artifact metadata "
