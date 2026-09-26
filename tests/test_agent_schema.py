@@ -12,8 +12,10 @@ def test_run_schema_defines_every_state_changing_argument():
     arguments = {item["name"]: item for item in payload["arguments"]}
     assert arguments["--plan"]["idempotency"]
     assert arguments["--concurrency"]["state_change"]
+    assert "不配置或延长补题" in arguments["--held-only"]["state_change"]
     assert arguments["--upload-only"]["conflicts_with"] == [
         "--concurrency", "--decision-token", "--recheck-generation",
+        "--held-only",
     ]
     assert "不登记设备" in arguments["--upload-only"]["state_change"]
     assert arguments["--decision-token"]["decision_required"] is True

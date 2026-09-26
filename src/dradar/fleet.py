@@ -1341,8 +1341,12 @@ def _handle_request(
                         "saved run-plan identity is incomplete; use the "
                         "original website run instructions to recover safely"
                     )
-                credentials_file = saved_credentials
-                plan_id = saved_plan_id
+                raise FleetError(
+                    "this batch belongs to a website run plan; Fleet retry "
+                    "cannot reauthorize a stopped device. Use the original "
+                    "`dradar run --plan ... --held-only` instructions to "
+                    "resume only its still-held assignments"
+                )
             if credentials_file is not None and not isinstance(credentials_file, str):
                 raise FleetError("invalid private run-plan credentials file")
             if plan_id is not None and (

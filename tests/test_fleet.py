@@ -1427,7 +1427,7 @@ def test_plan_token_stays_in_private_file_not_fleet_argv_env_or_state(
     assert json.loads(persisted)["batches"][BATCH_A]["credentials_file"] == str(credentials)
 
 
-def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
+def test_raw_retry_of_saved_run_plan_requires_official_device_readmission(
     tmp_path, monkeypatch,
 ):
     fleet._prepare_dirs(tmp_path)
@@ -1444,24 +1444,10 @@ def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
         "plan_id": "plan-retry",
         "credentials_file": str(credentials),
     }
-    captured = {}
-
-    class Process:
-        pid = 654
-
-        def poll(self):
-            return None
-
-    def resolve(_workers, _batch_id, _state, credentials_file, *_runtime):
-        captured["resolved_credentials"] = credentials_file
-        return 2, [], {"account_limit": 4}
-
-    def spawn(*_args, **kwargs):
-        captured["spawned_credentials"] = kwargs["credentials_file"]
-        return Process(), io.StringIO()
-
-    monkeypatch.setattr(fleet, "_resolve_workers_in_runtime", resolve)
-    monkeypatch.setattr(fleet, "_spawn_pool", spawn)
+    monkeypatch.setattr(
+        fleet, "_spawn_pool",
+        lambda *_args, **_kwargs: pytest.fail("raw retry must not start a pool"),
+    )
     fleet._handle_request(
         tmp_path,
         state,
@@ -1484,11 +1470,8 @@ def test_retry_reuses_saved_run_plan_identity_when_raw_cli_omits_it(
         (fleet._root(tmp_path) / fleet.RESPONSE_DIR
          / "retry-plan-request.json").read_text()
     )
-    assert response["ok"] is True
-    assert captured == {
-        "resolved_credentials": str(credentials),
-        "spawned_credentials": str(credentials),
-    }
+    assert response["ok"] is False
+    assert "run --plan ... --held-only" in response["error"]
     assert state["batches"][BATCH_A]["plan_id"] == "plan-retry"
     assert state["batches"][BATCH_A]["credentials_file"] == str(credentials)
 
