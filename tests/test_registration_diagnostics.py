@@ -150,3 +150,13 @@ def test_failed_downgrade_queues_original(tmp_path):
     assert len(calls)==2
     saved=json.loads(next((tmp_path/'failure-reports').glob('*.json')).read_text())
     assert saved['detail']==record['detail'] and saved['report_key']==record['report_key']
+
+
+@pytest.mark.parametrize('body', [b'not-json', b'[]', b'null', b'"text"'])
+def test_registration_response_parser_rejects_bad_body(body):
+    from dradar.api_client import ApiClient
+    window = RegistrationWindow(registration.time.monotonic()+30, lambda: True)
+    window.api = SimpleNamespace(_check=lambda r: r.json())
+    with pytest.raises(ApiError) as caught:
+        window._check_response(httpx.Response(200, content=body))
+    assert caught.value.registration_reason == 'invalid_response'

@@ -127,6 +127,17 @@ class RegistrationWindow:
                                  cookies=self.api._client.cookies,
                                  timeout=3.0, trust_env=True)
 
+    def _check_response(self, response):
+        # Only this registration facade classifies malformed JSON/shape;
+        # ApiClient's general response and retry contract is unchanged.
+        try:
+            result = self.api._check(response)
+        except ValueError as exc:
+            raise self._error("invalid registration response", "invalid_response") from exc
+        if not isinstance(result, dict):
+            raise self._error("invalid registration response", "invalid_response")
+        return result
+
     async def _request(self, client, path, *, attempts=1, cleanup=False,
                        method="POST", raw_response=False, **kwargs):
         for attempt in range(attempts):
@@ -150,10 +161,7 @@ class RegistrationWindow:
                 # No generic 429 backoff and no retries of an HTTP refusal.
                 if raw_response:
                     return response
-                result = self.api._check(response)
-                if not isinstance(result, dict):
-                    raise self._error("invalid registration response", "invalid_response")
-                return result
+                return self._check_response(response)
             except _TRANSIENT as exc:
                 if attempt + 1 == attempts:
                     raise self._error("registration transport failed", "transport_error") from exc
@@ -182,6 +190,7 @@ class RegistrationWindow:
             # periodic/global client mutation or duplicated auth policy.
             scoped = copy.copy(api)
             scoped._request = self._start_request
+            scoped._check = self._check_response
             response = scoped.mark_started(assignment["assignment_id"],
                 session_id=telemetry.session_id, worker_event_id=event["event_id"])
             if response.get("ok") is not True:
