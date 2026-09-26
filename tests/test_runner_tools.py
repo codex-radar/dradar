@@ -1032,6 +1032,16 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
 
     monkeypatch.setattr(runner_mod, "build_pier_command", fake_build)
     monkeypatch.setattr(runner_mod.subprocess, "Popen", FakePopen)
+    if os.name == "nt":
+        # This fixture models artifact handoff, not native Job creation. Route
+        # its synthetic process through the same patched Popen on Windows;
+        # the real Job lifecycle has separate native contract tests.
+        monkeypatch.setattr(
+            runner_mod, "_spawn_pier_process",
+            lambda cmd, log, work_dir, env, *, job_dir: runner_mod.subprocess.Popen(
+                cmd, stdout=log, stderr=subprocess.STDOUT, cwd=work_dir, env=env,
+            ),
+        )
     monkeypatch.setattr(
         runner_mod,
         "_cleanup_exited_pier_process_group",

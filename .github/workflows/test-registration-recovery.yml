@@ -6,6 +6,7 @@ on:
       - 'src/dradar/worker_events.py'
       - 'src/dradar/pier_codex_managed.py'
       - 'src/dradar/runner.py'
+      - 'src/dradar/windows_job.py'
       - 'src/dradar/runloop.py'
       - 'src/dradar/flight_recorder.py'
       - 'src/dradar/telemetry.py'
@@ -13,6 +14,8 @@ on:
       - 'tests/test_packaged_adapter_resources.py'
       - 'tests/test_registration*.py'
       - 'tests/test_pier_codex_managed.py'
+      - 'tests/test_windows_job_product.py'
+      - 'tests/test_windows_job_adapter.py'
       - '.github/workflows/test-registration-recovery.yml'
   workflow_dispatch:
 permissions:
@@ -41,6 +44,7 @@ jobs:
         run: >-
           python -m pytest -q tests/test_registration_recovery.py
           tests/test_registration_native.py tests/test_worker_start_native.py
+          tests/test_windows_job_product.py tests/test_windows_job_adapter.py
           --junitxml=evidence/registration.xml
       - name: Actual managed adapter dependency
         if: matrix.python == '3.13'
