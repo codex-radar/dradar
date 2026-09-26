@@ -2573,13 +2573,7 @@ def _upload_trial_checked(
                                     f"  {task_id}: lease expired before its saved "
                                     "upload could be reconciled; local evidence kept"
                                 )
-                                if upload_only_recovery:
-                                    return "expired"
-                                pending.remove(
-                                    HOME, assignment_id,
-                                    scope_fingerprint=entry.get("scope_fingerprint"),
-                                )
-                                cleanup_settled()
+                                protect_terminal_result("lease_expired")
                                 return "expired"
                             print(
                                 f"  {task_id}: legacy upload reconciliation failed "

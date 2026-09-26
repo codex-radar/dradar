@@ -1317,6 +1317,46 @@ def _recover_plan_uploads(
 
     batch_id = state["batch_id"]
     before = _exact_pending_uploads(batch_id, client)
+    plan = state["plan"]
+    selected = {row["assignment_id"]: row for row in plan["assignments"]}
+    eligible_ids = {row["assignment_id"] for row in before}
+    unmatched = (local_jobs.protected_assignment_ids(HOME) & set(selected)) | {
+        row["assignment_id"] for row in pending.load(HOME)
+        if row.get("batch_id") == batch_id or row["assignment_id"] in selected
+    }
+    unmatched -= eligible_ids
+    for aid in list(unmatched):
+        saved = selected.get(aid)
+        if saved is None:
+            continue
+        try:
+            receipt = client.assignment_recovery_status(aid)
+        except (ApiError, AttributeError):
+            continue
+        if isinstance(receipt, dict) and all(
+            receipt.get(key) == expected for key, expected in (
+                ("assignment_id", aid), ("batch_id", batch_id),
+                ("benchmark_id", plan["benchmark_id"]),
+                ("task_id", saved.get("task_id")), ("model", saved.get("model")),
+                ("effort", saved.get("effort")), ("status", "submitted"),
+                ("has_submission", True),
+            )
+        ):
+            unmatched.remove(aid)
+    if unmatched:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "review_required", "interaction": "warn",
+            "decision_required": False, "agent_action": "notify_only",
+            "error_code": "local_result_reconciliation_required",
+            "retryable": False, "choices": [],
+            "user_message": (
+                "发现本机成果或安全记录，但缺少与本运行匹配的补交记录，且服务端尚未确认对应提交。"
+                "请保留 jobs 和 pending_uploads.json，核对原账号、题目和提交回执；不会自动重跑或上传这些文件。"
+            ),
+            "agent": {"requires_user_action": True,
+                      "unreconciled_result_count": len(unmatched)},
+        }
     if not before:
         return {
             "schema_version": SCHEMA_VERSION,
