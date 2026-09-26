@@ -200,7 +200,6 @@ _SCOPED_REFILL_TRANSIENT_LIMIT = 5
 _POOL_SESSION_CAPACITY_RETRY_SECONDS = 10 * 60
 _POOL_IMAGE_CACHE_MAINTENANCE_SECONDS = 15 * 60
 _POOL_TARGET_CACHE: dict[Path, int] = {}
-_ZCODE_NETWORK_RETRY_DELAY_SECONDS = 2.0
 _PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
     "worker-entrypoint-failed",
     "startup-dependency-missing",
@@ -216,16 +215,6 @@ _PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
     "runner_session_capacity_reached",
     "provider_capability_required",
 })
-
-
-def _retryable_zcode_network_failure(assignment: dict, exc: RunnerError) -> bool:
-    diagnostic = exc.failure_diagnostic
-    return bool(
-        assignment.get("agent") == ZCODE_AGENT
-        and isinstance(diagnostic, dict)
-        and diagnostic.get("schema") == "dradar-runner-failure-v1"
-        and diagnostic.get("zcode_provider_failure_reason") == "network_error"
-    )
 
 
 # Cloudflare's common request-body ceiling is 100 MB. Keep enough headroom
@@ -3081,15 +3070,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         nonlocal ownership_state
         run_intent.require_worker(HOME)
         if ownership_state == "bound":
-            # BuildFlake retry is still the same logical assignment attempt.
-            # The first successful bind already fenced this process/session;
-            # never replay the ownership write merely because Pier rebuilds.
+            # Repeated callbacks for this one attempt must not replay the
+            # ownership write after the first successful binding.
             return
-        if ownership_state == "stop_unconfirmed":
-            raise RunnerError(
-                "server ownership stop was not confirmed; refusing to rebind "
-                "the assignment for another model attempt"
-            )
         bind_stage = "worker-registration"
         window = (_worker_event or {}).get("_registration_window")
         if window is not None:
@@ -3217,232 +3200,205 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
 
     art = None
-    for attempt in (1, 2):
+    try:
+        run_intent.require_worker(HOME)
+    except run_intent.IntentStopped:
+        print("a local stop cancelled this attempt before launch")
+        return "local-stop-requested"
+    assignment["_runner_attempt"]=1
+    execution_observer = None
+    journal = getattr(telemetry, "capacity_journal", None)
+    if journal is not None:
+        execution_observer = journal.begin_attempt(assignment)
+    try:
         try:
-            run_intent.require_worker(HOME)
-        except run_intent.IntentStopped:
-            print("a local stop cancelled this attempt before launch")
-            return "local-stop-requested"
-        assignment["_runner_attempt"]=attempt
-        execution_observer = None
-        journal = getattr(telemetry, "capacity_journal", None)
-        if journal is not None:
-            execution_observer = journal.begin_attempt(assignment)
-        try:
-            try:
-                if telemetry is not None:
-                    # Pier's adapter sidecar binds this exact runner session
-                    # into its structured worker_registered event.
-                    assignment["_runner_session_id"] = telemetry.session_id
-                art = run_trial(
-                    assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
-                    on_started=bind_owner,
-                    on_worker_registered=bind_owner,
-                    **({"execution_observer": execution_observer} if execution_observer is not None else {}),
-                    **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
-                    environment_build_timeout_multiplier=(
-                        getattr(
-                            args, "_environment_build_timeout_multiplier", None,
-                        )
-                    ),
-                    build_cache_mode=(
-                        getattr(args, "_build_cache_mode", None)
-                        or getattr(args, "build_cache_mode", None)
-                        or image_cache.DEFAULT_BUILD_CACHE_MODE
-                    ),
-                )
-                cancellation.protect_finalization()
-            finally:
-                if art is None:
-                    remove_builder()
-            break
-        except run_intent.IntentStopped:
-            print("a local stop cancelled this attempt before launch")
-            return "local-stop-requested"
-        except BuildFlakeError as exc:
-            if telemetry:
-                _record_flight_event(telemetry,
-                    "build_failed", component="build",
-                    assignment_id=assignment["assignment_id"],
-                    reason_code="build_flake",
-                    attributes={"attempt": attempt},
-                )
-            # The image build died before the agent ran — a free failure
-            # (zero quota), and mirror flakes usually pass on the second
-            # attempt, so retry once automatically instead of bouncing the
-            # volunteer. A second flake in a row is likely a real network
-            # problem worth a human look.
-            safe_exc = image_cache.redact_docker_diagnostic(exc, limit=1200)
-            if attempt == 1:
-                print(f"environment build failed ({safe_exc})\n"
-                      "no quota was consumed — retrying once automatically...")
-                continue
-            print(f"trial failed: {safe_exc}\n"
-                  "the build failed twice — check your network/proxy and retry "
-                  "the original run instructions after the assignment cooldown "
-                  "(still free: the agent never started), or "
-                  "use `dradar release` if you do not want to keep the cell")
-            _signal_pool_abort(
-                _ENVIRONMENT_BUILD_ABORT_PREFIX
-                + " repeated isolated builder failure",
-                interrupt_siblings=False,
-            )
-            _mark_stopped_quietly(
-                client, assignment, failure_kind="environment_build_failed",
-                failure_diagnostic=exc.failure_diagnostic,
-            )
-            _report_failure_quietly(
-                client, assignment, phase="environment-build",
-                failure_kind="environment_build_failed",
-                failure_code="environment_build_failed",
-            )
-            return "environment-build-failed"
-        except RunnerCleanupUnconfirmedError as exc:
-            if exc.job_dir is not None:
-                # This is a quarantine fence, not a claimed valid result. Do
-                # not inspect/copy files while a writer may still be alive.
-                pending.record(HOME, {
-                    "record_kind": "cleanup_quarantine",
-                    "assignment_id": assignment["assignment_id"],
-                    "nonce": assignment["nonce"],
-                    "task_id": assignment["task_id"],
-                    "batch_id": assignment.get("batch_id"),
-                    "scope_fingerprint": pending.scope_fingerprint(
-                        server=getattr(client, "server", None),
-                        account_scope=getattr(client, "account_scope", None),
-                        benchmark_id=getattr(client, "benchmark_id", None),
-                        batch_id=assignment.get("batch_id"),
-                    ),
-                    "job_dir": str(exc.job_dir),
-                    "upload_blocked": "cleanup_unconfirmed",
-                    "ledger_version": 3,
-                    "owner_epoch": assignment.get("owner_epoch", 0),
-                    "resume_generation": assignment.get("resume_generation", 0),
-                    "runner_session_id": (telemetry.session_id if telemetry is not None
-                                          else assignment.get("_runner_session_id")),
-                })
-            cause = exc.__cause__
-            if isinstance(cause, RunnerError) and cause.report_code:
-                _report_failure_quietly(
-                    client, assignment, phase="runner",
-                    failure_kind="runner_failed", failure_code=cause.report_code,
-                    **({"report_detail": cause.report_detail} if cause.report_detail else {}),
-                )
-            _report_failure_quietly(
-                client, assignment, phase="cleanup",
-                failure_kind="cleanup-unconfirmed",
-                failure_code="cleanup-unconfirmed",
-            )
-            print(
-                f"trial stopped: {exc}\n"
-                "the lease remains running because local cleanup was not proven; "
-                "this worker slot is quarantined to prevent a duplicate agent"
-            )
-            return "cleanup-unconfirmed"
-        except RunnerTaskRetryableError as exc:
-            stopped = _mark_stopped_quietly(
-                client,
-                assignment,
-                failure_kind="runner_failed",
-                failure_diagnostic=exc.failure_diagnostic,
-            )
-            retry_state = (
-                "the assignment was returned for a later retry"
-                if stopped
-                else "the server will recover the isolated lease after it goes stale"
-            )
-            print(
-                f"trial isolated: {exc}\n{retry_state}; other worker slots may continue"
-            )
-            _report_failure_quietly(
-                client, assignment, phase="runner",
-                failure_kind="runner_failed",
-                failure_code=(exc.failure_diagnostic or {}).get("failure_code")
-                or "assignment-isolated",
-            )
-            return "assignment-isolated" if stopped else "cleanup-unconfirmed"
-        except RunnerError as exc:
-            if isinstance(exc, CodexInstallError) and telemetry is not None:
-                _record_flight_event(
-                    telemetry, "build_failed", component="build",
-                    assignment_id=assignment["assignment_id"],
-                    reason_code="codex_install_failed",
-                    attributes={"attempt": attempt},
-                )
-            failure_kind = classify_exception_message(str(exc))
-            terminal_outcome = _terminal_failure_outcome(failure_kind)
-            if attempt == 1 and _retryable_zcode_network_failure(assignment, exc):
-                stopped = _mark_stopped_quietly(
-                    client,
-                    assignment,
-                    defer_seconds=0,
-                    failure_kind="provider-transport",
-                    failure_diagnostic=exc.failure_diagnostic,
-                )
-                ownership_state = (
-                    "needs_bind" if stopped else "stop_unconfirmed"
-                )
-                if stopped:
-                    print(
-                        "ZCode reported a structured transient network failure; "
-                        "retrying this assignment once in the same runner..."
+            if telemetry is not None:
+                # Pier's adapter sidecar binds this exact runner session
+                # into its structured worker_registered event.
+                assignment["_runner_session_id"] = telemetry.session_id
+            art = run_trial(
+                assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
+                on_started=bind_owner,
+                on_worker_registered=bind_owner,
+                **({"execution_observer": execution_observer} if execution_observer is not None else {}),
+                **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
+                environment_build_timeout_multiplier=(
+                    getattr(
+                        args, "_environment_build_timeout_multiplier", None,
                     )
-                    time.sleep(_ZCODE_NETWORK_RETRY_DELAY_SECONDS)
-                    continue
-                print(
-                    "ZCode reported a transient network failure, but checkout "
-                    "cleanup was not confirmed; refusing an unsafe retry"
-                )
-                _report_failure_quietly(
-                    client, assignment, phase="runner",
-                    failure_kind="provider-transport",
-                    failure_code="retry-cleanup-unconfirmed",
-                )
-                return "cleanup-unconfirmed"
-            if isinstance(exc, CodexInstallError):
-                print(f"trial failed: {exc}\n"
-                      "retry the original run instructions with this held "
-                      "assignment after its retry cooldown")
-            else:
-                print(f"trial failed: {exc}\n"
-                      "use `dradar resume` to retry later, or `dradar release` "
-                      "to give the cell back")
-            if failure_kind == "auth":
-                from .auth_failure import auth_failure_sentence
-                print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
-            stopped = _mark_stopped_quietly(
-                client,
-                assignment,
-                failure_kind=failure_kind or "runner_failed",
-                failure_diagnostic=(
-                    exc.failure_diagnostic
-                    if (failure_kind or "runner_failed") == "runner_failed"
-                    else None
+                ),
+                build_cache_mode=(
+                    getattr(args, "_build_cache_mode", None)
+                    or getattr(args, "build_cache_mode", None)
+                    or image_cache.DEFAULT_BUILD_CACHE_MODE
                 ),
             )
-            diagnostic = exc.failure_diagnostic or {}
+            cancellation.protect_finalization()
+        finally:
+            if art is None:
+                remove_builder()
+    except run_intent.IntentStopped:
+        print("a local stop cancelled this attempt before launch")
+        return "local-stop-requested"
+    except BuildFlakeError as exc:
+        if telemetry:
+            _record_flight_event(telemetry,
+                "build_failed", component="build",
+                assignment_id=assignment["assignment_id"],
+                reason_code="build_flake",
+                attributes={"attempt": 1, "phase": "building"},
+            )
+        safe_exc = image_cache.redact_docker_diagnostic(exc, limit=1200)
+        print(f"environment build failed: {safe_exc}\n"
+              "the attempt stopped; inspect diagnostics and the environment "
+              "before explicitly resuming this held assignment")
+        _signal_pool_abort(
+            _ENVIRONMENT_BUILD_ABORT_PREFIX
+            + " isolated builder failure",
+            interrupt_siblings=False,
+        )
+        stopped = _mark_stopped_quietly(
+            client, assignment, failure_kind="environment_build_failed",
+            failure_diagnostic=exc.failure_diagnostic,
+        )
+        _report_failure_quietly(
+            client, assignment, phase="environment-build",
+            failure_kind="environment_build_failed",
+            failure_code="environment_build_failed",
+        )
+        return "environment-build-failed" if stopped else "cleanup-unconfirmed"
+    except RunnerCleanupUnconfirmedError as exc:
+        if exc.job_dir is not None:
+            # This is a quarantine fence, not a claimed valid result. Do
+            # not inspect/copy files while a writer may still be alive.
+            pending.record(HOME, {
+                "record_kind": "cleanup_quarantine",
+                "assignment_id": assignment["assignment_id"],
+                "nonce": assignment["nonce"],
+                "task_id": assignment["task_id"],
+                "batch_id": assignment.get("batch_id"),
+                "scope_fingerprint": pending.scope_fingerprint(
+                    server=getattr(client, "server", None),
+                    account_scope=getattr(client, "account_scope", None),
+                    benchmark_id=getattr(client, "benchmark_id", None),
+                    batch_id=assignment.get("batch_id"),
+                ),
+                "job_dir": str(exc.job_dir),
+                "upload_blocked": "cleanup_unconfirmed",
+                "ledger_version": 3,
+                "owner_epoch": assignment.get("owner_epoch", 0),
+                "resume_generation": assignment.get("resume_generation", 0),
+                "runner_session_id": (telemetry.session_id if telemetry is not None
+                                      else assignment.get("_runner_session_id")),
+            })
+        cause = exc.__cause__
+        if isinstance(cause, RunnerError) and cause.report_code:
             _report_failure_quietly(
                 client, assignment, phase="runner",
-                failure_kind=failure_kind or "runner_failed",
-                failure_code=(
-                    exc.report_code or diagnostic.get("failure_code")
-                    or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
-                    or failure_kind or "runner_failed"
-                ),
-                **({"report_detail": exc.report_detail} if exc.report_detail else {}),
+                failure_kind="runner_failed", failure_code=cause.report_code,
+                **({"report_detail": cause.report_detail} if cause.report_detail else {}),
             )
-            if not stopped:
-                print("server stop was not confirmed; quarantining this worker slot")
-                return "cleanup-unconfirmed"
-            return terminal_outcome or "failed"
-        except (KeyboardInterrupt, EOFError):
-            stopped = _mark_stopped_quietly(
-                client, assignment, defer_seconds=0,
-                failure_kind="user_interrupted",
+        _report_failure_quietly(
+            client, assignment, phase="cleanup",
+            failure_kind="cleanup-unconfirmed",
+            failure_code="cleanup-unconfirmed",
+        )
+        print(
+            f"trial stopped: {exc}\n"
+            "the lease remains running because local cleanup was not proven; "
+            "this worker slot is quarantined to prevent a duplicate agent"
+        )
+        return "cleanup-unconfirmed"
+    except RunnerTaskRetryableError as exc:
+        stopped = _mark_stopped_quietly(
+            client,
+            assignment,
+            failure_kind="runner_failed",
+            failure_diagnostic=exc.failure_diagnostic,
+        )
+        retry_state = (
+            "the assignment was returned for a later retry"
+            if stopped
+            else "the server will recover the isolated lease after it goes stale"
+        )
+        print(
+            f"trial isolated: {exc}\n{retry_state}; other worker slots may continue"
+        )
+        _report_failure_quietly(
+            client, assignment, phase="runner",
+            failure_kind="runner_failed",
+            failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+            or "assignment-isolated",
+        )
+        return "assignment-isolated" if stopped else "cleanup-unconfirmed"
+    except RunnerError as exc:
+        if isinstance(exc, CodexInstallError) and telemetry is not None:
+            _record_flight_event(
+                telemetry, "build_failed", component="build",
+                assignment_id=assignment["assignment_id"],
+                reason_code="codex_install_failed",
+                attributes={"attempt": 1, "phase": "building"},
             )
-            if not stopped:
-                return "cleanup-unconfirmed"
-            raise
+        failure_kind = classify_exception_message(str(exc))
+        terminal_outcome = _terminal_failure_outcome(failure_kind)
+        diagnostic = exc.failure_diagnostic or {}
+        # Record the observed transport class; recovery policy belongs to the
+        # caller. A network error can occur after paid model work has begun.
+        transport_failure = (
+            assignment.get("agent") == ZCODE_AGENT
+            and diagnostic.get("schema") == "dradar-runner-failure-v1"
+            and diagnostic.get("zcode_provider_failure_reason") == "network_error"
+        )
+        if transport_failure:
+            _record_flight_event(
+                telemetry, "provider_failed", component="provider",
+                assignment_id=assignment["assignment_id"],
+                reason_code="transport_error", attributes={"attempt": 1},
+            )
+        if isinstance(exc, CodexInstallError):
+            print(f"trial failed: {exc}\n"
+                  "retry the original run instructions with this held "
+                  "assignment after its retry cooldown")
+        else:
+            print(f"trial failed: {exc}\n"
+                  "inspect diagnostics and the current assignment status "
+                  "before explicitly resuming")
+        if failure_kind == "auth":
+            from .auth_failure import auth_failure_sentence
+            print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
+        stopped = _mark_stopped_quietly(
+            client,
+            assignment,
+            failure_kind=failure_kind or "runner_failed",
+            failure_diagnostic=(
+                exc.failure_diagnostic
+                if (failure_kind or "runner_failed") == "runner_failed"
+                else None
+            ),
+        )
+        diagnostic = exc.failure_diagnostic or {}
+        _report_failure_quietly(
+            client, assignment, phase="runner",
+            failure_kind=failure_kind or "runner_failed",
+            failure_code=(
+                exc.report_code or diagnostic.get("failure_code")
+                or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
+                or failure_kind or "runner_failed"
+            ),
+            **({"report_detail": exc.report_detail} if exc.report_detail else {}),
+        )
+        if not stopped:
+            print("server stop was not confirmed; quarantining this worker slot")
+            return "cleanup-unconfirmed"
+        return terminal_outcome or "failed"
+    except (KeyboardInterrupt, EOFError):
+        stopped = _mark_stopped_quietly(
+            client, assignment, defer_seconds=0,
+            failure_kind="user_interrupted",
+        )
+        if not stopped:
+            return "cleanup-unconfirmed"
+        raise
 
     if assignment.get("agent") == GROK_AGENT:
         preflight_kind = _grok_preflight_failure(art.result)
@@ -7220,7 +7176,7 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             break
         if outcome == "environment-build-failed":
             print(
-                "stopping this batch after repeated environment setup failures; "
+                "stopping this batch after the environment setup failure; "
                 "no later cell will be started. Fix Docker/network/Pier, then run "
                 "`dradar resume`."
             )
@@ -7509,8 +7465,8 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 "local environment build failed", interrupt_siblings=False,
             )
             print(
-                "stopping this worker before the next checkout after repeated "
-                "environment setup failures. Fix Docker/network/Pier, then "
+                "stopping this worker before the next checkout after the "
+                "environment setup failure. Fix Docker/network/Pier, then "
                 "retry the original run instructions with held assignments "
                 "after their retry cooldown."
             )

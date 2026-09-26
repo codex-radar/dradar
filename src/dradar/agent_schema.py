@@ -52,6 +52,8 @@ COMMAND_SCHEMAS = {
             "recovery_commands": "agent.next_commands",
         },
         "interaction_rules": {
+            "authorization": "reuse_existing_user_authorization_for_the_exact_action; ask_only_for_new_choices_or_scope",
+            "decision_token": "validates_action_context; neither_grants_authorization_nor_requires_a_new_user_turn",
             "first_device": "notify_and_start",
             "same_device": "notify_and_resume_idempotently",
             "other_healthy_device": "confirm_before_join",
@@ -97,7 +99,7 @@ COMMAND_SCHEMAS = {
             _argument(
                 "--held-only",
                 user_intent="只恢复这次运行已经领取、仍有效的题目，不继续补题",
-                allowed_when="原计划仍授权当前设备恢复，且用户明确选择只处理现有题目",
+                allowed_when="原计划仍授权当前设备恢复，且已有授权覆盖只处理现有题目",
                 default=False,
                 state_change="重新校验并登记当前设备；只启动已领题，不配置或延长补题活动",
                 decision_required=False,
@@ -135,13 +137,13 @@ COMMAND_SCHEMAS = {
             ),
             _argument(
                 "--decision-token",
-                user_intent="执行用户刚刚明确同意的跨设备动作或服务端可用数量选择",
-                allowed_when="前一次响应 decision_required=true，且用户已选择对应选项",
+                user_intent="执行已有用户授权覆盖的跨设备动作或服务端可用数量选择",
+                allowed_when="前一次响应 decision_required=true，且对应选项属于已有授权；新业务选择才询问用户",
                 default=None,
                 state_change="消费一次性凭证并允许当前设备加入或继续",
                 decision_required=True,
                 conflicts_with=["未获得用户同意"],
-                idempotency="只能成功消费一次；状态变化后失败关闭并重新询问",
+                idempotency="只能成功消费一次；状态变化后失败关闭，重新核当前状态与已有授权，不绕过 CAS 或 unknown",
                 failure_codes=[
                     "decision_context_missing", "decision_invalid_or_state_changed",
                     "decision_invalid_or_capacity_changed",
@@ -165,8 +167,8 @@ COMMAND_SCHEMAS = {
             ),
             _argument(
                 "--docker-install-token",
-                user_intent="执行用户刚刚明确选择的推荐 Docker 环境安装",
-                allowed_when="前一次响应要求确认安装，且用户选择安装推荐环境",
+                user_intent="执行已有用户授权覆盖的推荐 Docker 环境安装",
+                allowed_when="前一次响应要求确认安装，且已有环境修复授权覆盖该安装；否则询问用户",
                 default=None,
                 state_change="消费一次性本机授权，只安装推荐环境并继续原运行计划一次",
                 decision_required=True,
@@ -310,7 +312,8 @@ def command_schema(command: str) -> dict:
             ),
             "environment_recovery": (
                 "环境错误可在 agent.next_commands 给出非秘密 argv 数组；"
-                "requires_user_action=true 时只能提示用户完成交互"
+                "requires_user_action=true 时核对具体原因：平台本人交互须由用户完成；"
+                "已有授权覆盖的环境修复可由 Agent 执行，不能绕过成果审核或未知退出"
             ),
             "followup_launcher": (
                 "agent.followup_launcher 仅在可核验的官方 Git 安装中提供；"

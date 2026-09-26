@@ -20,6 +20,9 @@ on:
       - 'tests/test_windows_job*.py'
       - 'tests/test_capacity_journal.py'
       - 'tests/test_run_plan_intent_control.py'
+      - 'tests/test_runner_strategy.py'
+      - 'tests/test_agent_schema.py'
+      - 'src/dradar/agent_schema.py'
       - '.github/workflows/test-registration-recovery.yml'
   workflow_dispatch:
 permissions:
@@ -50,6 +53,7 @@ jobs:
           tests/test_registration_native.py tests/test_worker_start_native.py
           tests/test_windows_job_product.py tests/test_windows_job_adapter.py
           tests/test_capacity_journal.py tests/test_run_plan_intent_control.py
+          tests/test_runner_strategy.py tests/test_agent_schema.py
           --junitxml=evidence/registration.xml
       - name: Actual managed adapter dependency
         if: matrix.python == '3.13'
