@@ -353,7 +353,10 @@ def prepare(
             return path
 
 
-def add_expected(path: Path | None, assignments: list[dict]) -> None:
+def add_expected(
+    path: Path | None, assignments: list[dict], *,
+    require_matching_metadata: bool = False,
+) -> None:
     if path is None:
         return
     entries = _active_entries(assignments)
@@ -370,6 +373,19 @@ def add_expected(path: Path | None, assignments: list[dict]) -> None:
                     "assignment(s) are outside the explicit boundary: "
                     + ", ".join(unexpected)
                 )
+            if require_matching_metadata:
+                for assignment_id in state["expected"].keys() & entries.keys():
+                    saved = state["expected"][assignment_id]
+                    current = entries[assignment_id]
+                    if any(
+                        saved.get(field) != current.get(field)
+                        or not saved.get(field)
+                        for field in ("batch_id", "task_id", "model", "effort")
+                    ):
+                        raise BoundaryError(
+                            "saved assignment identity differs from the current "
+                            f"lease: {assignment_id}"
+                        )
             state["expected"].update(entries)
             _save(path, state)
 

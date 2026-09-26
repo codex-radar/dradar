@@ -7194,6 +7194,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         try:
             assignment_boundary.add_expected(
                 _assignment_boundary_path(args), [assignment],
+                require_matching_metadata=bool(
+                    getattr(args, "resume", False)
+                    and getattr(args, "batch_id", None)
+                ),
             )
         except (assignment_boundary.BoundaryError, OSError) as exc:
             _mark_stopped_quietly(

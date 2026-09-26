@@ -197,6 +197,29 @@ def test_exact_batch_worker_inherits_only_admitted_boundary(
         )
 
 
+def test_exact_batch_checkout_does_not_replace_saved_task_identity(tmp_path):
+    held = {**_assignment("held", "original-task"),
+            "benchmark_id": "deep-swe", "batch_id": "target-batch"}
+    path = assignment_boundary.prepare(
+        tmp_path, "deep-swe", [held], batch_id="target-batch",
+        expected_ids=["held"],
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(assignment_boundary.BoundaryError,
+                       match="saved assignment identity differs"):
+        assignment_boundary.add_expected(
+            path, [{**held, "task_id": "swapped-task", "owner_epoch": 2}],
+            require_matching_metadata=True,
+        )
+
+    assert path.read_bytes() == before
+    assignment_boundary.add_expected(
+        path, [{**held, "owner_epoch": 2}],
+        require_matching_metadata=True,
+    )
+
+
 def test_submitted_assignment_may_leave_active_leases(tmp_path):
     active = [_assignment("a1"), _assignment("a2")]
     path = assignment_boundary.prepare(tmp_path, "bench", active)
