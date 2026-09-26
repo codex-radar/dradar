@@ -488,3 +488,135 @@ def test_known_capacity_rejection_allows_distinct_bounded_action_not_implicit_re
     saved = json.loads(old_path.read_text())
     assert saved['request'] == json.loads(original)['request']
     assert saved['receipt']['intent_status'] == 'rejected'
+
+
+def pending_stop(home, client):
+    client.send_hook = lambda *_: (_ for _ in ()).throw(ApiError('stop ACK lost'))
+    with pytest.raises(ApiError) as info:
+        execute(home, client, operation='stop', request=STOP, local_intent='original-stop-marker')
+    assert info.value.code == 'intent_unknown'
+    return files(home)[0]
+
+
+def test_pending_read_with_no_record_never_creates_intent_or_sends(tmp_path):
+    client = Client()
+    assert intents.pending_receipt(tmp_path, client, operation='stop', request=STOP) is None
+    assert not (tmp_path/'run-plans').exists()
+    assert not client.posts and not client.gets
+
+
+@pytest.mark.parametrize('effective', [True, False])
+def test_pending_stop_read_recovers_original_id_without_new_local_identity_or_revision(tmp_path, effective):
+    client = Client()
+    path = pending_stop(tmp_path, client)
+    original = json.loads(path.read_text())['request']
+    client.remote[path.stem] = receipt('stop', original, effective=effective,
+        device_intent_revision=8 if effective else 9,
+        current_start_intent_id=None if effective else 'c'*32)
+    result = intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert result['intent_id'] == path.stem and result['current_effective'] is effective
+    assert result['idempotent_replay'] is True and len(client.posts) == 1
+    saved = json.loads(path.read_text())
+    assert saved['request'] == original and saved['local_intent'] == 'original-stop-marker'
+    assert saved['status'] == 'received' and len(files(tmp_path)) == 1
+    # Settled receipts are not returned from the local cache on the next call.
+    assert intents.pending_receipt(tmp_path, client, operation='stop', request=STOP) is None
+    assert len(client.gets) == 2
+
+
+def test_pending_read_404_is_unknown_without_resend_or_record_changes(tmp_path):
+    client = Client()
+    path = pending_stop(tmp_path, client)
+    before = path.read_bytes()
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert info.value.code == 'intent_unknown' and info.value.payload['applied'] is None
+    assert path.read_bytes() == before and len(client.posts) == 1 and len(files(tmp_path)) == 1
+
+
+@pytest.mark.parametrize('change', [dict(scope='all_devices'), dict(expected_generation=4),
+                                  dict(plan_id='q'*32), dict(decision_token='different-challenge')])
+def test_pending_read_requires_exact_critical_body(tmp_path, change):
+    client = Client()
+    pending_stop(tmp_path, client)
+    before_gets = len(client.gets)
+    assert intents.pending_receipt(tmp_path, client, operation='stop', request=dict(STOP, **change)) is None
+    assert len(client.gets) == before_gets and len(client.posts) == 1
+
+
+def test_pending_read_requires_same_operation_and_authenticated_scope(tmp_path):
+    client = Client()
+    pending_stop(tmp_path, client)
+    other = Client()
+    other.account_scope = 'b'*64
+    assert intents.pending_receipt(tmp_path, other, operation='stop', request=STOP) is None
+    other.account_scope = client.account_scope
+    other.server = 'https://another.invalid'
+    assert intents.pending_receipt(tmp_path, other, operation='stop', request=STOP) is None
+    assert intents.pending_receipt(tmp_path, client, operation='start', request=START) is None
+    assert not other.posts and not other.gets and len(client.gets) == 1
+
+
+def test_pending_read_persists_known_rejection_and_preserves_api_error(tmp_path):
+    client = Client()
+    path = pending_stop(tmp_path, client)
+    original = json.loads(path.read_text())['request']
+    client.remote[path.stem] = receipt('stop', original, status='rejected', device_intent_revision=10)
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert info.value.code == 'intent_revision_conflict' and info.value.payload['intent_id'] == path.stem
+    assert info.value.payload['intent_status'] == 'rejected'
+    saved = json.loads(path.read_text())
+    assert saved['request'] == original and saved['status'] == 'received'
+    assert len(client.posts) == 1
+
+
+def test_pending_read_rejects_ambiguous_matching_ids_without_network(tmp_path):
+    from dradar import run_plans
+    client = Client()
+    path = pending_stop(tmp_path, client)
+    second = json.loads(path.read_text())
+    second['sequence'] += 1
+    second['request']['intent_id'] = 'e'*32
+    second['request_fingerprint'] = intents.fingerprint('stop', second['request'])
+    run_plans._atomic_json(path.with_name('e'*32+'.json'), second)
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert info.value.code == 'local_intent_evidence_invalid'
+    assert len(client.posts) == len(client.gets) == 1
+
+
+def test_pending_read_preserves_corrupt_original(tmp_path):
+    client = Client()
+    path = pending_stop(tmp_path, client)
+    path.write_text('{incomplete')
+    before = path.read_bytes()
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert info.value.code == 'local_intent_evidence_invalid'
+    assert path.read_bytes() == before and len(client.posts) == len(client.gets) == 1
+
+
+@pytest.mark.parametrize('change', [dict(expected_generation=True), dict(expected_intent_revision=7),
+                                  dict(intent_id='a'*32)])
+def test_pending_read_does_not_coerce_or_accept_a_replacement_identity(tmp_path, change):
+    client = Client()
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=dict(STOP, **change))
+    assert info.value.code == 'intent_request_invalid' and not client.posts and not client.gets
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX lock contention adapter')
+def test_pending_read_get_occurs_outside_local_scan_lock(tmp_path):
+    import fcntl
+    client = Client()
+    pending_stop(tmp_path, client)
+    def get(intent_id, _):
+        with (tmp_path/'run-plans'/'remote-intents'/'index.lock').open('a+') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        raise unknown(intent_id)
+    client.get_hook = get
+    with pytest.raises(ApiError) as info:
+        intents.pending_receipt(tmp_path, client, operation='stop', request=STOP)
+    assert info.value.code == 'intent_unknown' and len(client.posts) == 1

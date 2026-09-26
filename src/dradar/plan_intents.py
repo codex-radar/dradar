@@ -223,6 +223,46 @@ def _request_matches(record, payload, local_intent):
     return original == payload and record["local_intent"] == local_intent
 
 
+def pending_receipt(home: Path, client, *, operation: str, request: dict):
+    """Read one exact pending operation, without selecting a new local action.
+
+    Match the original critical body and authenticated scope, independently of
+    today's observed revision or local lifecycle. A missing matching pending
+    record returns None; a Server 404 stays unknown. This function never POSTs
+    or grants local launch authority. Callers must inspect current_effective.
+    """
+    try:
+        if not isinstance(client.server, str) or not client.server:
+            raise ValueError("missing server")
+        _wire_hex(client.account_scope, "account_scope", 64)
+        if not isinstance(request, dict) or {"intent_id", "expected_intent_revision"} & request.keys():
+            raise ValueError("use the original critical request body")
+        normalized = _run_plan_intent_payload(operation, dict(request,
+            expected_intent_revision=0, intent_id="0" * 32))
+    except (TypeError, ValueError) as exc:
+        raise _error("intent_request_invalid", "The complete run intent request must have strict wire types.") from exc
+    payload = {k: v for k, v in normalized.items()
+               if k not in {"schema_version", "intent_id", "expected_intent_revision"}}
+    root = _directory(home)
+    if not root.exists():
+        return None
+    with _lock(root):
+        matches = []
+        for path in sorted(root.glob("*.json")):
+            record = _read(path)
+            body = {k: v for k, v in record["request"].items()
+                    if k not in {"intent_id", "expected_intent_revision"}}
+            if (record["status"] == "pending" and record["server"] == client.server
+                    and record["account_scope"] == client.account_scope
+                    and record["operation"] == operation and body == payload):
+                matches.append(path)
+        if len(matches) > 1:
+            raise _error("local_intent_evidence_invalid", "More than one pending intent matches the original request.")
+    if not matches:
+        return None
+    return read_receipt(matches[0], client)  # GET and durable settlement occur outside the scan lock.
+
+
 def execute(home: Path, client, *, operation: str, request: dict,
             expected_revision: int, local_intent: str, explicit_retry: bool = False,
             new_intent: bool = False):
