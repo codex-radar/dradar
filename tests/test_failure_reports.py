@@ -41,6 +41,25 @@ def test_report_builder_drops_arbitrary_and_path_like_values():
     assert report["platform"].count("/") == 0
 
 
+def test_generic_runner_failure_can_carry_only_session_correlation():
+    session = "a" * 32
+    report = failure_reports.build_report(
+        source="cli", phase="runner", failure_kind="runner_failed",
+        failure_code="runner_failed", detail={"task_id": "fixture", "session_id": session},
+    )
+    assert report["detail"] == {"task_id": "fixture", "session_id": session}
+    assert failure_reports._valid_report_details(report)
+
+
+def test_generic_runner_failure_rejects_mixed_registration_detail():
+    report = failure_reports.build_report(
+        source="cli", phase="runner", failure_kind="runner_failed",
+        failure_code="runner_failed",
+        detail={"session_id": "a" * 32, "registration_result": "flight_unknown"},
+    )
+    assert not failure_reports._valid_report_details(report)
+
+
 def test_report_builder_uses_compiled_version_without_distribution_metadata(
     monkeypatch,
 ):

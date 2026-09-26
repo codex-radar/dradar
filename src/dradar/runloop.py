@@ -3138,7 +3138,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         except ApiError as exc:
             registration_detail = (
                 telemetry.worker_registration_diagnostic
-                if telemetry is not None and bind_stage == "worker-registration"
+                if telemetry is not None
                 else None
             )
             raise RunnerError(
@@ -3377,15 +3377,24 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             ),
         )
         diagnostic = exc.failure_diagnostic or {}
+        failure_report_code = (
+            exc.report_code or diagnostic.get("failure_code")
+            or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
+            or failure_kind or "runner_failed"
+        )
+        failure_report_detail = dict(exc.report_detail or {})
+        if (
+            failure_report_code == "runner_failed"
+            and telemetry is not None
+            and "session_id" not in failure_report_detail
+        ):
+            failure_report_detail["session_id"] = telemetry.session_id
         _report_failure_quietly(
             client, assignment, phase="runner",
             failure_kind=failure_kind or "runner_failed",
-            failure_code=(
-                exc.report_code or diagnostic.get("failure_code")
-                or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
-                or failure_kind or "runner_failed"
-            ),
-            **({"report_detail": exc.report_detail} if exc.report_detail else {}),
+            failure_code=failure_report_code,
+            **({"report_detail": failure_report_detail}
+               if failure_report_detail else {}),
         )
         if not stopped:
             print("server stop was not confirmed; quarantining this worker slot")
