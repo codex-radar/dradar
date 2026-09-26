@@ -4416,6 +4416,69 @@ def _assignment_boundary_path(args) -> Path | None:
     return Path(value) if value else None
 
 
+def _confirm_exact_batch_submissions(
+    client: ApiClient, path: Path, benchmark_id: str,
+    batch_id: str, active: list[dict],
+) -> None:
+    """Reconcile only disappeared IDs durably submitted by this account."""
+    if not path.exists():
+        return
+    state, digest = assignment_boundary.snapshot(path)
+    if state.get("benchmark_id") != benchmark_id or state.get("batch_id") != batch_id:
+        raise assignment_boundary.BoundaryError(
+            "saved boundary does not match the requested benchmark and batch"
+        )
+    expected = state["expected"]
+    if not expected or any(
+        not isinstance(saved, dict)
+        or saved.get("batch_id") != batch_id
+        or any(not saved.get(key) for key in ("task_id", "model", "effort"))
+        for saved in expected.values()
+    ):
+        raise assignment_boundary.BoundaryError(
+            "saved boundary lacks exact assignment batch metadata"
+        )
+    active_by_id = {item.get("assignment_id"): item for item in active}
+    if set(active_by_id) - set(expected):
+        return  # prepare() retains the existing outside-boundary rejection.
+    if any(
+        any(saved.get(key) != active_by_id[aid].get(key)
+            for key in ("batch_id", "task_id", "model", "effort"))
+        for aid, saved in expected.items() if aid in active_by_id
+    ):
+        raise assignment_boundary.BoundaryError(
+            "saved assignment identity differs from the current lease"
+        )
+    settled = {
+        aid for aid, outcome in state["outcomes"].items()
+        if outcome.get("outcome") in assignment_boundary.SETTLED_OUTCOMES
+    }
+    missing = set(expected) - settled - set(active_by_id)
+    if not missing:
+        return
+    for aid in sorted(missing):
+        row = client.assignment_recovery_status(aid)
+        saved = expected[aid]
+        if not isinstance(row, dict) or any(
+            row.get(key) != value for key, value in (
+                ("assignment_id", aid),
+                ("batch_id", batch_id),
+                ("benchmark_id", benchmark_id),
+                ("task_id", saved["task_id"]),
+                ("model", saved["model"]),
+                ("effort", saved["effort"]),
+                ("status", "submitted"),
+                ("has_submission", True),
+            )
+        ):
+            raise assignment_boundary.BoundaryError(
+                f"server did not confirm a matching submission for {aid}"
+            )
+    assignment_boundary.confirm_server_submissions(
+        path, digest, set(active_by_id), missing,
+    )
+
+
 def _prepare_assignment_boundary(
     args,
     client: ApiClient,
@@ -4516,12 +4579,20 @@ def _prepare_assignment_boundary(
             HOME, benchmark_id, scoped_batch_id,
         )
         batches = assignment_boundary.admitted_batches(saved_path)
+        if scoped_batch_id is not None and saved_path.exists() and batches != [scoped_batch_id]:
+            raise assignment_boundary.BoundaryError(
+                "exact-batch boundary contains unknown or different batch attribution"
+            )
         if len(batches) > 1:
             # Exact batch resume still executes only its requested batch. The shared
             # ledger must see its siblings too, including after a spawn failure.
             # Retain the requested inventory so an out-of-campaign batch
             # cannot be hidden by the sibling union and pass admission.
             active = active + _BatchInventory(client, batches).get_assignment()["active"]
+        if scoped_batch_id is not None and batch_id == scoped_batch_id:
+            _confirm_exact_batch_submissions(
+                client, saved_path, benchmark_id, scoped_batch_id, active,
+            )
         path = assignment_boundary.prepare(
             HOME,
             benchmark_id,

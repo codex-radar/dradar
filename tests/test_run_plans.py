@@ -141,7 +141,7 @@ def _state(tmp_path, plan):
 
 def _args(
     *, concurrency=None, decision_token=None, scope=None, upload_only=False,
-    recheck_generation=None, docker_install_token=None,
+    recheck_generation=None, docker_install_token=None, held_only=False,
 ):
     return SimpleNamespace(
         plan=RUN_CODE,
@@ -150,6 +150,7 @@ def _args(
         decision_token=decision_token,
         scope=scope,
         upload_only=upload_only,
+        held_only=held_only,
         recheck_generation=recheck_generation,
         docker_install_token=docker_install_token,
         json=True,
@@ -304,6 +305,12 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
         "--upload-only", "--json",
     ]) == 0
     assert cli.main([
+        "run", "--plan", RUN_CODE,
+        "--server", "https://api.claudecoderadar.com",
+        "--held-only", "--concurrency", "1", "--json",
+    ]) == 0
+    assert seen[-1][1].held_only is True
+    assert cli.main([
         "progress", "--plan", RUN_CODE,
         "--server", "https://api.claudecoderadar.com", "--json",
     ]) == 0
@@ -326,10 +333,10 @@ def test_cli_parses_user_intent_run_progress_and_stop_commands(monkeypatch):
     assert seen[0][1].upload_only is True
     assert seen[0][1].server == "https://api.claudecoderadar.com"
     assert seen[1][1].plan == RUN_CODE
-    assert seen[2][1].scope == "all-devices"
-    assert seen[2][1].decision_token == "drd_once"
-    assert seen[3][1].recheck_generation == 7
-    assert seen[4][1].docker_install_token == "drdi_once"
+    assert seen[3][1].scope == "all-devices"
+    assert seen[3][1].decision_token == "drd_once"
+    assert seen[4][1].recheck_generation == 7
+    assert seen[5][1].docker_install_token == "drdi_once"
 
 
 def test_exchange_keeps_run_code_out_of_state_and_uses_private_files(
@@ -640,6 +647,60 @@ def test_auto_refill_uses_safe_effective_concurrency_not_seed_count(
     assert added[0]["refill"] is True
     assert added[0]["max_tasks"] == 20
     assert added[0]["batch_id"] == BATCH_ID
+
+
+def test_stopped_refill_plan_can_readmit_device_for_held_only_work(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=10, task_count=10,
+                 refill=True, refill_to=10, max_tasks=20)
+    client = FakeClient(starts=[_server_response(
+        plan, _envelope(agent_action="start_runner"),
+    )])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: {
+        "status": "failed", "plan_id": plan["plan_id"], "workers": 10,
+        "refill": True,
+    })
+    added = []
+    monkeypatch.setattr(fleet, "add_batch", lambda **kwargs: (
+        added.append(kwargs) or
+        {"batch": {"status": "starting", "workers": kwargs["workers"]}}
+    ))
+
+    assert run_plans.cmd_run_plan(_args(concurrency=1, held_only=True)) == 0
+    assert len(client.start_calls) == 1
+    assert client.start_calls[0]["concurrency"] == 1
+    assert len(added) == 1
+    assert added[0]["retry"] is True
+    assert added[0]["workers"] == 1
+    assert added[0]["credentials_file"] is not None
+    assert added[0]["plan_id"] == plan["plan_id"]
+    assert added[0]["refill"] is False
+    assert all(added[0][key] is None for key in (
+        "max_tasks", "refill_harness", "refill_model", "refill_effort",
+    ))
+    assert json.loads(capsys.readouterr().out)["status"] == "preparing"
+
+
+def test_held_only_cannot_change_a_live_refill_pool(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan(mode="fixed", concurrency=2, task_count=2,
+                 refill=True, refill_to=2, max_tasks=4)
+    client = FakeClient()
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch: {
+        "status": "running", "plan_id": plan["plan_id"], "workers": 2,
+        "refill": True,
+    })
+    monkeypatch.setattr(fleet, "add_batch", lambda **_kwargs: (
+        pytest.fail("must not spawn a second pool")
+    ))
+
+    assert run_plans.cmd_run_plan(_args(concurrency=1, held_only=True)) == 1
+    assert client.start_calls == []
+    assert json.loads(capsys.readouterr().out)["error_code"] == "local_run_scope_conflict"
 
 
 def test_active_legacy_controller_waits_before_server_admission(
