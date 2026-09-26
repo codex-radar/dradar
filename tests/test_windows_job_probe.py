@@ -96,7 +96,8 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(45)']); "
         "Path(sys.argv[1]).write_text(json.dumps({"
         "'child_pid':p.pid,'cwd':os.getcwd(),"
-        "'env':os.environ.get('DRADAR_JOB_PROBE')}))"
+        "'env':os.environ.get('DRADAR_JOB_PROBE')})); "
+        "print('stdout-contract'); print('stderr-contract',file=sys.stderr)"
     )
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(45)"])
     job = kernel.CreateJobObjectW(None, None)
@@ -108,14 +109,35 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
     ), ctypes.get_last_error()
     process = thread = None
     bound = False
+    import _winapi
+    import msvcrt
+    log = (tmp_path / "pier.log").open("w+b")
+    devnull = open(os.devnull, "rb")
+    inherited = []
     try:
+        current = _winapi.GetCurrentProcess()
+        for handle in (
+            msvcrt.get_osfhandle(devnull.fileno()),
+            msvcrt.get_osfhandle(log.fileno()),
+        ):
+            inherited.append(_winapi.DuplicateHandle(
+                current, handle, current, 0, True, _winapi.DUPLICATE_SAME_ACCESS,
+            ))
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= _winapi.STARTF_USESTDHANDLES
+        startup.hStdInput = inherited[0]
+        startup.hStdOutput = startup.hStdError = inherited[1]
+        startup.lpAttributeList = {"handle_list": inherited}
         process, thread, _pid, _tid = _winapi.CreateProcess(
             sys.executable,
             subprocess.list2cmdline([sys.executable, "-c", code, str(marker)]),
-            None, None, False, 0x00000004,
+            None, None, True, 0x00000004,
             dict(os.environ, DRADAR_JOB_PROBE="exact-job"), str(tmp_path),
-            subprocess.STARTUPINFO(),
+            startup,
         )
+        for handle in inherited:
+            _winapi.CloseHandle(handle)
+        inherited.clear()
         assert kernel.AssignProcessToJobObject(job, process), ctypes.get_last_error()
         bound = True
         in_job = wintypes.BOOL()
@@ -130,6 +152,11 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         assert kernel.WaitForSingleObject(process, 10000) == 0, "parent did not exit"
         assert json.loads(marker.read_text())["cwd"] == str(tmp_path)
         assert json.loads(marker.read_text())["env"] == "exact-job"
+        log.flush()
+        log.seek(0)
+        assert b"stdout-contract" in log.read()
+        log.seek(0)
+        assert b"stderr-contract" in log.read()
         accounting = BasicAccounting()
         returned = wintypes.DWORD()
         assert kernel.QueryInformationJobObject(
@@ -154,6 +181,8 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         assert accounting.ActiveProcesses == 0
         assert unrelated.poll() is None
     finally:
+        for handle in inherited:
+            _winapi.CloseHandle(handle)
         if process is not None:
             if bound:
                 kernel.TerminateJobObject(job, 1)
@@ -164,5 +193,7 @@ def test_suspended_spawn_binds_before_descendant_and_audits_after_parent_exit(tm
         if process is not None:
             _winapi.CloseHandle(process)
         kernel.CloseHandle(job)
+        log.close()
+        devnull.close()
         unrelated.terminate()
         unrelated.wait(timeout=5)
