@@ -6,14 +6,24 @@ It has not been released or accepted for production.
 
 ## User-visible behavior
 
+- `dradar claim-receipt --request-id <original-id> --json` reads the original
+  claim using the configured account credential. Supply `--expected-fingerprint`
+  to check the Server's canonical request fingerprint; a raw request-file hash
+  is a different value. Without it, the result explicitly reports that binding
+  was not checked. The command issues one GET and never claims, reinvites,
+  registers an account, or starts work. Exit 0 means an exact accepted receipt,
+  2 means unknown/unavailable, and 1 means invalid/conflicting evidence. A 404
+  keeps the original ID and body unknown; it does not authorize a new request.
 - `dradar stop --plan <original-run-code> --scope this-device --json` records
   local cancellation before waiting for network responses. This also works while
   the first run is exchanging its invitation. If the plan identity is not yet
   available, the response says that local cancellation is recorded and the remote
   stop is unconfirmed. It does not claim that active processes have exited.
 - A delayed run, automatic recheck, queued Fleet launch, or provider permission
-  from the cancelled local generation cannot create another launch. An explicit
+  from the cancelled local generation cannot create another local launch. An explicit
   new run can request a new generation after old execution has been reconciled.
+  An already granted provider permission or external request may still finish.
+  Stop drains authorized work; it is not proof of immediate physical exit.
 - `run --upload-only` can finish exact saved results with retained original
   credentials. A credential exchange does not overwrite an older Fleet's private
   credential file. Damaged or unmatched results remain protected for review.

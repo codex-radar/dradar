@@ -26,6 +26,7 @@ from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
 from .boundary_recovery import cmd_boundary_recover
 from .cells import cmd_cells
+from .claim_receipts import cmd_claim_receipt
 from .doctor import cmd_doctor
 from .fleet import (
     cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
@@ -165,6 +166,14 @@ def main(argv: list[str] | None = None) -> int:
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")
     p_capacity.set_defaults(func=cmd_capacity)
+
+    p_claim_receipt = sub.add_parser(
+        "claim-receipt", help="read the receipt for an original claim request")
+    p_claim_receipt.add_argument("--request-id", required=True, metavar="ORIGINAL_ID")
+    p_claim_receipt.add_argument("--expected-fingerprint", metavar="SHA256",
+                                 help="canonical request fingerprint, not the raw JSON file hash")
+    p_claim_receipt.add_argument("--json", action="store_true")
+    p_claim_receipt.set_defaults(func=cmd_claim_receipt)
 
     p_schema = sub.add_parser(
         "schema", help="show the versioned command contract used by Agents")
