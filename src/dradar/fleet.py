@@ -1215,7 +1215,8 @@ def _stop_run_plan_device(item: dict, reason: str) -> str | None:
         if not isinstance(plan_id, str) or not plan_id:
             raise ValueError("missing run plan ID")
         remote = _client(cfg)
-        remote.stop_run_plan(plan_id=plan_id, scope="this_device")
+        remote.stop_run_plan(plan_id=plan_id, scope="this_device",
+                             expected_generation=cfg.get("run_plan_credential_generation"))
     except (ApiError, KeyError, OSError, ValueError) as exc:
         return f"could not confirm this device stopped after {reason}: {exc}"
     return None

@@ -51,6 +51,58 @@ def normalize_batch_id(value: str | None) -> str | None:
     return parsed.hex
 
 
+def _wire_string(value: Any, name: str, minimum: int, maximum: int) -> str:
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise ValueError(f"{name} must be a string of {minimum}-{maximum} characters")
+    return value
+
+
+def _wire_hex(value: Any, name: str, length: int) -> str:
+    if not isinstance(value, str) or not re.fullmatch(rf"[0-9a-f]{{{length}}}", value):
+        raise ValueError(f"{name} must be {length} lowercase hex characters")
+    return value
+
+
+def _wire_generation(value: Any) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError("expected_generation/device_generation must be a nonnegative integer")
+    return value
+
+
+def _cleanup_payload(payload: Any, *, legacy: bool = False) -> dict[str, Any]:
+    """Validate declarations without inventing exit evidence or evidence IDs."""
+    common = {"schema_version", "evidence_id", "execution_manifest_sha256"}
+    required = common | ({"quarantine_id", "snapshot_sha256", "managed_process_inventory",
+                           "owned_container_inventory", "historical_scope_verified"}
+                         if legacy else {"session_id", "batch_id", "device_generation",
+                                         "exit_state", "process_tree", "owned_containers"})
+    if not isinstance(payload, dict) or not required <= payload.keys() or payload.keys() - required - {"device_id"}:
+        raise ValueError("cleanup payload has missing or unknown fields")
+    checked = dict(payload)
+    if type(checked["schema_version"]) is not int or checked["schema_version"] != 1:
+        raise ValueError("cleanup schema_version must be integer 1")
+    _wire_hex(checked["evidence_id"], "evidence_id", 32)
+    _wire_hex(checked["execution_manifest_sha256"], "execution_manifest_sha256", 64)
+    if checked.get("device_id") is not None:
+        _wire_string(checked["device_id"], "device_id", 8, 200)
+    if legacy:
+        _wire_hex(checked["quarantine_id"], "quarantine_id", 64)
+        _wire_hex(checked["snapshot_sha256"], "snapshot_sha256", 64)
+        if checked["historical_scope_verified"] is not True:
+            raise ValueError("historical scope must be explicitly verified")
+        confirmations = ("managed_process_inventory", "owned_container_inventory")
+    else:
+        _wire_string(checked["session_id"], "session_id", 8, 64)
+        _wire_string(checked["batch_id"], "batch_id", 16, 64)
+        _wire_generation(checked["device_generation"])
+        if checked["exit_state"] != "confirmed":
+            raise ValueError("exit_state must be confirmed")
+        confirmations = ("process_tree", "owned_containers")
+    if any(checked[field] != "confirmed_absent" for field in confirmations):
+        raise ValueError("cleanup requires explicit confirmed_absent declarations")
+    return checked
+
+
 def _env_proxies_set() -> bool:
     """Any of the proxy env vars httpx honors. Passing ANY explicit transport
     to httpx.Client disables its environment-proxy mounting entirely, so the
@@ -425,6 +477,40 @@ class ApiClient:
             return self._get("/api/v1/run-plans/identity")
         return self._get("/api/v1/whoami")
 
+    def run_plan_capabilities(self) -> dict[str, Any]:
+        """Read protocol support once; the caller decides how to handle old servers."""
+        return self._check(self._request(
+            "GET", "/api/v1/run-plans/capabilities", timeout=3.0,
+            retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def require_runner_reservation_protocol(self) -> None:
+        """New local execution requires the server's durable reservation contract."""
+        value = self.run_plan_capabilities()
+        if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+                or value["schema_version"] != 1
+                or not isinstance(value.get("capabilities"), list)
+                or "runner-reservation-v1" not in value["capabilities"]
+                or value.get("stop_generation_cas") is not True
+                or value.get("close_releases_capacity") is not False):
+            raise ApiError("Server upgrade required before new execution; saved results and stop remain available.",
+                           status_code=426, code="runner_reservation_upgrade_required")
+
+    def claim_request_receipt(
+        self, request_id: str, *, expected_fingerprint: str | None = None,
+    ) -> dict[str, Any]:
+        """Read the saved claim intent; unknown never creates a replacement ID."""
+        _wire_string(request_id, "request_id", 16, 64)
+        params = {}
+        if expected_fingerprint is not None:
+            params["expected_fingerprint"] = _wire_hex(
+                expected_fingerprint, "expected_fingerprint", 64,
+            )
+        return self._check(self._request(
+            "GET", "/api/v1/claim-requests/" + urllib.parse.quote(request_id, safe=""),
+            params=params, timeout=3.0, retry_rate_limit=False, retry_transport=False,
+        ))
+
     def exchange_run_plan(
         self,
         *,
@@ -470,6 +556,7 @@ class ApiClient:
         concurrency: int | None = None,
         decision: str | None = None,
         decision_token: str | None = None,
+        expected_generation: int | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": 1,
@@ -477,6 +564,8 @@ class ApiClient:
             "logical_session_id": logical_session_id,
             "concurrency_mode": concurrency_mode,
         }
+        if expected_generation is not None:
+            payload["expected_generation"] = _wire_generation(expected_generation)
         if concurrency is not None:
             payload["concurrency"] = concurrency
         if decision is not None:
@@ -501,12 +590,15 @@ class ApiClient:
         plan_id: str,
         scope: str,
         decision_token: str | None = None,
+        expected_generation: int | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": 1,
             "plan_id": plan_id,
             "scope": scope,
         }
+        if expected_generation is not None:
+            payload["expected_generation"] = _wire_generation(expected_generation)
         if decision_token is not None:
             payload["decision_token"] = decision_token
         return self._post(
@@ -838,6 +930,46 @@ class ApiClient:
     def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         return self._post("/api/v1/runner/close", json=payload, timeout=3.0)
+
+    def runner_session_receipt(
+        self, session_id: str, *, batch_id: str,
+    ) -> dict[str, Any]:
+        """Read close/release acceptance without inferring physical exit."""
+        _wire_string(session_id, "session_id", 8, 64)
+        _wire_string(batch_id, "batch_id", 16, 64)
+        return self._check(self._request(
+            "GET", "/api/v1/runner/sessions/" + urllib.parse.quote(session_id, safe="") + "/receipt",
+            params={"batch_id": batch_id}, timeout=3.0,
+            retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
+        return self._post(
+            "/api/v1/runner/release-capacity", json=_cleanup_payload(payload),
+            timeout=3.0, retry_rate_limit=False, retry_transport=False,
+        )
+
+    def runner_reservations(
+        self, *, limit: int = 100, after: str = "", quarantine_after: str = "",
+    ) -> dict[str, Any]:
+        """Read unknown reservations and migration scopes, each with its cursor."""
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("limit must be an integer between 1 and 200")
+        _wire_string(after, "after", 0, 64)
+        _wire_string(quarantine_after, "quarantine_after", 0, 64)
+        return self._check(self._request(
+            "GET", "/api/v1/runner/reservations",
+            params={"limit": limit, "after": after, "quarantine_after": quarantine_after},
+            timeout=3.0, retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def reconcile_legacy_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Declare reviewed historical cleanup; never manufacture a clean baseline."""
+        return self._post(
+            "/api/v1/runner/reconcile-legacy", json=_cleanup_payload(payload, legacy=True),
+            timeout=3.0, retry_rate_limit=False, retry_transport=False,
+        )
 
     def flight_event_capabilities(self) -> dict[str, Any]:
         """Optional, bounded negotiation; callers tolerate old servers."""

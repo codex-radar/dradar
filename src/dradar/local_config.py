@@ -126,6 +126,9 @@ def runtime_config(credentials_file: str | os.PathLike[str] | None = None) -> di
         or points_tier not in {"plus", "pro-5x", "pro-20x"}
     ):
         raise ValueError("invalid private run-plan credentials file")
+    generation = payload.get("credential_generation")
+    if generation is not None and (type(generation) is not int or generation < 0):
+        raise ValueError("invalid private run-plan credential generation")
     runtime = dict(cfg)
     runtime.update({
         "server": server,
@@ -133,6 +136,7 @@ def runtime_config(credentials_file: str | os.PathLike[str] | None = None) -> di
         "benchmark": benchmark,
         "run_plan_batch_id": batch_id,
         "run_plan_id": payload.get("plan_id"),
+        "run_plan_credential_generation": generation,
         "run_plan_logical_session_id": logical_session_id,
         "run_plan_points_tier": points_tier,
     })

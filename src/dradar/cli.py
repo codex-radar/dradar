@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__, local_jobs, pending
+from . import __version__, local_jobs, pending, capacity_journal
 from .agent_schema import cmd_schema
 from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
@@ -707,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError) as exc:
+    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError, capacity_journal.CapacityEvidenceError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except (KeyboardInterrupt, EOFError):

@@ -116,6 +116,7 @@ def _state(tmp_path, plan):
         "credential_kind": "run_plan_v1",
         "server": "https://api.codexradar.com",
         "token": PLAN_TOKEN,
+        "credential_generation": 0,
         "run_code_hash": run_plans._run_code_digest(RUN_CODE),
         "plan": plan,
         "plan_id": plan["plan_id"],
@@ -240,9 +241,19 @@ class FakeClient:
         self.start_calls = []
         self.progress_calls = []
         self.stop_calls = []
+        self.plan_id = next((item["plan"]["plan_id"] for item in
+                             self.starts + self.progress_results + self.stop_results
+                             if isinstance(item, dict) and isinstance(item.get("plan"), dict)),
+                            "plan_test_123456")
+
+    def run_plan_capabilities(self):
+        return {"schema_version":1, "capabilities":["runner-reservation-v1"],
+                "stop_generation_cas":True, "close_releases_capacity":False}
 
     def whoami(self):
-        return {"concurrent_limit": 8, "claim_limit": 8}
+        return {"schema_version":1, "plan_id":self.plan_id,
+                "device_generation":0, "credential_generation":0,
+                "concurrent_limit": 8, "claim_limit": 8}
 
     @staticmethod
     def _next(values):
@@ -804,7 +815,7 @@ def test_structured_local_startup_failure_stops_phantom_device_immediately(
     assert payload["agent"]["requires_user_action"] is True
     assert "已有本地文件没有被修改" in payload["user_message"]
     assert client.stop_calls == [
-        {"plan_id": plan["plan_id"], "scope": "this_device"},
+        {"plan_id": plan["plan_id"], "scope": "this_device", "expected_generation": 0},
     ]
 
 
@@ -1575,6 +1586,8 @@ def test_fixed_workers_still_enforce_count_plan_and_server_limits(
     plan = _plan(mode="fixed", concurrency=5, task_count=5)
     client = FakeClient()
     monkeypatch.setattr(client, "whoami", lambda: {
+        "schema_version":1, "plan_id":plan["plan_id"],
+        "device_generation":0, "credential_generation":0,
         "concurrent_limit": account_limit,
     })
     _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
@@ -1983,7 +1996,7 @@ def test_stop_winning_after_server_start_is_not_replayed_as_a_new_run(
     assert "next_commands" not in payload.get("agent", {})
     assert len(client.start_calls) == 1
     assert client.stop_calls == [{
-        "plan_id": plan["plan_id"], "scope": "this_device",
+        "plan_id": plan["plan_id"], "scope": "this_device", "expected_generation": 0,
     }]
 
 

@@ -105,6 +105,12 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         if os.name != "nt":
             os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+        if os.name != "nt":
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -252,11 +258,12 @@ def _iter_states(home: Path = HOME):
     root = _root(home)
     if root.is_symlink() or not root.is_dir():
         return
-    for path in sorted(root.glob(f"plan-*{STATE_SUFFIX}")):
+    for path in sorted(root.glob(f"plan-*{STATE_SUFFIX}"), key=lambda item: item.stat().st_mtime_ns, reverse=True):
         state = _read_private_json(path)
         if (
             state and state.get("schema_version") == SCHEMA_VERSION
             and state.get("credential_kind") == "run_plan_v1"
+            and not state.get("retired_for_new_execution")
         ):
             yield path, state
 
@@ -306,6 +313,22 @@ def _scrub_state(path: Path, state: dict[str, Any], *, reason: str, now: float) 
     _atomic_json(path, summary)
 
 
+def _state_has_preserved_evidence(state: dict[str, Any], home: Path) -> bool:
+    """Unknown local evidence keeps its credential, even after server expiry."""
+    if state.get("retired_for_new_execution") or state.get("previous_credentials"):
+        return True
+    try:
+        if any(row.get("batch_id") == state.get("batch_id") for row in pending.load(home)):
+            return True
+        for path in (home / "runner-reservations").glob("*.json"):
+            saved = _read_private_json(path)
+            if saved is None or (saved.get("batch_id") == state.get("batch_id") and saved.get("released") is not True):
+                return True
+    except (OSError, pending.PendingLedgerError):
+        return True
+    return False
+
+
 def _cleanup_states(home: Path = HOME) -> None:
     """Bound inactive local state without touching credentials used by Fleet."""
     root = _root(home)
@@ -323,7 +346,7 @@ def _cleanup_states(home: Path = HOME) -> None:
         except OSError:
             continue
         if state.get("credential_kind") == "run_plan_v1":
-            if _state_in_active_fleet(path, home=home):
+            if _state_has_preserved_evidence(state, home) or _state_in_active_fleet(path, home=home):
                 continue
             if _state_expired(state, now=now):
                 _scrub_state(path, state, reason="expired", now=now)
@@ -337,7 +360,7 @@ def _cleanup_states(home: Path = HOME) -> None:
     # not become an unbounded token archive. Keep the newest bounded set.
     credentials.sort(reverse=True, key=lambda item: item[0])
     for _modified, path, state in credentials[MAX_CREDENTIAL_STATES:]:
-        if _state_in_active_fleet(path, home=home):
+        if _state_has_preserved_evidence(state, home) or _state_in_active_fleet(path, home=home):
             continue
         _scrub_state(path, state, reason="inactive_state_limit", now=now)
         summaries.append((now, path))
@@ -507,6 +530,7 @@ def _exchange(
         "credential_kind": "run_plan_v1",
         "server": server,
         "token": token,
+        "credential_generation": _optional_credential_generation(response.get("credential_generation", response.get("device_generation"))),
         "access_expires_at": response.get("access_expires_at"),
         "run_code_hash": _run_code_digest(run_code),
         "plan": plan,
@@ -528,6 +552,120 @@ def _exchange(
     _atomic_json(path, state)
     _cleanup_states(home)
     return path, state
+
+
+def _optional_credential_generation(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        raise RunPlanClientError("credential_generation_invalid", "本机凭证代次无法核验；请保留原运行记录并检查，不会开始新题。")
+    return value
+
+
+def _credential_contexts(state: dict[str, Any], client: ApiClient):
+    contexts = [(state, client)]
+    history = state.get("previous_credentials", [])
+    if not isinstance(history, list):
+        raise RunPlanClientError("credential_history_invalid", "旧凭证记录无法核验，请保留文件并检查。")
+    for old in history:
+        if (not isinstance(old, dict) or any(old.get(key) != state.get(key) for key in
+                ("server", "plan_id", "batch_id", "benchmark"))
+                or not isinstance(old.get("token"), str) or not old["token"].startswith("drp_")):
+            raise RunPlanClientError("credential_history_invalid", "旧凭证范围无法核验，请保留文件并检查。")
+        contexts.append((old, ApiClient(old["server"], old["token"],
+                         benchmark_id=old["benchmark"], batch_id=old["batch_id"])))
+    return contexts
+
+
+def _reconcile_capacity(state: dict[str, Any], client: ApiClient) -> dict[str, int]:
+    try:
+        from . import capacity_journal
+        return capacity_journal.reconcile_saved(HOME, client, batch_id=state["batch_id"])
+    except (ImportError, OSError, ValueError) as exc:
+        raise RunPlanClientError("capacity_evidence_unreadable", "本机退出证据无法核验，容量仍保留；请保留运行记录并检查。停止命令仍可使用。", agent_action="notify_only") from exc
+    except capacity_journal.CapacityEvidenceError as exc:
+        raise RunPlanClientError("capacity_evidence_unreadable", "本机退出证据无法核验，容量仍保留；请保留运行记录并检查。停止命令仍可使用。", agent_action="notify_only") from exc
+
+
+def _preserve_before_new_execution(state: dict[str, Any], client: ApiClient) -> None:
+    contexts = _credential_contexts(state, client)
+    saved = [entry for old, old_client in contexts for entry in _exact_pending_uploads(old["batch_id"], old_client)]
+    completed, unknown = _split_pending_results(saved)
+    if completed:
+        raise RunPlanClientError("completed_result_upload_pending", "本机还有已完成成果需要先补交；原凭证和成果已保留，不会开始新题。", agent_action="recover_upload", agent_details={"completed_result_count":len(completed), "next_commands":[_upload_recovery_action()]})
+    if unknown:
+        raise RunPlanClientError("cleanup_unconfirmed", _cleanup_quarantine_message(len(unknown)), agent_action="notify_only")
+    preserved = _recover_plan_uploads(state, client)
+    if preserved.get("status") != "completed":
+        raise RunPlanClientError("local_result_reconciliation_required", preserved["user_message"], agent_action="notify_only", agent_details=preserved.get("agent"))
+    # Retry the original credential first. Current credentials may be unable to
+    # read a future generation, and an old exact receipt remains authoritative.
+    counts = {"released":0, "pending":0, "unknown":0}
+    for old, old_client in reversed(contexts):
+        counts = _reconcile_capacity(old, old_client)
+    if counts["pending"] or counts["unknown"]:
+        raise RunPlanClientError("runner_exit_unconfirmed", "先前运行的退出或容量回执尚未确认，原记录已保留；请核查本机资源并对账后再明确恢复。", agent_action="notify_only", agent_details={"capacity_reconciliation":counts, "requires_user_action":True})
+
+
+def _execution_protocol(client: ApiClient, state: dict[str, Any]) -> tuple[int, int]:
+    try:
+        capabilities = client.run_plan_capabilities()
+        identity = client.whoami()
+    except AttributeError as exc:
+        raise RunPlanClientError("runner_reservation_upgrade_required", "服务端尚未确认安全运行协议；可以查看、停止和补交，但不会开始新题。") from exc
+    if (not isinstance(capabilities, dict) or type(capabilities.get("schema_version")) is not int
+            or capabilities["schema_version"] != 1
+            or not isinstance(capabilities.get("capabilities"), list)
+            or "runner-reservation-v1" not in capabilities["capabilities"]
+            or capabilities.get("stop_generation_cas") is not True
+            or capabilities.get("close_releases_capacity") is not False):
+        raise RunPlanClientError("runner_reservation_upgrade_required", "服务端尚未确认安全运行协议；可以查看、停止和补交，但不会开始新题。")
+    if (not isinstance(identity, dict) or type(identity.get("schema_version")) is not int
+            or identity["schema_version"] != 1 or identity.get("plan_id") != state["plan_id"]):
+        raise RunPlanClientError("device_generation_unconfirmed", "服务端未确认本次计划的设备代次，不会开始新题。")
+    live = _optional_credential_generation(identity.get("device_generation"))
+    credential = _optional_credential_generation(identity.get("credential_generation"))
+    saved = _optional_credential_generation(state.get("credential_generation"))
+    if live is None or credential is None or (saved is not None and saved != credential):
+        raise RunPlanClientError("device_generation_unconfirmed", "服务端凭证代次与本机记录不一致，不会开始新题。")
+    return live, credential
+
+
+def _explicit_reexchange(run_code, path, state, client, *, guard):
+    _preserve_before_new_execution(state, client)
+    guard()
+    device_id, device_name = stable_device(HOME)
+    response = ApiClient(state["server"], "").exchange_run_plan(
+        run_code=run_code, device_id=device_id, device_name=device_name)
+    if not isinstance(response, dict) or response.get("schema_version") != 1:
+        raise RunPlanClientError("plan_response_invalid", "服务端返回的恢复凭证无法核验。")
+    plan = _validate_plan(response.get("plan"))
+    token = response.get("plan_access_token")
+    generation = _optional_credential_generation(response.get("credential_generation"))
+    if (not isinstance(token, str) or not token.startswith("drp_") or len(token)>512
+            or generation is None or _optional_credential_generation(response.get("device_generation")) != generation
+            or plan["plan_id"] != state["plan_id"] or plan["batch_id"] != state["batch_id"]):
+        raise RunPlanClientError("plan_response_invalid", "恢复凭证不属于原计划和设备代次，原记录已保留。")
+    new_client = ApiClient(state["server"], token, benchmark_id=state["benchmark"], batch_id=state["batch_id"])
+    next_state = dict(state)
+    previous = {key:value for key,value in state.items() if key != "previous_credentials"}
+    next_state.update(token=token, credential_generation=generation, plan=plan,
+                      access_expires_at=response.get("access_expires_at"),
+                      logical_session_id="drl_"+secrets.token_urlsafe(24),
+                      pending_decision=None, pending_local_capacity=None,
+                      previous_credentials=[*state.get("previous_credentials", []),previous])
+    live, issued = _execution_protocol(new_client, next_state)
+    if live != issued:
+        raise RunPlanClientError("stale_device_generation", "恢复期间出现更新的停止意图；本次不会开始新题，请先查看进度。")
+    guard()
+    # Never overwrite a path that an older Fleet item can still use for fault
+    # stop or exact-result upload. The new token gets a new private path.
+    new_path = path.with_name(f"plan-{state['plan_id']}-credential-{hashlib.sha256(token.encode()).hexdigest()[:16]}.json")
+    _atomic_json(new_path, next_state)
+    old_state = dict(state)
+    old_state["retired_for_new_execution"] = True
+    _atomic_json(path, old_state)
+    return new_path, next_state, new_client
 
 
 def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
@@ -555,7 +693,11 @@ def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
         server = _resolve_server(getattr(args, "server", None), saved_stop)
     else:
         with _exclusive_lock(_root(HOME) / STATE_LOCK_FILE):
-            saved = _saved_state(run_code, home=HOME)
+            digest = _run_code_digest(run_code)
+            saved = next(((path, state) for path, state in _iter_states(HOME) or ()
+                          if secrets.compare_digest(str(state.get("run_code_hash") or ""), digest)), None)
+            if saved is None:
+                saved = _saved_state(run_code, home=HOME)
             server = _resolve_server(getattr(args, "server", None), saved)
             if saved is None:
                 path, state = _exchange(run_code, server, home=HOME)
@@ -567,6 +709,7 @@ def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
         raise RunPlanClientError("credential_invalid", "本机运行权限无效，请回网页重新复制。")
     _validate_plan(plan)
     client = ApiClient(server, token, benchmark_id=plan["benchmark_id"], batch_id=plan["batch_id"])
+    client.credential_generation = _optional_credential_generation(state.get("credential_generation"))
     return run_code, path, state, client
 
 
@@ -1329,8 +1472,29 @@ def _progress_state_changed_response() -> dict[str, Any]:
     }
 
 
+def _recover_all_plan_uploads(state: dict[str, Any], client: ApiClient) -> dict[str, Any]:
+    contexts = _credential_contexts(state, client)
+    selected = [(old, old_client) for old, old_client in contexts
+                if _exact_pending_uploads(old["batch_id"], old_client)]
+    known_ids = {entry["assignment_id"] for old, old_client in selected
+                 for entry in _exact_pending_uploads(old["batch_id"], old_client)}
+    result = None
+    counts = {"released":0, "pending":0, "unknown":0}
+    for old, old_client in selected or [(state, client)]:
+        result = _recover_plan_uploads(old, old_client, known_other_assignment_ids=known_ids)
+        counts = _reconcile_capacity(old, old_client)
+        if result.get("status") != "completed":
+            return result
+    if counts["pending"] or counts["unknown"]:
+        raise RunPlanClientError("runner_exit_unconfirmed",
+            "完成成果的补交已处理；先前运行的退出或容量回执仍未确认，请保留记录并检查。",
+            agent_action="notify_only", agent_details={"capacity_reconciliation":counts})
+    return result
+
+
 def _recover_plan_uploads(
-    state: dict[str, Any], client: ApiClient,
+    state: dict[str, Any], client: ApiClient, *,
+    known_other_assignment_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Replay this plan's completed local uploads without starting a runner."""
 
@@ -1344,6 +1508,7 @@ def _recover_plan_uploads(
         if row.get("batch_id") == batch_id or row["assignment_id"] in selected
     }
     unmatched -= eligible_ids
+    unmatched -= known_other_assignment_ids or set()
     for aid in list(unmatched):
         saved = selected.get(aid)
         if saved is None:
@@ -1948,6 +2113,13 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
             agent_action="notify_only",
         )))
         return 1
+    except OSError:
+        _output(args, _local_error_response(RunPlanClientError(
+            "local_state_io_unconfirmed",
+            "本机运行记录的读写未能确认，已停止后续启动。请保留现有文件，检查磁盘和目录权限后重试。",
+            agent_action="notify_only",
+        )))
+        return 1
     except ApiError as exc:
         response = _api_error_response(exc)
         if _output(args, response):
@@ -1997,7 +2169,7 @@ def cmd_run_plan(args) -> int:
             )
         _run_code, path, state, client = _state_and_client(args)
         if getattr(args, "upload_only", False):
-            return _recover_plan_uploads(state, client)
+            return _recover_all_plan_uploads(state, client)
         local_generation = args._local_run_generation
         run_intent.require(HOME, state["batch_id"], local_generation)
         if not authoritative_recheck:
@@ -2085,6 +2257,23 @@ def cmd_run_plan(args) -> int:
             same_local_plan and current_status in {"starting", "running", "orphaned"}
         )
 
+        live_generation, credential_generation = _execution_protocol(client, state)
+        if not already_local:
+            _preserve_before_new_execution(state, client)
+        if live_generation != credential_generation:
+            explicit_resume = (recheck_generation is None and not authoritative_recheck
+                               and not raw_decision_token and docker_install_token is None)
+            if not explicit_resume or already_local:
+                raise RunPlanClientError("stale_device_generation", "设备已有新的停止或恢复意图；旧自动检查不会提升凭证或重新启动，请先查看进度并明确恢复。", agent_action="notify_only")
+            path, state, client = _explicit_reexchange(_run_code, path, state, client,
+                guard=lambda:run_intent.require(HOME, plan["batch_id"], local_generation))
+            plan = state["plan"]
+            credential_generation = state["credential_generation"]
+        else:
+            state["credential_generation"] = credential_generation
+            _atomic_json(path, state)
+        run_intent.require(HOME, plan["batch_id"], local_generation)
+
         assignments = plan["assignments"]
         first = assignments[0]
         refill = plan["refill"]
@@ -2112,6 +2301,7 @@ def cmd_run_plan(args) -> int:
                 try:
                     client.stop_run_plan(
                         plan_id=plan["plan_id"], scope="this_device",
+                        expected_generation=credential_generation,
                     )
                 except ApiError:
                     pass
@@ -2145,6 +2335,7 @@ def cmd_run_plan(args) -> int:
             request = {
                 "plan_id": plan["plan_id"],
                 "logical_session_id": state["logical_session_id"],
+                "expected_generation": credential_generation,
                 "concurrency_mode": concurrency_mode,
                 "concurrency": concurrency,
                 "decision": decision,
@@ -2480,7 +2671,7 @@ def cmd_run_plan(args) -> int:
             and current.get("plan_id") == plan["plan_id"]
         ):
             try:
-                client.stop_run_plan(plan_id=plan["plan_id"], scope="this_device")
+                client.stop_run_plan(plan_id=plan["plan_id"], scope="this_device", expected_generation=credential_generation)
             except ApiError:
                 pass
             raise RunPlanClientError(
@@ -2505,6 +2696,7 @@ def cmd_run_plan(args) -> int:
             try:
                 client.stop_run_plan(
                     plan_id=plan["plan_id"], scope="this_device",
+                        expected_generation=credential_generation,
                 )
             except ApiError:
                 pass
@@ -2549,6 +2741,7 @@ def cmd_run_plan(args) -> int:
 def cmd_progress_plan(args) -> int:
     def operate() -> dict[str, Any]:
         _run_code, path, state, client = _state_and_client(args)
+        capacity_reconciliation = _reconcile_capacity(state, client)
         pending_capacity = state.get("pending_local_capacity")
         if (
             isinstance(pending_capacity, dict)
@@ -2592,7 +2785,9 @@ def cmd_progress_plan(args) -> int:
                     "本机运行信息已经变化；为避免覆盖新状态，本次进度未保存。",
                     agent_action="notify_only",
                 )
-            if _intent_generation(current) != snapshot_generation:
+            if (_intent_generation(current) != snapshot_generation
+                    or current.get("retired_for_new_execution")
+                    or current.get("token") != state.get("token")):
                 return None
             # Merge only into the freshly re-read state.  Never write the old
             # pre-network snapshot back over a newer run/stop intent.
@@ -2607,7 +2802,8 @@ def cmd_progress_plan(args) -> int:
         from . import fleet
 
         local_item = fleet.batch_status(state["batch_id"])
-        pending_uploads = _exact_pending_uploads(state["batch_id"], client)
+        pending_uploads = [entry for old, old_client in _credential_contexts(state, client)
+                           for entry in _exact_pending_uploads(old["batch_id"], old_client)]
         completed_pending, quarantine_pending = _split_pending_results(pending_uploads)
         same_local_plan = bool(
             isinstance(local_item, dict)
@@ -2632,6 +2828,11 @@ def cmd_progress_plan(args) -> int:
                 ),
                 quarantine_count=len(quarantine_pending),
             )
+        if ((capacity_reconciliation["pending"] or capacity_reconciliation["unknown"])
+                and local_status not in {"starting", "running", "stopping", "orphaned"}):
+            raise RunPlanClientError("runner_exit_unconfirmed",
+                "先前运行的退出或容量回执尚未确认；请保留本机记录并检查，暂时不能新增运行。",
+                agent_action="notify_only", agent_details={"capacity_reconciliation":capacity_reconciliation})
         if (
             same_local_plan
             and local_fault
@@ -2685,6 +2886,7 @@ def cmd_stop_plan(args) -> int:
         request = {
             "plan_id": state["plan_id"],
             "scope": scope,
+            "expected_generation": _optional_credential_generation(state.get("credential_generation")),
             "decision_token": decision_token,
         }
         try:

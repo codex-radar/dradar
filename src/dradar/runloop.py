@@ -3079,6 +3079,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
 
     def bind_owner(_worker_event: dict | None = None) -> None:
         nonlocal ownership_state
+        run_intent.require_worker(HOME)
         if ownership_state == "bound":
             # BuildFlake retry is still the same logical assignment attempt.
             # The first successful bind already fenced this process/session;
@@ -3218,6 +3219,10 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     art = None
     for attempt in (1, 2):
         assignment["_runner_attempt"]=attempt
+        execution_observer = None
+        journal = getattr(telemetry, "capacity_journal", None)
+        if journal is not None:
+            execution_observer = journal.begin_attempt(assignment)
         try:
             try:
                 if telemetry is not None:
@@ -3228,6 +3233,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                     assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
                     on_started=bind_owner,
                     on_worker_registered=bind_owner,
+                    **({"execution_observer": execution_observer} if execution_observer is not None else {}),
                     **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
                     environment_build_timeout_multiplier=(
                         getattr(
@@ -5313,6 +5319,7 @@ def cmd_go(args) -> int:
         )
         client = _client(cfg, auto_register=True)
         _scope_client_to_batch(client, args.batch_id)
+        client.require_runner_reservation_protocol()
     except BaseException as exc:
         _publish_fleet_startup_failure(args, exc)
         raise
@@ -7845,10 +7852,12 @@ def _wait_for_scoped_refill_work(
             runtime = _run_config(args)
             plan_id = runtime.get("run_plan_id")
             logical_session_id = runtime.get("run_plan_logical_session_id")
+            credential_generation = runtime.get("run_plan_credential_generation")
             if (
                 not isinstance(plan_id, str) or not plan_id
                 or not isinstance(logical_session_id, str)
                 or not logical_session_id.startswith("drl_")
+                or type(credential_generation) is not int or credential_generation < 0
             ):
                 raise refill_plan.RefillError(
                     "private run-plan credentials lack a stable device session"
@@ -7858,6 +7867,7 @@ def _wait_for_scoped_refill_work(
                 logical_session_id=logical_session_id,
                 concurrency_mode="fixed",
                 concurrency=desired_workers,
+                expected_generation=credential_generation,
             )
             envelope = refresh.get("envelope") if isinstance(refresh, dict) else None
             if not isinstance(envelope, dict):
