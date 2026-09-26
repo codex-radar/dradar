@@ -428,3 +428,19 @@ def test_reconcile_post_outcomes_are_explicit_and_bounded(
         assert rc == 0 and output["read_only"] is False and output["idempotent_replay"] is True
     else:
         assert rc == 1 and output["read_only"] is False and output["error_code"] == expected
+
+
+@pytest.mark.parametrize("change", [
+    lambda value: value.pop("execution_manifest_sha256"),
+    lambda value: value.update(unexpected="must stop"),
+    lambda value: value.update(historical_scope_verified=False),
+])
+def test_reconcile_evidence_shape_is_required_before_network(reconcile_wire, capsys, change):
+    seen, evidence = reconcile_wire
+    value = _reconcile_evidence()
+    change(value)
+    save(evidence, value)
+    rc = legacy_capacity.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1 and output["error_code"] == "reconcile_evidence_unverifiable"
+    assert seen == []
