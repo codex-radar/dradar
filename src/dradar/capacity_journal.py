@@ -265,7 +265,10 @@ def reconcile_file(path: Path, client) -> bool:
             raise CapacityEvidenceError("Saved exit evidence changed; preserve it for review.")
         receipt = _receipt(client, state)
         if not receipt["closed"]:
-            client.runner_close(state["close_request"])
+            try:
+                client.runner_close(state["close_request"])
+            except ApiError:
+                pass  # The exact receipt distinguishes a lost ACK from no close.
             receipt = _receipt(client, state)
             if not receipt["closed"]:
                 return False

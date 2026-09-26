@@ -99,6 +99,18 @@ def test_empty_session_requires_created_and_sealed_journal(tmp_path):
         journal.reconcile_file(tmp_path / "missing.json", ReceiptServer())
 
 
+def test_close_commit_with_lost_ack_is_read_back_before_release(tmp_path):
+    local = prepare(tmp_path)
+    assert local.seal(close_seq=2, reason="completed")
+    class LostClose(ReceiptServer):
+        def runner_close(self, body):
+            super().runner_close(body)
+            raise ApiError("accepted close without acknowledgement")
+    server = LostClose()
+    assert journal.reconcile_file(local.path, server)
+    assert server.calls.count("close") == server.calls.count("release") == 1
+
+
 @pytest.mark.parametrize("bad", [
     event("confirmed_absent", process_group="absent", exact_job_containers="absent"),
     event("entered", scope={**SCOPE, "runner_session_id": "wrong-session"}),
