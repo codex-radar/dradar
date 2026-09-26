@@ -5256,7 +5256,6 @@ def cmd_go(args) -> int:
         _align_refill_target_with_workers(args)
     if (auto_workers or workers > 1) and not getattr(args, "worker_child", False):
         try:
-            _preflight_scoped_provider(args)
             result = _run_worker_pool(args)
         except (KeyboardInterrupt, EOFError) as exc:
             # The pool parent returns from cmd_go before the single-worker
@@ -5274,11 +5273,6 @@ def cmd_go(args) -> int:
         )
         return result
     try:
-        _preflight_scoped_provider(args)
-    except BaseException as exc:
-        _publish_fleet_startup_failure(args, exc)
-        raise
-    try:
         cfg = _run_config(args)
         cfg["benchmark"] = (
             getattr(args, "benchmark", None)
@@ -5288,6 +5282,7 @@ def cmd_go(args) -> int:
         client = _client(cfg, auto_register=True)
         _scope_client_to_batch(client, args.batch_id)
         client.require_runner_reservation_protocol()
+        _preflight_scoped_provider(args)
     except BaseException as exc:
         _publish_fleet_startup_failure(args, exc)
         raise
@@ -5965,6 +5960,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
     """Prepare one batch, then supervise several ordinary resume processes."""
     if prepared is not None:
         cfg, client, active = prepared
+        client.require_runner_reservation_protocol()
         if not args.yes:
             answer = input(
                 f"start {len(active)} held tasks across their exact batches "
@@ -6004,6 +6000,10 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             )
             client = _client(cfg, auto_register=True)
             _scope_client_to_batch(client, getattr(args, "batch_id", None))
+            # The parent can claim before any child starts. Check admission
+            # before capacity inventory, environment preparation or claims.
+            client.require_runner_reservation_protocol()
+            _preflight_scoped_provider(args)
             requested_options = [
                 value for value in (
                     getattr(args, "refill_to", None), getattr(args, "auto", None),
@@ -6044,6 +6044,8 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             )
             client = _client(cfg, auto_register=True)
             _scope_client_to_batch(client, getattr(args, "batch_id", None))
+            client.require_runner_reservation_protocol()
+            _preflight_scoped_provider(args)
         tasks_root = _selected_tasks_root(cfg)
         flight = FlightRecorder(HOME, client) if fleet_pool else None
 

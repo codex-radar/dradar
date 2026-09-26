@@ -310,7 +310,7 @@ def test_worker_count_accepts_40(monkeypatch):
     assert seen == [40]
 
 
-def test_antigravity_refill_preflight_fails_before_pool_or_server(
+def test_antigravity_refill_preflight_fails_after_protocol_before_preparation(
         tmp_path, monkeypatch,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -318,10 +318,16 @@ def test_antigravity_refill_preflight_fails_before_pool_or_server(
         runloop, "prepare_antigravity_auth",
         lambda: f"cannot inspect {tmp_path}/providers/antigravity/.gemini/token",
     )
-    started = []
-    monkeypatch.setattr(
-        runloop, "_run_worker_pool", lambda _args: started.append(True) or 0,
-    )
+    _patch_pool_setup(monkeypatch)
+    protocol_checks = []
+    class Client(_ReservationReadyClient):
+        def require_runner_reservation_protocol(self):
+            protocol_checks.append(True)
+            return super().require_runner_reservation_protocol()
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: Client())
+    monkeypatch.setattr(runloop, "_scope_client_to_batch", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda *_a: pytest.fail(
+        "provider failure must stop before environment preparation"))
     runloop.refill_plan.configure(
         tmp_path,
         volunteer_id="vol-1", refill_to=1, max_tasks=2,
@@ -339,7 +345,7 @@ def test_antigravity_refill_preflight_fails_before_pool_or_server(
     with pytest.raises(SystemExit) as exc:
         runloop.cmd_go(args)
 
-    assert started == []
+    assert protocol_checks == [True]
     message = str(exc.value)
     assert "$DRADAR_HOME/providers/antigravity" in message
     assert str(tmp_path) not in message
@@ -827,7 +833,7 @@ class _ScriptedProcess(_Process):
 
 
 def _patch_pool_setup(monkeypatch, active_count=5):
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": []}
 
@@ -1105,7 +1111,7 @@ def test_pool_children_inherit_the_parents_exact_capability_snapshot(monkeypatch
     _patch_pool_setup(monkeypatch)
     calls = []
 
-    class Client:
+    class Client(_ReservationReadyClient):
         capabilities = ("public-task-package-pin-v1", "codebuddy-ready-v4")
 
         def get_assignment(self):
@@ -1189,7 +1195,7 @@ def test_pool_scopes_inventory_and_all_children_to_exact_batch(monkeypatch):
     batch_id = "550e8400e29b41d4a716446655440000"
     scoped = []
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def set_batch_id(self, value):
             scoped.append(value)
 
@@ -1854,7 +1860,7 @@ def test_pool_restores_vacant_slot_when_fresh_held_work_is_waiting(
         monkeypatch, capsys):
     _patch_pool_setup(monkeypatch, active_count=2)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def __init__(self):
             self.calls = 0
 
@@ -2379,7 +2385,7 @@ def test_server_confirmed_stopped_assignment_backfills_after_retry_time(
         "runner_phase": None,
     }
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def __init__(self):
             self.calls = 0
 
@@ -2542,7 +2548,7 @@ def test_pool_does_not_restore_slot_for_future_retry(monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=2)
     retry_after = datetime.now(timezone.utc) + timedelta(hours=1)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": [{
                 "assignment_id": "cooling-down",
@@ -2796,7 +2802,7 @@ def test_external_pool_circuit_is_persistent_and_prevents_worker_start(
 def test_backfill_spawn_failure_keeps_existing_worker_running(monkeypatch, capsys):
     _patch_pool_setup(monkeypatch, active_count=2)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": [{"assignment_id": "new", "started_at": None}]}
 
@@ -3128,7 +3134,7 @@ def test_last_worker_completion_followed_by_batch_404_exits_cleanly(
         monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=1)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         batch_id = "550e8400e29b41d4a716446655440000"
 
         def set_batch_id(self, value):
