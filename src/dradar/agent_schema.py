@@ -193,16 +193,16 @@ COMMAND_SCHEMAS = {
         ],
     },
     "progress": {
-        "summary": "读取这次领取在所有设备上的进度",
+        "summary": "读取这次领取的进度，并对账原意图和已有退出容量回执",
         "arguments": [
             _argument(
                 "--plan",
                 user_intent="查看指定这次领取的进度",
                 allowed_when="本机可以交换或已有该计划的短期权限",
                 default=None,
-                state_change="none",
+                state_change="保存本机进度与原意图回执；必要时重放原 session close/release，不创建新执行",
                 decision_required=False,
-                idempotency="read_only",
+                idempotency="reconcile_original_requests_only",
                 failure_codes=["run_code_invalid", "plan_expired", "plan_access_denied"],
             ),
             _argument(
@@ -212,7 +212,7 @@ COMMAND_SCHEMAS = {
                 default="saved_plan_then_config_then_public_default",
                 state_change="none",
                 decision_required=False,
-                idempotency="read_only",
+                idempotency="same_bound_server",
                 failure_codes=["server_url_invalid", "server_scope_mismatch"],
             ),
             _argument(
