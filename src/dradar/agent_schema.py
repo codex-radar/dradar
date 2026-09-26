@@ -64,6 +64,7 @@ COMMAND_SCHEMAS = {
             "capacity_temporarily_zero": "poll_then_replay_base_run_without_old_choices",
             "missing_current_tool": "notify_before_server_start",
             "completed_result_upload_recovery": "exact_batch_upload_only_no_runner_start",
+            "stopped_refill_held_recovery": "same_plan_device_readmission_without_new_claims",
         },
         "arguments": [
             _argument(
@@ -94,6 +95,17 @@ COMMAND_SCHEMAS = {
                 ],
             ),
             _argument(
+                "--held-only",
+                user_intent="只恢复这次运行已经领取、仍有效的题目，不继续补题",
+                allowed_when="原计划仍授权当前设备恢复，且用户明确选择只处理现有题目",
+                default=False,
+                state_change="重新校验并登记当前设备；只启动已领题，不配置或延长补题活动",
+                decision_required=False,
+                conflicts_with=["--upload-only"],
+                idempotency="同一设备和批次重复提交不会再领取题目或重复执行已提交题目",
+                failure_codes=["plan_stopped", "plan_expired", "local_run_scope_conflict"],
+            ),
+            _argument(
                 "--upload-only",
                 user_intent="只补交这台设备已经完成、但尚未成功上传的结果",
                 allowed_when="进度响应的 agent_action=recover_upload",
@@ -102,6 +114,7 @@ COMMAND_SCHEMAS = {
                 decision_required=False,
                 conflicts_with=[
                     "--concurrency", "--decision-token", "--recheck-generation",
+                    "--held-only",
                 ],
                 idempotency="没有待补交结果时直接成功；已上传结果不会重复运行模型",
                 failure_codes=[

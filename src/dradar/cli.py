@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         help="tasks to run at once, or auto (default: the website choice)",
     )
     p_run_plan.add_argument(
+        "--held-only", action="store_true",
+        help="resume this run's held assignments without starting or extending refill",
+    )
+    p_run_plan.add_argument(
         "--upload-only", action="store_true",
         help="retry completed results for this run without starting task work",
     )

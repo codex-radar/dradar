@@ -1899,9 +1899,11 @@ def cmd_run_plan(args) -> int:
     def operate(*, authoritative_recheck: bool = False) -> dict[str, Any]:
         recheck_generation = getattr(args, "recheck_generation", None)
         docker_install_token = getattr(args, "docker_install_token", None)
+        held_only = bool(getattr(args, "held_only", False))
         if getattr(args, "upload_only", False):
             if (
                 getattr(args, "concurrency", None) is not None
+                or held_only
                 or getattr(args, "decision_token", None) is not None
                 or recheck_generation is not None
                 or docker_install_token is not None
@@ -1971,6 +1973,16 @@ def cmd_run_plan(args) -> int:
             and current_local.get("plan_id") == plan["plan_id"]
         )
         if (
+            held_only and same_local_plan
+            and current_status in {"starting", "running", "orphaned"}
+            and current_local.get("refill")
+        ):
+            raise RunPlanClientError(
+                "local_run_scope_conflict",
+                "这台设备仍在运行原补题模式；请先安全停止，再明确只恢复已领题。",
+                agent_action="inspect_current_run",
+            )
+        if (
             recheck_generation is not None
             and same_local_plan
             and current_status in {
@@ -2010,11 +2022,11 @@ def cmd_run_plan(args) -> int:
                     credentials_file=path,
                     plan_id=plan["plan_id"],
                     retry=True,
-                    refill=bool(refill.get("enabled")),
-                    max_tasks=refill.get("max_tasks"),
-                    refill_harness=plan["harness"],
-                    refill_model=first.get("model"),
-                    refill_effort=first.get("effort"),
+                    refill=bool(refill.get("enabled")) and not held_only,
+                    max_tasks=(refill.get("max_tasks") if not held_only else None),
+                    refill_harness=(plan["harness"] if not held_only else None),
+                    refill_model=(first.get("model") if not held_only else None),
+                    refill_effort=(first.get("effort") if not held_only else None),
                 )
             except fleet.FleetStartupError as exc:
                 # Server admission is reversible until local readiness is
