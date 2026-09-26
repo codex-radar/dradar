@@ -260,8 +260,17 @@ def cmd_status(args) -> int:
 
     local_pending = pending.load(HOME)
     if local_pending:
-        print(f"\n{len(local_pending)} trial(s) ran but haven't uploaded yet "
-              "— run `dradar retry-upload` to flush them")
+        quarantine = [entry for entry in local_pending
+                      if pending.is_cleanup_quarantine(entry)]
+        results = [entry for entry in local_pending
+                   if isinstance(entry, dict) and not pending.is_cleanup_quarantine(entry)]
+        if quarantine:
+            print(f"\n{len(quarantine)} run(s) have unconfirmed process exit/cleanup; "
+                  "results are unknown. Keep the safety records and inspect "
+                  "local cleanup before any recovery")
+        if results:
+            print(f"\n{len(results)} saved result(s) need upload or review "
+                  "— run `dradar retry-upload` for eligible results")
 
     # Lease visibility belongs in status as a short summary even though
     # `dradar leases` owns the detailed view. This makes the recovery command

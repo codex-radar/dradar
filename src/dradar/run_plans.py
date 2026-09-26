@@ -1097,7 +1097,7 @@ def _local_preparing_response(
 def _exact_pending_uploads(
     batch_id: str, client: ApiClient | None = None,
 ) -> list[dict[str, Any]]:
-    """Read only durable completed results belonging to one exact plan batch."""
+    """Read saved results and safety fences belonging to one exact plan batch."""
 
     from . import pending
 
@@ -1131,6 +1131,44 @@ def _exact_pending_uploads(
         ):
             matches.append(entry)
     return matches
+
+
+def _split_pending_results(
+    entries: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    from . import pending
+
+    quarantine = [entry for entry in entries if pending.is_cleanup_quarantine(entry)]
+    results = [entry for entry in entries if not pending.is_cleanup_quarantine(entry)]
+    return results, quarantine
+
+
+def _cleanup_quarantine_message(count: int) -> str:
+    return (
+        f"这台设备有 {count} 条运行的进程退出/清理未确认，成果未知；"
+        "安全隔离记录已保留，不能自动补交或重跑。请先核查本机清理状态。"
+    )
+
+
+def _cleanup_quarantine_response(count: int) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "review_required",
+        "interaction": "warn",
+        "decision_required": False,
+        "user_message": _cleanup_quarantine_message(count),
+        "agent_action": "notify_only",
+        "error_code": "cleanup_unconfirmed",
+        "retryable": False,
+        "choices": [],
+        "poll_after_seconds": None,
+        "agent": {
+            "requires_user_action": True,
+            "completed_result_count": 0,
+            "cleanup_unconfirmed_count": count,
+            "next_commands": [],
+        },
+    }
 
 
 def _upload_recovery_action() -> dict[str, Any]:
@@ -1290,6 +1328,9 @@ def _recover_plan_uploads(
             "retryable": False,
             "choices": [],
         }
+    results_before, quarantine_before = _split_pending_results(before)
+    if not results_before:
+        return _cleanup_quarantine_response(len(quarantine_before))
     from . import runloop
 
     runloop._mark_pending_scope_required(client)
@@ -1307,8 +1348,15 @@ def _recover_plan_uploads(
             "retryable": False,
             "choices": [],
         }
-    blocked = [entry for entry in remaining if entry.get("upload_blocked")]
-    if blocked and len(blocked) == len(remaining):
+    results, quarantine = _split_pending_results(remaining)
+    if not results:
+        return _cleanup_quarantine_response(len(quarantine))
+    quarantine_note = (
+        "另有运行的进程退出/清理未确认，成果未知；其隔离记录不会补交或重跑。"
+        if quarantine else ""
+    )
+    blocked = [entry for entry in results if entry.get("upload_blocked")]
+    if blocked and len(blocked) == len(results):
         return {
             "schema_version": SCHEMA_VERSION,
             "status": "review_required",
@@ -1316,6 +1364,7 @@ def _recover_plan_uploads(
             "decision_required": False,
             "user_message": (
                 "这台设备有已完成结果需要人工检查后再补交；不会重新运行题目。"
+                + quarantine_note
             ),
             "agent_action": "notify_only",
             "error_code": "completed_result_review_required",
@@ -1324,6 +1373,7 @@ def _recover_plan_uploads(
             "agent": {
                 "requires_user_action": True,
                 "completed_result_count": len(blocked),
+                **({"cleanup_unconfirmed_count": len(quarantine)} if quarantine else {}),
             },
         }
     return {
@@ -1334,6 +1384,7 @@ def _recover_plan_uploads(
         "user_message": (
             "这台设备有已完成结果尚未补交成功；网络恢复后只需继续补交，"
             "不会重新运行题目。"
+            + quarantine_note
         ),
         "agent_action": "recover_upload",
         "error_code": "completed_result_upload_pending",
@@ -1341,13 +1392,18 @@ def _recover_plan_uploads(
         "choices": [],
         "poll_after_seconds": 30,
         "user_message_policy": "on_change_or_heartbeat",
-        "agent": {"next_commands": [_upload_recovery_action()]},
+        "agent": {
+            "completed_result_count": len(results),
+            "next_commands": [_upload_recovery_action()],
+            **({"cleanup_unconfirmed_count": len(quarantine)} if quarantine else {}),
+        },
     }
 
 
 def _local_progress_fault_response(
     server_response: dict[str, Any], local_item: dict[str, Any] | None,
     *, pending_upload_count: int = 0, blocked_upload_count: int = 0,
+    quarantine_count: int = 0,
 ) -> dict[str, Any]:
     """Make a dead local runner visible without misreporting remote devices."""
 
@@ -1377,6 +1433,16 @@ def _local_progress_fault_response(
         "argv": ["dradar", "fleet", "status"],
         "interactive": False,
     }]
+    if quarantine_count:
+        agent["cleanup_unconfirmed_count"] = quarantine_count
+        if not pending_upload_count:
+            result.update(_cleanup_quarantine_response(quarantine_count))
+            result["agent"] = {**agent, **result["agent"]}
+            return result
+    quarantine_note = (
+        "另有运行的进程退出/清理未确认，成果未知；其隔离记录不会补交或重跑。"
+        if quarantine_count else ""
+    )
     if pending_upload_count:
         if blocked_upload_count == pending_upload_count:
             agent.update({
@@ -1391,6 +1457,7 @@ def _local_progress_fault_response(
                 "user_message": (
                     "这台设备有已完成结果需要人工检查后再补交；"
                     "不会重新运行题目。"
+                    + quarantine_note
                 ),
                 "agent_action": "notify_only",
                 "error_code": "completed_result_review_required",
@@ -1411,6 +1478,7 @@ def _local_progress_fault_response(
             "user_message": (
                 "这台设备有已完成结果尚未补交成功；接下来只会补交结果，"
                 "不会重新运行题目。"
+                + quarantine_note
             ),
             "agent_action": "recover_upload",
             "error_code": "completed_result_upload_pending",
@@ -2430,6 +2498,7 @@ def cmd_progress_plan(args) -> int:
 
         local_item = fleet.batch_status(state["batch_id"])
         pending_uploads = _exact_pending_uploads(state["batch_id"], client)
+        completed_pending, quarantine_pending = _split_pending_results(pending_uploads)
         same_local_plan = bool(
             isinstance(local_item, dict)
             and local_item.get("plan_id") == state["plan_id"]
@@ -2446,11 +2515,12 @@ def cmd_progress_plan(args) -> int:
             return _local_progress_fault_response(
                 response,
                 local_item if same_local_plan else None,
-                pending_upload_count=len(pending_uploads),
+                pending_upload_count=len(completed_pending),
                 blocked_upload_count=sum(
                     bool(entry.get("upload_blocked"))
-                    for entry in pending_uploads
+                    for entry in completed_pending
                 ),
+                quarantine_count=len(quarantine_pending),
             )
         if (
             same_local_plan
