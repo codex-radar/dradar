@@ -78,13 +78,16 @@ class RegistrationWindow:
                 "registration_ack_state": self._diagnostic_ack,
                 "registration_close_state": "not_attempted",
             }
-            now = time.monotonic()
-            elapsed = (now - self._diagnostic_started) * 1000
-            remaining = (self.deadline - now) * 1000
-            if math.isfinite(now) and math.isfinite(elapsed) and 0 <= elapsed <= 120000:
-                result["registration_elapsed_ms"] = int(elapsed)
-                if math.isfinite(remaining) and remaining <= 15000:
-                    result["registration_remaining_ms"] = int(max(0, remaining))
+            try:
+                now = time.monotonic()
+                elapsed = (now - self._diagnostic_started) * 1000
+                remaining = (self.deadline - now) * 1000
+                if math.isfinite(now) and math.isfinite(elapsed) and 0 <= elapsed <= 120000:
+                    result["registration_elapsed_ms"] = int(elapsed)
+                    if math.isfinite(remaining) and remaining <= 15000:
+                        result["registration_remaining_ms"] = int(max(0, remaining))
+            except (ArithmeticError, TypeError, ValueError, OSError):
+                pass
             self._diagnostic = result
             self._publish_diagnostic()
         except Exception:

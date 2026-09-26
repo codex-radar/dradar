@@ -160,3 +160,11 @@ def test_registration_response_parser_rejects_bad_body(body):
     with pytest.raises(ApiError) as caught:
         window._check_response(httpx.Response(200, content=body))
     assert caught.value.registration_reason == 'invalid_response'
+
+
+def test_clock_read_failure_omits_only_numbers(monkeypatch):
+    window = RegistrationWindow(registration.time.monotonic()+30, lambda: True)
+    monkeypatch.setattr(registration.time, 'monotonic', lambda: (_ for _ in ()).throw(OSError('clock unavailable')))
+    result = diagnostic(window, window._error('worker exited', 'worker_exited'))
+    assert result['registration_failure_reason'] == 'worker_exited'
+    assert 'registration_elapsed_ms' not in result and 'registration_remaining_ms' not in result
