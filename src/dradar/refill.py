@@ -331,10 +331,15 @@ def configure(
     refill_order: str = "cost",
     server_campaign_id: str | None = None,
     points_tier: str | None = None,
+    refill_mode: str = "seed_barrier",
     replace_existing: bool = False,
 ) -> dict:
     if refill_to < 1 or max_tasks < 1:
         raise RefillError("refill target and max tasks must be positive")
+    if refill_mode not in {"seed_barrier", "rolling_submitted"}:
+        raise RefillError("invalid refill mode")
+    if refill_mode == "rolling_submitted" and server_campaign_id is None:
+        raise RefillError("rolling mode requires an exact server campaign")
     if quota_tier not in TIERS:
         raise RefillError(f"unknown quota tier: {quota_tier}")
     if refill_harness is None and (refill_model is not None or refill_effort is not None):
@@ -362,6 +367,7 @@ def configure(
         "refill_model": refill_model,
         "refill_effort": refill_effort,
         "refill_order": refill_order,
+        "refill_mode": refill_mode,
     }
     if server_campaign_id is not None:
         desired["server_campaign_id"] = server_campaign_id
@@ -384,6 +390,8 @@ def configure(
         # CLI upgrade does not manufacture a conflicting plan.
         if current is not None and "refill_order" not in current:
             current["refill_order"] = "cost"
+        if current is not None and "refill_mode" not in current:
+            current["refill_mode"] = "seed_barrier"
         replaced_plan_id = None
         if current and isinstance(current.get("circuit"), dict):
             circuit = current["circuit"]
@@ -735,6 +743,17 @@ def _authoritative_campaign_snapshot(plan: dict, client) -> dict | None:
         and campaign_harness == plan.get("refill_harness")
         and campaign.get("model") == plan.get("refill_model")
         and campaign.get("effort") == plan.get("refill_effort")
+        and campaign.get("refill_mode", "seed_barrier") == plan.get(
+            "refill_mode", "seed_barrier"
+        )
+        and (
+            plan.get("refill_mode", "seed_barrier") != "rolling_submitted"
+            or (
+                isinstance(campaign.get("rolling_credits"), int)
+                and not isinstance(campaign["rolling_credits"], bool)
+                and 0 <= campaign["rolling_credits"] <= campaign["planned"]
+            )
+        )
     )
     if not valid:
         raise RefillError("server returned an invalid exact refill campaign status")
@@ -814,7 +833,8 @@ def refill_once(home: Path, client) -> dict:
                     "planned": planned,
                     "reason": campaign.get("stop_reason"),
                 }
-            if campaign["seed_pending"]:
+            if (plan.get("refill_mode", "seed_barrier") == "seed_barrier"
+                    and campaign["seed_pending"]):
                 # The exact server campaign counts submissions from every
                 # admitted device. Never gate this path on the machine-local
                 # submitted_seed_assignment_ids list.
@@ -838,10 +858,26 @@ def refill_once(home: Path, client) -> dict:
                     "planned": planned,
                     "reason": campaign.get("stop_reason"),
                 }
+            if (plan.get("refill_mode") == "rolling_submitted"
+                    and campaign["rolling_credits"] == 0):
+                plan["status"] = campaign_status
+                _save_unlocked(home, plan)
+                return {
+                    "status": campaign_status,
+                    "claimed": 0,
+                    "held": campaign["held"],
+                    "planned": planned,
+                    "rolling_pending": True,
+                }
             plan["status"] = "active"
             plan["stop_reason"] = None
             held_for_target = campaign["held"]
             target_for_refill = campaign["refill_to"]
+            if plan.get("refill_mode") == "rolling_submitted":
+                target_for_refill = min(
+                    target_for_refill,
+                    campaign["held"] + campaign["rolling_credits"],
+                )
             max_tasks_for_refill = campaign["max_tasks"]
         else:
             held_for_target = len(active)
@@ -939,6 +975,7 @@ def refill_once(home: Path, client) -> dict:
                     break
                 if exc.code in {
                     "refill_seed_pending", "refill_target_satisfied",
+                    "refill_submission_pending",
                 }:
                     server_target_satisfied = (
                         exc.code == "refill_target_satisfied"

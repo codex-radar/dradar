@@ -5176,10 +5176,14 @@ def cmd_go(args) -> int:
         getattr(args, "refill_model", None),
         getattr(args, "refill_effort", None),
         getattr(args, "refill_order", None),
+        getattr(args, "refill_mode", None),
     )
     if any(value is not None for value in refill_options) and not getattr(args, "refill", False):
         sys.exit("refill limits and scope filters require --refill")
     if getattr(args, "refill", False):
+        if (getattr(args, "refill_mode", None) == "rolling-submitted"
+                and not getattr(args, "fleet_pool", False)):
+            sys.exit("rolling refill requires an exact Fleet run-plan campaign")
         if (
             getattr(args, "expect_assignment", None)
             or getattr(args, "forget_assignment_boundary", False)
@@ -5463,6 +5467,8 @@ def _worker_command(args) -> list[str]:
             command.extend(("--refill-effort", args.refill_effort))
         if getattr(args, "refill_order", None):
             command.extend(("--refill-order", args.refill_order))
+        if getattr(args, "refill_mode", None):
+            command.extend(("--refill-mode", args.refill_mode))
     return command
 
 
@@ -7499,6 +7505,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 elif replenished.get("seed_pending"):
                     print(f"{progress}; waiting for "
                           f"{replenished['seed_pending']} selected task(s) before auto-refill")
+                elif replenished.get("rolling_pending"):
+                    print(f"{progress}; waiting for one server-accepted submission "
+                          "before rolling refill")
                 elif replenished.get("status") == "draining":
                     print("refill limit reached; no more tasks will be claimed, "
                           "draining the existing queue")
@@ -7643,7 +7652,15 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         ))
     if args.max_estimated_quota_pct is not None:
         print(f"  estimated quota cap: {args.max_estimated_quota_pct}% {args.quota_tier}")
-    print("  order: all initially selected tasks must submit before auto-refill starts")
+    refill_mode = (
+        "rolling_submitted"
+        if getattr(args, "refill_mode", None) == "rolling-submitted"
+        else "seed_barrier"
+    )
+    if refill_mode == "rolling_submitted":
+        print("  order: each server-accepted submission frees one held slot")
+    else:
+        print("  order: all initially selected tasks must submit before auto-refill starts")
     print("  safety: any non-submitted task stops refill; existing work is never released")
     if not args.yes:
         answer = input("start this refill plan? [y/N] ").strip().lower()
@@ -7685,6 +7702,8 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                 effort=args.refill_effort,
                 refill_to=target,
                 max_tasks=args.max_tasks,
+                **({"refill_mode": refill_mode}
+                   if getattr(args, "refill_mode", None) is not None else {}),
             )
             configured = client.configure_refill_campaign(**campaign_options)
         except ApiError as exc:
@@ -7695,6 +7714,10 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         if campaign.get("batch_id") != args.batch_id:
             raise refill_plan.RefillError(
                 "server returned a mismatched Fleet refill campaign"
+            )
+        if campaign.get("refill_mode", "seed_barrier") != refill_mode:
+            raise refill_plan.RefillError(
+                "server did not confirm the requested refill mode"
             )
         server_campaign_id = args.batch_id
 
@@ -7712,6 +7735,7 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         refill_order=getattr(args, "refill_order", None) or "cost",
         server_campaign_id=server_campaign_id,
         points_tier=points_tier,
+        refill_mode=refill_mode,
         # A normal parent owns the exclusive per-machine run lock here, so no
         # live local campaign can be displaced. Manual --parallel sessions do
         # not own that proof and must keep the fail-closed conflict behavior.
@@ -7902,6 +7926,11 @@ def _wait_for_scoped_refill_work(
                     print(
                         "selected work is still finishing across the active "
                         "devices; this device will wait for the shared queue"
+                    )
+                elif result.get("rolling_pending"):
+                    print(
+                        "waiting for a server-accepted submission to free "
+                        "one rolling refill slot"
                     )
                 else:
                     print(
