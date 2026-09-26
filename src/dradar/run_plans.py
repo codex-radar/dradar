@@ -539,6 +539,14 @@ def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
             (path, state) for path, state in _iter_states(HOME) or ()
             if secrets.compare_digest(str(state.get("run_code_hash") or ""), digest)
         ), None)
+        if saved_stop is None and getattr(args, "_early_local_stop", False):
+            raise RunPlanClientError(
+                "remote_stop_unconfirmed",
+                "已记录本机取消：尚未完成的运行请求不会继续启动。计划身份尚未缓存，远端停止未确认；请保留原运行说明并重查进度。",
+                retryable=True, agent_action="notify_only",
+                agent_details={"local_stop_recorded": True, "remote_stop_confirmed": False,
+                               "plan_identity_pending": True},
+            )
     # Progress/run in two conversations can race on first use. Serialize the
     # exchange and re-read state under the lock so only one logical session is
     # minted for this device.
@@ -2522,11 +2530,14 @@ def cmd_run_plan(args) -> int:
 
     def dispatch() -> dict[str, Any]:
         if not getattr(args, "upload_only", False):
+            scope = run_intent.request_scope(_validate_run_code(args.plan))
+            automatic = getattr(args, "recheck_generation", None) is not None
+            request_generation = (
+                run_intent.current(HOME, scope) if automatic else run_intent.begin(HOME, scope)
+            )
             _code, _path, prepared, _client = _state_and_client(args)
-            args._local_run_generation = (
-                run_intent.current(HOME, prepared["batch_id"])
-                if getattr(args, "recheck_generation", None) is not None
-                else run_intent.begin(HOME, prepared["batch_id"])
+            args._local_run_generation = run_intent.associate_request(
+                HOME, scope, request_generation, prepared["batch_id"], automatic=automatic,
             )
         # Record the explicit intent before waiting. An older queued run may
         # not reinterpret itself as a new resume after a concurrent stop.
@@ -2646,12 +2657,19 @@ def cmd_progress_plan(args) -> int:
 
 def cmd_stop_plan(args) -> int:
     def operate() -> dict[str, Any]:
+        scope = args.scope.replace("-", "_")
+        # This-device stop is actionable before the first network exchange.
+        # All-device scope still needs its existing decision confirmation.
+        args._early_local_stop = scope == "this_device"
+        if args._early_local_stop:
+            run_intent.stop_request(HOME, run_intent.request_scope(_validate_run_code(args.plan)))
         args._stop_read = True
         _run_code, path, state, client = _state_and_client(args)
-        scope = args.scope.replace("-", "_")
         decision_token = getattr(args, "decision_token", None)
         if decision_token:
             _decision_for(state, "stop", decision_token)
+            if not args._early_local_stop:
+                run_intent.stop_request(HOME, run_intent.request_scope(_validate_run_code(args.plan)))
         local_warning = None
         local_stop_recorded = scope == "this_device" or bool(decision_token)
         if scope == "this_device" or decision_token:

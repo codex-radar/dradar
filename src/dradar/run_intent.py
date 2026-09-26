@@ -23,7 +23,12 @@ class IntentStopped(RuntimeError):
 
 
 def _paths(home: Path, batch: str):
-    batch = normalize_batch_id(batch)
+    if isinstance(batch, str) and batch.startswith("request-"):
+        digest = batch.removeprefix("request-")
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise IntentStopped("invalid local request identity")
+    else:
+        batch = normalize_batch_id(batch)
     if batch is None:
         raise IntentStopped("an exact batch is required for local run intent")
     root = home / "run-plans" / "intents"
@@ -119,3 +124,37 @@ def require_worker(home: Path) -> None:
     generation = os.environ.get(GENERATION_ENV)
     if batch or generation:
         require(home, batch, generation)
+
+
+def request_scope(run_code: str) -> str:
+    """Opaque local cancellation identity, available before token exchange."""
+    return "request-" + hashlib.sha256(run_code.encode()).hexdigest()
+
+
+def associate_request(home: Path, scope: str, generation: str, batch: str, *, automatic: bool) -> str:
+    """Publish the request→batch link in the same order as an early stop."""
+    from .run_plans import _atomic_json, _exclusive_lock
+    path, _stopped, lock = _paths(home, scope)
+    with _exclusive_lock(lock):
+        require(home, scope, generation)
+        local_generation = current(home, batch) if automatic else begin(home, batch)
+        state = _read(path)
+        if state.get("batch_id") not in (None, batch):
+            raise IntentStopped("the exchanged request changed its local batch")
+        state["batch_id"] = batch
+        _atomic_json(path, state)
+        return local_generation
+
+
+def stop_request(home: Path, scope: str) -> None:
+    """Cancel even a first exchange; stop an associated batch if already known."""
+    from .run_plans import _atomic_json, _exclusive_lock
+    path, stopped, lock = _paths(home, scope)
+    with _exclusive_lock(lock):
+        _atomic_json(stopped, {"schema_version": 1, "stop_id": uuid.uuid4().hex})
+        try:
+            state = _read(path)
+        except IntentStopped:
+            return  # A damaged/absent run record cannot prevent cancellation.
+        if state.get("batch_id"):
+            stop(home, state["batch_id"])

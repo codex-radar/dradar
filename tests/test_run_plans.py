@@ -1202,6 +1202,57 @@ def test_real_cli_process_stop_cancels_pending_run_before_its_reply(
     assert not late_spawn.is_set()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="uses independent POSIX CLI processes")
+def test_first_exchange_can_be_cancelled_without_waiting_for_state_lock(tmp_path, monkeypatch):
+    import contextlib
+    import io
+
+    ctx = multiprocessing.get_context("fork")
+    entered, release = ctx.Event(), ctx.Event()
+    outcomes = ctx.Queue()
+    monkeypatch.setattr(run_plans, "HOME", tmp_path)
+
+    def exchange(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(8)
+        return _state(tmp_path, _plan())
+
+    monkeypatch.setattr(run_plans, "_exchange", exchange)
+    monkeypatch.setattr(fleet, "add_batch", lambda **_kwargs: pytest.fail("cancelled exchange cannot launch"))
+
+    def invoke(command):
+        capture = io.StringIO()
+        arguments = [command, "--plan", RUN_CODE, "--json"]
+        if command == "stop":
+            arguments += ["--scope", "this-device"]
+        with contextlib.redirect_stdout(capture):
+            rc = cli.main(arguments)
+        outcomes.put((command, rc, capture.getvalue()))
+
+    running = ctx.Process(target=invoke, args=("run",))
+    stopping = ctx.Process(target=invoke, args=("stop",))
+    running.start()
+    try:
+        assert entered.wait(3)
+        stopping.start()
+        stopping.join(3)
+        assert not stopping.is_alive()
+        assert running.is_alive()
+    finally:
+        release.set()
+        running.join(5)
+        stopping.join(5)
+        for proc in (running, stopping):
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(2)
+    assert running.exitcode == stopping.exitcode == 0
+    result = {row[0]: (row[1], json.loads(row[2])) for row in (outcomes.get(timeout=2), outcomes.get(timeout=2))}
+    assert result["run"][1]["error_code"] == "run_cancelled_by_newer_intent"
+    assert result["stop"][1]["agent"]["local_stop_recorded"] is True
+    assert result["stop"][1]["agent"]["remote_stop_confirmed"] is False
+
+
 def test_progress_cannot_restore_a_recheck_generation_after_stop(
     tmp_path, monkeypatch, capsys,
 ):
@@ -2965,6 +3016,7 @@ def test_progress_and_stop_reuse_saved_plan_access_without_exchange(
         ),
     )
     client = FakeClient(progress=[progress], stops=[stopped])
+    monkeypatch.setattr(run_plans, "_iter_states", lambda _home: iter([(path, state)]))
     monkeypatch.setattr(
         run_plans, "_saved_state", lambda _code, **_kwargs: (path, state),
     )
