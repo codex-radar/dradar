@@ -5,10 +5,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from dradar import cancellation, pending, runloop
+from dradar import cancellation, failure_reports, pending, runloop
 from dradar.runner import RunnerCleanupUnconfirmedError
 from test_go_menu import ASSIGNMENT, SubmitClient, _args, _fake_art
 from private_artifact_fixture import private_trial
@@ -128,7 +129,7 @@ def test_interrupted_result_uses_original_upload_path_and_exits(isolated, monkey
     assert pending.load(runloop.HOME) == []
 
 
-def test_unconfirmed_cleanup_fences_without_fabricating_artifacts(isolated, monkeypatch):
+def test_unconfirmed_cleanup_fences_without_fabricating_artifacts(isolated, monkeypatch, capsys):
     job = isolated / 'home/work/jobs/exact-job'
     def run(*a, **k):
         cancellation.protect_finalization(cancelled=True)
@@ -137,11 +138,126 @@ def test_unconfirmed_cleanup_fences_without_fabricating_artifacts(isolated, monk
     client = SubmitClient({})
     assert runloop._run_and_submit(client, dict(ASSIGNMENT), isolated, _args(), 'abc') == 'cleanup-unconfirmed'
     row = pending.load(runloop.HOME)[0]
+    assert row['record_kind'] == 'cleanup_quarantine'
     assert row['upload_blocked'] == 'cleanup_unconfirmed'
     assert 'trial_dir' not in row and 'outcome' not in row
     assert runloop._upload_trial(client, row) == 'upload-blocked'
     assert runloop._run_and_submit(client, dict(ASSIGNMENT), isolated, _args(), 'abc') == 'pending-upload'
     assert client.submissions == []
+    output = capsys.readouterr().out
+    assert 'result is unknown' in output
+    assert 'durable completed result pending upload' not in output
+
+
+def test_retry_upload_keeps_quarantine_and_retries_only_real_result(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, 'HOME', tmp_path)
+    quarantine = {
+        'assignment_id': 'unknown',
+        'batch_id': '12345678123456781234567812345678',
+        'upload_blocked': 'cleanup_unconfirmed',  # old 242 row
+    }
+    result = {
+        'assignment_id': 'finished',
+        'batch_id': '12345678123456781234567812345678',
+        'trial_dir': str(tmp_path / 'trial'),
+        'outcome': 'completed',
+    }
+    pending.record(tmp_path, quarantine)
+    pending.record(tmp_path, result)
+    monkeypatch.setattr(failure_reports, 'flush_pending',
+                        lambda *_args: {'received': 0, 'send_failed': 0})
+    attempted = []
+    monkeypatch.setattr(runloop, '_upload_trial',
+                        lambda _client, entry: attempted.append(entry['assignment_id']) or 'upload-failed')
+    assert runloop._retry_pending_uploads(SimpleNamespace()) == ['upload-failed']
+    assert attempted == ['finished']
+    assert pending.load(tmp_path) == [quarantine, result]
+    capsys.readouterr()
+
+    monkeypatch.setattr(runloop, '_load_config', lambda: {})
+    monkeypatch.setattr(runloop, '_client', lambda _cfg: SimpleNamespace())
+    assert runloop.cmd_retry_upload(SimpleNamespace(benchmark=None, request_salvage=None)) == 1
+    output = capsys.readouterr().out
+    assert 'results are unknown' in output
+    assert '1 still pending and retryable' in output
+    assert attempted == ['finished', 'finished']
+
+
+def test_quarantine_kind_cannot_be_salvaged_even_with_owner_superseded(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, 'HOME', tmp_path)
+    row = {
+        'assignment_id': 'unknown', 'task_id': 'task',
+        'record_kind': 'cleanup_quarantine',
+        'upload_blocked': 'owner_superseded',
+        'trial_dir': str(tmp_path / 'trial'), 'outcome': 'completed',
+    }
+    pending.record(tmp_path, row)
+    class MustStayLocal:
+        def __getattr__(self, name):
+            pytest.fail(f'quarantine must not call client.{name}')
+    assert runloop._upload_trial(MustStayLocal(), row, request_salvage=True) == 'upload-blocked'
+    assert pending.load(tmp_path) == [row]
+    assert 'result is unknown' in capsys.readouterr().out
+    monkeypatch.setattr(runloop, '_load_config', lambda: {})
+    monkeypatch.setattr(runloop, '_client', lambda _cfg: MustStayLocal())
+    assert runloop.cmd_retry_upload(SimpleNamespace(
+        benchmark=None, request_salvage='unknown', yes=True,
+    )) == 2
+    assert pending.load(tmp_path) == [row]
+    assert 'salvage and retry-upload cannot clear' in capsys.readouterr().out
+
+
+def test_kind_only_quarantine_stops_scoped_refill_before_retry(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(runloop, 'HOME', tmp_path)
+    row = {'assignment_id': 'unknown', 'record_kind': 'cleanup_quarantine'}
+    monkeypatch.setattr(runloop, '_scoped_fleet_refill', lambda _args: True)
+    monkeypatch.setattr(runloop, '_pool_abort_reason', lambda: None)
+    monkeypatch.setattr(runloop, '_run_config', lambda _args: {
+        'run_plan_id': 'plan', 'run_plan_logical_session_id': 'drl_session',
+    })
+    monkeypatch.setattr(runloop, '_pending_uploads_for_client_batch',
+                        lambda _client, _batch: [row])
+    monkeypatch.setattr(runloop, '_retry_pending_uploads',
+                        lambda *_a, **_k: pytest.fail('quarantine must not retry'))
+    class Client:
+        def start_run_plan(self, **_kwargs):
+            return {'envelope': {'agent_action': 'continue'}}
+    with pytest.raises(SystemExit, match='result is unknown'):
+        runloop._wait_for_scoped_refill_work(
+            SimpleNamespace(batch_id='batch'), Client(), desired_workers=1,
+        )
+
+
+def test_acquisition_describes_unknown_result_and_fences_model(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(runloop, 'HOME', tmp_path)
+    pending.record(tmp_path, {
+        'assignment_id': 'unknown', 'record_kind': 'cleanup_quarantine',
+    })
+    class Client:
+        def get_assignment(self):
+            return {'active': [{'assignment_id': 'unknown'}], 'free_pick': True}
+    client = Client()
+    assert runloop._acquire_batch(client, True) == ([], True)
+    output = capsys.readouterr().out
+    assert 'unknown result' in output
+    assert 'completed assignment' not in output
+    pending.record(tmp_path, {
+        'assignment_id': 'unheld_result', 'trial_dir': str(tmp_path / 'trial'),
+        'outcome': 'completed',
+    })
+    assert runloop._run_batch(SimpleNamespace(), client, tmp_path,
+                              [{'assignment_id': 'unknown'}]) == 1
+    output = capsys.readouterr().out
+    assert 'unknown result' in output
+    assert 'durable pending results' not in output
 
 
 def test_interrupted_artifact_durable_before_failure_reporting(isolated, monkeypatch):

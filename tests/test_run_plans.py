@@ -3403,6 +3403,101 @@ def test_progress_surfaces_completed_result_that_requires_review(
     assert payload["agent"]["server_status"]["agent_action"] == "done"
 
 
+def test_cleanup_quarantine_is_not_reported_as_completed_result(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan()
+    path, state = _state(tmp_path, plan)
+    marker = {
+        "assignment_id": "unconfirmed",
+        "batch_id": BATCH_ID,
+        "upload_blocked": "cleanup_unconfirmed",  # already-saved 0.5.242 shape
+        "job_dir": str(tmp_path / "job"),
+    }
+    pending.record(tmp_path, marker)
+    progress = _server_response(
+        plan, _envelope(status="completed", agent_action="done"),
+        state={"other_healthy": []},
+    )
+    client = FakeClient(progress=[progress])
+    monkeypatch.setattr(run_plans, "HOME", tmp_path)
+    monkeypatch.setattr(
+        run_plans, "_state_and_client",
+        lambda _args: (RUN_CODE, path, state, client),
+    )
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch_id: None)
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "review_required"
+    assert payload["error_code"] == "cleanup_unconfirmed"
+    assert payload["agent_action"] == "notify_only"
+    assert payload["agent"]["completed_result_count"] == 0
+    assert payload["agent"]["cleanup_unconfirmed_count"] == 1
+    assert payload["agent"]["next_commands"] == []
+    assert "成果未知" in payload["user_message"]
+    assert "已完成结果" not in payload["user_message"]
+    assert pending.load(tmp_path) == [marker]
+
+    monkeypatch.setattr(
+        runloop, "_retry_pending_uploads",
+        lambda *_args, **_kwargs: pytest.fail("quarantine must not retry upload"),
+    )
+    assert run_plans.cmd_run_plan(_args(upload_only=True)) == 0
+    recovery = json.loads(capsys.readouterr().out)
+    assert recovery["error_code"] == "cleanup_unconfirmed"
+    assert recovery["agent"]["completed_result_count"] == 0
+    assert pending.load(tmp_path) == [marker]
+
+
+def test_mixed_quarantine_keeps_real_result_visible_without_uploading_marker(
+    tmp_path, monkeypatch, capsys,
+):
+    plan = _plan()
+    path, state = _state(tmp_path, plan)
+    quarantine = {
+        "record_kind": "cleanup_quarantine",
+        "assignment_id": "unconfirmed",
+        "batch_id": BATCH_ID,
+        "upload_blocked": "cleanup_unconfirmed",
+    }
+    result = {"assignment_id": "completed", "batch_id": BATCH_ID}
+    pending.record(tmp_path, quarantine)
+    pending.record(tmp_path, result)
+    progress = _server_response(
+        plan, _envelope(status="incomplete", agent_action="review_failure"),
+        state={"other_healthy": []},
+    )
+    client = FakeClient(progress=[progress])
+    monkeypatch.setattr(run_plans, "HOME", tmp_path)
+    monkeypatch.setattr(
+        run_plans, "_state_and_client",
+        lambda _args: (RUN_CODE, path, state, client),
+    )
+    monkeypatch.setattr(fleet, "batch_status", lambda _batch_id: None)
+
+    assert run_plans.cmd_progress_plan(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agent_action"] == "recover_upload"
+    assert payload["agent"]["completed_result_count"] == 1
+    assert payload["agent"]["cleanup_unconfirmed_count"] == 1
+    assert payload["agent"]["next_commands"][0]["args"] == ["--upload-only", "--json"]
+    assert "成果未知" in payload["user_message"]
+
+    replayed = []
+    def replay(_client, *, batch_id=None):
+        replayed.append(batch_id)
+        pending.remove(tmp_path, "completed")
+        return ["submitted"]
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", replay)
+    assert run_plans.cmd_run_plan(_args(upload_only=True)) == 0
+    recovery = json.loads(capsys.readouterr().out)
+    assert replayed == [BATCH_ID]
+    assert recovery["error_code"] == "cleanup_unconfirmed"
+    assert recovery["agent"]["completed_result_count"] == 0
+    assert pending.load(tmp_path) == [quarantine]
+
+
 def test_plan_scoped_capacity_uses_identity_and_exact_inventory_not_whoami(
     monkeypatch,
 ):

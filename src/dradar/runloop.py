@@ -752,7 +752,13 @@ def _select_precise_resume_assignment(
     if selected_id in _pending_assignment_ids_for_client(
         client, batch_id=args.batch_id,
     ):
-        print("selected assignment already has a durable result pending upload; refusing to rerun")
+        if selected_id in _pending_quarantine_assignment_ids_for_client(
+            client, batch_id=args.batch_id,
+        ):
+            print("selected assignment has unconfirmed process exit/cleanup; "
+                  "result is unknown, and rerun is unsafe")
+        else:
+            print("selected assignment already has a durable result pending upload; refusing to rerun")
         return None
     matches = [a for a in active if a.get("assignment_id") == selected_id]
     if len(matches) != 1:
@@ -1969,7 +1975,9 @@ def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
                   upload_only_recovery=False):
     pending.record(HOME, entry)
     try:
-        if (entry.get("upload_blocked") and not request_salvage) or not Path(entry["trial_dir"]).exists():
+        if (pending.is_cleanup_quarantine(entry)
+                or (entry.get("upload_blocked") and not request_salvage)
+                or not Path(entry["trial_dir"]).exists()):
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 upload_only_recovery=upload_only_recovery,
@@ -2016,7 +2024,18 @@ def _upload_trial_checked(
     assignment_id = entry["assignment_id"]
     task_id = entry.get("task_id", "?")
     blocked_reason = entry.get("upload_blocked")
-    salvage_requested = request_salvage and blocked_reason == "owner_superseded"
+    quarantine = pending.is_cleanup_quarantine(entry)
+    if quarantine:
+        pending.record(HOME, entry)
+        print(
+            f"  {task_id}: process exit/cleanup is unconfirmed; result is "
+            "unknown, so no upload or rerun was attempted; the safety "
+            "record was kept"
+        )
+        return "upload-blocked"
+    salvage_requested = (
+        request_salvage and blocked_reason == "owner_superseded"
+    )
     if request_salvage and not salvage_requested:
         pending.record(HOME, entry)
         print(
@@ -3054,10 +3073,18 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     if assignment["assignment_id"] in _pending_assignment_ids_for_client(
         client, batch_id=assignment.get("batch_id"),
     ):
-        print(
-            "refusing to start: this assignment already has a durable completed "
-            "result pending upload; run `dradar retry-upload`"
-        )
+        if assignment["assignment_id"] in _pending_quarantine_assignment_ids_for_client(
+            client, batch_id=assignment.get("batch_id"),
+        ):
+            print(
+                "refusing to start: process exit/cleanup is unconfirmed and "
+                "the result is unknown; keep the safety record for review"
+            )
+        else:
+            print(
+                "refusing to start: this assignment already has a durable completed "
+                "result pending upload; run `dradar retry-upload`"
+            )
         return "pending-upload"
     work_dir = HOME / "work"
     print("running trial (this can take a while)...")
@@ -3287,6 +3314,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
                 # This is a quarantine fence, not a claimed valid result. Do
                 # not inspect/copy files while a writer may still be alive.
                 pending.record(HOME, {
+                    "record_kind": "cleanup_quarantine",
                     "assignment_id": assignment["assignment_id"],
                     "nonce": assignment["nonce"],
                     "task_id": assignment["task_id"],
@@ -4029,15 +4057,26 @@ def _pending_uploads_for_scope(
 def _pending_assignment_ids_for_client(
     client: ApiClient, *, batch_id: str | None = None,
 ) -> set[str]:
-    """Return durable assignments only from this account/plan queue.
+    """Return saved-result and cleanup-fence assignments for this scope.
 
     Assignment fencing must still include session-bound rows: even when a
     standalone command cannot immediately replay such a row, it must not rerun
-    the paid model work.  Unlike upload replay, this helper intentionally does
-    not require a live session ID.
+    the paid model work or a potentially live quarantined writer. Unlike
+    upload replay, this helper intentionally does not require a live session ID.
     """
+    return {
+        str(entry["assignment_id"])
+        for entry in _pending_fence_entries_for_client(client, batch_id=batch_id)
+        if entry.get("assignment_id")
+    }
+
+
+def _pending_fence_entries_for_client(
+    client: ApiClient, *, batch_id: str | None = None,
+) -> list[dict]:
+    """Read all exact-scope rows, including those ineligible for replay."""
     if not _pending_scope_is_required(client):
-        return pending.assignment_ids(HOME)
+        return [entry for entry in pending.load(HOME) if isinstance(entry, dict)]
     effective_batch = (
         batch_id if batch_id is not None else getattr(client, "batch_id", None)
     )
@@ -4050,10 +4089,16 @@ def _pending_assignment_ids_for_client(
                 client, entry, batch_id=effective_batch,
             )
         ]
+    return entries
+
+
+def _pending_quarantine_assignment_ids_for_client(
+    client: ApiClient, *, batch_id: str | None = None,
+) -> set[str]:
     return {
         str(entry["assignment_id"])
-        for entry in entries
-        if entry.get("assignment_id")
+        for entry in _pending_fence_entries_for_client(client, batch_id=batch_id)
+        if entry.get("assignment_id") and pending.is_cleanup_quarantine(entry)
     }
 
 
@@ -4129,6 +4174,11 @@ def _retry_pending_uploads(
         entries = [entry for entry in entries if isinstance(entry, dict)]
     if not entries:
         return []
+    # A cleanup fence may have no result. Keep it for duplicate-start
+    # protection, but never send it through upload recovery.
+    entries = [entry for entry in entries if not pending.is_cleanup_quarantine(entry)]
+    if not entries:
+        return []
     print(f"checking {len(entries)} pending upload(s) left over from a previous run...")
     outcomes = []
     for e in entries:
@@ -4170,6 +4220,12 @@ def cmd_retry_upload(args) -> int:
             )
             return 2
         entry = matches[0]
+        if pending.is_cleanup_quarantine(entry):
+            print(
+                "process exit/cleanup is unconfirmed and the result is unknown; "
+                "salvage and retry-upload cannot clear this safety record"
+            )
+            return 2
         if entry.get("upload_blocked") != "owner_superseded":
             print(
                 "that saved result is not blocked by owner_superseded; "
@@ -4222,8 +4278,17 @@ def cmd_retry_upload(args) -> int:
         else:
             eligible = [entry for entry in remaining if isinstance(entry, dict)]
             skipped = []
-        blocked = [entry for entry in eligible if entry.get("upload_blocked")]
-        retryable = [entry for entry in eligible if not entry.get("upload_blocked")]
+        quarantine = [entry for entry in eligible if pending.is_cleanup_quarantine(entry)]
+        blocked = [entry for entry in eligible if entry.get("upload_blocked")
+                   and not pending.is_cleanup_quarantine(entry)]
+        retryable = [entry for entry in eligible if not entry.get("upload_blocked")
+                     and not pending.is_cleanup_quarantine(entry)]
+        if quarantine:
+            print(
+                f"{len(quarantine)} run(s) have unconfirmed process exit/cleanup; "
+                "results are unknown. Safety records were kept, with no upload "
+                "or rerun attempted for them"
+            )
         if blocked:
             reasons = ", ".join(
                 f"{entry.get('task_id', entry.get('assignment_id', '?'))}:"
@@ -4255,7 +4320,8 @@ def cmd_retry_upload(args) -> int:
                             probe, entry, batch_id=entry.get("batch_id"),
                         ):
                             saved_benchmarks.setdefault(candidate, set()).add(
-                                "blocked" if entry.get("upload_blocked")
+                                "quarantine" if pending.is_cleanup_quarantine(entry)
+                                else "blocked" if entry.get("upload_blocked")
                                 else "retryable"
                             )
                 for saved, states in sorted(saved_benchmarks.items()):
@@ -4274,8 +4340,13 @@ def cmd_retry_upload(args) -> int:
                             prefix + "the saved upload is blocked and "
                             "requires explicit review before any recovery"
                         )
+                    if "quarantine" in states:
+                        print(
+                            prefix + "process exit/cleanup is unconfirmed and "
+                            "the result is unknown; keep its safety record"
+                        )
             print(
-                f"{len(skipped)} saved upload(s) were kept because their "
+                f"{len(skipped)} saved ledger row(s) were kept because their "
                 "server/account/plan/session scope is unknown, malformed, or "
                 "does not match this login; review them explicitly before retrying"
             )
@@ -4311,6 +4382,10 @@ def recover_one_pending_upload(
         print("recovery rejected: assignment must name exactly one pending row")
         return 2
     entry = matches[0]
+    if pending.is_cleanup_quarantine(entry):
+        print("recovery rejected: process exit/cleanup is unconfirmed and the "
+              "result is unknown; keep the safety record for review")
+        return 1
     if entry.get("upload_blocked"):
         print("recovery rejected: saved upload requires separate owner/artifact review")
         return 1
@@ -4728,7 +4803,7 @@ def cmd_cleanup(args) -> int:
     if protected_active or protected_pending or protected_kept:
         print("protected: "
               f"{protected_active} active/resumable, "
-              f"{protected_pending} pending upload, "
+              f"{protected_pending} pending result or cleanup fence, "
               f"{protected_kept} explicitly kept")
 
     image_plan = None
@@ -6767,11 +6842,21 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             # re-enrolling this device or starting another model.
             _mark_pending_scope_required(client)
             _retry_pending_uploads(client, batch_id=args.batch_id)
-            if _pending_uploads_for_client_batch(client, args.batch_id):
-                print(
-                    "worker pool stopped with a completed result still waiting "
-                    "to upload; no model work will be repeated"
+            remaining_pending = _pending_uploads_for_client_batch(client, args.batch_id)
+            if remaining_pending:
+                quarantine_count = sum(
+                    pending.is_cleanup_quarantine(entry) for entry in remaining_pending
                 )
+                result_count = len(remaining_pending) - quarantine_count
+                if quarantine_count:
+                    print("worker pool stopped with unconfirmed process exit/cleanup; "
+                          "result is unknown and no model work will be repeated")
+                if result_count and quarantine_count:
+                    print(f"worker pool also has {result_count} completed result(s) "
+                          "waiting to upload or review; no model work will be repeated")
+                elif result_count:
+                    print("worker pool stopped with a completed result still waiting "
+                          "to upload; no model work will be repeated")
                 return 1
         if abort_interrupts_siblings:
             print(f"worker pool stopped cleanly by circuit breaker: {abort_reason}")
@@ -6936,10 +7021,18 @@ def _acquire_batch(
     )
     blocked = [a for a in active if a.get("assignment_id") in pending_ids]
     if blocked:
-        print(
-            f"holding {len(blocked)} completed assignment(s) for upload recovery; "
-            "the model will not be run again"
+        quarantine_ids = _pending_quarantine_assignment_ids_for_client(
+            client, batch_id=getattr(client, "batch_id", None),
         )
+        quarantine_count = sum(
+            a.get("assignment_id") in quarantine_ids for a in blocked
+        )
+        if quarantine_count:
+            print(f"holding {quarantine_count} assignment(s) with unconfirmed "
+                  "process cleanup and unknown result; the model will not run again")
+        if len(blocked) > quarantine_count:
+            print(f"holding {len(blocked) - quarantine_count} completed "
+                  "assignment(s) for upload recovery; the model will not run again")
     return [a for a in active if a.get("assignment_id") not in pending_ids], free_pick
 
 
@@ -6951,9 +7044,20 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
     blocked_ids = _pending_assignment_ids_for_client(
         client, batch_id=getattr(client, "batch_id", None),
     )
+    held_blocked_ids = {
+        a.get("assignment_id") for a in active
+        if a.get("assignment_id") in blocked_ids
+    }
     active = [a for a in active if a.get("assignment_id") not in blocked_ids]
     if not active:
-        print("all held assignments already have durable pending results; refusing to rerun")
+        quarantine_ids = _pending_quarantine_assignment_ids_for_client(
+            client, batch_id=getattr(client, "batch_id", None),
+        )
+        if held_blocked_ids & quarantine_ids:
+            print("held assignments include unconfirmed process cleanup and "
+                  "unknown result; refusing to rerun")
+        if held_blocked_ids - quarantine_ids:
+            print("held assignments include durable pending results; refusing to rerun")
         return 1
     empty_blocked_ids = _empty_submission_blocked_ids(active, client)
     if empty_blocked_ids and len(empty_blocked_ids) < len(active):
@@ -7717,9 +7821,21 @@ def _wait_for_scoped_refill_work(
                 client, args.batch_id,
             )
             blocked_pending = [
-                entry for entry in scoped_pending if entry.get("upload_blocked")
+                entry for entry in scoped_pending
+                if pending.is_cleanup_quarantine(entry) or entry.get("upload_blocked")
             ]
             if blocked_pending:
+                if any(pending.is_cleanup_quarantine(entry) for entry in blocked_pending):
+                    result_count = sum(
+                        not pending.is_cleanup_quarantine(entry)
+                        for entry in scoped_pending
+                    )
+                    raise SystemExit(
+                        "process exit/cleanup is unconfirmed on this device; "
+                        "result is unknown and no new model work will start"
+                        + (f"; {result_count} completed result(s) also need upload "
+                           "or review" if result_count else "")
+                    )
                 raise SystemExit(
                     "a completed result on this device needs upload review; "
                     "no new model work will start until it is resolved"
@@ -7732,9 +7848,20 @@ def _wait_for_scoped_refill_work(
                 )
                 blocked_after_retry = [
                     entry for entry in pending_after_retry
-                    if entry.get("upload_blocked")
+                    if pending.is_cleanup_quarantine(entry) or entry.get("upload_blocked")
                 ]
                 if blocked_after_retry:
+                    if any(pending.is_cleanup_quarantine(entry) for entry in blocked_after_retry):
+                        result_count = sum(
+                            not pending.is_cleanup_quarantine(entry)
+                            for entry in pending_after_retry
+                        )
+                        raise SystemExit(
+                            "process exit/cleanup is unconfirmed on this device; "
+                            "result is unknown and no new model work will start"
+                            + (f"; {result_count} completed result(s) also need upload "
+                               "or review" if result_count else "")
+                        )
                     raise SystemExit(
                         "a completed result on this device needs upload review; "
                         "no new model work will start until it is resolved"

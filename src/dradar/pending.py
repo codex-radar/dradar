@@ -14,6 +14,10 @@ Entries are self-pruning: a retry that gets back 409 specifically saying
 expired — unsalvageable, the cell already reopened for someone else) removes
 the entry. A 409 recovery-generation conflict is not success and stays queued.
 Anything else keeps it for the next retry.
+
+The same ledger also holds ``cleanup_unconfirmed`` safety fences. Those rows
+may have no result or trial directory. They block duplicate model starts but
+must never be counted or replayed as completed uploads.
 """
 
 import hashlib
@@ -122,12 +126,23 @@ def load(home: Path) -> list[dict]:
     return _load_unlocked(home)
 
 
-def assignment_ids(home: Path) -> set[str]:
-    """Assignments with durable completed work that must never be rerun.
+def is_cleanup_quarantine(entry: object) -> bool:
+    """Identify a process-cleanup fence, including rows saved by older CLIs.
 
-    A blocked/superseded upload is intentionally included: it still represents
-    paid work whose ownership must be resolved explicitly, not a license to
-    start the model again.
+    This is a lifecycle state, not an upload result.  Artifact paths or an
+    ``outcome`` field cannot turn an unconfirmed writer into completed work.
+    """
+    return isinstance(entry, dict) and (
+        entry.get("record_kind") == "cleanup_quarantine"
+        or entry.get("upload_blocked") == "cleanup_unconfirmed"
+    )
+
+
+def assignment_ids(home: Path) -> set[str]:
+    """Assignments with saved results or cleanup fences that must not rerun.
+
+    A quarantine row does not prove there is a result, but it does mean a
+    writer may still exist.  Keep it in the duplicate-start fence.
     """
     return {
         str(entry["assignment_id"])

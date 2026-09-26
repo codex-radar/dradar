@@ -58,6 +58,19 @@ def test_cmd_status_notes_local_pending(monkeypatch, capsys):
     assert "retry-upload" in capsys.readouterr().out
 
 
+def test_cmd_status_calls_cleanup_quarantine_unknown_not_pending_result(monkeypatch, capsys):
+    monkeypatch.setattr(identity, "_load_config", lambda: {"server": "https://x", "token": "t"})
+    monkeypatch.setattr(identity, "_client",
+                        lambda cfg: FakeStatusClient({"nickname": "v", "points": 0, "submissions": []}))
+    marker = {"assignment_id": "a1", "upload_blocked": "cleanup_unconfirmed"}
+    monkeypatch.setattr(identity.pending, "load", lambda home: [marker])
+    from types import SimpleNamespace
+    identity.cmd_status(SimpleNamespace())
+    output = capsys.readouterr().out
+    assert "results are unknown" in output
+    assert "retry-upload" not in output
+
+
 def test_cmd_status_makes_lease_recovery_commands_discoverable(monkeypatch, capsys):
     payload = {"nickname": "v", "points": 0, "submissions": []}
     active = [
