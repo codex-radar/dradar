@@ -12,7 +12,7 @@ import zipfile
 import httpx
 import pytest
 
-from dradar import cli, fleet, runloop
+from dradar import cli, fleet, refill, runloop
 from dradar.api_client import ApiClient
 
 
@@ -576,6 +576,56 @@ class _Telemetry:
 
     def close(self, reason):
         self.closed = reason
+
+
+@pytest.mark.parametrize("worker_child,status,expected_status", [
+    (True, None, "active"),
+    (False, None, "active"),
+    (True, 409, "active"),
+    (True, 500, "active"),
+    (True, 401, "stopped"),
+    (True, 403, "stopped"),
+    (False, 403, "stopped"),
+])
+def test_refill_error_owner_preserves_transport_but_stops_auth(
+        tmp_path, monkeypatch, worker_child, status, expected_status):
+    batch_id = "550e8400e29b41d4a716446655440000"
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=1, max_tasks=10,
+        quota_tier="plus", max_estimated_quota_pct=None, active=[],
+        refill_harness="codex", refill_model="gpt-6-sol",
+        refill_effort="low",
+    )
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {})
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
+    monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
+    monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
+    monkeypatch.setattr(runloop, "ensure_pier", lambda: None)
+    monkeypatch.setattr(runloop, "_ensure_egress_runtime", lambda **_k: None)
+    monkeypatch.setattr(runloop, "_prepare_assignment_boundary", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_publish_fleet_startup_failure", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_mark_pending_scope_required", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda *_a, **_k: None)
+    monkeypatch.setattr(runloop, "acquire_run_lock", lambda *_a: None)
+    monkeypatch.setattr(runloop, "sweep_orphan_compose", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_maintain_image_cache", lambda *_a, **_k: True)
+
+    def fail(*_a, **_k):
+        runloop._exit_for(runloop.ApiError("private", status_code=status))
+
+    monkeypatch.setattr(runloop, "_go_menu", fail)
+    args = _args(
+        workers=1, auto=None, resume=True, parallel=worker_child,
+        worker_child=worker_child, refill=True, max_tasks=10,
+        batch_id=batch_id,
+    )
+    with pytest.raises(SystemExit):
+        runloop.cmd_go(args)
+    assert refill.load(tmp_path)["status"] == expected_status
 
 
 @pytest.mark.parametrize(
@@ -1234,7 +1284,7 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     # A second device's live workers belong to the server's aggregate target,
     # not this device's local two-worker cap. The wait path counts exact local
     # waiting inventory without subtracting global heartbeat owners.
-    assert ready_calls == [{}, {}]
+    assert ready_calls == [{"propagate_errors": True}] * 2
 
 
 @pytest.mark.parametrize("status_code", (401, 403, 410))
@@ -1286,7 +1336,7 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     monkeypatch.setattr(
         runloop, "_acquire_batch", lambda *_args, **_kwargs: ([assignment], True),
     )
-    monkeypatch.setattr(runloop, "_pool_ready_work_count", lambda _client: 1)
+    monkeypatch.setattr(runloop, "_pool_ready_work_count", lambda _client, **_kwargs: 1)
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
@@ -1308,6 +1358,39 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     ) == [assignment]
     assert client.calls == 2
     assert sleeps == [45]
+
+
+def test_scoped_refill_wait_exits_after_bounded_transport_failures(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {
+        "run_plan_id": "plan-a",
+        "run_plan_logical_session_id": "drl_same_device",
+    })
+    sleeps = []
+    monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
+
+    class Client:
+        calls = 0
+
+        def start_run_plan(self, **_kwargs):
+            self.calls += 1
+            raise runloop.ApiError(
+                "cannot reach DRadar API: phase=run_plan_start "
+                "transport=read_error method=POST",
+                transport_phase="run_plan_start",
+                transport_kind="read_error",
+            )
+
+    client = Client()
+    with pytest.raises(SystemExit, match="could not be reconciled after 5"):
+        runloop._wait_for_scoped_refill_work(
+            _scoped_refill_args(), client, desired_workers=2,
+        )
+    assert client.calls == runloop._SCOPED_REFILL_TRANSIENT_LIMIT
+    assert sleeps == [runloop._SCOPED_REFILL_WAIT_SECONDS] * (
+        runloop._SCOPED_REFILL_TRANSIENT_LIMIT - 1
+    )
 
 
 def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
@@ -1348,7 +1431,7 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
     )
     ready = iter((1, 1, 1))
     monkeypatch.setattr(
-        runloop, "_pool_ready_work_count", lambda _client: next(ready),
+        runloop, "_pool_ready_work_count", lambda _client, **_kwargs: next(ready),
     )
     monkeypatch.setattr(runloop.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(

@@ -122,6 +122,67 @@ def test_transport_failure_has_no_status_code():
     assert "cannot reach" in str(ei.value)
 
 
+@pytest.mark.parametrize("failure,kind", [
+    (httpx.RemoteProtocolError, "remote_protocol_error"),
+    (httpx.ReadError, "read_error"),
+    (httpx.ReadTimeout, "read_timeout"),
+])
+def test_partial_response_has_safe_stage_and_bounded_get_retry(failure, kind):
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        raise failure("token=secret proxy://user:password@host body=private")
+
+    client = _client(handler)
+    waits = []
+    client._sleep = waits.append
+    with pytest.raises(ApiError) as raised:
+        client.get_assignment()
+    assert calls == ["GET"] * 4
+    assert waits == [1.0, 2.0, 3.0]
+    assert raised.value.status_code is None
+    assert raised.value.transport_phase == "assignment_inventory"
+    assert raised.value.transport_kind == kind
+    assert "secret" not in str(raised.value)
+    assert "password" not in str(raised.value)
+
+
+def test_lost_claim_response_is_not_replayed_and_has_safe_stage():
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        raise httpx.RemoteProtocolError("token=secret body=private")
+
+    client = _client(handler)
+    with pytest.raises(ApiError) as raised:
+        client.claim_assignment("task", "model", "low")
+    assert calls == ["POST"]
+    assert raised.value.transport_phase == "assignment_claim"
+    assert "secret" not in str(raised.value)
+
+
+def test_partial_json_body_is_a_transport_failure_not_a_claim_response():
+    class BrokenBody(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"active":'
+            raise httpx.ReadError("token=secret body=private")
+
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=BrokenBody())
+        return httpx.Response(200, json={"active": []})
+
+    client = _client(handler)
+    client._sleep = lambda _seconds: None
+    assert client.get_assignment() == {"active": []}
+    assert calls == ["/api/v1/assignment"] * 2
+
+
 def test_429_honors_retry_after_with_jitter_before_retrying():
     calls = []
 
