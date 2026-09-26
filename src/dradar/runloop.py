@@ -4589,7 +4589,7 @@ def _prepare_assignment_boundary(
             # Retain the requested inventory so an out-of-campaign batch
             # cannot be hidden by the sibling union and pass admission.
             active = active + _BatchInventory(client, batches).get_assignment()["active"]
-        if scoped_batch_id is not None and batch_id == scoped_batch_id:
+        if scoped_batch_id is not None and batch_id == scoped_batch_id and not precise:
             _confirm_exact_batch_submissions(
                 client, saved_path, benchmark_id, scoped_batch_id, active,
             )
