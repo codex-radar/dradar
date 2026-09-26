@@ -80,7 +80,7 @@ def test_success_paths_unchanged(monkeypatch,tmp_path,fallback):
 
 
 def test_hash_unreadable_is_unknown(tmp_path):
-    assert runner._image_preflight_detail(tmp_path, {})=={'task_toml_sha256':'unknown'}
+    assert runner._image_preflight_detail(None, {})=={'task_toml_sha256':'unknown'}
 
 
 def test_diagnostic_collection_cannot_mask_failure(monkeypatch,tmp_path):
@@ -93,3 +93,72 @@ def test_diagnostic_collection_cannot_mask_failure(monkeypatch,tmp_path):
     assert caught.value.report_code=='codex_task_image_unavailable'
     assert caught.value.report_detail=={}
     assert PRIVATE not in str(caught.value)
+
+
+def test_hash_bound_to_parsed_bytes(monkeypatch,tmp_path):
+    digest=setup_task(tmp_path)
+    def run(command,**kwargs):
+        (tmp_path/'task.toml').write_text('changed')
+        return subprocess.CompletedProcess(command,1,'',PRIVATE)
+    monkeypatch.setattr(runner.subprocess,'run',run)
+    with pytest.raises(runner.CodexInstallError) as caught: runner._codex_task_platforms(tmp_path)
+    assert caught.value.report_detail['task_toml_sha256']==digest
+
+
+def report():
+    from dradar import failure_reports as f
+    return f.build_report(source='cli',phase='runner',failure_kind='runner_failed',
+        failure_code='codex_task_image_unavailable',detail={
+        'task_id':'t1','image_local_result':'nonzero_exit','image_local_exit_code':-9,
+        'image_remote_result':'timeout','task_toml_sha256':'a'*64})
+
+
+def test_real_http_422_only_downgrade(tmp_path):
+    import httpx
+    from dradar import failure_reports as f
+    from dradar.api_client import ApiClient
+    for status,body,retries in [(422,{'detail':'failure report detail has unsupported fields'},2),
+        (422,{'detail':'invalid image preflight detail'},1),(401,{'detail':'failure report detail has unsupported fields'},1),
+        (500,{'detail':'failure report detail has unsupported fields'},1)]:
+        calls=[]
+        def handle(req):
+            calls.append(json.loads(req.content))
+            return httpx.Response(status if len(calls)==1 else 200,json=body if len(calls)==1 else {'status':'received'})
+        client=ApiClient('https://local.invalid','unused')
+        client._client.close()
+        client._client=httpx.Client(base_url="https://local.invalid",transport=httpx.MockTransport(handle))
+        try: f._send_compatible(client,report())
+        except Exception: pass
+        assert len(calls)==retries
+        if retries==2:
+            assert calls[1]['detail']=={'task_id':'t1'}
+            assert {k:v for k,v in calls[0].items() if k!='detail'}=={k:v for k,v in calls[1].items() if k!='detail'}
+        client._client.close()
+
+
+def test_second_failure_queues_original(tmp_path):
+    from dradar import failure_reports as f
+    from dradar.api_client import ApiError
+    class Client:
+        def __init__(self):self.calls=[]
+        def report_runner_failure(self,p):
+            self.calls.append(p)
+            raise ApiError('private text',status_code=422,payload={'detail':'failure report detail has unsupported fields'})
+    client=Client();payload=report()
+    assert f.submit_or_queue(client,tmp_path,payload)=='send-failed'
+    assert len(client.calls)==2
+    queued=f.pending(tmp_path)[0]
+    assert queued['detail']==payload['detail'] and queued['report_key']==payload['report_key']
+    assert 'private text' not in json.dumps(queued)
+
+
+@pytest.mark.parametrize('key,value',[
+    ('image_local_result',PRIVATE),('image_local_exit_code',True),
+    ('image_remote_exit_code','999999999999999999'),('task_toml_sha256',PRIVATE),
+])
+def test_bad_fields_do_not_leave_client(key,value):
+    from dradar import failure_reports as f
+    detail=report()['detail'];detail[key]=value
+    encoded=json.dumps(f.build_report(source='cli',phase='runner',failure_kind='runner_failed',
+        failure_code='codex_task_image_unavailable',detail=detail))
+    assert PRIVATE not in encoded

@@ -481,12 +481,12 @@ def _codex_linux_platforms() -> tuple[str, ...]:
     return tuple(targets)
 
 
-def _image_preflight_detail(task_path: Path, attempts: dict[str, object]) -> dict[str, object]:
+def _image_preflight_detail(task_bytes: bytes, attempts: dict[str, object]) -> dict[str, object]:
     """Only bounded structural data; never retain command output or identifiers."""
     detail = dict(attempts)
     try:
         detail["task_toml_sha256"] = hashlib.sha256(
-            (task_path / "task.toml").read_bytes()
+            task_bytes
         ).hexdigest()
     except Exception:
         # Diagnostics must not replace the original preflight failure.
@@ -497,7 +497,8 @@ def _image_preflight_detail(task_path: Path, attempts: dict[str, object]) -> dic
 def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
     """Choose npm checks without requiring a prebuilt image for build tasks."""
     try:
-        task = tomllib.loads((task_path / "task.toml").read_text(encoding="utf-8"))
+        task_bytes = (task_path / "task.toml").read_bytes()
+        task = tomllib.loads(task_bytes.decode("utf-8"))
         environment = task.get("environment", {})
         if not isinstance(environment, dict):
             raise TypeError("environment must be a table")
@@ -557,7 +558,7 @@ def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
         result_key = f"image_{stage}_result"
         try:
             proc = subprocess.run(command, capture_output=True, text=True, timeout=20)
-            if type(proc.returncode) is int and -2147483648 <= proc.returncode <= 2147483647:
+            if type(proc.returncode) is int and -2147483648 <= proc.returncode <= 4294967295:
                 attempts[f"image_{stage}_exit_code"] = proc.returncode
             if proc.returncode == 0:
                 manifest = json.loads(proc.stdout)
@@ -576,7 +577,7 @@ def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
             attempts[result_key] = "json_invalid"
     if not isinstance(manifest, dict):
         try:
-            report_detail = _image_preflight_detail(task_path, attempts)
+            report_detail = _image_preflight_detail(task_bytes, attempts)
         except Exception:
             report_detail = {}
         raise CodexInstallError(
