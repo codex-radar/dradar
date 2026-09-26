@@ -73,21 +73,21 @@ def main() -> int:
         with _launch_lock(root):
             # Select the signed runtime under the same gate as registration.
             # A contender must not skip selection and silently run old code.
-            keys = None
             try:
                 keys = load_trusted_keys(HOME)
-                if keys and not active_invocations(root):
-                    controller = UpdateController(root, trusted_keys=keys)
-                    with controller.transaction():
-                        controller.recover_on_launcher_start()
-                    _activate_if_idle(root)
-            except UpdateLockBusy:
-                # A downloader can own update.lock for its whole transfer.
-                # Defer recovery/activation, but still register activity and
-                # verify the current or LKG signed runtime below.
-                pass
             except (OSError, ValueError, RuntimeError):
                 keys = None
+            if keys:
+                try:
+                    if not active_invocations(root):
+                        controller = UpdateController(root, trusted_keys=keys)
+                        with controller.transaction():
+                            controller.recover_on_launcher_start()
+                        _activate_if_idle(root)
+                except (OSError, ValueError, RuntimeError):
+                    # Recovery and activation can be deferred. A valid signed
+                    # committed artifact is still preferable to bundled code.
+                    pass
             activity = register_invocation(root)
             activity.__enter__()
             if keys:

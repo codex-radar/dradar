@@ -91,6 +91,11 @@ def test_busy_update_transaction_still_selects_signed_runtime(
     with UpdateLock(tmp_path / "ota" / "update.lock"):
         assert launcher.main() == 0
     assert selected == [True]
+    def failed_recovery(_):
+        raise ValueError("recoverable state error")
+    monkeypatch.setattr(launcher.UpdateController, "recover_on_launcher_start", failed_recovery)
+    assert launcher.main() == 0
+    assert selected == [True, True]
     assert capsys.readouterr().err == ""
     with UpdateLock(tmp_path / "ota" / "launch.lock"):
         assert not active_invocations(tmp_path / "ota")
