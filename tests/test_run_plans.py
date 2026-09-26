@@ -661,11 +661,13 @@ def test_auto_refill_uses_safe_effective_concurrency_not_seed_count(
     assert added[0]["batch_id"] == BATCH_ID
 
 
+@pytest.mark.parametrize("refill_mode", ["seed_barrier", "rolling_submitted"])
 def test_stopped_refill_plan_can_readmit_device_for_held_only_work(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, refill_mode,
 ):
     plan = _plan(mode="fixed", concurrency=10, task_count=10,
                  refill=True, refill_to=10, max_tasks=20)
+    plan["refill"]["refill_mode"] = refill_mode
     client = FakeClient(starts=[_server_response(
         plan, _envelope(agent_action="start_runner"),
     )])
@@ -689,6 +691,7 @@ def test_stopped_refill_plan_can_readmit_device_for_held_only_work(
     assert added[0]["credentials_file"] is not None
     assert added[0]["plan_id"] == plan["plan_id"]
     assert added[0]["refill"] is False
+    assert added[0]["refill_mode"] == "seed_barrier"
     assert all(added[0][key] is None for key in (
         "max_tasks", "refill_harness", "refill_model", "refill_effort",
     ))

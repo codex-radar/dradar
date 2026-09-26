@@ -1066,6 +1066,7 @@ def _spawn_pool(
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
+    refill_mode: str = "seed_barrier",
     credentials_file: str | None = None,
     benchmark: str | None = None,
     runtime_executable: str | None = None,
@@ -1093,6 +1094,8 @@ def _spawn_pool(
             "--refill-model", str(refill_model),
             "--refill-effort", str(refill_effort),
         ))
+        if refill_mode == "rolling_submitted":
+            command.extend(("--refill-mode", "rolling-submitted"))
     env = _pool_environment(runtime_environment)
     env[CONTROLLER_ID_ENV] = controller_id
     env[POOL_BATCH_ENV] = batch_id
@@ -1270,12 +1273,13 @@ def _handle_request(
                     "refill_harness": request.get("refill_harness"),
                     "refill_model": request.get("refill_model"),
                     "refill_effort": request.get("refill_effort"),
+                    "refill_mode": request.get("refill_mode", "seed_barrier"),
                 }
                 if (request.get("benchmark") is not None
                         and request["benchmark"] != current.get("benchmark")):
                     raise FleetError("batch is already active with a different benchmark")
                 if any(
-                    current.get(key) != value
+                    current.get(key, "seed_barrier" if key == "refill_mode" else None) != value
                     for key, value in requested_shape.items()
                 ):
                     raise FleetError(
@@ -1315,6 +1319,7 @@ def _handle_request(
             refill_harness = request.get("refill_harness")
             refill_model = request.get("refill_model")
             refill_effort = request.get("refill_effort")
+            refill_mode = request.get("refill_mode", "seed_barrier")
             credentials_file = request.get("credentials_file")
             plan_id = request.get("plan_id")
             benchmark = request.get("benchmark")
@@ -1364,6 +1369,10 @@ def _handle_request(
                 or credentials_file is None
             ):
                 raise FleetError("a run plan requires its private credentials file")
+            if not isinstance(refill_mode, str) or refill_mode not in {"seed_barrier", "rolling_submitted"}:
+                raise FleetError("invalid refill mode")
+            if not refill and refill_mode != "seed_barrier":
+                raise FleetError("rolling mode requires refill")
             if refill:
                 if (
                     not isinstance(max_tasks, int)
@@ -1442,6 +1451,7 @@ def _handle_request(
                         refill_harness=refill_harness,
                         refill_model=refill_model,
                         refill_effort=refill_effort,
+                        refill_mode=refill_mode,
                         credentials_file=credentials_file,
                         benchmark=benchmark,
                         runtime_executable=runtime_executable,
@@ -1469,6 +1479,7 @@ def _handle_request(
                             "refill_harness": refill_harness,
                             "refill_model": refill_model,
                             "refill_effort": refill_effort,
+                            "refill_mode": refill_mode,
                         }
                         state["batches"][batch_id] = item
                         _write_state(home, state)
@@ -1854,6 +1865,11 @@ def _print_add_response(response: dict) -> int:
 
 
 def cmd_fleet_add(args) -> int:
+    refill_mode = (
+        "rolling_submitted"
+        if getattr(args, "refill_mode", None) == "rolling-submitted"
+        else "seed_barrier"
+    )
     if args.refill and (
         args.max_tasks is None
         or args.refill_harness is None
@@ -1867,7 +1883,7 @@ def cmd_fleet_add(args) -> int:
     if not args.refill and any(
         value is not None for value in (
             args.max_tasks, args.refill_harness, args.refill_model,
-            args.refill_effort,
+            args.refill_effort, getattr(args, "refill_mode", None),
         )
     ):
         raise SystemExit("Fleet refill limits and scope require --refill")
@@ -1882,6 +1898,7 @@ def cmd_fleet_add(args) -> int:
             refill_harness=args.refill_harness,
             refill_model=args.refill_model,
             refill_effort=args.refill_effort,
+            refill_mode=refill_mode,
         )
     except FleetError as exc:
         raise SystemExit(str(exc)) from exc
@@ -2001,6 +2018,7 @@ def add_batch(
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
+    refill_mode: str = "seed_barrier",
     credentials_file: Path | str | None = None,
     plan_id: str | None = None,
     intent_generation: str | None = None,
@@ -2023,6 +2041,7 @@ def add_batch(
         "refill_harness": refill_harness,
         "refill_model": refill_model,
         "refill_effort": refill_effort,
+        "refill_mode": refill_mode,
         "credentials_file": str(credentials_file) if credentials_file else None,
         "plan_id": plan_id,
         "intent_generation": intent_generation,

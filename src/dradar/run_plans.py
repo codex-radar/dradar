@@ -487,6 +487,9 @@ def _validate_plan(value: object) -> dict[str, Any]:
     enabled = refill.get("enabled")
     refill_to = refill.get("refill_to")
     max_tasks = refill.get("max_tasks")
+    refill_mode = refill.get("refill_mode", "seed_barrier")
+    if not isinstance(refill_mode, str) or refill_mode not in {"seed_barrier", "rolling_submitted"}:
+        raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
     def valid_positive(item: object) -> bool:
         return isinstance(item, int) and not isinstance(item, bool) and item >= 1
     if not isinstance(enabled, bool):
@@ -499,7 +502,7 @@ def _validate_plan(value: object) -> dict[str, Any]:
             or (refill_to is not None and refill_to > max_tasks)
         ):
             raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
-    elif refill_to is not None or max_tasks is not None:
+    elif refill_to is not None or max_tasks is not None or refill_mode != "seed_barrier":
         raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
     _state_path(value["plan_id"])
     return value
@@ -2293,6 +2296,7 @@ def cmd_run_plan(args) -> int:
                     refill_harness=(plan["harness"] if not held_only else None),
                     refill_model=(first.get("model") if not held_only else None),
                     refill_effort=(first.get("effort") if not held_only else None),
+                    refill_mode=(refill.get("refill_mode", "seed_barrier") if not held_only else "seed_barrier"),
                 )
             except fleet.FleetStartupError as exc:
                 # Server admission is reversible until local readiness is

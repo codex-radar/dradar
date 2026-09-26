@@ -28,6 +28,13 @@ def _isolate_worker_boundary_mechanics(monkeypatch):
     )
 
 
+class _ReservationReadyClient:
+    """Mechanics fixture with the explicitly supported U2 admission protocol."""
+    def require_runner_reservation_protocol(self):
+        return {"schema_version": 1, "capabilities": ["runner-reservation-v1"],
+                "stop_generation_cas": True, "close_releases_capacity": False}
+
+
 def _args(**overrides):
     values = dict(
         workers=3, yes=True, keep=False, allow_task_drift=False,
@@ -161,7 +168,7 @@ def test_cli_claim_response_lost_does_not_retry_or_change_server_state(
         monkeypatch, tmp_path, capsys):
     assignment = {"assignment_id": "server-held", "task_id": "t1"}
 
-    class LostResponseClient:
+    class LostResponseClient(_ReservationReadyClient):
         batch_id = None
 
         def __init__(self):
@@ -541,6 +548,21 @@ def test_worker_command_never_forwards_auto_selection():
     assert "go" not in command
 
 
+def test_rolling_fleet_worker_child_uses_saved_plan_mode(monkeypatch):
+    command = runloop._worker_command(_args(
+        refill=True, refill_to=2, max_tasks=3, fleet_pool=True,
+        refill_mode="rolling-submitted",
+    ))
+    assert "--refill-mode" not in command
+    assert "--fleet-pool" not in command
+    assert "--refill" in command
+    monkeypatch.setattr(runloop, "_load_config", lambda: pytest.fail(
+        "worker-child passed mode validation",
+    ))
+    with pytest.raises(pytest.fail.Exception, match="passed mode validation"):
+        cli.main(command[command.index("resume"):])
+
+
 def test_worker_command_forwards_archive_opt_in_only():
     assert "--archive-session" not in runloop._worker_command(_args())
     assert "--archive-session" in runloop._worker_command(
@@ -600,7 +622,7 @@ def test_refill_error_owner_preserves_transport_but_stops_auth(
     monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
     monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
@@ -660,7 +682,7 @@ def test_only_parent_retries_pending_uploads_before_draining_waiting_work(
     checked_out = []
     pending_retries = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "ensure_tasks_root", lambda _root: None)
@@ -687,7 +709,7 @@ def test_only_parent_retries_pending_uploads_before_draining_waiting_work(
 def test_recovery_repeat_failure_stops_before_waiting_checkout(monkeypatch):
     checked_out = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
@@ -710,7 +732,7 @@ def test_recovery_repeat_failure_stops_before_waiting_checkout(monkeypatch):
 def test_egress_preflight_failure_happens_before_checkout(monkeypatch):
     checked_out = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
@@ -1255,6 +1277,7 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     results = iter((
@@ -1298,6 +1321,7 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     assert client.starts == [{
         "plan_id": "plan-a",
         "logical_session_id": "drl_same_device",
+        "expected_generation": 0,
         "concurrency_mode": "fixed",
         "concurrency": 2,
     }] * 2
@@ -1323,6 +1347,7 @@ def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
@@ -1357,6 +1382,7 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     monkeypatch.setattr(
@@ -1398,6 +1424,7 @@ def test_scoped_refill_wait_exits_after_bounded_transport_failures(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
@@ -1437,6 +1464,7 @@ def test_scoped_refill_wait_persists_authoritative_stop_runner(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
 
     class Client:
@@ -1467,6 +1495,7 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     pending_entries = [{
         "assignment_id": "done-a",
@@ -1528,6 +1557,7 @@ def test_scoped_refill_wait_exposes_blocked_upload_instead_of_waiting_forever(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [{
         "assignment_id": "done-a",
@@ -2630,6 +2660,7 @@ def test_scoped_plan_drain_with_lost_upload_settles_as_recoverable_failure(
             "benchmark": runloop.DEFAULT_BENCHMARK,
             "run_plan_id": "plan-a",
             "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
         },
     )
     monkeypatch.setattr(runloop, "_pool_ready_work_count", lambda *_a, **_k: 1)

@@ -34,6 +34,10 @@ def test_detached_runner_reports_preparation_failure_without_touching_user_files
         def do_GET(self):
             path = urlparse(self.path).path
             requests.append(("GET", path))
+            if path == "/api/v1/run-plans/capabilities":
+                self._send({"schema_version": 1, "capabilities": ["runner-reservation-v1"],
+                            "stop_generation_cas": True, "close_releases_capacity": False})
+                return
             if path == "/api/v1/run-plans/identity":
                 self._send({"concurrent_limit": 2, "claim_limit": 2})
                 return
@@ -84,6 +88,7 @@ def test_detached_runner_reports_preparation_failure_without_touching_user_files
             "benchmark": "deep-swe",
             "batch_id": BATCH_ID,
             "logical_session_id": "drl_process_test_only",
+            "credential_generation": 0,
             "plan_id": "plan-process-test",
             "plan": {"points_tier": "plus"},
         }))

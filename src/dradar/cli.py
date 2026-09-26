@@ -266,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
         help="after every seed assignment submits, keep this exact campaign filled",
     )
     p_fleet_add.add_argument(
+        "--refill-mode", choices=("seed-barrier", "rolling-submitted"),
+        help="explicit campaign mode; rolling-submitted refills an accepted submission slot",
+    )
+    p_fleet_add.add_argument(
         "--max-tasks", type=int, metavar="N",
         help="campaign total-task cap including the website-selected seed batch",
     )
@@ -647,6 +651,10 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--refill-to", type=int, metavar="N",
             help="target number of held/running tasks while refill is active",
+        )
+        p.add_argument(
+            "--refill-mode", choices=("seed-barrier", "rolling-submitted"),
+            help="explicit Fleet campaign mode (default: wait for all seed submissions)",
         )
         p.add_argument(
             "--refill-harness", metavar="HARNESS",
