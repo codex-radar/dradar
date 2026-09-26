@@ -3041,6 +3041,7 @@ def cmd_stop_plan(args) -> int:
                     or getattr(exc, "code", None) not in _STALE_SERVER_DECISION_CODES
                     or evidence.get("intent_status") != "rejected"
                     or evidence.get("applied") is not False
+                    or evidence.get("applied_intent_revision") is not None
                     or evidence.get("device_intent_revision") != state.get("device_intent_revision")):
                 if local_stop_recorded:
                     return _local_error_response(RunPlanClientError(
@@ -3054,11 +3055,12 @@ def cmd_stop_plan(args) -> int:
                                        "remote_error_code": getattr(exc, "code", None)},
                     ))
                 raise
-            # The all-device stop confirmation changed while the user was
-            # deciding.  Re-read exactly once without the stale capability;
-            # this can return a fresh confirmation/current state, but cannot
-            # authorize the destructive stop by itself.
+            # The exact confirmation was rejected at the unchanged revision.
+            # Its earlier challenge receipt has no reusable token. Confirm
+            # that receipt and replace it once with a fresh challenge; this
+            # request cannot authorize the all-device stop by itself.
             request["decision_token"] = None
+            fresh_stop_challenge = True
             try:
                 response = send_stop()
             except (ApiError, RunPlanClientError, OSError):

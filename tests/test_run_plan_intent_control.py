@@ -184,3 +184,38 @@ def test_known_capacity_rejection_allows_later_bounded_recheck_at_same_revision(
     assert len(client.start_calls) == 2
     assert client.start_calls[0]["intent_id"] != client.start_calls[1]["intent_id"]
     assert client.start_calls[0]["expected_intent_revision"] == client.start_calls[1]["expected_intent_revision"]
+
+
+def test_expired_stop_confirmation_replaces_existing_scrubbed_challenge(
+        tmp_path, monkeypatch, capsys):
+    def challenge(token):
+        return old._server_response(old._plan(), old._envelope(
+            status="decision_required", interaction="confirm", decision_required=True,
+            agent_action="ask_user", decision="stop_all_devices", decision_token=token,
+            choices=[{"id": "stop_all_devices", "label": "停止所有设备"},
+                     {"id": "cancel", "label": "取消"}]))
+
+    client = old.FakeClient(stops=[challenge("drd_original"), old._stale_decision_error(),
+                                   challenge("drd_renewed"), stopped()])
+    path, state = prepare(tmp_path, monkeypatch, client)
+    assert run_plans.cmd_stop_plan(old._args(scope="all-devices")) == 0
+    assert json.loads(capsys.readouterr().out)["decision_token"] == "drd_original"
+    original_id = client.stop_calls[0]["intent_id"]
+    assert "decision_token" not in client.run_plan_intent_receipt(original_id)["envelope"]
+    # A later command recovers from the durable state and original journal.
+    state.clear()
+    state.update(json.loads(path.read_text()))
+    assert run_plans.cmd_stop_plan(old._args(
+        scope="all-devices", decision_token="drd_original")) == 0
+    renewed = json.loads(capsys.readouterr().out)
+    assert renewed["agent_action"] == "ask_user"
+    assert renewed["decision_token"] == "drd_renewed"
+    assert len(client.stop_calls) == 3
+    assert len({call["intent_id"] for call in client.stop_calls}) == 3
+    assert {call["expected_intent_revision"] for call in client.stop_calls} == {0}
+    assert [call["decision_token"] for call in client.stop_calls] == [None, "drd_original", None]
+    assert client.revision == 0
+    assert run_plans.cmd_stop_plan(old._args(
+        scope="all-devices", decision_token="drd_renewed")) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "stopped"
+    assert client.revision == 1 and len(client.stop_calls) == 4
