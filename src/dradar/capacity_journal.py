@@ -23,6 +23,20 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def _exit_facts_confirmed(event: dict, spawn: dict | None) -> bool:
+    if event.get("process_group") != "absent" or event.get("exact_job_containers") != "absent":
+        return False
+    job_id = event.get("windows_job_id")
+    if job_id is not None or event.get("platform") == "nt" or (spawn or {}).get("windows_job_id") is not None:
+        return (isinstance(job_id, str) and len(job_id) == 32
+                and all(c in "0123456789abcdef" for c in job_id)
+                and spawn is not None and spawn.get("windows_job_id") == job_id
+                and spawn.get("pid") == event.get("pid")
+                and spawn.get("process_identity_kind") == "exact_windows_job"
+                and event.get("evidence_kind") == "windows_job_and_exact_job_docker_recheck_v1")
+    return True
+
+
 def _read(path: Path) -> dict:
     try:
         if path.is_symlink():
@@ -46,6 +60,7 @@ def _read(path: Path) -> dict:
                 raise ValueError("invalid attempt")
             previous = "registered"
             execution_id = None
+            spawn = None
             for event in attempt["events"]:
                 kind = event["event"]
                 scope = event["scope"]
@@ -55,15 +70,17 @@ def _read(path: Path) -> dict:
                         or any(c not in "0123456789abcdef" for c in identity)
                         or execution_id not in (None, identity)
                         or scope.get("runner_session_id") != state["session_id"]
-                        or any(scope.get(key) != attempt["scope"].get(key) for key in ("assignment_id", "task_id", "batch_id"))):
+                        or any(scope.get(key) != attempt["scope"].get(key) for key in ("assignment_id", "task_id", "batch_id", "owner_epoch", "resume_generation"))):
                     raise ValueError("invalid attempt identity")
                 allowed = {"entered": {"registered"}, "launch_pending": {"entered"},
                            "spawned": {"launch_pending"}, "confirmed_absent": {"spawned"},
                            "never_started": {"entered", "launch_pending"}}
                 if kind != "unknown" and previous not in allowed.get(kind, set()):
                     raise ValueError("invalid execution order")
-                if kind == "confirmed_absent" and (event.get("process_group") != "absent" or event.get("exact_job_containers") != "absent"):
+                if kind == "confirmed_absent" and not _exit_facts_confirmed(event, spawn):
                     raise ValueError("missing exit facts")
+                if kind == "spawned":
+                    spawn = event
                 if kind == "never_started" and (event.get("execution_started") is not False or (previous == "launch_pending" and event.get("reason") != "popen_failed")):
                     raise ValueError("unconfirmed no-launch claim")
                 previous, execution_id = kind, identity
@@ -168,7 +185,7 @@ class CapacityJournal:
                 scope = saved.get("scope")
                 if not isinstance(scope, dict) or scope.get("runner_session_id") != state["session_id"] or any(
                     scope.get(key) != binding[key]
-                    for key in ("assignment_id", "task_id", "batch_id")
+                    for key in ("assignment_id", "task_id", "batch_id", "owner_epoch", "resume_generation")
                 ):
                     raise CapacityEvidenceError("Execution audit scope does not match its durable attempt.")
                 event_id = saved.get("execution_id")
@@ -185,10 +202,8 @@ class CapacityJournal:
                 }
                 if saved["event"] != "unknown" and previous not in allowed[saved["event"]]:
                     raise CapacityEvidenceError("Execution audit events are incomplete or out of order.")
-                if saved["event"] == "confirmed_absent" and (
-                    saved.get("process_group") != "absent"
-                    or saved.get("exact_job_containers") != "absent"
-                ):
+                spawn = next((item for item in attempt["events"] if item["event"] == "spawned"), None)
+                if saved["event"] == "confirmed_absent" and not _exit_facts_confirmed(saved, spawn):
                     raise CapacityEvidenceError("Exit evidence is incomplete.")
                 if saved["event"] == "never_started" and (
                     saved.get("execution_started") is not False

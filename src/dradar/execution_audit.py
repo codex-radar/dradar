@@ -30,6 +30,7 @@ class ExecutionAudit:
         self.observer_failed = False
         self.pid = None
         self.pgid = None
+        self.windows_job_id = None
 
     def emit(self, event: str, **facts) -> None:
         payload = dict(schema="dradar.execution_audit.v1", event=event,
@@ -48,22 +49,33 @@ class ExecutionAudit:
         self.launch_pending = True
         self.emit("launch_pending", execution_started=False)
 
-    def record_spawn(self, pid) -> None:
+    def record_spawn(self, pid, *, windows_job_id=None) -> None:
         self.spawned = True
         self.pid = pid if type(pid) is int and pid > 0 else None
-        self.pgid = self.pid if os.name == "posix" else None
+        if windows_job_id is not None and (
+                not isinstance(windows_job_id, str) or len(windows_job_id) != 32
+                or any(c not in "0123456789abcdef" for c in windows_job_id)):
+            raise ExecutionObserverError("Windows Job identity is invalid")
+        self.windows_job_id = windows_job_id
+        self.pgid = self.pid if os.name == "posix" and windows_job_id is None else None
         self.emit("spawned", pid=self.pid, pgid=self.pgid, execution_started=True,
-                  process_identity_kind="live_child_handle_and_private_pgid")
+                  windows_job_id=windows_job_id,
+                  process_identity_kind=("exact_windows_job" if windows_job_id else
+                                         "live_child_handle_and_private_pgid"))
 
     def absent(self) -> None:
         if self.observer_failed:
             raise ExecutionObserverError("earlier execution evidence was not persisted")
         if self.observer is not None and not self.scope_bound():
             raise ExecutionObserverError("execution exit evidence has no exact session scope")
+        if os.name == "nt" and self.windows_job_id is None:
+            raise ExecutionObserverError("Windows execution exit has no exact Job identity")
         self.emit("confirmed_absent", pid=self.pid, pgid=self.pgid,
                   execution_started=True, process_group="absent",
                   exact_job_containers="absent",
-                  evidence_kind="private_pgid_and_exact_job_docker_recheck_v1")
+                  windows_job_id=self.windows_job_id,
+                  evidence_kind=("windows_job_and_exact_job_docker_recheck_v1" if self.windows_job_id
+                                 else "private_pgid_and_exact_job_docker_recheck_v1"))
         self.confirmed = True
 
     def never_started(self, reason: str) -> None:
