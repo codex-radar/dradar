@@ -64,7 +64,9 @@ class ApiError(RuntimeError):
     def __init__(self, message: str, status_code: int | None = None,
                  code: str | None = None, retry_after: float | None = None,
                  required_capability: str | None = None,
-                 payload: dict[str, Any] | None = None):
+                 payload: dict[str, Any] | None = None,
+                 transport_phase: str | None = None,
+                 transport_kind: str | None = None):
         # None means "never got a real HTTP response" (DNS/connect/timeout) —
         # callers that need to branch on a specific status (e.g. 409 vs 410)
         # must check this instead of grepping the message, which can contain
@@ -84,6 +86,8 @@ class ApiError(RuntimeError):
         # Versioned endpoints can return a complete Agent-facing envelope.
         # Keep it as structured data so callers never have to parse prose.
         self.payload = payload
+        self.transport_phase = transport_phase
+        self.transport_kind = transport_kind
 
 
 class ApiClient:
@@ -183,7 +187,48 @@ class ApiClient:
                 if retry_transport and attempt < 3 and method in {"GET", "HEAD"}:
                     self._sleep(1.0 * (attempt + 1))
                     continue
-                raise ApiError(f"cannot reach {self.server}: {exc}") from exc
+                # Exception text can contain proxy URLs, headers, or request
+                # data. The endpoint family and HTTPX failure class are enough
+                # to diagnose the stage without logging those values.
+                endpoint = path.split("?", 1)[0]
+                phases = {
+                    "/api/v1/assignment": "assignment_inventory",
+                    "/api/v1/assignment/claim": "assignment_claim",
+                    "/api/v1/assignment/checkout": "assignment_checkout",
+                    "/api/v1/assignment/started": "assignment_started",
+                    "/api/v1/refill-campaign/status": "refill_status",
+                    "/api/v1/refill-campaign/configure": "refill_configure",
+                    "/api/v1/run-plans/start": "run_plan_start",
+                    "/api/v1/run-plans/progress": "run_plan_progress",
+                    "/api/v1/run-plans/stop": "run_plan_stop",
+                    "/api/v1/runner/heartbeat": "runner_heartbeat",
+                    "/api/v1/runner/flight-events": "flight_events",
+                    "/api/v1/submissions": "submission_upload",
+                    "/api/v1/submission-upload-intents": "upload_intent",
+                }
+                phase = phases.get(endpoint, "other")
+                if re.fullmatch(
+                    r"/api/v1/assignments/[0-9a-f]{32}/recovery-status",
+                    endpoint,
+                ):
+                    phase = "assignment_recovery_status"
+                kind = next((name for cls, name in (
+                    (httpx.ConnectTimeout, "connect_timeout"),
+                    (httpx.ReadTimeout, "read_timeout"),
+                    (httpx.WriteTimeout, "write_timeout"),
+                    (httpx.PoolTimeout, "pool_timeout"),
+                    (httpx.ConnectError, "connect_error"),
+                    (httpx.ReadError, "read_error"),
+                    (httpx.WriteError, "write_error"),
+                    (httpx.RemoteProtocolError, "remote_protocol_error"),
+                    (httpx.LocalProtocolError, "local_protocol_error"),
+                ) if isinstance(exc, cls)), "other_http_error")
+                raise ApiError(
+                    f"cannot reach DRadar API: phase={phase} "
+                    f"transport={kind} method={method}",
+                    transport_phase=phase,
+                    transport_kind=kind,
+                ) from exc
             if (
                 response.status_code != 429
                 or not retry_rate_limit

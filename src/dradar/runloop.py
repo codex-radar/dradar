@@ -191,6 +191,7 @@ _POOL_BACKFILL_MAX_ATTEMPTS = 3
 _POOL_BACKFILL_RETRY_BASE_SECONDS = 2.0
 _POOL_BACKFILL_RETRY_MAX_SECONDS = 30.0
 _SCOPED_REFILL_WAIT_SECONDS = 30.0
+_SCOPED_REFILL_TRANSIENT_LIMIT = 5
 # A runner-session admission conflict is different from a broken executable or
 # provider preflight: another fresh/stale session may temporarily occupy the
 # batch's observation capacity while the held assignment is still safe and
@@ -1289,14 +1290,16 @@ def _exit_for(exc: ApiError) -> None:
         _signal_pool_abort(
             "DRadar account authentication failed", interrupt_siblings=False,
         )
-        sys.exit(f"{exc}\nyour token was rejected — `dradar login --github` recovers a "
-                 "linked identity, otherwise grab a fresh token on the radar page")
+        raise SystemExit(
+            f"{exc}\nyour token was rejected — `dradar login --github` recovers a "
+            "linked identity, otherwise grab a fresh token on the radar page"
+        ) from exc
     if exc.status_code in (402, 403):
         _signal_pool_abort(
             f"DRadar account stopped with HTTP {exc.status_code}",
             interrupt_siblings=False,
         )
-        sys.exit(str(exc))
+        raise SystemExit(str(exc)) from exc
     if exc.status_code == 429:
         _signal_pool_abort(
             "DRadar service rate limit persisted after bounded retries",
@@ -1306,8 +1309,13 @@ def _exit_for(exc: ApiError) -> None:
                  "the supervised pool will stop new checkout/backfill while "
                  "already-running siblings finish")
     if exc.status_code is None:
+        detail = (
+            f" phase={exc.transport_phase} transport={exc.transport_kind};"
+            if exc.transport_phase and exc.transport_kind else ""
+        )
         raise SystemExit(
-            "DRadar API request ended without a complete HTTP response; the "
+            "DRadar API request ended without a complete HTTP response;"
+            f"{detail} the "
             "server may have processed it. Check the current task state on "
             "the radar page and with `dradar leases` before following the "
             "supported recovery steps in your original run instructions."
@@ -5146,6 +5154,14 @@ def cmd_go(args) -> int:
         try:
             _preflight_scoped_provider(args)
             result = _run_worker_pool(args)
+        except (KeyboardInterrupt, EOFError) as exc:
+            # The pool parent returns from cmd_go before the single-worker
+            # cleanup block. A user interrupt belongs to this parent, not to
+            # any child it signals while shutting down.
+            if getattr(args, "refill", False):
+                refill_plan.stop(HOME, "interrupted by user")
+            _publish_fleet_startup_failure(args, exc)
+            raise
         except BaseException as exc:
             _publish_fleet_startup_failure(args, exc)
             raise
@@ -5184,6 +5200,7 @@ def cmd_go(args) -> int:
     telemetry.bind_batch(args.batch_id)
     telemetry.start()
     close_reason = "error"
+    transport_interrupted = False
 
     try:
         # One runner per machine by default, THEN sweep containers stranded by
@@ -5292,12 +5309,29 @@ def cmd_go(args) -> int:
         close_reason = "completed" if rc == 0 else "paused"
         return rc
     except (KeyboardInterrupt, EOFError):
-        if getattr(args, "refill", False):
+        if getattr(args, "refill", False) and not getattr(args, "worker_child", False):
             refill_plan.stop(HOME, "interrupted by user")
         close_reason = "interrupted"
         raise
+    except BaseException as exc:
+        api_error = exc if isinstance(exc, ApiError) else exc.__cause__
+        if isinstance(api_error, ApiError):
+            transport_interrupted = api_error.status_code is None
+            if (getattr(args, "refill", False)
+                    and getattr(args, "worker_child", False)
+                    and api_error.status_code in {401, 402, 403}):
+                refill_plan.stop(
+                    HOME,
+                    f"account authorization rejected (HTTP {api_error.status_code})",
+                )
+        raise
     finally:
-        if getattr(args, "refill", False) and close_reason == "error":
+        # Children do not own the shared refill plan. A lost response also
+        # leaves a write's result unknown, so preserve the plan for the
+        # supervisor's authoritative inventory/campaign reconciliation.
+        if (getattr(args, "refill", False) and close_reason == "error"
+                and not getattr(args, "worker_child", False)
+                and not transport_interrupted):
             refill_plan.stop(HOME, "CLI exited unexpectedly")
         telemetry.close(close_reason)
 
@@ -5459,6 +5493,7 @@ def _pool_ready_work_count(
     client: ApiClient, *, claimed_after: datetime | None = None,
     desired_workers: int | None = None,
     returned_assignment_ids: set[str] | None = None,
+    propagate_errors: bool = False,
 ) -> int | None:
     """Read work eligible for a vacant desired-worker slot.
 
@@ -5479,6 +5514,8 @@ def _pool_ready_work_count(
             # not a failed inventory read. Initial acquisition still routes
             # the same 404 through _acquire_batch/_exit_for and fails closed.
             return 0
+        if propagate_errors:
+            raise
         print(f"worker backfill check failed ({exc}); keeping current workers only")
         return None
     active = data.get("active")
@@ -7634,6 +7671,7 @@ def _wait_for_scoped_refill_work(
     if not _scoped_fleet_refill(args):
         return []
     announced = False
+    transient_failures = 0
     while True:
         reason = _pool_abort_reason()
         if reason:
@@ -7666,7 +7704,13 @@ def _wait_for_scoped_refill_work(
                 raise refill_plan.RefillError(
                     "the server unexpectedly requires a new device decision"
                 )
-            if envelope.get("agent_action") in {"stop_runner", "done"}:
+            if envelope.get("agent_action") == "stop_runner":
+                # The authenticated run-plan owner has explicitly stopped
+                # this continuation. Persist that decision locally so a
+                # later CLI restart cannot treat the old plan as accepting.
+                refill_plan.stop(HOME, "run plan stopped this continuation")
+                return []
+            if envelope.get("agent_action") == "done":
                 return []
 
             scoped_pending = _pending_uploads_for_client_batch(
@@ -7718,7 +7762,8 @@ def _wait_for_scoped_refill_work(
             # device's live workers from this device's local target: the server
             # has separately reserved each device's concurrency and atomic
             # checkout remains the final partitioning boundary.
-            ready = _pool_ready_work_count(client)
+            ready = _pool_ready_work_count(client, propagate_errors=True)
+            transient_failures = 0
             if active and ready:
                 return active
             if status in {"stopped", "completed"} or (
@@ -7748,9 +7793,26 @@ def _wait_for_scoped_refill_work(
                 or (exc.status_code is not None and exc.status_code >= 500)
             )
             if not transient:
+                # The pool parent reaches this wait loop outside cmd_go's
+                # single-worker finally block. An authoritative rejection
+                # must close the durable plan here, or a later invocation
+                # could silently resume a stopped/unauthorized campaign.
+                refill_plan.stop(
+                    HOME,
+                    f"exact continuation rejected (HTTP {exc.status_code})",
+                )
                 raise SystemExit(
                     "the exact continuation is no longer authorized on "
                     f"this device ({exc}); no model was started"
+                ) from exc
+            transient_failures += 1
+            if transient_failures >= _SCOPED_REFILL_TRANSIENT_LIMIT:
+                raise SystemExit(
+                    "the exact continuation could not be reconciled after "
+                    f"{transient_failures} bounded attempts; no new model "
+                    "was started. Check the scoped plan and held work with "
+                    "the original run instructions before resuming. "
+                    f"Last safe API diagnosis: {exc}"
                 ) from exc
             if not announced:
                 print(
