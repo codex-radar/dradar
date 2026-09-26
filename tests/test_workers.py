@@ -1425,6 +1425,41 @@ def test_scoped_refill_wait_exits_after_bounded_transport_failures(
     )
 
 
+def test_scoped_refill_wait_persists_authoritative_stop_runner(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=1, max_tasks=10,
+        quota_tier="plus", max_estimated_quota_pct=None, active=[],
+        refill_harness="codex", refill_model="gpt-6-sol",
+        refill_effort="low",
+    )
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {
+        "run_plan_id": "plan-a",
+        "run_plan_logical_session_id": "drl_same_device",
+    })
+
+    class Client:
+        calls = 0
+
+        def start_run_plan(self, **_kwargs):
+            self.calls += 1
+            return {"envelope": {
+                "decision_required": False,
+                "agent_action": "stop_runner",
+            }}
+
+    client = Client()
+    assert runloop._wait_for_scoped_refill_work(
+        _scoped_refill_args(), client, desired_workers=2,
+    ) == []
+    assert client.calls == 1
+    assert refill.load(tmp_path)["status"] == "stopped"
+    assert refill.load(tmp_path)["stop_reason"] == (
+        "run plan stopped this continuation"
+    )
+
+
 def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
     tmp_path, monkeypatch,
 ):

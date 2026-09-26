@@ -7704,7 +7704,13 @@ def _wait_for_scoped_refill_work(
                 raise refill_plan.RefillError(
                     "the server unexpectedly requires a new device decision"
                 )
-            if envelope.get("agent_action") in {"stop_runner", "done"}:
+            if envelope.get("agent_action") == "stop_runner":
+                # The authenticated run-plan owner has explicitly stopped
+                # this continuation. Persist that decision locally so a
+                # later CLI restart cannot treat the old plan as accepting.
+                refill_plan.stop(HOME, "run plan stopped this continuation")
+                return []
+            if envelope.get("agent_action") == "done":
                 return []
 
             scoped_pending = _pending_uploads_for_client_batch(
