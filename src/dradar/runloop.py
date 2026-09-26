@@ -7877,13 +7877,10 @@ def _wait_for_scoped_refill_work(
 ) -> list[dict]:
     """Keep one exact run-plan device healthy across an empty refill gap.
 
-    No model child exists during this phase. A normal runner heartbeat is not
-    sufficient because the exact batch may contain zero live assignments and
-    the server deliberately avoids creating an empty runner session. Instead,
-    replay the same logical device's idempotent run-plan start at the bounded
-    polling cadence. This refreshes device liveness without reserving another
-    worker or widening the plan. The shared drain marker remains authoritative
-    for a local stop request.
+    No model child may exist during this phase. Maintain only the exact active
+    admission with its revision and start ID, then read progress. This cannot
+    create or reactivate a run. A stop or newer admission makes the touch fail;
+    this loop never refreshes the revision or replays a start to bypass it.
     """
 
     if not _scoped_fleet_refill(args):
@@ -7900,22 +7897,34 @@ def _wait_for_scoped_refill_work(
             plan_id = runtime.get("run_plan_id")
             logical_session_id = runtime.get("run_plan_logical_session_id")
             credential_generation = runtime.get("run_plan_credential_generation")
+            intent_revision = runtime.get("run_plan_intent_revision")
+            start_intent = runtime.get("run_plan_current_start_intent_id")
             if (
                 not isinstance(plan_id, str) or not plan_id
                 or not isinstance(logical_session_id, str)
                 or not logical_session_id.startswith("drl_")
                 or type(credential_generation) is not int or credential_generation < 0
+                or type(intent_revision) is not int or intent_revision < 0
+                or not isinstance(start_intent, str) or len(start_intent) != 32
+                or any(char not in "0123456789abcdef" for char in start_intent)
             ):
                 raise refill_plan.RefillError(
                     "private run-plan credentials lack a stable device session"
                 )
-            refresh = client.start_run_plan(
+            touched = client.heartbeat_run_plan(
                 plan_id=plan_id,
-                logical_session_id=logical_session_id,
-                concurrency_mode="fixed",
-                concurrency=desired_workers,
+                current_start_intent_id=start_intent,
+                expected_intent_revision=intent_revision,
                 expected_generation=credential_generation,
             )
+            if (not isinstance(touched, dict) or touched.get("touched") is not True
+                    or touched.get("starts_new_work") is not False
+                    or touched.get("plan_id") != plan_id
+                    or touched.get("current_start_intent_id") != start_intent
+                    or type(touched.get("device_intent_revision")) is not int
+                    or touched["device_intent_revision"] != intent_revision):
+                raise refill_plan.RefillError("server did not confirm the existing run admission")
+            refresh = client.run_plan_progress(plan_id)
             envelope = refresh.get("envelope") if isinstance(refresh, dict) else None
             if not isinstance(envelope, dict):
                 raise refill_plan.RefillError(

@@ -325,6 +325,7 @@ ZCODE_LEGACY_CAPABILITY = "zcode-glm-5.3-bigmodel-coding-plan-v1"
 ZCODE_CAPABILITY = "zcode-glm-5.3-family-bigmodel-coding-plan-v2"
 TASK_PACKAGE_SYNC_CAPABILITY = "public-task-package-pin-v1"
 RUNNER_RESERVATION_CAPABILITY = "runner-reservation-v1"
+RUN_PLAN_INTENT_CAPABILITY = "run-plan-intents-v1"
 ZCODE_RUN_CONFIG_VERSION = "zcode-protocol-glm-5.3-family-full-container-v3"
 ZCODE_RUNTIME_PROFILE = "pier-zcode-glm-5.3-family-api-key-full-container-v3"
 ZCODE_HOME_RELATIVE_PATH = Path("providers") / "zcode"
@@ -2125,7 +2126,8 @@ def advertised_capabilities(
     # public task repository.  Servers activate this marker only when their
     # configured task package requires the new distribution path, allowing a
     # CLI-first rolling upgrade while old servers harmlessly ignore it.
-    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY, RUNNER_RESERVATION_CAPABILITY]
+    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY, RUNNER_RESERVATION_CAPABILITY,
+                    RUN_PLAN_INTENT_CAPABILITY]
     from .managed_auth_selection import load_selection, CAPABILITY as managed_capability
     from .auth_refresh import RefreshUnavailable
     try:

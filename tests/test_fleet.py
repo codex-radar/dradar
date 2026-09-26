@@ -1364,7 +1364,11 @@ def test_plan_token_stays_in_private_file_not_fleet_argv_env_or_state(
     credentials = tmp_path / "run-plans" / "plan-example.json"
     credentials.parent.mkdir(mode=0o700)
     token = "drp_extremely_private_plan_token"
-    credentials.write_text(json.dumps({"token": token}))
+    credentials.write_text(json.dumps({"credential_kind": "run_plan_v1", "token": token,
+        "server": "https://example.invalid", "benchmark": "deep-swe", "batch_id": BATCH_A,
+        "logical_session_id": "drl_original", "plan_id": "plan-example",
+        "plan": {"points_tier": "plus"}, "credential_generation": 2,
+        "device_intent_revision": 7, "intent_protocol": 1, "current_start_intent_id": "b" * 32}))
     credentials.chmod(0o600)
     captured = {}
 
@@ -1424,6 +1428,9 @@ def test_plan_token_stays_in_private_file_not_fleet_argv_env_or_state(
     )
     persisted = fleet._state_path(tmp_path).read_text()
     assert token not in persisted
+    saved = json.loads(persisted)["batches"][BATCH_A]
+    assert saved["run_plan_credential_generation"] == 2
+    assert saved["run_plan_intent_revision"] == 7
     assert json.loads(persisted)["batches"][BATCH_A]["credentials_file"] == str(credentials)
 
 

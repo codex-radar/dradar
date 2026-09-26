@@ -1217,12 +1217,40 @@ def _stop_run_plan_device(item: dict, reason: str) -> str | None:
         plan_id = cfg.get("run_plan_id")
         if not isinstance(plan_id, str) or not plan_id:
             raise ValueError("missing run plan ID")
+        from . import plan_intents, run_intent
+        batch_id = cfg.get("batch_id") or cfg.get("run_plan_batch_id")
+        if not batch_id:
+            raise ValueError("missing exact run plan batch")
+        local_warning = None
+        local_generation = item.get("intent_generation")
+        if local_generation is not None:
+            try:
+                run_intent.stop(HOME, batch_id, expected_generation=local_generation)
+            except run_intent.IntentStopped:
+                return "the original local lifecycle is already stopped or superseded"
+        elif cfg.get("run_plan_intent_protocol", 0) == 1:
+            return "the original local lifecycle is unconfirmed; no newer local run was stopped"
+        else:
+            run_intent.stop(HOME, batch_id)
         remote = _client(cfg)
-        remote.stop_run_plan(plan_id=plan_id, scope="this_device",
-                             expected_generation=cfg.get("run_plan_credential_generation"))
+        request = dict(plan_id=plan_id, scope="this_device",
+                       expected_generation=cfg.get("run_plan_credential_generation"))
+        revision = cfg.get("run_plan_intent_revision")
+        if cfg.get("run_plan_intent_protocol", 0) == 1:
+            revision = item.get("run_plan_intent_revision")
+            original_generation = item.get("run_plan_credential_generation")
+            if type(revision) is not int or type(original_generation) is not int:
+                return "the original remote admission is unconfirmed; no later admission was stopped"
+            request["expected_generation"] = original_generation
+        if revision is None and cfg.get("run_plan_intent_protocol", 0) == 0:
+            remote.stop_run_plan(**request)
+        else:
+            plan_intents.execute(HOME, remote, operation="stop", request=request,
+                expected_revision=revision,
+                local_intent=run_intent._stop_digest(run_intent._paths(HOME, batch_id)[1]))
     except (ApiError, KeyError, OSError, ValueError) as exc:
         return f"could not confirm this device stopped after {reason}: {exc}"
-    return None
+    return local_warning
 
 
 def _response(home: Path, request_id: str, payload: dict) -> None:
@@ -1444,6 +1472,7 @@ def _handle_request(
                     home, batch_id, request.get("intent_generation"),
                 )
                 with lifecycle:
+                    original_plan = runtime_config(credentials_file) if credentials_file else {}
                     process, log_handle = _spawn_pool(
                         home, state, batch_id, workers,
                         refill=refill,
@@ -1472,6 +1501,10 @@ def _handle_request(
                             "warnings": warnings,
                             "capacity": capacity,
                             "plan_id": plan_id,
+                            "intent_generation": request.get("intent_generation"),
+                            "run_plan_credential_generation": original_plan.get("run_plan_credential_generation"),
+                            "run_plan_intent_revision": original_plan.get("run_plan_intent_revision"),
+                            "run_plan_current_start_intent_id": original_plan.get("run_plan_current_start_intent_id"),
                             "credentials_file": credentials_file,
                             "benchmark": benchmark,
                             "refill": refill,

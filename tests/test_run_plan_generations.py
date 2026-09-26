@@ -220,6 +220,14 @@ def test_modern_fleet_fault_stop_keeps_original_generation_and_revision_without_
     state.update(credential_generation=2,device_intent_revision=7,
                  intent_protocol=1,current_start_intent_id='b'*32)
     run_plans._atomic_json(path,state)
+    lifecycle=run_intent.begin(tmp_path,state['batch_id'])
+    item={'credentials_file':str(path),'intent_generation':lifecycle,
+          'run_plan_credential_generation':2,'run_plan_intent_revision':7,
+          'run_plan_current_start_intent_id':'b'*32}
+    # The credential file may later carry a newer observation. The old Fleet
+    # item must retain the original admission it is permitted to reduce.
+    state['device_intent_revision']=8
+    run_plans._atomic_json(path,state)
     original=path.read_bytes()
     client=old.FakeClient(stops=[old._server_response(old._plan(),
         old._envelope(status='stopped',agent_action='stop_runner'))])
@@ -235,7 +243,7 @@ def test_modern_fleet_fault_stop_keeps_original_generation_and_revision_without_
         return original_stop(**request)
     monkeypatch.setattr(client,'stop_run_plan',stop_after_local_marker)
     monkeypatch.setattr(fleet,'_client',lambda cfg:client)
-    assert fleet._stop_run_plan_device({'credentials_file':str(path)},'local failure') is None
+    assert fleet._stop_run_plan_device(item,'local failure') is None
     request,=client.stop_calls
     assert request['plan_id']==state['plan_id'] and request['scope']=='this_device'
     assert request['expected_generation']==2 and request['expected_intent_revision']==7

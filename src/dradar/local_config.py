@@ -129,6 +129,17 @@ def runtime_config(credentials_file: str | os.PathLike[str] | None = None) -> di
     generation = payload.get("credential_generation")
     if generation is not None and (type(generation) is not int or generation < 0):
         raise ValueError("invalid private run-plan credential generation")
+    intent_revision = payload.get("device_intent_revision")
+    start_intent = payload.get("current_start_intent_id")
+    if intent_revision is not None and (type(intent_revision) is not int or intent_revision < 0):
+        raise ValueError("invalid private run-plan intent revision")
+    if start_intent is not None and (not isinstance(start_intent, str) or len(start_intent) != 32
+                                    or any(char not in "0123456789abcdef" for char in start_intent)):
+        raise ValueError("invalid private run-plan start intent")
+    intent_protocol = payload.get("intent_protocol", 0)
+    if (type(intent_protocol) is not int or intent_protocol not in (0, 1)
+            or (intent_protocol == 1 and intent_revision is None)):
+        raise ValueError("invalid private run-plan intent protocol")
     runtime = dict(cfg)
     runtime.update({
         "server": server,
@@ -137,6 +148,9 @@ def runtime_config(credentials_file: str | os.PathLike[str] | None = None) -> di
         "run_plan_batch_id": batch_id,
         "run_plan_id": payload.get("plan_id"),
         "run_plan_credential_generation": generation,
+        "run_plan_intent_revision": intent_revision,
+        "run_plan_current_start_intent_id": start_intent,
+        "run_plan_intent_protocol": intent_protocol,
         "run_plan_logical_session_id": logical_session_id,
         "run_plan_points_tier": points_tier,
     })

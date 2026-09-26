@@ -1270,6 +1270,22 @@ def _ready_run_plan_envelope():
     }
 
 
+def _heartbeat_run_plan_response():
+    return {"touched": True, "starts_new_work": False, "plan_id": "plan-a",
+            "device_intent_revision": 1, "current_start_intent_id": "a" * 32}
+
+
+class _AdmittedRefillClient:
+    def heartbeat_run_plan(self, **_kwargs):
+        return _heartbeat_run_plan_response()
+
+    def run_plan_progress(self, _plan_id):
+        return _ready_run_plan_envelope()
+
+    def start_run_plan(self, **_kwargs):
+        pytest.fail("an idle admitted pool must never replay a start")
+
+
 def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier(
     tmp_path, monkeypatch,
 ):
@@ -1278,6 +1294,8 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     results = iter((
@@ -1304,13 +1322,13 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         def __init__(self):
             self.starts = []
 
-        def start_run_plan(self, **kwargs):
+        def heartbeat_run_plan(self, **kwargs):
             self.starts.append(kwargs)
-            return _ready_run_plan_envelope()
+            return _heartbeat_run_plan_response()
 
     client = Client()
     active = runloop._wait_for_scoped_refill_work(
@@ -1320,10 +1338,9 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     assert active == [assignment]
     assert client.starts == [{
         "plan_id": "plan-a",
-        "logical_session_id": "drl_same_device",
         "expected_generation": 0,
-        "concurrency_mode": "fixed",
-        "concurrency": 2,
+        "expected_intent_revision": 1,
+        "current_start_intent_id": "a" * 32,
     }] * 2
     assert sleeps == [runloop._SCOPED_REFILL_WAIT_SECONDS]
     assert runloop._SCOPED_REFILL_WAIT_SECONDS >= 30
@@ -1333,7 +1350,7 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     assert ready_calls == [{"propagate_errors": True}] * 2
 
 
-@pytest.mark.parametrize("status_code", (401, 403, 410))
+@pytest.mark.parametrize("status_code", (401, 403, 409, 410))
 def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
     tmp_path, monkeypatch, status_code,
 ):
@@ -1348,14 +1365,16 @@ def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             raise runloop.ApiError(
                 "plan no longer authorized", status_code=status_code,
@@ -1383,6 +1402,8 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     monkeypatch.setattr(
@@ -1398,17 +1419,17 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         def __init__(self):
             self.calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 raise runloop.ApiError(
                     "busy", status_code=503, retry_after=45,
                 )
-            return _ready_run_plan_envelope()
+            return _heartbeat_run_plan_response()
 
     client = Client()
     assert runloop._wait_for_scoped_refill_work(
@@ -1425,14 +1446,16 @@ def test_scoped_refill_wait_exits_after_bounded_transport_failures(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             raise runloop.ApiError(
                 "cannot reach DRadar API: phase=run_plan_start "
@@ -1465,12 +1488,14 @@ def test_scoped_refill_wait_persists_authoritative_stop_runner(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def run_plan_progress(self, _plan_id):
             self.calls += 1
             return {"envelope": {
                 "decision_required": False,
@@ -1496,6 +1521,8 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     pending_entries = [{
         "assignment_id": "done-a",
@@ -1536,9 +1563,9 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
         lambda *_args, **_kwargs: pytest.fail("pending replay must not rerun a model"),
     )
 
-    class Client:
-        def start_run_plan(self, **_kwargs):
-            return _ready_run_plan_envelope()
+    class Client(_AdmittedRefillClient):
+        def heartbeat_run_plan(self, **_kwargs):
+            return _heartbeat_run_plan_response()
 
     active = runloop._wait_for_scoped_refill_work(
         _scoped_refill_args(), Client(), desired_workers=2,
@@ -1558,6 +1585,8 @@ def test_scoped_refill_wait_exposes_blocked_upload_instead_of_waiting_forever(
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
         "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [{
         "assignment_id": "done-a",
@@ -1569,9 +1598,9 @@ def test_scoped_refill_wait_exposes_blocked_upload_instead_of_waiting_forever(
         lambda *_args: pytest.fail("blocked upload must stop before refill"),
     )
 
-    class Client:
-        def start_run_plan(self, **_kwargs):
-            return _ready_run_plan_envelope()
+    class Client(_AdmittedRefillClient):
+        def heartbeat_run_plan(self, **_kwargs):
+            return _heartbeat_run_plan_response()
 
     with pytest.raises(SystemExit, match="needs upload review"):
         runloop._wait_for_scoped_refill_work(

@@ -109,14 +109,31 @@ def require(home: Path, batch: str, generation: str | None) -> None:
         raise IntentStopped("a newer run or stop cancelled this launch")
 
 
-def stop(home: Path, batch: str) -> str | None:
-    """Persist reduction and publish local drain without waiting for the API."""
+def lifecycle_snapshot(home: Path, batch: str) -> tuple[str, str]:
+    path, stopped, _lock = _paths(home, batch)
+    if path.is_symlink():
+        raise IntentStopped("the local lifecycle is unsafe")
+    return (_stop_digest(stopped),
+            hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "absent")
+
+
+@contextmanager
+def stop_publication(home: Path, batch: str, *, expected_generation: str | None = None):
+    """Publish reduction and let the caller capture evidence under this short lock."""
     from .run_plans import _atomic_json, _exclusive_lock
     from .fleet import _request_pool_drain
     _path, stopped, lock = _paths(home, batch)
     with _exclusive_lock(lock):
+        if expected_generation is not None:
+            require(home, batch, expected_generation)
         _atomic_json(stopped, {"schema_version": 1, "stop_id": uuid.uuid4().hex})
-        return _request_pool_drain(home, batch, "this device was asked to stop")
+        yield _request_pool_drain(home, batch, "this device was asked to stop")
+
+
+def stop(home: Path, batch: str, *, expected_generation: str | None = None) -> str | None:
+    """Persist reduction and publish local drain without waiting for the API."""
+    with stop_publication(home, batch, expected_generation=expected_generation) as warning:
+        return warning
 
 
 def require_worker(home: Path) -> None:

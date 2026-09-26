@@ -21,6 +21,7 @@ from dradar import (
     pending,
     provider_config,
     run_plans,
+    run_intent,
     runloop,
 )
 from dradar.api_client import ApiClient, ApiError
@@ -234,25 +235,36 @@ def _stale_decision_error(code="decision_invalid_or_state_changed"):
 
 
 class FakeClient:
+    server = "https://api.codexradar.com"
+    benchmark_id = "deep-swe"
+    account_scope = __import__("hashlib").sha256((server + "\0" + PLAN_TOKEN).encode()).hexdigest()
+    receipts = {}
+
     def __init__(self, starts=None, progress=None, stops=None):
         self.starts = list(starts or [])
         self.progress_results = list(progress or [])
         self.stop_results = list(stops or [])
+        self.revision = 0
+        self.current_start = None
         self.start_calls = []
         self.progress_calls = []
         self.stop_calls = []
+        self.heartbeat_calls = []
         self.plan_id = next((item["plan"]["plan_id"] for item in
                              self.starts + self.progress_results + self.stop_results
                              if isinstance(item, dict) and isinstance(item.get("plan"), dict)),
                             "plan_test_123456")
 
     def run_plan_capabilities(self):
-        return {"schema_version":1, "capabilities":["runner-reservation-v1"],
-                "stop_generation_cas":True, "close_releases_capacity":False}
+        return {"schema_version":1, "capabilities":["runner-reservation-v1", "run-plan-intents-v1"],
+                "stop_generation_cas":True, "close_releases_capacity":False,
+                "intent_schema_version":1, "start_stop_intent_cas":True, "admission_heartbeat":True}
 
     def whoami(self):
         return {"schema_version":1, "plan_id":self.plan_id,
                 "device_generation":0, "credential_generation":0,
+                "device_intent_revision":self.revision, "intent_protocol":1,
+                "current_start_intent_id":self.current_start,
                 "concurrent_limit": 8, "claim_limit": 8}
 
     @staticmethod
@@ -262,9 +274,49 @@ class FakeClient:
             raise value
         return value
 
+    def _intent(self, operation, kwargs, values):
+        from copy import deepcopy
+        from test_plan_intents import receipt
+        if "intent_id" not in kwargs:
+            return self._next(values)
+        try:
+            response = self._next(values)
+        except ApiError as exc:
+            if exc.status_code and 400 <= exc.status_code < 500:
+                body = receipt(operation, kwargs, status="rejected", error_code=exc.code,
+                               original_http_status=exc.status_code)
+                body.update(exc.payload or {})
+                self.receipts[kwargs["intent_id"]] = deepcopy(body)
+                exc.payload = body
+            raise
+        envelope = response.get("envelope", {})
+        status = "decision_required" if envelope.get("decision_required") else (
+            "applied" if envelope.get("agent_action") in ("monitor", "start_runner", "stop_runner") else "rejected")
+        body = receipt(operation, kwargs, status=status, **response)
+        self.revision = body["device_intent_revision"]
+        self.current_start = body["current_start_intent_id"]
+        self.receipts[kwargs["intent_id"]] = deepcopy(body)
+        return body
+
     def start_run_plan(self, **kwargs):
         self.start_calls.append(kwargs)
-        return self._next(self.starts)
+        return self._intent("start", kwargs, self.starts)
+
+    def run_plan_intent_receipt(self, intent_id, **kwargs):
+        from copy import deepcopy
+        from test_plan_intents import unknown
+        if intent_id not in self.receipts:
+            raise unknown(intent_id)
+        result = deepcopy(self.receipts[intent_id])
+        result["idempotent_replay"] = True
+        result.get("envelope", {}).pop("decision_token", None)
+        return result
+
+    def heartbeat_run_plan(self, **kwargs):
+        self.heartbeat_calls.append(kwargs)
+        return dict(touched=True, starts_new_work=False, plan_id=kwargs["plan_id"],
+                    current_start_intent_id=kwargs["current_start_intent_id"],
+                    device_intent_revision=kwargs["expected_intent_revision"])
 
     def run_plan_progress(self, plan_id):
         self.progress_calls.append(plan_id)
@@ -272,7 +324,7 @@ class FakeClient:
 
     def stop_run_plan(self, **kwargs):
         self.stop_calls.append(kwargs)
-        return self._next(self.stop_results)
+        return self._intent("stop", kwargs, self.stop_results)
 
 
 def _prepare_run(
@@ -285,6 +337,8 @@ def _prepare_run(
     environment_issue=None,
 ):
     path, state = _state(tmp_path, plan)
+    monkeypatch.setattr(run_plans, "HOME", tmp_path)
+    monkeypatch.setattr(fleet, "HOME", tmp_path)
     monkeypatch.setattr(
         run_plans,
         "_state_and_client",
@@ -817,9 +871,11 @@ def test_structured_local_startup_failure_stops_phantom_device_immediately(
     assert payload["agent_action"] == "notify_only"
     assert payload["agent"]["requires_user_action"] is True
     assert "已有本地文件没有被修改" in payload["user_message"]
-    assert client.stop_calls == [
-        {"plan_id": plan["plan_id"], "scope": "this_device", "expected_generation": 0},
-    ]
+    assert len(client.stop_calls) == 1
+    assert client.stop_calls[0] == {"plan_id": plan["plan_id"], "scope": "this_device",
+        "expected_generation": 0, "decision_token": None, "expected_intent_revision": 1,
+        "intent_id": client.stop_calls[0]["intent_id"]}
+    assert len(client.stop_calls[0]["intent_id"]) == 32
 
 
 def test_auto_resource_downgrade_returns_one_top_level_warn_envelope(
@@ -1157,15 +1213,17 @@ def test_real_cli_process_stop_cancels_pending_run_before_its_reply(
         wait_at("preflight")
         return None
 
-    def start(**_kwargs):
+    def start(**kwargs):
+        from test_plan_intents import receipt
         wait_at("server_start")
-        return _server_response(plan)
+        return receipt("start", kwargs, **_server_response(plan))
 
-    def stop(**_kwargs):
+    def stop(**kwargs):
+        from test_plan_intents import receipt
         stop_sent.set()
         if not stop_ack:
             raise ApiError("synthetic lost stop acknowledgement")
-        return _server_response(plan, _envelope(status="stopped", agent_action="stop_runner"))
+        return receipt("stop", kwargs, **_server_response(plan, _envelope(status="stopped", agent_action="stop_runner")))
 
     def spawn(**_kwargs):
         late_spawn.set()
@@ -1443,13 +1501,13 @@ def test_server_stopped_start_response_never_launches_a_local_pool(
     monkeypatch.setattr(
         fleet, "add_batch", lambda **_kwargs: pytest.fail("stopped plan cannot start"),
     )
-    monkeypatch.setattr(fleet, "stop_batch", stopped_batches.append)
+    monkeypatch.setattr(fleet, "_request_pool_drain", lambda home, batch, reason: stopped_batches.append(batch))
 
     assert run_plans.cmd_run_plan(_args()) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "stopped"
     assert payload["agent_action"] == "stop_runner"
-    assert stopped_batches == [BATCH_ID]
+    assert stopped_batches and set(stopped_batches) == {BATCH_ID}
 
 
 @pytest.mark.parametrize("source", ("website", "command", "auto_plan_override"))
@@ -1511,6 +1569,7 @@ def test_upgrade_retires_old_local_resource_confirmation(
     )
     old = run_plans._local_capacity_response(
         path, state, requested=5, recommended=1,
+        local_generation=run_intent.begin(run_plans.HOME, state["batch_id"]),
         snapshot=_snapshot(available=1),
     )
     monkeypatch.setattr(run_plans, "_capacity_snapshot", lambda *_args: (
@@ -1542,6 +1601,7 @@ def test_progress_discards_old_local_estimate_barrier_without_starting(
     path, state = _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
     run_plans._local_capacity_response(
         path, state, requested=5, recommended=1,
+        local_generation=run_intent.begin(run_plans.HOME, state["batch_id"]),
         snapshot=_snapshot(available=1),
     )
 
@@ -1591,6 +1651,7 @@ def test_fixed_workers_still_enforce_count_plan_and_server_limits(
     monkeypatch.setattr(client, "whoami", lambda: {
         "schema_version":1, "plan_id":plan["plan_id"],
         "device_generation":0, "credential_generation":0,
+        "device_intent_revision":0, "current_start_intent_id":None, "intent_protocol":1,
         "concurrent_limit": account_limit,
     })
     _prepare_run(monkeypatch, tmp_path, plan=plan, client=client)
@@ -1864,7 +1925,7 @@ def test_lost_start_response_retry_ensures_missing_local_fleet_pool(
 
     assert run_plans.cmd_run_plan(_args()) == 1
     first = json.loads(capsys.readouterr().out)
-    assert first["error_code"] == "service_unavailable"
+    assert first["error_code"] == "intent_unknown"
     assert added == []
 
     assert run_plans.cmd_run_plan(_args()) == 0
@@ -1881,9 +1942,11 @@ def test_same_device_with_live_local_pool_is_idempotently_ensured(
     tmp_path, monkeypatch, capsys, old_controller,
 ):
     plan = _plan()
-    client = FakeClient(starts=[_server_response(
+    client = FakeClient(progress=[_server_response(
         plan, _envelope(status="already_running"),
     )])
+    client.revision = 1
+    client.current_start = "a" * 32
     path, state = _state(tmp_path, plan)
     monkeypatch.setattr(
         run_plans,
@@ -1919,7 +1982,9 @@ def test_same_device_with_live_local_pool_is_idempotently_ensured(
     assert run_plans.cmd_run_plan(_args()) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "already_running"
-    assert client.start_calls[0]["concurrency"] == 2
+    assert client.start_calls == []
+    assert len(client.heartbeat_calls) == 1
+    assert client.heartbeat_calls[0]["expected_intent_revision"] == 1
     assert len(ensured) == 1
     assert ensured[0]["workers"] == 2
 
@@ -1935,7 +2000,9 @@ def test_active_local_pool_is_not_silently_resized_or_reactivated(
     status, expected_code, expected_rc, tmp_path, monkeypatch, capsys,
 ):
     plan = _plan()
-    client = FakeClient(starts=[_server_response(plan)])
+    client = FakeClient(progress=[_server_response(plan)])
+    client.revision = 1
+    client.current_start = "a" * 32
     path, state = _state(tmp_path, plan)
     monkeypatch.setattr(
         run_plans, "_state_and_client",
@@ -1998,18 +2065,21 @@ def test_stop_winning_after_server_start_is_not_replayed_as_a_new_run(
     assert payload["agent_action"] == "notify_only"
     assert "next_commands" not in payload.get("agent", {})
     assert len(client.start_calls) == 1
-    assert client.stop_calls == [{
-        "plan_id": plan["plan_id"], "scope": "this_device", "expected_generation": 0,
-    }]
+    assert len(client.stop_calls) == 1
+    assert client.stop_calls[0] == {"plan_id": plan["plan_id"], "scope": "this_device",
+        "expected_generation": 0, "decision_token": None, "expected_intent_revision": 1,
+        "intent_id": client.stop_calls[0]["intent_id"]}
 
 
 def test_orphaned_live_pool_is_counted_and_never_spawned_twice(
     tmp_path, monkeypatch, capsys,
 ):
     plan = _plan()
-    client = FakeClient(starts=[_server_response(
+    client = FakeClient(progress=[_server_response(
         plan, _envelope(status="already_running"),
     )])
+    client.revision = 1
+    client.current_start = "a" * 32
     path, state = _state(tmp_path, plan)
     monkeypatch.setattr(
         run_plans, "_state_and_client",
@@ -2028,7 +2098,9 @@ def test_orphaned_live_pool_is_counted_and_never_spawned_twice(
     assert run_plans.cmd_run_plan(_args()) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "already_running"
-    assert client.start_calls[0]["concurrency"] == 2
+    assert client.start_calls == []
+    assert len(client.heartbeat_calls) == 1
+    assert client.heartbeat_calls[0]["expected_intent_revision"] == 1
 
 
 def test_concurrent_auto_plans_share_one_atomic_local_admission_budget(
@@ -2231,7 +2303,7 @@ def test_stop_linearizes_after_inflight_start_and_stops_the_new_pool(
         local[batch_id]["status"] = "stopping"
 
     monkeypatch.setattr(fleet, "add_batch", add_batch)
-    monkeypatch.setattr(fleet, "stop_batch", stop_batch)
+    monkeypatch.setattr(fleet, "_request_pool_drain", lambda home, batch, reason: stop_batch(batch))
     monkeypatch.setattr(run_plans, "_output", lambda _args, _response: 0)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2246,7 +2318,7 @@ def test_stop_linearizes_after_inflight_start_and_stops_the_new_pool(
         assert starting.result(timeout=5) == 0
         assert stopping.result(timeout=5) == 0
 
-    assert events == ["add", "stop"]
+    assert events[0] == "add" and set(events[1:]) == {"stop"}
     assert client.stop_calls[0]["scope"] == "this_device"
 
 
@@ -2917,6 +2989,7 @@ def test_zero_spare_capacity_asks_in_plain_language_without_internal_ids(tmp_pat
     path, state = _state(tmp_path, plan)
     response = run_plans._local_capacity_response(
         path, state, requested=1, recommended=0,
+        local_generation=run_intent.begin(run_plans.HOME, state["batch_id"]),
         snapshot=_snapshot(available=0, auto_workers=0),
     )
     assert response["user_message"] == (
@@ -3043,7 +3116,7 @@ def test_progress_and_stop_reuse_saved_plan_access_without_exchange(
     )
     monkeypatch.setattr(run_plans, "ApiClient", lambda *_args, **_kwargs: client)
     stopped_batches = []
-    monkeypatch.setattr(fleet, "stop_batch", stopped_batches.append)
+    monkeypatch.setattr(fleet, "_request_pool_drain", lambda home, batch, reason: stopped_batches.append(batch))
 
     assert run_plans.cmd_progress_plan(_args()) == 0
     progress_payload = json.loads(capsys.readouterr().out)
@@ -3054,7 +3127,7 @@ def test_progress_and_stop_reuse_saved_plan_access_without_exchange(
     stop_payload = json.loads(capsys.readouterr().out)
     assert stop_payload["status"] == "stopped"
     assert client.stop_calls[0]["scope"] == "this_device"
-    assert stopped_batches == [BATCH_ID]
+    assert stopped_batches and set(stopped_batches) == {BATCH_ID}
 
 
 def test_stale_stop_all_decision_rechecks_once_without_stopping(
@@ -3243,17 +3316,24 @@ def test_progress_surfaces_local_runner_failure_without_stopping_remote_devices(
         assert "目前没有其他设备继续" in payload["user_message"]
 
 
+def _record_scoped_result(home, entry):
+    entry["scope_fingerprint"] = pending.scope_fingerprint(
+        server=FakeClient.server, account_scope=FakeClient.account_scope,
+        benchmark_id=FakeClient.benchmark_id, batch_id=entry.get("batch_id"))
+    pending.record(home, entry)
+
+
 def test_upload_only_replays_exact_completed_result_before_any_runner_action(
     tmp_path, monkeypatch, capsys,
 ):
     plan = _plan()
     path, state = _state(tmp_path, plan)
     other_batch = "550e8400e29b41d4a716446655440000"
-    pending.record(tmp_path, {
+    _record_scoped_result(tmp_path, {
         "assignment_id": "done-this-plan",
         "batch_id": BATCH_ID,
     })
-    pending.record(tmp_path, {
+    _record_scoped_result(tmp_path, {
         "assignment_id": "done-other-plan",
         "batch_id": other_batch,
     })
@@ -3269,7 +3349,9 @@ def test_upload_only_replays_exact_completed_result_before_any_runner_action(
 
     def retry(_client, *, batch_id=None):
         replayed.append(batch_id)
-        pending.remove(tmp_path, "done-this-plan")
+        pending.remove(tmp_path, "done-this-plan", scope_fingerprint=pending.scope_fingerprint(
+            server=FakeClient.server, account_scope=FakeClient.account_scope,
+            benchmark_id=FakeClient.benchmark_id, batch_id=BATCH_ID))
         return ["submitted"]
 
     monkeypatch.setattr(runloop, "_retry_pending_uploads", retry)
@@ -3337,7 +3419,7 @@ def test_upload_only_distinguishes_retryable_and_review_required_results(
     entry = {"assignment_id": "done", "batch_id": BATCH_ID}
     if blocked:
         entry["upload_blocked"] = "owner_superseded"
-    pending.record(tmp_path, entry)
+    _record_scoped_result(tmp_path, entry)
     client = FakeClient()
     monkeypatch.setattr(run_plans, "HOME", tmp_path)
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -3378,7 +3460,7 @@ def test_upload_only_json_stdout_is_one_document_with_real_retry_diagnostics(
 ):
     plan = _plan()
     path, state = _state(tmp_path, plan)
-    pending.record(tmp_path, {
+    _record_scoped_result(tmp_path, {
         "assignment_id": "done",
         "batch_id": BATCH_ID,
         "upload_blocked": "owner_superseded",
@@ -3448,7 +3530,7 @@ def test_progress_routes_exact_completed_result_to_upload_only_recovery(
 ):
     plan = _plan()
     path, state = _state(tmp_path, plan)
-    pending.record(tmp_path, {
+    _record_scoped_result(tmp_path, {
         "assignment_id": "done",
         "batch_id": BATCH_ID,
     })
@@ -3594,7 +3676,7 @@ def test_progress_surfaces_completed_result_that_requires_review(
 ):
     plan = _plan()
     path, state = _state(tmp_path, plan)
-    pending.record(tmp_path, {
+    _record_scoped_result(tmp_path, {
         "assignment_id": "done",
         "batch_id": BATCH_ID,
         "upload_blocked": "owner_superseded",
@@ -3634,7 +3716,7 @@ def test_cleanup_quarantine_is_not_reported_as_completed_result(
         "upload_blocked": "cleanup_unconfirmed",  # already-saved 0.5.242 shape
         "job_dir": str(tmp_path / "job"),
     }
-    pending.record(tmp_path, marker)
+    _record_scoped_result(tmp_path, marker)
     progress = _server_response(
         plan, _envelope(status="completed", agent_action="done"),
         state={"other_healthy": []},
@@ -3682,8 +3764,8 @@ def test_mixed_quarantine_keeps_real_result_visible_without_uploading_marker(
         "upload_blocked": "cleanup_unconfirmed",
     }
     result = {"assignment_id": "completed", "batch_id": BATCH_ID}
-    pending.record(tmp_path, quarantine)
-    pending.record(tmp_path, result)
+    _record_scoped_result(tmp_path, quarantine)
+    _record_scoped_result(tmp_path, result)
     progress = _server_response(
         plan, _envelope(status="incomplete", agent_action="review_failure"),
         state={"other_healthy": []},
@@ -3707,7 +3789,7 @@ def test_mixed_quarantine_keeps_real_result_visible_without_uploading_marker(
     replayed = []
     def replay(_client, *, batch_id=None):
         replayed.append(batch_id)
-        pending.remove(tmp_path, "completed")
+        pending.remove(tmp_path, "completed", scope_fingerprint=result["scope_fingerprint"])
         return ["submitted"]
     monkeypatch.setattr(runloop, "_retry_pending_uploads", replay)
     assert run_plans.cmd_run_plan(_args(upload_only=True)) == 0
