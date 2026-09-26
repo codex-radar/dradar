@@ -28,6 +28,13 @@ def _isolate_worker_boundary_mechanics(monkeypatch):
     )
 
 
+class _ReservationReadyClient:
+    """Mechanics fixture with the explicitly supported U2 admission protocol."""
+    def require_runner_reservation_protocol(self):
+        return {"schema_version": 1, "capabilities": ["runner-reservation-v1"],
+                "stop_generation_cas": True, "close_releases_capacity": False}
+
+
 def _args(**overrides):
     values = dict(
         workers=3, yes=True, keep=False, allow_task_drift=False,
@@ -161,7 +168,7 @@ def test_cli_claim_response_lost_does_not_retry_or_change_server_state(
         monkeypatch, tmp_path, capsys):
     assignment = {"assignment_id": "server-held", "task_id": "t1"}
 
-    class LostResponseClient:
+    class LostResponseClient(_ReservationReadyClient):
         batch_id = None
 
         def __init__(self):
@@ -303,7 +310,7 @@ def test_worker_count_accepts_40(monkeypatch):
     assert seen == [40]
 
 
-def test_antigravity_refill_preflight_fails_before_pool_or_server(
+def test_antigravity_refill_preflight_fails_after_protocol_before_preparation(
         tmp_path, monkeypatch,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
@@ -311,10 +318,16 @@ def test_antigravity_refill_preflight_fails_before_pool_or_server(
         runloop, "prepare_antigravity_auth",
         lambda: f"cannot inspect {tmp_path}/providers/antigravity/.gemini/token",
     )
-    started = []
-    monkeypatch.setattr(
-        runloop, "_run_worker_pool", lambda _args: started.append(True) or 0,
-    )
+    _patch_pool_setup(monkeypatch)
+    protocol_checks = []
+    class Client(_ReservationReadyClient):
+        def require_runner_reservation_protocol(self):
+            protocol_checks.append(True)
+            return super().require_runner_reservation_protocol()
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: Client())
+    monkeypatch.setattr(runloop, "_scope_client_to_batch", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda *_a: pytest.fail(
+        "provider failure must stop before environment preparation"))
     runloop.refill_plan.configure(
         tmp_path,
         volunteer_id="vol-1", refill_to=1, max_tasks=2,
@@ -332,7 +345,7 @@ def test_antigravity_refill_preflight_fails_before_pool_or_server(
     with pytest.raises(SystemExit) as exc:
         runloop.cmd_go(args)
 
-    assert started == []
+    assert protocol_checks == [True]
     message = str(exc.value)
     assert "$DRADAR_HOME/providers/antigravity" in message
     assert str(tmp_path) not in message
@@ -541,6 +554,21 @@ def test_worker_command_never_forwards_auto_selection():
     assert "go" not in command
 
 
+def test_rolling_fleet_worker_child_uses_saved_plan_mode(monkeypatch):
+    command = runloop._worker_command(_args(
+        refill=True, refill_to=2, max_tasks=3, fleet_pool=True,
+        refill_mode="rolling-submitted",
+    ))
+    assert "--refill-mode" not in command
+    assert "--fleet-pool" not in command
+    assert "--refill" in command
+    monkeypatch.setattr(runloop, "_load_config", lambda: pytest.fail(
+        "worker-child passed mode validation",
+    ))
+    with pytest.raises(pytest.fail.Exception, match="passed mode validation"):
+        cli.main(command[command.index("resume"):])
+
+
 def test_worker_command_forwards_archive_opt_in_only():
     assert "--archive-session" not in runloop._worker_command(_args())
     assert "--archive-session" in runloop._worker_command(
@@ -600,7 +628,7 @@ def test_refill_error_owner_preserves_transport_but_stops_auth(
     monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
     monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
@@ -660,7 +688,7 @@ def test_only_parent_retries_pending_uploads_before_draining_waiting_work(
     checked_out = []
     pending_retries = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "ensure_tasks_root", lambda _root: None)
@@ -687,7 +715,7 @@ def test_only_parent_retries_pending_uploads_before_draining_waiting_work(
 def test_recovery_repeat_failure_stops_before_waiting_checkout(monkeypatch):
     checked_out = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
@@ -710,7 +738,7 @@ def test_recovery_repeat_failure_stops_before_waiting_checkout(monkeypatch):
 def test_egress_preflight_failure_happens_before_checkout(monkeypatch):
     checked_out = []
     monkeypatch.setattr(runloop, "_load_config", lambda: {})
-    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_k: _ReservationReadyClient())
     monkeypatch.setattr(runloop, "tasks_root_from_config", lambda _cfg: object())
     monkeypatch.setattr(runloop, "RunnerTelemetry", _Telemetry)
     monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
@@ -805,7 +833,7 @@ class _ScriptedProcess(_Process):
 
 
 def _patch_pool_setup(monkeypatch, active_count=5):
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": []}
 
@@ -1083,7 +1111,7 @@ def test_pool_children_inherit_the_parents_exact_capability_snapshot(monkeypatch
     _patch_pool_setup(monkeypatch)
     calls = []
 
-    class Client:
+    class Client(_ReservationReadyClient):
         capabilities = ("public-task-package-pin-v1", "codebuddy-ready-v4")
 
         def get_assignment(self):
@@ -1167,7 +1195,7 @@ def test_pool_scopes_inventory_and_all_children_to_exact_batch(monkeypatch):
     batch_id = "550e8400e29b41d4a716446655440000"
     scoped = []
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def set_batch_id(self, value):
             scoped.append(value)
 
@@ -1248,6 +1276,22 @@ def _ready_run_plan_envelope():
     }
 
 
+def _heartbeat_run_plan_response():
+    return {"touched": True, "starts_new_work": False, "plan_id": "plan-a",
+            "device_intent_revision": 1, "current_start_intent_id": "a" * 32}
+
+
+class _AdmittedRefillClient:
+    def heartbeat_run_plan(self, **_kwargs):
+        return _heartbeat_run_plan_response()
+
+    def run_plan_progress(self, _plan_id):
+        return _ready_run_plan_envelope()
+
+    def start_run_plan(self, **_kwargs):
+        pytest.fail("an idle admitted pool must never replay a start")
+
+
 def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier(
     tmp_path, monkeypatch,
 ):
@@ -1255,6 +1299,9 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     results = iter((
@@ -1281,13 +1328,13 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         def __init__(self):
             self.starts = []
 
-        def start_run_plan(self, **kwargs):
+        def heartbeat_run_plan(self, **kwargs):
             self.starts.append(kwargs)
-            return _ready_run_plan_envelope()
+            return _heartbeat_run_plan_response()
 
     client = Client()
     active = runloop._wait_for_scoped_refill_work(
@@ -1297,9 +1344,9 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     assert active == [assignment]
     assert client.starts == [{
         "plan_id": "plan-a",
-        "logical_session_id": "drl_same_device",
-        "concurrency_mode": "fixed",
-        "concurrency": 2,
+        "expected_generation": 0,
+        "expected_intent_revision": 1,
+        "current_start_intent_id": "a" * 32,
     }] * 2
     assert sleeps == [runloop._SCOPED_REFILL_WAIT_SECONDS]
     assert runloop._SCOPED_REFILL_WAIT_SECONDS >= 30
@@ -1309,7 +1356,7 @@ def test_scoped_refill_wait_refreshes_device_and_opens_after_global_seed_barrier
     assert ready_calls == [{"propagate_errors": True}] * 2
 
 
-@pytest.mark.parametrize("status_code", (401, 403, 410))
+@pytest.mark.parametrize("status_code", (401, 403, 409, 410))
 def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
     tmp_path, monkeypatch, status_code,
 ):
@@ -1323,14 +1370,17 @@ def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             raise runloop.ApiError(
                 "plan no longer authorized", status_code=status_code,
@@ -1357,6 +1407,9 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [])
     monkeypatch.setattr(
@@ -1372,17 +1425,17 @@ def test_scoped_refill_wait_honors_retry_after_for_transient_error(
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         def __init__(self):
             self.calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 raise runloop.ApiError(
                     "busy", status_code=503, retry_after=45,
                 )
-            return _ready_run_plan_envelope()
+            return _heartbeat_run_plan_response()
 
     client = Client()
     assert runloop._wait_for_scoped_refill_work(
@@ -1398,14 +1451,17 @@ def test_scoped_refill_wait_exits_after_bounded_transport_failures(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     sleeps = []
     monkeypatch.setattr(runloop.time, "sleep", sleeps.append)
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **_kwargs):
             self.calls += 1
             raise runloop.ApiError(
                 "cannot reach DRadar API: phase=run_plan_start "
@@ -1437,12 +1493,15 @@ def test_scoped_refill_wait_persists_authoritative_stop_runner(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
 
-    class Client:
+    class Client(_AdmittedRefillClient):
         calls = 0
 
-        def start_run_plan(self, **_kwargs):
+        def run_plan_progress(self, _plan_id):
             self.calls += 1
             return {"envelope": {
                 "decision_required": False,
@@ -1467,6 +1526,9 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     pending_entries = [{
         "assignment_id": "done-a",
@@ -1507,9 +1569,9 @@ def test_scoped_refill_wait_retries_exact_pending_upload_until_recovered(
         lambda *_args, **_kwargs: pytest.fail("pending replay must not rerun a model"),
     )
 
-    class Client:
-        def start_run_plan(self, **_kwargs):
-            return _ready_run_plan_envelope()
+    class Client(_AdmittedRefillClient):
+        def heartbeat_run_plan(self, **_kwargs):
+            return _heartbeat_run_plan_response()
 
     active = runloop._wait_for_scoped_refill_work(
         _scoped_refill_args(), Client(), desired_workers=2,
@@ -1528,6 +1590,9 @@ def test_scoped_refill_wait_exposes_blocked_upload_instead_of_waiting_forever(
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
+        "run_plan_intent_revision": 1,
+        "run_plan_current_start_intent_id": "a" * 32,
     })
     monkeypatch.setattr(runloop, "_pending_uploads_for_batch", lambda _batch: [{
         "assignment_id": "done-a",
@@ -1539,9 +1604,9 @@ def test_scoped_refill_wait_exposes_blocked_upload_instead_of_waiting_forever(
         lambda *_args: pytest.fail("blocked upload must stop before refill"),
     )
 
-    class Client:
-        def start_run_plan(self, **_kwargs):
-            return _ready_run_plan_envelope()
+    class Client(_AdmittedRefillClient):
+        def heartbeat_run_plan(self, **_kwargs):
+            return _heartbeat_run_plan_response()
 
     with pytest.raises(SystemExit, match="needs upload review"):
         runloop._wait_for_scoped_refill_work(
@@ -1795,7 +1860,7 @@ def test_pool_restores_vacant_slot_when_fresh_held_work_is_waiting(
         monkeypatch, capsys):
     _patch_pool_setup(monkeypatch, active_count=2)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def __init__(self):
             self.calls = 0
 
@@ -2320,7 +2385,7 @@ def test_server_confirmed_stopped_assignment_backfills_after_retry_time(
         "runner_phase": None,
     }
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def __init__(self):
             self.calls = 0
 
@@ -2483,7 +2548,7 @@ def test_pool_does_not_restore_slot_for_future_retry(monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=2)
     retry_after = datetime.now(timezone.utc) + timedelta(hours=1)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": [{
                 "assignment_id": "cooling-down",
@@ -2630,6 +2695,7 @@ def test_scoped_plan_drain_with_lost_upload_settles_as_recoverable_failure(
             "benchmark": runloop.DEFAULT_BENCHMARK,
             "run_plan_id": "plan-a",
             "run_plan_logical_session_id": "drl_same_device",
+        "run_plan_credential_generation": 0,
         },
     )
     monkeypatch.setattr(runloop, "_pool_ready_work_count", lambda *_a, **_k: 1)
@@ -2736,7 +2802,7 @@ def test_external_pool_circuit_is_persistent_and_prevents_worker_start(
 def test_backfill_spawn_failure_keeps_existing_worker_running(monkeypatch, capsys):
     _patch_pool_setup(monkeypatch, active_count=2)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {"active": [{"assignment_id": "new", "started_at": None}]}
 
@@ -3068,7 +3134,7 @@ def test_last_worker_completion_followed_by_batch_404_exits_cleanly(
         monkeypatch):
     _patch_pool_setup(monkeypatch, active_count=1)
 
-    class Client:
+    class Client(_ReservationReadyClient):
         batch_id = "550e8400e29b41d4a716446655440000"
 
         def set_batch_id(self, value):

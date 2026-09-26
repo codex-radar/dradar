@@ -42,6 +42,54 @@ def _argument(
 
 
 COMMAND_SCHEMAS = {
+    "capacity": {
+        "summary": "查看原身份的占用和迁移历史，或在证据齐全时核对一组历史容量",
+        "result_contract": {
+            "schema_version": 1,
+            "read_only": True,
+            "mode": "--reservations",
+            "stable_fields": ["scope", "reservations", "migration_quarantines", "next_after", "next_quarantine_after", "exit_evidence"],
+            "pagination": "one page per call; use the returned cursors for subsequent pages",
+            "historical_unverified": "retained pre-migration history; not exit proof or a release receipt",
+            "counts_toward_capacity": "current unresolved occupancy; does not by itself mean the account is full",
+            "unknown_classification": "keep unknown; never infer exemption from missing fields",
+            "recovery": "--reservations is read-only; --reconcile is one explicit, evidence-gated historical reconciliation after fresh exact-scope verification",
+            "reconcile_success": {"mode": "reconcile", "read_only": False, "status": "ok", "idempotent_replay": "server fact"},
+            "reconcile_error": {"mode": "reconcile", "read_only": False, "status": "error", "unknown_transport": "preserve evidence; never auto-replay"},
+        },
+        "arguments": [
+            _argument(name, user_intent=intent,
+                allowed_when="使用已有原账号或原计划凭证；--reservations 模式下查询",
+                default=default, state_change="只读 GET；不创建身份、exchange、刷新凭证或准备 provider",
+                decision_required=False, idempotency="重复查询不改变库存或释放占用")
+            for name, intent, default in (
+                ("--reservations", "读取一页库存", False),
+                ("--plan", "选择原本机已保存的计划", None),
+                ("--server", "核对原站点", None),
+                ("--after", "继续上一页会话库存", ""),
+                ("--quarantine-after", "继续上一页历史快照", ""),
+                ("--json", "输出结构化事实", False),
+            )
+        ] + [
+            _argument(
+                "--reconcile",
+                user_intent="核对一组原设备历史快照并提交一次精确容量恢复",
+                allowed_when="已有原计划或原账号凭证、本机保存的原 device_id、人工保留的严格退出证据，以及 fresh inventory 中同一 historical_unverified 且已映射的 quarantine",
+                default=None,
+                state_change="先读取当前原身份库存；全部 scope、snapshot 和证据字段精确匹配后只 POST 一次；失败保留证据，不自动重放",
+                decision_required=True,
+                conflicts_with=["--reservations", "未知或新建 device_id", "缺字段或未核验的退出证据"],
+                idempotency="相同原证据重放由 Server 幂等回执；scope、snapshot 或 evidence 冲突停止",
+                failure_codes=[
+                    "reconcile_evidence_unavailable", "reconcile_evidence_unverifiable",
+                    "reconcile_device_unavailable", "reconcile_device_mismatch",
+                    "reconcile_quarantine_unknown", "reconcile_scope_not_historical",
+                    "reconcile_snapshot_changed", "reconcile_scope_unmapped",
+                    "reconcile_access_denied", "reconcile_conflict", "reconcile_query_failed",
+                ],
+            ),
+        ],
+    },
     "run": {
         "summary": "在当前设备执行网页已经确定的这次领取",
         "environment_contract": {
@@ -52,6 +100,8 @@ COMMAND_SCHEMAS = {
             "recovery_commands": "agent.next_commands",
         },
         "interaction_rules": {
+            "authorization": "reuse_existing_user_authorization_for_the_exact_action; ask_only_for_new_choices_or_scope",
+            "decision_token": "validates_action_context; neither_grants_authorization_nor_requires_a_new_user_turn",
             "first_device": "notify_and_start",
             "same_device": "notify_and_resume_idempotently",
             "other_healthy_device": "confirm_before_join",
@@ -64,6 +114,7 @@ COMMAND_SCHEMAS = {
             "capacity_temporarily_zero": "poll_then_replay_base_run_without_old_choices",
             "missing_current_tool": "notify_before_server_start",
             "completed_result_upload_recovery": "exact_batch_upload_only_no_runner_start",
+            "stopped_refill_held_recovery": "same_plan_device_readmission_without_new_claims",
         },
         "arguments": [
             _argument(
@@ -94,6 +145,17 @@ COMMAND_SCHEMAS = {
                 ],
             ),
             _argument(
+                "--held-only",
+                user_intent="只恢复这次运行已经领取、仍有效的题目，不继续补题",
+                allowed_when="原计划仍授权当前设备恢复，且已有授权覆盖只处理现有题目",
+                default=False,
+                state_change="重新校验并登记当前设备；只启动已领题，不配置或延长补题活动",
+                decision_required=False,
+                conflicts_with=["--upload-only"],
+                idempotency="同一设备和批次重复提交不会再领取题目或重复执行已提交题目",
+                failure_codes=["plan_stopped", "plan_expired", "local_run_scope_conflict"],
+            ),
+            _argument(
                 "--upload-only",
                 user_intent="只补交这台设备已经完成、但尚未成功上传的结果",
                 allowed_when="进度响应的 agent_action=recover_upload",
@@ -102,6 +164,7 @@ COMMAND_SCHEMAS = {
                 decision_required=False,
                 conflicts_with=[
                     "--concurrency", "--decision-token", "--recheck-generation",
+                    "--held-only",
                 ],
                 idempotency="没有待补交结果时直接成功；已上传结果不会重复运行模型",
                 failure_codes=[
@@ -122,13 +185,13 @@ COMMAND_SCHEMAS = {
             ),
             _argument(
                 "--decision-token",
-                user_intent="执行用户刚刚明确同意的跨设备动作或服务端可用数量选择",
-                allowed_when="前一次响应 decision_required=true，且用户已选择对应选项",
+                user_intent="执行已有用户授权覆盖的跨设备动作或服务端可用数量选择",
+                allowed_when="前一次响应 decision_required=true，且对应选项属于已有授权；新业务选择才询问用户",
                 default=None,
                 state_change="消费一次性凭证并允许当前设备加入或继续",
                 decision_required=True,
                 conflicts_with=["未获得用户同意"],
-                idempotency="只能成功消费一次；状态变化后失败关闭并重新询问",
+                idempotency="只能成功消费一次；状态变化后失败关闭，重新核当前状态与已有授权，不绕过 CAS 或 unknown",
                 failure_codes=[
                     "decision_context_missing", "decision_invalid_or_state_changed",
                     "decision_invalid_or_capacity_changed",
@@ -152,8 +215,8 @@ COMMAND_SCHEMAS = {
             ),
             _argument(
                 "--docker-install-token",
-                user_intent="执行用户刚刚明确选择的推荐 Docker 环境安装",
-                allowed_when="前一次响应要求确认安装，且用户选择安装推荐环境",
+                user_intent="执行已有用户授权覆盖的推荐 Docker 环境安装",
+                allowed_when="前一次响应要求确认安装，且已有环境修复授权覆盖该安装；否则询问用户",
                 default=None,
                 state_change="消费一次性本机授权，只安装推荐环境并继续原运行计划一次",
                 decision_required=True,
@@ -178,16 +241,16 @@ COMMAND_SCHEMAS = {
         ],
     },
     "progress": {
-        "summary": "读取这次领取在所有设备上的进度",
+        "summary": "读取这次领取的进度，并对账原意图和已有退出容量回执",
         "arguments": [
             _argument(
                 "--plan",
                 user_intent="查看指定这次领取的进度",
                 allowed_when="本机可以交换或已有该计划的短期权限",
                 default=None,
-                state_change="none",
+                state_change="保存本机进度与原意图回执；必要时重放原 session close/release，不创建新执行",
                 decision_required=False,
-                idempotency="read_only",
+                idempotency="reconcile_original_requests_only",
                 failure_codes=["run_code_invalid", "plan_expired", "plan_access_denied"],
             ),
             _argument(
@@ -197,7 +260,7 @@ COMMAND_SCHEMAS = {
                 default="saved_plan_then_config_then_public_default",
                 state_change="none",
                 decision_required=False,
-                idempotency="read_only",
+                idempotency="same_bound_server",
                 failure_codes=["server_url_invalid", "server_scope_mismatch"],
             ),
             _argument(
@@ -297,7 +360,8 @@ def command_schema(command: str) -> dict:
             ),
             "environment_recovery": (
                 "环境错误可在 agent.next_commands 给出非秘密 argv 数组；"
-                "requires_user_action=true 时只能提示用户完成交互"
+                "requires_user_action=true 时核对具体原因：平台本人交互须由用户完成；"
+                "已有授权覆盖的环境修复可由 Agent 执行，不能绕过成果审核或未知退出"
             ),
             "followup_launcher": (
                 "agent.followup_launcher 仅在可核验的官方 Git 安装中提供；"

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from .api_client import ApiClient, ApiError
+from . import capacity_journal
 from .flight_recorder import FlightRecorder, _checked_lock
 
 
@@ -87,6 +88,16 @@ class RunnerTelemetry:
         self._stop_requested = False
         self._session_started_recorded = False
         self.flight_recorder = FlightRecorder(home, client) if home is not None else None
+        server = getattr(client, "server", None)
+        self.capacity_journal = (
+            capacity_journal.CapacityJournal(home, session_id=self.session_id, server=server)
+            if home is not None and isinstance(server, str) and server else None
+        )
+        generation = getattr(client, "credential_generation", None)
+        if self.capacity_journal is not None and generation is not None:
+            # This exact credential already pins new session admission. Save
+            # that authority before the first heartbeat or recovery receipt.
+            self.capacity_journal.bind_generation(generation)
 
     @property
     def stop_requested(self) -> bool:
@@ -144,6 +155,8 @@ class RunnerTelemetry:
     def bind_batch(self, batch_id: str | None) -> None:
         if not batch_id:
             return
+        if self.capacity_journal is not None:
+            self.capacity_journal.bind(batch_id)
         with self._lock:
             changed = self._batch_id != batch_id
             self._batch_id = batch_id
@@ -240,6 +253,8 @@ class RunnerTelemetry:
 
     def _payload(self, *, registration_check=None) -> dict:
         with _checked_lock(self._lock, registration_check):
+            if self._stop.is_set():
+                raise capacity_journal.CapacityEvidenceError("This runner is sealed; no new heartbeat can register it.")
             self._seq += 1
             return {
                 "protocol_version": 3,
@@ -454,15 +469,25 @@ class RunnerTelemetry:
             raise ValueError(f"unknown close reason {reason!r}")
         self._stop.set()
         self._wake.set()
+        with self._lock:
+            self._seq += 1
+            close_seq = self._seq
+        # Seal local execution before waiting for a heartbeat/network lock.
+        # Incomplete attempts stay reserved even when logical close succeeds.
+        can_release = False
+        if self.capacity_journal is not None:
+            try:
+                can_release = self.capacity_journal.seal(close_seq=close_seq, reason=reason)
+            except (capacity_journal.CapacityEvidenceError, OSError):
+                print("runner exit evidence needs review; capacity remains reserved", file=sys.stderr)
         if self._thread is not None:
             self._thread.join(timeout=1.0)
         if not self._disabled:
             with self._lock:
-                self._seq += 1
                 payload = {
                     "session_id": self.session_id,
                     "batch_id": self._batch_id,
-                    "seq": self._seq,
+                    "seq": close_seq,
                     "reason": reason,
                 }
             with self._send_lock:
@@ -470,6 +495,11 @@ class RunnerTelemetry:
                     self.client.runner_close(payload)
                 except Exception:
                     pass
+        if can_release:
+            try:
+                capacity_journal.reconcile_file(self.capacity_journal.path, self.client)
+            except (ApiError, capacity_journal.CapacityEvidenceError, OSError):
+                print("runner capacity receipt is unresolved; saved evidence will be retried", file=sys.stderr)
         self.record_event(
             "session_closed", component="cli", reason_code=reason,
             assignment_id=self._active_assignment_id,

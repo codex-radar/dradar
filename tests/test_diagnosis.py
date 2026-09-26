@@ -689,7 +689,7 @@ def test_structured_quota_terminal_stops_fresh_retry_and_drains_pool(
     monkeypatch.setattr(runloop, "run_trial", quota_terminal)
     client = SubmitClient({})
     stopped = []
-    client.mark_stopped = lambda *a, **k: stopped.append((a, k)) or {}
+    client.mark_stopped = lambda *a, **k: stopped.append((a, k)) or {"ok": True}
 
     outcome = runloop._run_and_submit(
         client, ASSIGNMENT, tmp_path, _args(), "abc123",
@@ -760,7 +760,7 @@ def test_failed_trial_reports_stopped_to_server(monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "run_trial", always_fails)
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
     assert tag == "failed"
     assert stopped == [(
@@ -785,7 +785,7 @@ def test_failed_trial_reports_only_structured_failure_diagnostic(
     monkeypatch.setattr(runloop, "run_trial", always_fails)
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
     assert runloop._run_and_submit(
         client, ASSIGNMENT, tmp_path, _args(), "abc",
     ) == "failed"
@@ -793,10 +793,9 @@ def test_failed_trial_reports_only_structured_failure_diagnostic(
     assert "secret" not in json.dumps(stopped[0][1])
 
 
-def test_zcode_structured_network_failure_retries_once_serially(
+def test_zcode_network_failure_preserves_diagnostic_without_automatic_retry(
         monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
-    monkeypatch.setattr(runloop, "_ZCODE_NETWORK_RETRY_DELAY_SECONDS", 0)
     assignment = {**ASSIGNMENT, "agent": "zcode"}
     diagnostic = {
         "schema": "dradar-runner-failure-v1",
@@ -819,23 +818,22 @@ def test_zcode_structured_network_failure_retries_once_serially(
     monkeypatch.setattr(runloop, "run_trial", transient_then_success)
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
 
     assert runloop._run_and_submit(
         client, assignment, tmp_path, _args(), "abc",
-    ) == "submitted"
-    assert len(calls) == 2
+    ) == "failed"
+    assert len(calls) == 1
     assert stopped == [(assignment["assignment_id"], {
-        "defer_seconds": 0,
-        "failure_kind": "provider-transport",
+        "defer_seconds": 300,
+        "failure_kind": "runner_failed",
         "failure_diagnostic": diagnostic,
     })]
 
 
-def test_zcode_network_retry_is_bounded_to_two_total_attempts(
+def test_persistent_zcode_network_failure_calls_provider_only_once(
         monkeypatch, tmp_path):
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
-    monkeypatch.setattr(runloop, "_ZCODE_NETWORK_RETRY_DELAY_SECONDS", 0)
     assignment = {**ASSIGNMENT, "agent": "zcode"}
     diagnostic = {
         "schema": "dradar-runner-failure-v1",
@@ -851,13 +849,13 @@ def test_zcode_network_retry_is_bounded_to_two_total_attempts(
     monkeypatch.setattr(runloop, "run_trial", always_fails)
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
 
     assert runloop._run_and_submit(
         client, assignment, tmp_path, _args(), "abc",
     ) == "failed"
-    assert len(calls) == 2
-    assert [entry[1]["defer_seconds"] for entry in stopped] == [0, 300]
+    assert len(calls) == 1
+    assert [entry[1]["defer_seconds"] for entry in stopped] == [300]
 
 
 def test_user_interrupt_without_checkpoint_reports_stopped_to_server(
@@ -869,7 +867,7 @@ def test_user_interrupt_without_checkpoint_reports_stopped_to_server(
     )
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
 
     with pytest.raises(KeyboardInterrupt):
         runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
@@ -889,7 +887,7 @@ def test_user_interrupt_relinquishes_owner_without_checkpoint(
     )
     stopped = []
     client = SubmitClient({})
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    client.mark_stopped = lambda aid, **kw: (stopped.append((aid, kw)) or {"ok": True})
 
     with pytest.raises(KeyboardInterrupt):
         runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")

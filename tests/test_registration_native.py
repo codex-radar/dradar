@@ -23,9 +23,24 @@ from test_registration_recovery import fixture
 
 def wait_until(predicate, timeout=5):
     until = time.monotonic() + timeout
-    while not predicate():
+    while not (value := predicate()):
         assert time.monotonic() < until, 'native fixture did not become ready'
         time.sleep(.01)
+    return value
+
+
+def completed_worker_event(sidecar, session_id, child):
+    assert child.poll() is None, f'native worker exited before readiness: {child.returncode}'
+    try:
+        text = sidecar.read_text()
+    except (FileNotFoundError, PermissionError, UnicodeDecodeError):
+        return None
+    # Creation can be observed before the child's append is complete. The
+    # fixture must wait for an actual event, just as the product reader does.
+    if not text.endswith('\n'):
+        return None
+    event = worker_events.parse_worker_event(text.splitlines()[-1])
+    return event if event and event.session_id == session_id else None
 
 
 @pytest.mark.parametrize('fault', [
@@ -35,6 +50,7 @@ def wait_until(predicate, timeout=5):
 def test_real_worker_gate_socket_cancel_and_cleanup(tmp_path, monkeypatch, fault):
     with fixture(tmp_path, monkeypatch, fault) as (_, api, telemetry, assignment, state):
         sidecar, gate, marker = (tmp_path/name for name in ('ready.jsonl', 'gate.json', 'crossed'))
+        sidecar.touch()  # deterministic empty-file-before-append window
         identity = dict(schema=worker_events.WORKER_START_SCHEMA, nonce='f'*32,
                         session_id=telemetry.session_id, job='native', parent_pid=os.getpid())
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
@@ -47,8 +63,7 @@ def test_real_worker_gate_socket_cancel_and_cleanup(tmp_path, monkeypatch, fault
             'time.sleep(.5)', str(marker)], env=env, **runner._pier_process_options())
         cancel_thread = None
         try:
-            wait_until(sidecar.exists)
-            event = worker_events.parse_worker_event(sidecar.read_text().splitlines()[-1])
+            event = wait_until(lambda: completed_worker_event(sidecar, telemetry.session_id, child))
             assert event and event.start_deadline
             window = RegistrationWindow(event.start_deadline, lambda: child.poll() is None)
             with cancellation.scope() as stop:

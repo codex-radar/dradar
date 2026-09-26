@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,75 @@ from pathlib import Path
 KEEP_MARKER = ".dradar-keep"
 TERMINAL_MARKER = ".dradar-terminal-evidence"
 _ASSIGNMENT_RE = re.compile(r"^a([0-9a-f]{32})(?:-|$)")
+
+
+class LocalEvidenceError(RuntimeError):
+    """Local evidence could not be inspected safely before model admission."""
+
+
+def _entry_mode(path: Path) -> int | None:
+    try:
+        return path.lstat().st_mode
+    except FileNotFoundError:
+        return None
+
+
+def protected_assignment_ids(home: Path) -> set[str]:
+    """Find historical results even when their pending row has been lost.
+
+    This is a conservative start fence, never upload or cleanup authority.
+    Do not read artifact bytes, infer credentials, or follow symbolic links.
+    A suspicious/unreadable job must not become permission to spend again.
+    """
+    root = home / "work" / "jobs"
+    protected: set[str] = set()
+    try:
+        mode = _entry_mode(root)
+        if root.parent.is_symlink() or (mode is not None and stat.S_ISLNK(mode)):
+            raise OSError("jobs root is a symbolic link")
+        if mode is None:
+            return protected
+        for job in root.iterdir():
+            assignment_id = assignment_id_for_job(job)
+            if assignment_id is None:
+                continue
+            mode = _entry_mode(job)
+            if mode is None:
+                continue
+            if not stat.S_ISDIR(mode):
+                protected.add(assignment_id)
+                continue
+            if any(_entry_mode(job / name) is not None
+                   for name in (KEEP_MARKER, TERMINAL_MARKER)):
+                protected.add(assignment_id)
+                continue
+            for trial in job.iterdir():
+                if trial.is_symlink():
+                    protected.add(assignment_id)
+                    break
+                if not trial.is_dir():
+                    continue
+                candidates = (
+                    trial / "artifacts" / "model.patch",
+                    trial / ".dradar" / "host-output" / "model.patch",
+                    trial / ".dradar" / "artifact-staging" / "manifest.json",
+                    trial / ".dradar" / "artifact-staging" / "model.patch.source",
+                )
+                ancestors = (trial / "artifacts", trial / ".dradar",
+                             trial / ".dradar" / "host-output",
+                             trial / ".dradar" / "artifact-staging")
+                if any(path.is_symlink() for path in ancestors):
+                    protected.add(assignment_id)
+                    break
+                if any(_entry_mode(path) is not None for path in candidates):
+                    protected.add(assignment_id)
+                    break
+    except OSError as exc:
+        raise LocalEvidenceError(
+            f"Cannot inspect preserved results in {root}; no new model work "
+            "is safe. Keep this directory and repair access before resuming."
+        ) from exc
+    return protected
 
 
 @dataclass(frozen=True)

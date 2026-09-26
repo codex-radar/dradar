@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
+from . import local_jobs, pending, run_intent, plan_intents
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .local_config import HOME, _load_config
 from .agent_actions import ActionValidationError, validate_actions, validate_envelope
@@ -104,6 +105,12 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         if os.name != "nt":
             os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+        if os.name != "nt":
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -251,11 +258,12 @@ def _iter_states(home: Path = HOME):
     root = _root(home)
     if root.is_symlink() or not root.is_dir():
         return
-    for path in sorted(root.glob(f"plan-*{STATE_SUFFIX}")):
+    for path in sorted(root.glob(f"plan-*{STATE_SUFFIX}"), key=lambda item: item.stat().st_mtime_ns, reverse=True):
         state = _read_private_json(path)
         if (
             state and state.get("schema_version") == SCHEMA_VERSION
             and state.get("credential_kind") == "run_plan_v1"
+            and not state.get("retired_for_new_execution")
         ):
             yield path, state
 
@@ -305,6 +313,22 @@ def _scrub_state(path: Path, state: dict[str, Any], *, reason: str, now: float) 
     _atomic_json(path, summary)
 
 
+def _state_has_preserved_evidence(state: dict[str, Any], home: Path) -> bool:
+    """Unknown local evidence keeps its credential, even after server expiry."""
+    if state.get("retired_for_new_execution") or state.get("previous_credentials"):
+        return True
+    try:
+        if any(row.get("batch_id") == state.get("batch_id") for row in pending.load(home)):
+            return True
+        for path in (home / "runner-reservations").glob("*.json"):
+            saved = _read_private_json(path)
+            if saved is None or (saved.get("batch_id") == state.get("batch_id") and saved.get("released") is not True):
+                return True
+    except (OSError, pending.PendingLedgerError):
+        return True
+    return False
+
+
 def _cleanup_states(home: Path = HOME) -> None:
     """Bound inactive local state without touching credentials used by Fleet."""
     root = _root(home)
@@ -322,7 +346,7 @@ def _cleanup_states(home: Path = HOME) -> None:
         except OSError:
             continue
         if state.get("credential_kind") == "run_plan_v1":
-            if _state_in_active_fleet(path, home=home):
+            if _state_has_preserved_evidence(state, home) or _state_in_active_fleet(path, home=home):
                 continue
             if _state_expired(state, now=now):
                 _scrub_state(path, state, reason="expired", now=now)
@@ -336,7 +360,7 @@ def _cleanup_states(home: Path = HOME) -> None:
     # not become an unbounded token archive. Keep the newest bounded set.
     credentials.sort(reverse=True, key=lambda item: item[0])
     for _modified, path, state in credentials[MAX_CREDENTIAL_STATES:]:
-        if _state_in_active_fleet(path, home=home):
+        if _state_has_preserved_evidence(state, home) or _state_in_active_fleet(path, home=home):
             continue
         _scrub_state(path, state, reason="inactive_state_limit", now=now)
         summaries.append((now, path))
@@ -463,6 +487,9 @@ def _validate_plan(value: object) -> dict[str, Any]:
     enabled = refill.get("enabled")
     refill_to = refill.get("refill_to")
     max_tasks = refill.get("max_tasks")
+    refill_mode = refill.get("refill_mode", "seed_barrier")
+    if not isinstance(refill_mode, str) or refill_mode not in {"seed_barrier", "rolling_submitted"}:
+        raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
     def valid_positive(item: object) -> bool:
         return isinstance(item, int) and not isinstance(item, bool) and item >= 1
     if not isinstance(enabled, bool):
@@ -475,7 +502,7 @@ def _validate_plan(value: object) -> dict[str, Any]:
             or (refill_to is not None and refill_to > max_tasks)
         ):
             raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
-    elif refill_to is not None or max_tasks is not None:
+    elif refill_to is not None or max_tasks is not None or refill_mode != "seed_barrier":
         raise RunPlanClientError("plan_response_invalid", "运行信息无效，请回网页重新复制。")
     _state_path(value["plan_id"])
     return value
@@ -506,6 +533,10 @@ def _exchange(
         "credential_kind": "run_plan_v1",
         "server": server,
         "token": token,
+        "credential_generation": _optional_credential_generation(response.get("credential_generation", response.get("device_generation"))),
+        "device_intent_revision": response.get("device_intent_revision"),
+        "intent_protocol": response.get("intent_protocol", 0),
+        "current_start_intent_id": response.get("current_start_intent_id"),
         "access_expires_at": response.get("access_expires_at"),
         "run_code_hash": _run_code_digest(run_code),
         "plan": plan,
@@ -529,24 +560,220 @@ def _exchange(
     return path, state
 
 
+def _optional_credential_generation(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        raise RunPlanClientError("credential_generation_invalid", "本机凭证代次无法核验；请保留原运行记录并检查，不会开始新题。")
+    return value
+
+
+def _credential_contexts(state: dict[str, Any], client: ApiClient):
+    contexts = [(state, client)]
+    history = state.get("previous_credentials", [])
+    if not isinstance(history, list):
+        raise RunPlanClientError("credential_history_invalid", "旧凭证记录无法核验，请保留文件并检查。")
+    for old in history:
+        if (not isinstance(old, dict) or any(old.get(key) != state.get(key) for key in
+                ("server", "plan_id", "batch_id", "benchmark"))
+                or not isinstance(old.get("token"), str) or not old["token"].startswith("drp_")):
+            raise RunPlanClientError("credential_history_invalid", "旧凭证范围无法核验，请保留文件并检查。")
+        contexts.append((old, ApiClient(old["server"], old["token"],
+                         benchmark_id=old["benchmark"], batch_id=old["batch_id"])))
+    return contexts
+
+
+def _reconcile_capacity(state: dict[str, Any], client: ApiClient) -> dict[str, int]:
+    try:
+        from . import capacity_journal
+        return capacity_journal.reconcile_saved(HOME, client, batch_id=state["batch_id"])
+    except (ImportError, OSError, ValueError) as exc:
+        raise RunPlanClientError("capacity_evidence_unreadable", "本机退出证据无法核验，容量仍保留；请保留运行记录并检查。停止命令仍可使用。", agent_action="notify_only") from exc
+    except capacity_journal.CapacityEvidenceError as exc:
+        raise RunPlanClientError("capacity_evidence_unreadable", "本机退出证据无法核验，容量仍保留；请保留运行记录并检查。停止命令仍可使用。", agent_action="notify_only") from exc
+
+
+def _preserve_before_new_execution(state: dict[str, Any], client: ApiClient) -> None:
+    contexts = _credential_contexts(state, client)
+    saved = [entry for old, old_client in contexts for entry in _exact_pending_uploads(old["batch_id"], old_client)]
+    completed, unknown = _split_pending_results(saved)
+    if completed:
+        raise RunPlanClientError("completed_result_upload_pending", "本机还有已完成成果需要先补交；原凭证和成果已保留，不会开始新题。", agent_action="recover_upload", agent_details={"completed_result_count":len(completed), "next_commands":[_upload_recovery_action()]})
+    if unknown:
+        raise RunPlanClientError("cleanup_unconfirmed", _cleanup_quarantine_message(len(unknown)), agent_action="notify_only")
+    preserved = _recover_plan_uploads(state, client)
+    if preserved.get("status") != "completed":
+        raise RunPlanClientError("local_result_reconciliation_required", preserved["user_message"], agent_action="notify_only", agent_details=preserved.get("agent"))
+    # Retry the original credential first. Current credentials may be unable to
+    # read a future generation, and an old exact receipt remains authoritative.
+    counts = {"released":0, "pending":0, "unknown":0}
+    for old, old_client in reversed(contexts):
+        counts = _reconcile_capacity(old, old_client)
+    if counts["pending"] or counts["unknown"]:
+        raise RunPlanClientError("runner_exit_unconfirmed", "先前运行的退出或容量回执尚未确认，原记录已保留；请核查本机资源并对账后再明确恢复。", agent_action="notify_only", agent_details={"capacity_reconciliation":counts, "requires_user_action":True})
+
+
+def _execution_protocol(client: ApiClient, state: dict[str, Any]) -> tuple[int, int]:
+    try:
+        capabilities = client.run_plan_capabilities()
+        identity = client.whoami()
+    except AttributeError as exc:
+        raise RunPlanClientError("runner_reservation_upgrade_required", "服务端尚未确认安全运行协议；可以查看、停止和补交，但不会开始新题。") from exc
+    if (not isinstance(capabilities, dict) or type(capabilities.get("schema_version")) is not int
+            or capabilities["schema_version"] != 1
+            or not isinstance(capabilities.get("capabilities"), list)
+            or "runner-reservation-v1" not in capabilities["capabilities"]
+            or capabilities.get("stop_generation_cas") is not True
+            or capabilities.get("close_releases_capacity") is not False):
+        raise RunPlanClientError("runner_reservation_upgrade_required", "服务端尚未确认安全运行协议；可以查看、停止和补交，但不会开始新题。")
+    if ("run-plan-intents-v1" not in capabilities["capabilities"]
+            or type(capabilities.get("intent_schema_version")) is not int
+            or capabilities["intent_schema_version"] != 1
+            or capabilities.get("start_stop_intent_cas") is not True
+            or capabilities.get("admission_heartbeat") is not True):
+        raise RunPlanClientError("run_plan_intents_upgrade_required", "服务端尚未确认启停意图协议；请升级服务端后再开始或恢复，原成果仍保留。")
+    if (not isinstance(identity, dict) or type(identity.get("schema_version")) is not int
+            or identity["schema_version"] != 1 or identity.get("plan_id") != state["plan_id"]):
+        raise RunPlanClientError("device_generation_unconfirmed", "服务端未确认本次计划的设备代次，不会开始新题。")
+    live = _optional_credential_generation(identity.get("device_generation"))
+    credential = _optional_credential_generation(identity.get("credential_generation"))
+    saved = _optional_credential_generation(state.get("credential_generation"))
+    if live is None or credential is None or (saved is not None and saved != credential):
+        raise RunPlanClientError("device_generation_unconfirmed", "服务端凭证代次与本机记录不一致，不会开始新题。")
+    _remember_intent_observation(state, identity)
+    return live, credential
+
+
+def _remember_intent_observation(state: dict, value: dict) -> None:
+    revision = value.get("device_intent_revision")
+    current = value.get("current_start_intent_id")
+    if (type(revision) is not int or revision < 0
+            or (current is not None and (not isinstance(current, str)
+                or re.fullmatch(r"[0-9a-f]{32}", current) is None))):
+        raise RunPlanClientError("intent_revision_unconfirmed", "当前设备的启停意图无法核验；不会自动重发或开始运行。")
+    state["device_intent_revision"] = revision
+    state["current_start_intent_id"] = current
+    if "intent_protocol" in value:
+        if type(value["intent_protocol"]) is not int or value["intent_protocol"] not in (0, 1):
+            raise RunPlanClientError("intent_revision_unconfirmed", "设备启停协议无法核验。")
+        state["intent_protocol"] = value["intent_protocol"]
+
+
+def _send_plan_intent(client, state, *, operation, request, local_intent, explicit_retry=False, new_intent=False):
+    response = plan_intents.execute(
+        HOME, client, operation=operation, request=request,
+        expected_revision=state.get("device_intent_revision"),
+        local_intent=local_intent, explicit_retry=explicit_retry, new_intent=new_intent,
+    )
+    response = _validate_response(response)
+    _remember_intent_observation(state, response)
+    state["intent_protocol"] = 1
+    if (operation == "start" and response["envelope"].get("agent_action") in {"start_runner", "monitor"}
+            and response.get("current_effective") is not True):
+        raise RunPlanClientError("historical_start_intent", "这是一条历史运行回执；当前运行意图已变化，不会据此启动。请先查看进度。", agent_action="notify_only")
+    return response
+
+
+def _stop_local_identity(batch_id):
+    return run_intent._stop_digest(run_intent._paths(HOME, batch_id)[1])
+
+
+def _stop_after_local_fault(client, state, local_generation):
+    run_intent.stop(HOME, state["batch_id"], expected_generation=local_generation)
+    return _send_plan_intent(client, state, operation="stop", request={
+        "plan_id": state["plan_id"], "scope": "this_device",
+        "expected_generation": state.get("credential_generation"),
+        "decision_token": None,
+    }, local_intent=_stop_local_identity(state["batch_id"]))
+
+
+def _explicit_reexchange(run_code, path, state, client, *, guard, local_generation):
+    _preserve_before_new_execution(state, client)
+    for old, original_client in reversed(_credential_contexts(state, client)):
+        outcomes = plan_intents.reconcile_saved(HOME, original_client, plan_id=old["plan_id"])
+        if any(item["intent_status"] == "unknown" for item in outcomes):
+            raise RunPlanClientError("intent_outcome_unknown",
+                "原启停请求尚未确认，已保留原凭证和意图；请先对账，不会换凭证开始新运行。",
+                agent_action="notify_only")
+    guard()
+    device_id, device_name = stable_device(HOME)
+    response = ApiClient(state["server"], "").exchange_run_plan(
+        run_code=run_code, device_id=device_id, device_name=device_name)
+    if not isinstance(response, dict) or response.get("schema_version") != 1:
+        raise RunPlanClientError("plan_response_invalid", "服务端返回的恢复凭证无法核验。")
+    plan = _validate_plan(response.get("plan"))
+    token = response.get("plan_access_token")
+    generation = _optional_credential_generation(response.get("credential_generation"))
+    if (not isinstance(token, str) or not token.startswith("drp_") or len(token)>512
+            or generation is None or _optional_credential_generation(response.get("device_generation")) != generation
+            or plan["plan_id"] != state["plan_id"] or plan["batch_id"] != state["batch_id"]):
+        raise RunPlanClientError("plan_response_invalid", "恢复凭证不属于原计划和设备代次，原记录已保留。")
+    new_client = ApiClient(state["server"], token, benchmark_id=state["benchmark"], batch_id=state["batch_id"])
+    new_client.credential_generation = generation
+    next_state = dict(state)
+    previous = {key:value for key,value in state.items() if key != "previous_credentials"}
+    next_state.update(token=token, credential_generation=generation, plan=plan,
+                      access_expires_at=response.get("access_expires_at"),
+                      logical_session_id="drl_"+secrets.token_urlsafe(24),
+                      pending_decision=None, pending_local_capacity=None,
+                      previous_credentials=[*state.get("previous_credentials", []),previous])
+    live, issued = _execution_protocol(new_client, next_state)
+    if live != issued:
+        raise RunPlanClientError("stale_device_generation", "恢复期间出现更新的停止意图；本次不会开始新题，请先查看进度。")
+    guard()
+    # Never overwrite a path that an older Fleet item can still use for fault
+    # stop or exact-result upload. The new token gets a new private path.
+    new_path = path.with_name(f"plan-{state['plan_id']}-credential-{hashlib.sha256(token.encode()).hexdigest()[:16]}.json")
+    with run_intent.launch_guard(HOME, state["batch_id"], local_generation):
+        _atomic_json(new_path, next_state)
+        old_state = dict(state)
+        old_state["retired_for_new_execution"] = True
+        _atomic_json(path, old_state)
+    return new_path, next_state, new_client
+
+
 def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
     run_code = _validate_run_code(args.plan)
+    saved_stop = None
+    if getattr(args, "_stop_read", False):
+        digest = _run_code_digest(run_code)
+        saved_stop = next((
+            (path, state) for path, state in _iter_states(HOME) or ()
+            if secrets.compare_digest(str(state.get("run_code_hash") or ""), digest)
+        ), None)
+        if saved_stop is None and getattr(args, "_early_local_stop", False):
+            raise RunPlanClientError(
+                "remote_stop_unconfirmed",
+                "已记录本机取消：尚未完成的运行请求不会继续启动。计划身份尚未缓存，远端停止未确认；请保留原运行说明并重查进度。",
+                retryable=True, agent_action="notify_only",
+                agent_details={"local_stop_recorded": True, "remote_stop_confirmed": False,
+                               "plan_identity_pending": True},
+            )
     # Progress/run in two conversations can race on first use. Serialize the
     # exchange and re-read state under the lock so only one logical session is
     # minted for this device.
-    with _exclusive_lock(_root(HOME) / STATE_LOCK_FILE):
-        saved = _saved_state(run_code, home=HOME)
-        server = _resolve_server(getattr(args, "server", None), saved)
-        if saved is None:
-            path, state = _exchange(run_code, server, home=HOME)
-        else:
-            path, state = saved
+    if saved_stop is not None:
+        path, state = saved_stop
+        server = _resolve_server(getattr(args, "server", None), saved_stop)
+    else:
+        with _exclusive_lock(_root(HOME) / STATE_LOCK_FILE):
+            digest = _run_code_digest(run_code)
+            saved = next(((path, state) for path, state in _iter_states(HOME) or ()
+                          if secrets.compare_digest(str(state.get("run_code_hash") or ""), digest)), None)
+            if saved is None:
+                saved = _saved_state(run_code, home=HOME)
+            server = _resolve_server(getattr(args, "server", None), saved)
+            if saved is None:
+                path, state = _exchange(run_code, server, home=HOME)
+            else:
+                path, state = saved
     token = state.get("token")
     plan = state.get("plan")
     if not isinstance(token, str) or not token.startswith("drp_"):
         raise RunPlanClientError("credential_invalid", "本机运行权限无效，请回网页重新复制。")
     _validate_plan(plan)
     client = ApiClient(server, token, benchmark_id=plan["benchmark_id"], batch_id=plan["batch_id"])
+    client.credential_generation = _optional_credential_generation(state.get("credential_generation"))
     return run_code, path, state, client
 
 
@@ -697,6 +924,7 @@ def _local_capacity_response(
     path: Path,
     state: dict[str, Any],
     *,
+    local_generation: str,
     requested: int,
     recommended: int,
     snapshot: dict[str, Any],
@@ -728,7 +956,8 @@ def _local_capacity_response(
         ),
         "expires_at": time.time() + 5 * 60,
     }
-    _atomic_json(path, state)
+    with run_intent.launch_guard(HOME, state["batch_id"], local_generation):
+        _atomic_json(path, state)
     choices = []
     if recommended >= 1:
         choices.append({
@@ -1259,6 +1488,7 @@ def _plan_recheck_response(
     *,
     path: Path,
     state: dict[str, Any],
+    local_generation: str,
     error_code: str,
     user_message: str,
     command: str = "run",
@@ -1267,9 +1497,8 @@ def _plan_recheck_response(
 ) -> dict[str, Any]:
     """Return an executable bounded wait instead of promising hidden work."""
 
-    generation = _advance_intent_generation(
-        path, state, pending_recheck=True,
-    )
+    with run_intent.launch_guard(HOME, state["batch_id"], local_generation):
+        generation = _advance_intent_generation(path, state, pending_recheck=True)
     agent: dict[str, Any] = {
         "next_commands": [_plan_recheck_action(command, generation)],
     }
@@ -1309,13 +1538,74 @@ def _progress_state_changed_response() -> dict[str, Any]:
     }
 
 
+def _recover_all_plan_uploads(state: dict[str, Any], client: ApiClient) -> dict[str, Any]:
+    contexts = _credential_contexts(state, client)
+    selected = [(old, old_client) for old, old_client in contexts
+                if _exact_pending_uploads(old["batch_id"], old_client)]
+    known_ids = {entry["assignment_id"] for old, old_client in selected
+                 for entry in _exact_pending_uploads(old["batch_id"], old_client)}
+    result = None
+    counts = {"released":0, "pending":0, "unknown":0}
+    for old, old_client in selected or [(state, client)]:
+        result = _recover_plan_uploads(old, old_client, known_other_assignment_ids=known_ids)
+        counts = _reconcile_capacity(old, old_client)
+        if result.get("status") != "completed":
+            return result
+    if counts["pending"] or counts["unknown"]:
+        raise RunPlanClientError("runner_exit_unconfirmed",
+            "完成成果的补交已处理；先前运行的退出或容量回执仍未确认，请保留记录并检查。",
+            agent_action="notify_only", agent_details={"capacity_reconciliation":counts})
+    return result
+
+
 def _recover_plan_uploads(
-    state: dict[str, Any], client: ApiClient,
+    state: dict[str, Any], client: ApiClient, *,
+    known_other_assignment_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Replay this plan's completed local uploads without starting a runner."""
 
     batch_id = state["batch_id"]
     before = _exact_pending_uploads(batch_id, client)
+    plan = state["plan"]
+    selected = {row["assignment_id"]: row for row in plan["assignments"]}
+    eligible_ids = {row["assignment_id"] for row in before}
+    unmatched = (local_jobs.protected_assignment_ids(HOME) & set(selected)) | {
+        row["assignment_id"] for row in pending.load(HOME)
+        if row.get("batch_id") == batch_id or row["assignment_id"] in selected
+    }
+    unmatched -= eligible_ids
+    unmatched -= known_other_assignment_ids or set()
+    for aid in list(unmatched):
+        saved = selected.get(aid)
+        if saved is None:
+            continue
+        try:
+            receipt = client.assignment_recovery_status(aid)
+        except (ApiError, AttributeError):
+            continue
+        if isinstance(receipt, dict) and receipt.get("has_submission") is True and all(
+            receipt.get(key) == expected for key, expected in (
+                ("assignment_id", aid), ("batch_id", batch_id),
+                ("benchmark_id", plan["benchmark_id"]),
+                ("task_id", saved.get("task_id")), ("model", saved.get("model")),
+                ("effort", saved.get("effort")), ("status", "submitted"),
+            )
+        ):
+            unmatched.remove(aid)
+    if unmatched:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "review_required", "interaction": "warn",
+            "decision_required": False, "agent_action": "notify_only",
+            "error_code": "local_result_reconciliation_required",
+            "retryable": False, "choices": [],
+            "user_message": (
+                "发现本机成果或安全记录，但缺少与本运行匹配的补交记录，且服务端尚未确认对应提交。"
+                "请保留 jobs 和 pending_uploads.json，核对原账号、题目和提交回执；不会自动重跑或上传这些文件。"
+            ),
+            "agent": {"requires_user_action": True,
+                      "unreconciled_result_count": len(unmatched)},
+        }
     if not before:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -1550,7 +1840,14 @@ def _remember_response(
     response: dict[str, Any],
     *,
     command: str,
+    local_generation: str | None = None,
 ) -> None:
+    if local_generation is not None:
+        with run_intent.launch_guard(HOME, state["batch_id"], local_generation):
+            _remember_response(path, state, response, command=command)
+        return
+    if "device_intent_revision" in response:
+        _remember_intent_observation(state, response)
     if isinstance(response.get("plan"), dict):
         plan = _validate_plan(response["plan"])
         if any(plan.get(key) != state["plan"].get(key)
@@ -1875,6 +2172,27 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
     except RunPlanClientError as exc:
         _output(args, _local_error_response(exc))
         return 1
+    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError):
+        _output(args, _local_error_response(RunPlanClientError(
+            "local_result_evidence_unreadable",
+            "本机成果记录无法核验，已停止新增运行并保留原文件。请先检查成果记录；仍可使用 stop 停止任务。",
+            agent_action="notify_only",
+        )))
+        return 1
+    except run_intent.IntentStopped:
+        _output(args, _local_error_response(RunPlanClientError(
+            "run_cancelled_by_newer_intent",
+            "本机已有较新的停止或运行意图；旧请求不会再启动。请先查看进度，需要恢复时明确重新运行。",
+            agent_action="notify_only",
+        )))
+        return 1
+    except OSError:
+        _output(args, _local_error_response(RunPlanClientError(
+            "local_state_io_unconfirmed",
+            "本机运行记录的读写未能确认，已停止后续启动。请保留现有文件，检查磁盘和目录权限后重试。",
+            agent_action="notify_only",
+        )))
+        return 1
     except ApiError as exc:
         response = _api_error_response(exc)
         if _output(args, response):
@@ -1899,9 +2217,11 @@ def cmd_run_plan(args) -> int:
     def operate(*, authoritative_recheck: bool = False) -> dict[str, Any]:
         recheck_generation = getattr(args, "recheck_generation", None)
         docker_install_token = getattr(args, "docker_install_token", None)
+        held_only = bool(getattr(args, "held_only", False))
         if getattr(args, "upload_only", False):
             if (
                 getattr(args, "concurrency", None) is not None
+                or held_only
                 or getattr(args, "decision_token", None) is not None
                 or recheck_generation is not None
                 or docker_install_token is not None
@@ -1922,7 +2242,9 @@ def cmd_run_plan(args) -> int:
             )
         _run_code, path, state, client = _state_and_client(args)
         if getattr(args, "upload_only", False):
-            return _recover_plan_uploads(state, client)
+            return _recover_all_plan_uploads(state, client)
+        local_generation = args._local_run_generation
+        run_intent.require(HOME, state["batch_id"], local_generation)
         if not authoritative_recheck:
             if recheck_generation is None:
                 # Any explicit run is a newer user/Agent intent and invalidates
@@ -1971,6 +2293,16 @@ def cmd_run_plan(args) -> int:
             and current_local.get("plan_id") == plan["plan_id"]
         )
         if (
+            held_only and same_local_plan
+            and current_status in {"starting", "running", "orphaned"}
+            and current_local.get("refill")
+        ):
+            raise RunPlanClientError(
+                "local_run_scope_conflict",
+                "这台设备仍在运行原补题模式；请先安全停止，再明确只恢复已领题。",
+                agent_action="inspect_current_run",
+            )
+        if (
             recheck_generation is not None
             and same_local_plan
             and current_status in {
@@ -1998,33 +2330,53 @@ def cmd_run_plan(args) -> int:
             same_local_plan and current_status in {"starting", "running", "orphaned"}
         )
 
+        live_generation, credential_generation = _execution_protocol(client, state)
+        if not already_local:
+            _preserve_before_new_execution(state, client)
+        if live_generation != credential_generation:
+            explicit_resume = (recheck_generation is None and not authoritative_recheck
+                               and not raw_decision_token and docker_install_token is None)
+            if not explicit_resume or already_local:
+                raise RunPlanClientError("stale_device_generation", "设备已有新的停止或恢复意图；旧自动检查不会提升凭证或重新启动，请先查看进度并明确恢复。", agent_action="notify_only")
+            path, state, client = _explicit_reexchange(_run_code, path, state, client,
+                guard=lambda:run_intent.require(HOME, plan["batch_id"], local_generation),
+                local_generation=local_generation)
+            plan = state["plan"]
+            credential_generation = state["credential_generation"]
+        else:
+            state["credential_generation"] = credential_generation
+            with run_intent.launch_guard(HOME, plan["batch_id"], local_generation):
+                _atomic_json(path, state)
+        run_intent.require(HOME, plan["batch_id"], local_generation)
+
         assignments = plan["assignments"]
         first = assignments[0]
         refill = plan["refill"]
 
         def ensure_local_pool(workers: int) -> dict[str, Any]:
+            run_intent.require(HOME, plan["batch_id"], local_generation)
             try:
                 return fleet.add_batch(
                     batch_id=plan["batch_id"],
                     workers=workers,
                     credentials_file=path,
                     plan_id=plan["plan_id"],
+                    intent_generation=local_generation,
                     retry=True,
-                    refill=bool(refill.get("enabled")),
-                    max_tasks=refill.get("max_tasks"),
-                    refill_harness=plan["harness"],
-                    refill_model=first.get("model"),
-                    refill_effort=first.get("effort"),
+                    refill=bool(refill.get("enabled")) and not held_only,
+                    max_tasks=(refill.get("max_tasks") if not held_only else None),
+                    refill_harness=(plan["harness"] if not held_only else None),
+                    refill_model=(first.get("model") if not held_only else None),
+                    refill_effort=(first.get("effort") if not held_only else None),
+                    refill_mode=(refill.get("refill_mode", "seed_barrier") if not held_only else "seed_barrier"),
                 )
             except fleet.FleetStartupError as exc:
                 # Server admission is reversible until local readiness is
                 # acknowledged. Do not leave another device accounting for a
                 # machine that never actually became runnable.
                 try:
-                    client.stop_run_plan(
-                        plan_id=plan["plan_id"], scope="this_device",
-                    )
-                except ApiError:
+                    _stop_after_local_fault(client, state, local_generation)
+                except (ApiError, RunPlanClientError, OSError):
                     pass
                 raise RunPlanClientError(
                     exc.code,
@@ -2044,33 +2396,54 @@ def cmd_run_plan(args) -> int:
             decision: str | None,
             decision_token: str | None,
         ) -> dict[str, Any]:
-            """Consume a server decision once, then re-read without it once.
-
-            Assignment/device state may change while a person is deciding.
-            Replaying the old token would loop forever, while treating it as
-            success could start work without current authority.  On the two
-            explicit stale-token codes, discard both decision fields and make
-            exactly one authoritative request.  Any second error propagates.
-            """
+            """Submit one immutable operation; reconcile its exact receipt."""
 
             request = {
                 "plan_id": plan["plan_id"],
                 "logical_session_id": state["logical_session_id"],
+                "expected_generation": credential_generation,
                 "concurrency_mode": concurrency_mode,
                 "concurrency": concurrency,
                 "decision": decision,
                 "decision_token": decision_token,
             }
+            retry_sequence = state.get("capacity_intent_sequence", 0)
+            if type(retry_sequence) is not int or retry_sequence < 0:
+                raise RunPlanClientError("local_state_invalid", "容量确认记录无法核验，请保留本机运行信息。")
+            action_identity = local_generation + ":" + str(retry_sequence) + ":" + hashlib.sha256(
+                json.dumps({"mode": concurrency_mode, "concurrency": concurrency,
+                            "decision": decision, "token": decision_token}, sort_keys=True).encode()
+            ).hexdigest()
+            run_intent.require(HOME, plan["batch_id"], local_generation)
             try:
-                return _validate_response(client.start_run_plan(**request))
+                result = _send_plan_intent(client, state, operation="start", request=request,
+                    local_intent=action_identity, explicit_retry=recheck_generation is None,
+                    new_intent=(recheck_generation is None and not decision_token
+                                and isinstance(state.get("pending_decision"), dict)
+                                and state["pending_decision"].get("command") == "run"))
+                run_intent.require(HOME, plan["batch_id"], local_generation)
+                return result
             except ApiError as exc:
-                if (
-                    not decision_token
-                    or exc.code not in _STALE_SERVER_DECISION_CODES
-                ):
-                    raise
-                request.update({"decision": None, "decision_token": None})
-                return _validate_response(client.start_run_plan(**request))
+                evidence = exc.payload if isinstance(exc.payload, dict) else {}
+                if (decision_token and exc.code in _STALE_SERVER_DECISION_CODES
+                        and evidence.get("intent_status") == "rejected"
+                        and evidence.get("applied") is False
+                        and evidence.get("applied_intent_revision") is None
+                        and evidence.get("device_intent_revision") == state.get("device_intent_revision")):
+                    # This exact rejection did not change authority. Request a
+                    # challenge once at the same revision, without the expired
+                    # decision. CAS/generation errors never enter this branch.
+                    request.update(decision=None, decision_token=None)
+                    run_intent.require(HOME, plan["batch_id"], local_generation)
+                    result = _send_plan_intent(client, state, operation="start", request=request,
+                        local_intent=action_identity + ":challenge", explicit_retry=recheck_generation is None)
+                    run_intent.require(HOME, plan["batch_id"], local_generation)
+                    return result
+                if (evidence.get("intent_status") == "rejected"
+                        and evidence.get("original_http_status") == 200
+                        and isinstance(evidence.get("envelope"), dict)):
+                    return _validate_response(evidence)
+                raise
 
         if already_local:
             current_workers = int(current_local.get("workers") or 1)
@@ -2096,22 +2469,28 @@ def cmd_run_plan(args) -> int:
             if local_decision_token:
                 state["pending_local_capacity"] = None
                 _atomic_json(path, state)
-            decision = _decision_for(state, "run", server_decision_token)
-            response = start_with_authoritative_recheck(
-                concurrency_mode="fixed",
-                concurrency=current_workers,
-                decision=decision,
-                decision_token=server_decision_token,
-            )
-            _remember_response(path, state, response, command="run")
+            current_start = state.get("current_start_intent_id")
+            if not current_start:
+                raise RunPlanClientError("current_admission_unconfirmed", "当前运行许可未确认，请先查看进度。")
+            touched = client.heartbeat_run_plan(plan_id=plan["plan_id"],
+                current_start_intent_id=current_start,
+                expected_intent_revision=state["device_intent_revision"],
+                expected_generation=credential_generation)
+            if (not isinstance(touched, dict) or touched.get("touched") is not True
+                    or touched.get("starts_new_work") is not False
+                    or touched.get("plan_id") != plan["plan_id"]
+                    or touched.get("current_start_intent_id") != current_start
+                    or type(touched.get("device_intent_revision")) is not int
+                    or touched["device_intent_revision"] != state["device_intent_revision"]):
+                raise RunPlanClientError("current_admission_unconfirmed", "当前运行许可未确认，请先查看进度。")
+            run_intent.require(HOME, plan["batch_id"], local_generation)
+            response = _validate_response(client.run_plan_progress(plan["plan_id"]))
+            _remember_response(path, state, response, command="run", local_generation=local_generation)
             envelope = response["envelope"]
             if envelope.get("decision_required") or envelope.get("status") == "no_remaining":
                 return response
             if envelope.get("agent_action") == "stop_runner":
-                try:
-                    fleet.stop_batch(plan["batch_id"])
-                except fleet.FleetError:
-                    pass
+                run_intent.stop(HOME, plan["batch_id"], expected_generation=local_generation)
                 return response
             if envelope.get("agent_action") not in {"start_runner", "monitor"}:
                 return response
@@ -2181,6 +2560,7 @@ def cmd_run_plan(args) -> int:
                 fleet.prepare_new_batch_runtime(home=path.parent.parent)
             except fleet.FleetControllerUpdatePending as exc:
                 return _plan_recheck_response(
+                    local_generation=local_generation,
                     path=path,
                     state=state,
                     error_code=exc.code,
@@ -2238,6 +2618,7 @@ def cmd_run_plan(args) -> int:
                 selected_workers = int(snapshot["auto_workers"])
                 if selected_workers < 1:
                     return _plan_recheck_response(
+                    local_generation=local_generation,
                         path=path,
                         state=state,
                         error_code="local_capacity_unavailable",
@@ -2286,8 +2667,19 @@ def cmd_run_plan(args) -> int:
                 break
             except ApiError as exc:
                 reservation = _capacity_reservation(exc)
-                if reservation is None:
+                if (reservation is None or not isinstance(exc.payload, dict)
+                        or exc.payload.get("intent_status") != "rejected"
+                        or exc.payload.get("applied") is not False
+                        or exc.payload.get("applied_intent_revision") is not None
+                        or exc.payload.get("device_intent_revision") != state.get("device_intent_revision")):
                     raise
+                run_intent.require(HOME, plan["batch_id"], local_generation)
+                # A recorded business rejection changed no admission. A
+                # later bounded capacity check may name a new operation at
+                # this same revision; unknown/CAS outcomes never advance it.
+                state["capacity_intent_sequence"] = state.get("capacity_intent_sequence", 0) + 1
+                with run_intent.launch_guard(HOME, plan["batch_id"], local_generation):
+                    _atomic_json(path, state)
                 last_capacity_response = reservation["server"]
                 available = min(
                     int(reservation["available"]), selected_workers,
@@ -2295,6 +2687,7 @@ def cmd_run_plan(args) -> int:
                 )
                 if available < 1:
                     return _plan_recheck_response(
+                    local_generation=local_generation,
                         path=path,
                         state=state,
                         error_code="concurrency_capacity_reserved",
@@ -2317,6 +2710,7 @@ def cmd_run_plan(args) -> int:
                     return _local_capacity_response(
                         path,
                         state,
+                        local_generation=local_generation,
                         requested=selected_workers,
                         recommended=available,
                         snapshot=snapshot,
@@ -2333,6 +2727,7 @@ def cmd_run_plan(args) -> int:
                     )
                 if available >= selected_workers:
                     return _plan_recheck_response(
+                    local_generation=local_generation,
                         path=path,
                         state=state,
                         error_code="concurrency_capacity_reserved",
@@ -2353,6 +2748,7 @@ def cmd_run_plan(args) -> int:
         if response is None:
             if last_capacity_response is not None:
                 return _plan_recheck_response(
+                    local_generation=local_generation,
                     path=path,
                     state=state,
                     error_code="concurrency_capacity_reserved",
@@ -2365,15 +2761,12 @@ def cmd_run_plan(args) -> int:
             raise RunPlanClientError(
                 "protocol_invalid", "服务返回的信息不完整，请升级后重试。",
             )
-        _remember_response(path, state, response, command="run")
+        _remember_response(path, state, response, command="run", local_generation=local_generation)
         envelope = response["envelope"]
         if envelope.get("decision_required") or envelope.get("status") == "no_remaining":
             return response
         if envelope.get("agent_action") == "stop_runner":
-            try:
-                fleet.stop_batch(plan["batch_id"])
-            except fleet.FleetError:
-                pass
+            run_intent.stop(HOME, plan["batch_id"], expected_generation=local_generation)
             return response
         if envelope.get("agent_action") not in {"start_runner", "monitor"}:
             return response
@@ -2385,8 +2778,8 @@ def cmd_run_plan(args) -> int:
             and current.get("plan_id") == plan["plan_id"]
         ):
             try:
-                client.stop_run_plan(plan_id=plan["plan_id"], scope="this_device")
-            except ApiError:
+                _stop_after_local_fault(client, state, local_generation)
+            except (ApiError, RunPlanClientError, OSError):
                 pass
             raise RunPlanClientError(
                 "local_run_stopping",
@@ -2408,10 +2801,8 @@ def cmd_run_plan(args) -> int:
             # Admission is reversible until a local runner starts. Mark this
             # device stopped so another machine is not asked about a phantom.
             try:
-                client.stop_run_plan(
-                    plan_id=plan["plan_id"], scope="this_device",
-                )
-            except ApiError:
+                _stop_after_local_fault(client, state, local_generation)
+            except (ApiError, RunPlanClientError, OSError):
                 pass
             raise RunPlanClientError(
                 "local_start_failed",
@@ -2433,12 +2824,31 @@ def cmd_run_plan(args) -> int:
             return _local_warn_response(response, selected=actual_workers)
         return _local_monitor_response(response, selected=actual_workers)
 
-    return _run_command(args, lambda: _run_with_admission(operate))
+    def dispatch() -> dict[str, Any]:
+        if not getattr(args, "upload_only", False):
+            scope = run_intent.request_scope(_validate_run_code(args.plan))
+            automatic = getattr(args, "recheck_generation", None) is not None
+            request_generation = (
+                run_intent.current(HOME, scope) if automatic else run_intent.begin(HOME, scope)
+            )
+            _code, _path, prepared, _client = _state_and_client(args)
+            args._local_run_generation = run_intent.associate_request(
+                HOME, scope, request_generation, prepared["batch_id"], automatic=automatic,
+            )
+        # Record the explicit intent before waiting. An older queued run may
+        # not reinterpret itself as a new resume after a concurrent stop.
+        return _run_with_admission(operate)
+
+    return _run_command(args, dispatch)
 
 
 def cmd_progress_plan(args) -> int:
     def operate() -> dict[str, Any]:
         _run_code, path, state, client = _state_and_client(args)
+        intent_reconciliation = [item for old, original_client in reversed(_credential_contexts(state, client))
+                                 for item in plan_intents.reconcile_saved(
+                                     HOME, original_client, plan_id=old["plan_id"])]
+        capacity_reconciliation = _reconcile_capacity(state, client)
         pending_capacity = state.get("pending_local_capacity")
         if (
             isinstance(pending_capacity, dict)
@@ -2466,6 +2876,8 @@ def cmd_progress_plan(args) -> int:
             }
         snapshot_generation = _intent_generation(state)
         response = _validate_response(client.run_plan_progress(state["plan_id"]))
+        if intent_reconciliation:
+            response.setdefault("agent", {})["intent_reconciliation"] = intent_reconciliation
 
         def merge_current_state() -> dict[str, Any] | None:
             current = _read_private_json(path)
@@ -2482,7 +2894,9 @@ def cmd_progress_plan(args) -> int:
                     "本机运行信息已经变化；为避免覆盖新状态，本次进度未保存。",
                     agent_action="notify_only",
                 )
-            if _intent_generation(current) != snapshot_generation:
+            if (_intent_generation(current) != snapshot_generation
+                    or current.get("retired_for_new_execution")
+                    or current.get("token") != state.get("token")):
                 return None
             # Merge only into the freshly re-read state.  Never write the old
             # pre-network snapshot back over a newer run/stop intent.
@@ -2497,7 +2911,8 @@ def cmd_progress_plan(args) -> int:
         from . import fleet
 
         local_item = fleet.batch_status(state["batch_id"])
-        pending_uploads = _exact_pending_uploads(state["batch_id"], client)
+        pending_uploads = [entry for old, old_client in _credential_contexts(state, client)
+                           for entry in _exact_pending_uploads(old["batch_id"], old_client)]
         completed_pending, quarantine_pending = _split_pending_results(pending_uploads)
         same_local_plan = bool(
             isinstance(local_item, dict)
@@ -2522,6 +2937,11 @@ def cmd_progress_plan(args) -> int:
                 ),
                 quarantine_count=len(quarantine_pending),
             )
+        if ((capacity_reconciliation["pending"] or capacity_reconciliation["unknown"])
+                and local_status not in {"starting", "running", "stopping", "orphaned"}):
+            raise RunPlanClientError("runner_exit_unconfirmed",
+                "先前运行的退出或容量回执尚未确认；请保留本机记录并检查，暂时不能新增运行。",
+                agent_action="notify_only", agent_details={"capacity_reconciliation":capacity_reconciliation})
         if (
             same_local_plan
             and local_fault
@@ -2547,49 +2967,116 @@ def cmd_progress_plan(args) -> int:
 
 def cmd_stop_plan(args) -> int:
     def operate() -> dict[str, Any]:
-        _run_code, path, state, client = _state_and_client(args)
         scope = args.scope.replace("-", "_")
+        # This-device stop is actionable before the first network exchange.
+        # All-device scope still needs its existing decision confirmation.
+        args._early_local_stop = scope == "this_device"
+        if args._early_local_stop:
+            run_intent.stop_request(HOME, run_intent.request_scope(_validate_run_code(args.plan)))
+        args._stop_read = True
+        _run_code, path, state, client = _state_and_client(args)
         decision_token = getattr(args, "decision_token", None)
         if decision_token:
             _decision_for(state, "stop", decision_token)
-        if scope == "this_device" or decision_token:
-            # A concrete stop is a newer local intent even when this device
-            # has no Fleet item yet.  Invalidate an outstanding automatic
-            # capacity recheck before contacting the server, so a lost stop
-            # response still cannot let the older action restart work.
-            _advance_intent_generation(path, state)
+            if not args._early_local_stop:
+                run_intent.stop_request(HOME, run_intent.request_scope(_validate_run_code(args.plan)))
+        local_warning = None
+        local_stop_recorded = scope == "this_device" or bool(decision_token)
+        _local_path, _, local_lock = run_intent._paths(HOME, state["batch_id"])
+        if local_stop_recorded:
+            with run_intent.stop_publication(HOME, state["batch_id"]) as local_warning:
+                _advance_intent_generation(path, state)
+                snapshot = run_intent.lifecycle_snapshot(HOME, state["batch_id"])
+        else:
+            snapshot = run_intent.lifecycle_snapshot(HOME, state["batch_id"])
         request = {
             "plan_id": state["plan_id"],
             "scope": scope,
+            "expected_generation": _optional_credential_generation(state.get("credential_generation")),
             "decision_token": decision_token,
         }
+        # Local cancellation is already durable. This bounded observation
+        # starts a new user stop at the current revision; a conflict below
+        # never refreshes it or downgrades the request to legacy fields.
+        fresh_stop_challenge = (not decision_token and isinstance(state.get("pending_decision"), dict)
+                                and state["pending_decision"].get("command") == "stop")
+        def send_stop():
+            if run_intent.lifecycle_snapshot(HOME, state["batch_id"]) != snapshot:
+                raise ApiError("a newer local run superseded this stop", code="stop_superseded_locally")
+            if state.get("device_intent_revision") is None:
+                if state.get("intent_protocol") == 1:
+                    raise ApiError("modern stop intent is unconfirmed", code="intent_revision_unconfirmed")
+                return _validate_response(client.stop_run_plan(**request))
+            return _send_plan_intent(client, state, operation="stop", request=request,
+                                     local_intent="stop:" + hashlib.sha256(json.dumps({
+                                         **request, "revision": state["device_intent_revision"]},
+                                         sort_keys=True).encode()).hexdigest(), explicit_retry=True,
+                                     new_intent=fresh_stop_challenge)
         try:
-            response = _validate_response(client.stop_run_plan(**request))
-        except ApiError as exc:
-            if (
-                not decision_token
-                or exc.code not in _STALE_SERVER_DECISION_CODES
-            ):
-                raise
-            # The all-device stop confirmation changed while the user was
-            # deciding.  Re-read exactly once without the stale capability;
-            # this can return a fresh confirmation/current state, but cannot
-            # authorize the destructive stop by itself.
-            request["decision_token"] = None
-            response = _validate_response(client.stop_run_plan(**request))
-        _remember_response(path, state, response, command="stop")
-        if response["envelope"].get("agent_action") == "stop_runner":
-            from . import fleet
-
+            prior = None
             try:
-                fleet.stop_batch(state["batch_id"])
-            except fleet.FleetError:
-                # Server stop is authoritative; heartbeat propagation stops a
-                # still-live local worker even if the coordinator disappeared.
-                pass
+                if type(request["expected_generation"]) is int:
+                    prior = plan_intents.pending_receipt(HOME, client, operation="stop", request=request)
+            except ApiError as exc:
+                if exc.code != "intent_unknown":
+                    raise
+                # Only an exact unknown receipt may reach the original-ID
+                # retry below; its body/revision still have to match.
+            if prior is not None and prior.get("intent_status") == "applied":
+                if prior.get("current_effective") is not True:
+                    raise ApiError("the recovered stop is historical", code="historical_stop_intent")
+                response = _validate_response(prior)
+            else:
+                if prior is not None and prior.get("intent_status") == "decision_required":
+                    fresh_stop_challenge = True
+                identity = client.whoami()
+                if (not isinstance(identity, dict) or identity.get("plan_id") != state["plan_id"]):
+                    raise ApiError("stop identity scope unconfirmed", code="intent_scope_mismatch")
+                if "device_intent_revision" in identity or state.get("intent_protocol") == 1:
+                    _remember_intent_observation(state, identity)
+                response = send_stop()
+        except (ApiError, RunPlanClientError, OSError) as exc:
+            evidence = exc.payload if isinstance(getattr(exc, "payload", None), dict) else {}
+            if (not decision_token
+                    or getattr(exc, "code", None) not in _STALE_SERVER_DECISION_CODES
+                    or evidence.get("intent_status") != "rejected"
+                    or evidence.get("applied") is not False
+                    or evidence.get("applied_intent_revision") is not None
+                    or evidence.get("device_intent_revision") != state.get("device_intent_revision")):
+                if local_stop_recorded:
+                    return _local_error_response(RunPlanClientError(
+                        "remote_stop_unconfirmed",
+                        "本机已记录停止新增；远端停止结果尚未确认。请保留当前运行信息并重查进度，不能据此重新启动。",
+                        retryable=True, agent_action="notify_only",
+                        agent_details={"local_stop_recorded": True,
+                                       "local_drain_published": local_warning is None,
+                                       "remote_stop_confirmed": False,
+                                       "remote_applied": evidence.get("applied"),
+                                       "remote_error_code": getattr(exc, "code", None)},
+                    ))
+                raise
+            # The exact confirmation was rejected at the unchanged revision.
+            # Its earlier challenge receipt has no reusable token. Confirm
+            # that receipt and replace it once with a fresh challenge; this
+            # request cannot authorize the all-device stop by itself.
+            request["decision_token"] = None
+            fresh_stop_challenge = True
+            try:
+                response = send_stop()
+            except (ApiError, RunPlanClientError, OSError):
+                return _local_error_response(RunPlanClientError(
+                    "remote_stop_unconfirmed", "本机已记录停止新增；远端停止结果尚未确认，请先查看进度。",
+                    agent_action="notify_only", agent_details={"local_stop_recorded": local_stop_recorded,
+                        "remote_stop_confirmed": False}))
+        with _exclusive_lock(local_lock):
+            if run_intent.lifecycle_snapshot(HOME, state["batch_id"]) != snapshot:
+                # Report the immutable remote fact without changing a later
+                # local run or publishing a stop to its Fleet instance.
+                return response
+            _remember_response(path, state, response, command="stop")
         return response
 
-    return _run_command(args, lambda: _run_with_admission(operate))
+    return _run_command(args, operate)
 
 
 __all__ = [

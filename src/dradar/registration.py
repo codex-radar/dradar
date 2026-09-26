@@ -20,13 +20,14 @@ from .flight_recorder import _checked_lock, _exclusive_file_lock
 
 REGISTRATION_SECONDS = 15.0
 HANDOFF_MARGIN_SECONDS = 1.0
+CLOSE_FENCE_SECONDS = 3.0
 _TRANSIENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
               httpx.ReadError, httpx.WriteError, httpx.WriteTimeout,
               httpx.RemoteProtocolError)
 
 
 class RegistrationWindow:
-    def __init__(self, worker_deadline, alive):
+    def __init__(self, worker_deadline, alive, *, defer_abort=False):
         now = time.monotonic()
         if (type(worker_deadline) not in (float, int)
                 or not math.isfinite(worker_deadline)
@@ -46,6 +47,10 @@ class RegistrationWindow:
         self.telemetry = self.api = self.assignment = None
         self._fenced = False
         self._abort_attempted = False
+        # The owning runner must revoke permission and stop local execution
+        # before a possibly slow close request. Standalone callers retain the
+        # immediate fence on bind failure unless they explicitly take ownership.
+        self._defer_abort = defer_abort
 
     def _error(self, message, reason):
         error = ApiError(message)
@@ -78,6 +83,10 @@ class RegistrationWindow:
                 "registration_ack_state": self._diagnostic_ack,
                 "registration_close_state": "not_attempted",
             }
+            if isinstance(exc, ApiError) and exc.status_code is not None:
+                result["ack_http_status"] = exc.status_code
+                if exc.code is not None:
+                    result["ack_http_code"] = exc.code
             try:
                 now = time.monotonic()
                 elapsed = (now - self._diagnostic_started) * 1000
@@ -224,7 +233,8 @@ class RegistrationWindow:
             return response
         except BaseException as exc:
             self._snapshot(exc)
-            self.abort()
+            if not self._defer_abort:
+                self.abort()
             if isinstance(exc, (OSError, ValueError, TypeError)):
                 raise ApiError("worker registration local data could not be confirmed") from exc
             raise
@@ -334,6 +344,12 @@ class RegistrationWindow:
         t = self.telemetry
         t._stop.set()
         t._wake.set()
+        start_deadline = self.deadline
+        if self._defer_abort:
+            # Local teardown can outlast the registration window. Give the
+            # owning runner one bounded close attempt after teardown without
+            # granting any more time to the expired provider start permission.
+            self.deadline = time.monotonic() + CLOSE_FENCE_SECONDS
         try:
             asyncio.run(self._close_fence())
         except BaseException as exc:
@@ -345,6 +361,8 @@ class RegistrationWindow:
             # Remain explicitly uncertain; runloop quarantines instead of
             # claiming a stop before an in-flight start is fenced.
             pass
+        finally:
+            self.deadline = start_deadline
 
     async def _close_fence(self):
         t = self.telemetry

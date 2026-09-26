@@ -153,7 +153,7 @@ _TERMINAL_LOCAL_OUTCOMES = {
 }
 _NON_FAULT_RUNNER_OUTCOMES = {
     "submitted", "interrupted", "expired", "assignment-isolated",
-    "assignment-reopened",
+    "assignment-reopened", "local-stop-requested",
 }
 _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
@@ -200,7 +200,6 @@ _SCOPED_REFILL_TRANSIENT_LIMIT = 5
 _POOL_SESSION_CAPACITY_RETRY_SECONDS = 10 * 60
 _POOL_IMAGE_CACHE_MAINTENANCE_SECONDS = 15 * 60
 _POOL_TARGET_CACHE: dict[Path, int] = {}
-_ZCODE_NETWORK_RETRY_DELAY_SECONDS = 2.0
 _PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
     "worker-entrypoint-failed",
     "startup-dependency-missing",
@@ -216,16 +215,6 @@ _PRECHECKOUT_FAILURE_REASON_CODES = frozenset({
     "runner_session_capacity_reached",
     "provider_capability_required",
 })
-
-
-def _retryable_zcode_network_failure(assignment: dict, exc: RunnerError) -> bool:
-    diagnostic = exc.failure_diagnostic
-    return bool(
-        assignment.get("agent") == ZCODE_AGENT
-        and isinstance(diagnostic, dict)
-        and diagnostic.get("schema") == "dradar-runner-failure-v1"
-        and diagnostic.get("zcode_provider_failure_reason") == "network_error"
-    )
 
 
 # Cloudflare's common request-body ceiling is 100 MB. Keep enough headroom
@@ -1973,6 +1962,7 @@ def _bundled_completed_outcome(
 
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
                   upload_only_recovery=False):
+    pending.require_uploadable(entry, request_salvage=request_salvage)
     pending.record(HOME, entry)
     try:
         if (pending.is_cleanup_quarantine(entry)
@@ -2015,8 +2005,8 @@ def _upload_trial_checked(
     The entry is recorded in the local pending-upload ledger BEFORE artifact
     staging or the submit attempt, so a process death during either handoff
     can't orphan a completed, quota-burning trial.
-    Every exit settles it: success, 409 "already submitted", and 410 remove
-    the entry; fencing conflicts and transient errors keep it for retry. The
+    Confirmed success removes the entry; terminal rejections retain a blocked
+    result, and fencing conflicts/transient errors keep it for recovery. The
     raw source patch is preserved separately until server acknowledgement;
     scrubbing writes to a fresh tempdir, so a later retry re-scrubs from the
     same byte-verified original."""
@@ -2081,9 +2071,10 @@ def _upload_trial_checked(
             # External developer/test job roots are never cleanup authority.
             pass
 
-    def settle_terminal_local_failure() -> None:
-        """Keep evidence but make a non-retryable local result runnable again."""
-        _mark_stopped_quietly(client, entry)
+    def protect_terminal_result(reason: str) -> None:
+        """A rejected paid result remains a durable model-start fence."""
+        entry["upload_blocked"] = reason
+        pending.record(HOME, entry)
         if job_dir and job_dir.is_dir():
             try:
                 local_jobs.mark_kept(HOME, job_dir, terminal=True)
@@ -2137,14 +2128,11 @@ def _upload_trial_checked(
             print(f"patch contains secret-shaped content ({', '.join(labels)}) "
                   "outside safely redactable added lines, or redaction made the diff "
                   f"invalid; not uploaded. Raw evidence kept at {patch}")
-            if upload_only_recovery:
-                return "not-uploaded"
-            pending.remove(
-                HOME, assignment_id,
-                scope_fingerprint=entry.get("scope_fingerprint"),
-            )
-            settle_terminal_local_failure()
-            return "not-uploaded"
+            entry["secret_guard_labels"] = labels
+            protect_terminal_result("secret_guard")
+            print("  upload blocked; inspect the preserved result. Automatic "
+                  "retry and model rerun are disabled; credential scanning remains required.")
+            return "upload-blocked"
         print(f"patch contained secret-shaped content "
               f"({', '.join(redacted_labels)}); uploading a structurally validated "
               "redacted copy. The raw patch stays local.")
@@ -2575,13 +2563,7 @@ def _upload_trial_checked(
                                     f"  {task_id}: lease expired before its saved "
                                     "upload could be reconciled; local evidence kept"
                                 )
-                                if upload_only_recovery:
-                                    return "expired"
-                                pending.remove(
-                                    HOME, assignment_id,
-                                    scope_fingerprint=entry.get("scope_fingerprint"),
-                                )
-                                cleanup_settled()
+                                protect_terminal_result("lease_expired")
                                 return "expired"
                             print(
                                 f"  {task_id}: legacy upload reconciliation failed "
@@ -2658,16 +2640,9 @@ def _upload_trial_checked(
                         print(
                             f"  {task_id}: lease or claim batch expired before "
                             "upload recovery could be registered — the cell "
-                            + ("reopened; local evidence kept" if upload_only_recovery
-                               else "reopened, dropping it")
+                            + "reopened; local evidence kept for review"
                         )
-                        if upload_only_recovery:
-                            return "expired"
-                        pending.remove(
-                            HOME, assignment_id,
-                            scope_fingerprint=entry.get("scope_fingerprint"),
-                        )
-                        cleanup_settled()
+                        protect_terminal_result("lease_expired")
                         return "expired"
                     if exc.status_code == 409 and exc.code == "upload_owner_superseded":
                         entry["upload_blocked"] = "owner_superseded"
@@ -2735,21 +2710,14 @@ def _upload_trial_checked(
                     # An older/strict server can reject the optional bundle
                     # and then reject the one-shot reduced request for not
                     # carrying that same bundle.  No retry can change this
-                    # completed payload.  Reopen the cell instead of pinning
-                    # a paid worker slot behind an immortal pending entry.
+                    # completed payload. Keep a non-retryable result fence;
+                    # a protocol mismatch does not authorize another solve.
                     print(
                         f"  {task_id}: the server requires a complete trajectory "
                         "bundle after rejecting/omitting this run's bundle; "
-                        + ("keeping the recovery evidence for review" if upload_only_recovery
-                           else "releasing the incompatible assignment instead of retrying forever")
+                        "keeping the recovery evidence for review"
                     )
-                    if upload_only_recovery:
-                        return "rejected"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
-                    )
-                    settle_terminal_local_failure()
+                    protect_terminal_result("trajectory_bundle_required")
                     print(
                         "  rejected artifacts kept for diagnosis: "
                         f"{patch.parent.parent}"
@@ -2770,16 +2738,8 @@ def _upload_trial_checked(
                         cleanup_settled()
                     return "submitted"
                 if exc.status_code == 410:
-                    print(f"  {task_id}: lease expired, unsalvageable — the cell reopened "
-                          + ("for someone else; local evidence kept" if upload_only_recovery
-                             else "for someone else, dropping it"))
-                    if upload_only_recovery:
-                        return "expired"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
-                    )
-                    cleanup_settled()
+                    print(f"  {task_id}: lease expired; local evidence kept for review")
+                    protect_terminal_result("lease_expired")
                     return "expired"
                 if (exc.status_code in (404, 413)
                         or _is_patch_secret_rejection(exc)):
@@ -2788,17 +2748,13 @@ def _upload_trial_checked(
                     # large, or a patch the server still considers unsafe.
                     # Never bypass the secret gate by retrying a reduced
                     # optional-artifact set.
-                    print(f"  {task_id}: the server rejected this upload for good ({exc}) — "
-                          + ("local recovery evidence kept " if upload_only_recovery
-                             else "retrying can't fix it, dropping it from the retry queue ")
-                          + f"(local artifact path: {patch.parent.parent})")
-                    if upload_only_recovery:
-                        return "rejected"
-                    pending.remove(
-                        HOME, assignment_id,
-                        scope_fingerprint=entry.get("scope_fingerprint"),
+                    print(f"  {task_id}: the server rejected this upload ({exc}); "
+                          f"local evidence kept for review at {patch.parent.parent}")
+                    protect_terminal_result(
+                        "server_secret_guard" if _is_patch_secret_rejection(exc)
+                        else "assignment_unknown" if exc.status_code == 404
+                        else "payload_too_large"
                     )
-                    settle_terminal_local_failure()
                     print(f"  rejected artifacts kept for diagnosis: {patch.parent.parent}")
                     return "rejected"
                 # Unknown 422 responses are not proof that the completed work
@@ -3051,6 +3007,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     # stops this worker before another checkout; a prior task must never poison
     # a later explicit invocation after the user has repaired Docker.
     args._docker_cleanup_blocked = None
+    from . import run_intent
+    try:
+        run_intent.require_worker(HOME)
+    except run_intent.IntentStopped:
+        print("this worker belongs to an older stopped run; no model was started")
+        return "local-stop-requested"
     hash_match = check_task_content_hash(assignment, tasks_root)
     if hash_match is False and not getattr(args, "allow_task_drift", False):
         print(
@@ -3082,8 +3044,9 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
         else:
             print(
-                "refusing to start: this assignment already has a durable completed "
-                "result pending upload; run `dradar retry-upload`"
+                "refusing to start: this assignment has saved results or a safety "
+                "record. Run `dradar retry-upload` to inspect upload recovery; "
+                "preserve the jobs directory and do not delete the record to rerun."
             )
         return "pending-upload"
     work_dir = HOME / "work"
@@ -3105,16 +3068,11 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
 
     def bind_owner(_worker_event: dict | None = None) -> None:
         nonlocal ownership_state
+        run_intent.require_worker(HOME)
         if ownership_state == "bound":
-            # BuildFlake retry is still the same logical assignment attempt.
-            # The first successful bind already fenced this process/session;
-            # never replay the ownership write merely because Pier rebuilds.
+            # Repeated callbacks for this one attempt must not replay the
+            # ownership write after the first successful binding.
             return
-        if ownership_state == "stop_unconfirmed":
-            raise RunnerError(
-                "server ownership stop was not confirmed; refusing to rebind "
-                "the assignment for another model attempt"
-            )
         bind_stage = "worker-registration"
         window = (_worker_event or {}).get("_registration_window")
         if window is not None:
@@ -3180,7 +3138,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         except ApiError as exc:
             registration_detail = (
                 telemetry.worker_registration_diagnostic
-                if telemetry is not None and bind_stage == "worker-registration"
+                if telemetry is not None
                 else None
             )
             raise RunnerError(
@@ -3242,219 +3200,214 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
 
     art = None
-    for attempt in (1, 2):
-        assignment["_runner_attempt"]=attempt
+    try:
+        run_intent.require_worker(HOME)
+    except run_intent.IntentStopped:
+        print("a local stop cancelled this attempt before launch")
+        return "local-stop-requested"
+    assignment["_runner_attempt"]=1
+    execution_observer = None
+    journal = getattr(telemetry, "capacity_journal", None)
+    if journal is not None:
+        execution_observer = journal.begin_attempt(assignment)
+    try:
         try:
-            try:
-                if telemetry is not None:
-                    # Pier's adapter sidecar binds this exact runner session
-                    # into its structured worker_registered event.
-                    assignment["_runner_session_id"] = telemetry.session_id
-                art = run_trial(
-                    assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
-                    on_started=bind_owner,
-                    on_worker_registered=bind_owner,
-                    **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
-                    environment_build_timeout_multiplier=(
-                        getattr(
-                            args, "_environment_build_timeout_multiplier", None,
-                        )
-                    ),
-                    build_cache_mode=(
-                        getattr(args, "_build_cache_mode", None)
-                        or getattr(args, "build_cache_mode", None)
-                        or image_cache.DEFAULT_BUILD_CACHE_MODE
-                    ),
-                )
-                cancellation.protect_finalization()
-            finally:
-                if art is None:
-                    remove_builder()
-            break
-        except BuildFlakeError as exc:
-            if telemetry:
-                _record_flight_event(telemetry,
-                    "build_failed", component="build",
-                    assignment_id=assignment["assignment_id"],
-                    reason_code="build_flake",
-                    attributes={"attempt": attempt},
-                )
-            # The image build died before the agent ran — a free failure
-            # (zero quota), and mirror flakes usually pass on the second
-            # attempt, so retry once automatically instead of bouncing the
-            # volunteer. A second flake in a row is likely a real network
-            # problem worth a human look.
-            safe_exc = image_cache.redact_docker_diagnostic(exc, limit=1200)
-            if attempt == 1:
-                print(f"environment build failed ({safe_exc})\n"
-                      "no quota was consumed — retrying once automatically...")
-                continue
-            print(f"trial failed: {safe_exc}\n"
-                  "the build failed twice — check your network/proxy and retry "
-                  "the original run instructions after the assignment cooldown "
-                  "(still free: the agent never started), or "
-                  "use `dradar release` if you do not want to keep the cell")
-            _signal_pool_abort(
-                _ENVIRONMENT_BUILD_ABORT_PREFIX
-                + " repeated isolated builder failure",
-                interrupt_siblings=False,
-            )
-            _mark_stopped_quietly(
-                client, assignment, failure_kind="environment_build_failed",
-                failure_diagnostic=exc.failure_diagnostic,
-            )
-            _report_failure_quietly(
-                client, assignment, phase="environment-build",
-                failure_kind="environment_build_failed",
-                failure_code="environment_build_failed",
-            )
-            return "environment-build-failed"
-        except RunnerCleanupUnconfirmedError as exc:
-            if exc.job_dir is not None:
-                # This is a quarantine fence, not a claimed valid result. Do
-                # not inspect/copy files while a writer may still be alive.
-                pending.record(HOME, {
-                    "record_kind": "cleanup_quarantine",
-                    "assignment_id": assignment["assignment_id"],
-                    "nonce": assignment["nonce"],
-                    "task_id": assignment["task_id"],
-                    "batch_id": assignment.get("batch_id"),
-                    "scope_fingerprint": pending.scope_fingerprint(
-                        server=getattr(client, "server", None),
-                        account_scope=getattr(client, "account_scope", None),
-                        benchmark_id=getattr(client, "benchmark_id", None),
-                        batch_id=assignment.get("batch_id"),
-                    ),
-                    "job_dir": str(exc.job_dir),
-                    "upload_blocked": "cleanup_unconfirmed",
-                    "ledger_version": 3,
-                    "owner_epoch": assignment.get("owner_epoch", 0),
-                    "resume_generation": assignment.get("resume_generation", 0),
-                    "runner_session_id": (telemetry.session_id if telemetry is not None
-                                          else assignment.get("_runner_session_id")),
-                })
-            cause = exc.__cause__
-            if isinstance(cause, RunnerError) and cause.report_code:
-                _report_failure_quietly(
-                    client, assignment, phase="runner",
-                    failure_kind="runner_failed", failure_code=cause.report_code,
-                    **({"report_detail": cause.report_detail} if cause.report_detail else {}),
-                )
-            _report_failure_quietly(
-                client, assignment, phase="cleanup",
-                failure_kind="cleanup-unconfirmed",
-                failure_code="cleanup-unconfirmed",
-            )
-            print(
-                f"trial stopped: {exc}\n"
-                "the lease remains running because local cleanup was not proven; "
-                "this worker slot is quarantined to prevent a duplicate agent"
-            )
-            return "cleanup-unconfirmed"
-        except RunnerTaskRetryableError as exc:
-            stopped = _mark_stopped_quietly(
-                client,
-                assignment,
-                failure_kind="runner_failed",
-                failure_diagnostic=exc.failure_diagnostic,
-            )
-            retry_state = (
-                "the assignment was returned for a later retry"
-                if stopped
-                else "the server will recover the isolated lease after it goes stale"
-            )
-            print(
-                f"trial isolated: {exc}\n{retry_state}; other worker slots may continue"
-            )
-            _report_failure_quietly(
-                client, assignment, phase="runner",
-                failure_kind="runner_failed",
-                failure_code=(exc.failure_diagnostic or {}).get("failure_code")
-                or "assignment-isolated",
-            )
-            return "assignment-isolated" if stopped else "cleanup-unconfirmed"
-        except RunnerError as exc:
-            if isinstance(exc, CodexInstallError) and telemetry is not None:
-                _record_flight_event(
-                    telemetry, "build_failed", component="build",
-                    assignment_id=assignment["assignment_id"],
-                    reason_code="codex_install_failed",
-                    attributes={"attempt": attempt},
-                )
-            failure_kind = classify_exception_message(str(exc))
-            terminal_outcome = _terminal_failure_outcome(failure_kind)
-            if attempt == 1 and _retryable_zcode_network_failure(assignment, exc):
-                stopped = _mark_stopped_quietly(
-                    client,
-                    assignment,
-                    defer_seconds=0,
-                    failure_kind="provider-transport",
-                    failure_diagnostic=exc.failure_diagnostic,
-                )
-                ownership_state = (
-                    "needs_bind" if stopped else "stop_unconfirmed"
-                )
-                if stopped:
-                    print(
-                        "ZCode reported a structured transient network failure; "
-                        "retrying this assignment once in the same runner..."
+            if telemetry is not None:
+                # Pier's adapter sidecar binds this exact runner session
+                # into its structured worker_registered event.
+                assignment["_runner_session_id"] = telemetry.session_id
+            art = run_trial(
+                assignment, tasks_root, work_dir, dev_agent=args.dev_agent,
+                on_started=bind_owner,
+                on_worker_registered=bind_owner,
+                **({"execution_observer": execution_observer} if execution_observer is not None else {}),
+                **({"on_auth_observed": auth_observed} if telemetry is not None else {}),
+                environment_build_timeout_multiplier=(
+                    getattr(
+                        args, "_environment_build_timeout_multiplier", None,
                     )
-                    time.sleep(_ZCODE_NETWORK_RETRY_DELAY_SECONDS)
-                    continue
-                print(
-                    "ZCode reported a transient network failure, but checkout "
-                    "cleanup was not confirmed; refusing an unsafe retry"
-                )
-                _report_failure_quietly(
-                    client, assignment, phase="runner",
-                    failure_kind="provider-transport",
-                    failure_code="retry-cleanup-unconfirmed",
-                )
-                return "cleanup-unconfirmed"
-            if isinstance(exc, CodexInstallError):
-                print(f"trial failed: {exc}\n"
-                      "retry the original run instructions with this held "
-                      "assignment after its retry cooldown")
-            else:
-                print(f"trial failed: {exc}\n"
-                      "use `dradar resume` to retry later, or `dradar release` "
-                      "to give the cell back")
-            if failure_kind == "auth":
-                from .auth_failure import auth_failure_sentence
-                print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
-            stopped = _mark_stopped_quietly(
-                client,
-                assignment,
-                failure_kind=failure_kind or "runner_failed",
-                failure_diagnostic=(
-                    exc.failure_diagnostic
-                    if (failure_kind or "runner_failed") == "runner_failed"
-                    else None
+                ),
+                build_cache_mode=(
+                    getattr(args, "_build_cache_mode", None)
+                    or getattr(args, "build_cache_mode", None)
+                    or image_cache.DEFAULT_BUILD_CACHE_MODE
                 ),
             )
-            diagnostic = exc.failure_diagnostic or {}
+            cancellation.protect_finalization()
+        finally:
+            if art is None:
+                remove_builder()
+    except run_intent.IntentStopped:
+        print("a local stop cancelled this attempt before launch")
+        return "local-stop-requested"
+    except BuildFlakeError as exc:
+        if telemetry:
+            _record_flight_event(telemetry,
+                "build_failed", component="build",
+                assignment_id=assignment["assignment_id"],
+                reason_code="build_flake",
+                attributes={"attempt": 1, "phase": "building"},
+            )
+        safe_exc = image_cache.redact_docker_diagnostic(exc, limit=1200)
+        print(f"environment build failed: {safe_exc}\n"
+              "the attempt stopped; inspect diagnostics and the environment "
+              "before explicitly resuming this held assignment")
+        _signal_pool_abort(
+            _ENVIRONMENT_BUILD_ABORT_PREFIX
+            + " isolated builder failure",
+            interrupt_siblings=False,
+        )
+        stopped = _mark_stopped_quietly(
+            client, assignment, failure_kind="environment_build_failed",
+            failure_diagnostic=exc.failure_diagnostic,
+        )
+        _report_failure_quietly(
+            client, assignment, phase="environment-build",
+            failure_kind="environment_build_failed",
+            failure_code="environment_build_failed",
+        )
+        return "environment-build-failed" if stopped else "cleanup-unconfirmed"
+    except RunnerCleanupUnconfirmedError as exc:
+        if exc.job_dir is not None:
+            # This is a quarantine fence, not a claimed valid result. Do
+            # not inspect/copy files while a writer may still be alive.
+            pending.record(HOME, {
+                "record_kind": "cleanup_quarantine",
+                "assignment_id": assignment["assignment_id"],
+                "nonce": assignment["nonce"],
+                "task_id": assignment["task_id"],
+                "batch_id": assignment.get("batch_id"),
+                "scope_fingerprint": pending.scope_fingerprint(
+                    server=getattr(client, "server", None),
+                    account_scope=getattr(client, "account_scope", None),
+                    benchmark_id=getattr(client, "benchmark_id", None),
+                    batch_id=assignment.get("batch_id"),
+                ),
+                "job_dir": str(exc.job_dir),
+                "upload_blocked": "cleanup_unconfirmed",
+                "ledger_version": 3,
+                "owner_epoch": assignment.get("owner_epoch", 0),
+                "resume_generation": assignment.get("resume_generation", 0),
+                "runner_session_id": (telemetry.session_id if telemetry is not None
+                                      else assignment.get("_runner_session_id")),
+            })
+        cause = exc.__cause__
+        if isinstance(cause, RunnerError) and cause.report_code:
             _report_failure_quietly(
                 client, assignment, phase="runner",
-                failure_kind=failure_kind or "runner_failed",
-                failure_code=(
-                    exc.report_code or diagnostic.get("failure_code")
-                    or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
-                    or failure_kind or "runner_failed"
-                ),
-                **({"report_detail": exc.report_detail} if exc.report_detail else {}),
+                failure_kind="runner_failed", failure_code=cause.report_code,
+                **({"report_detail": cause.report_detail} if cause.report_detail else {}),
             )
-            if not stopped:
-                print("server stop was not confirmed; quarantining this worker slot")
-                return "cleanup-unconfirmed"
-            return terminal_outcome or "failed"
-        except (KeyboardInterrupt, EOFError):
-            stopped = _mark_stopped_quietly(
-                client, assignment, defer_seconds=0,
-                failure_kind="user_interrupted",
+        _report_failure_quietly(
+            client, assignment, phase="cleanup",
+            failure_kind="cleanup-unconfirmed",
+            failure_code="cleanup-unconfirmed",
+        )
+        print(
+            f"trial stopped: {exc}\n"
+            "the lease remains running because local cleanup was not proven; "
+            "this worker slot is quarantined to prevent a duplicate agent"
+        )
+        return "cleanup-unconfirmed"
+    except RunnerTaskRetryableError as exc:
+        stopped = _mark_stopped_quietly(
+            client,
+            assignment,
+            failure_kind="runner_failed",
+            failure_diagnostic=exc.failure_diagnostic,
+        )
+        retry_state = (
+            "the assignment was returned for a later retry"
+            if stopped
+            else "the server will recover the isolated lease after it goes stale"
+        )
+        print(
+            f"trial isolated: {exc}\n{retry_state}; other worker slots may continue"
+        )
+        _report_failure_quietly(
+            client, assignment, phase="runner",
+            failure_kind="runner_failed",
+            failure_code=(exc.failure_diagnostic or {}).get("failure_code")
+            or "assignment-isolated",
+        )
+        return "assignment-isolated" if stopped else "cleanup-unconfirmed"
+    except RunnerError as exc:
+        if isinstance(exc, CodexInstallError) and telemetry is not None:
+            _record_flight_event(
+                telemetry, "build_failed", component="build",
+                assignment_id=assignment["assignment_id"],
+                reason_code="codex_install_failed",
+                attributes={"attempt": 1, "phase": "building"},
             )
-            if not stopped:
-                return "cleanup-unconfirmed"
-            raise
+        failure_kind = classify_exception_message(str(exc))
+        terminal_outcome = _terminal_failure_outcome(failure_kind)
+        diagnostic = exc.failure_diagnostic or {}
+        # Record the observed transport class; recovery policy belongs to the
+        # caller. A network error can occur after paid model work has begun.
+        transport_failure = (
+            assignment.get("agent") == ZCODE_AGENT
+            and diagnostic.get("schema") == "dradar-runner-failure-v1"
+            and diagnostic.get("zcode_provider_failure_reason") == "network_error"
+        )
+        if transport_failure:
+            _record_flight_event(
+                telemetry, "provider_failed", component="provider",
+                assignment_id=assignment["assignment_id"],
+                reason_code="transport_error", attributes={"attempt": 1},
+            )
+        if isinstance(exc, CodexInstallError):
+            print(f"trial failed: {exc}\n"
+                  "retry the original run instructions with this held "
+                  "assignment after its retry cooldown")
+        else:
+            print(f"trial failed: {exc}\n"
+                  "inspect diagnostics and the current assignment status "
+                  "before explicitly resuming")
+        if failure_kind == "auth":
+            from .auth_failure import auth_failure_sentence
+            print(auth_failure_sentence(getattr(exc, "auth_signal", None)))
+        stopped = _mark_stopped_quietly(
+            client,
+            assignment,
+            failure_kind=failure_kind or "runner_failed",
+            failure_diagnostic=(
+                exc.failure_diagnostic
+                if (failure_kind or "runner_failed") == "runner_failed"
+                else None
+            ),
+        )
+        diagnostic = exc.failure_diagnostic or {}
+        failure_report_code = (
+            exc.report_code or diagnostic.get("failure_code")
+            or ("codex_install_failed" if isinstance(exc, CodexInstallError) else None)
+            or failure_kind or "runner_failed"
+        )
+        failure_report_detail = dict(exc.report_detail or {})
+        if (
+            failure_report_code == "runner_failed"
+            and telemetry is not None
+            and "session_id" not in failure_report_detail
+        ):
+            failure_report_detail["session_id"] = telemetry.session_id
+        _report_failure_quietly(
+            client, assignment, phase="runner",
+            failure_kind=failure_kind or "runner_failed",
+            failure_code=failure_report_code,
+            **({"report_detail": failure_report_detail}
+               if failure_report_detail else {}),
+        )
+        if not stopped:
+            print("server stop was not confirmed; quarantining this worker slot")
+            return "cleanup-unconfirmed"
+        return terminal_outcome or "failed"
+    except (KeyboardInterrupt, EOFError):
+        stopped = _mark_stopped_quietly(
+            client, assignment, defer_seconds=0,
+            failure_kind="user_interrupted",
+        )
+        if not stopped:
+            return "cleanup-unconfirmed"
+        raise
 
     if assignment.get("agent") == GROK_AGENT:
         preflight_kind = _grok_preflight_failure(art.result)
@@ -4064,9 +4017,11 @@ def _pending_assignment_ids_for_client(
     the paid model work or a potentially live quarantined writer. Unlike
     upload replay, this helper intentionally does not require a live session ID.
     """
-    return {
+    # Scope authorizes upload, not another paid solve. A token change or a
+    # legacy row with no scope cannot erase an existing assignment fence.
+    return local_jobs.protected_assignment_ids(HOME) | {
         str(entry["assignment_id"])
-        for entry in _pending_fence_entries_for_client(client, batch_id=batch_id)
+        for entry in pending.load(HOME)
         if entry.get("assignment_id")
     }
 
@@ -4204,6 +4159,15 @@ def cmd_retry_upload(args) -> int:
     client = _client(cfg)
     entries = pending.load(HOME)
     if not entries:
+        protected = local_jobs.protected_assignment_ids(HOME)
+        if protected:
+            print(
+                f"Found {len(protected)} preserved local assignment(s) with no "
+                "pending upload record. Their submission and ownership must be "
+                "reconciled before recovery. Keep the jobs directory; no model "
+                "was rerun and no artifact was uploaded."
+            )
+            return 1
         print("nothing pending — every trial you've run has been uploaded")
         return 0
     salvage_assignment_id = getattr(args, "request_salvage", None)
@@ -4416,6 +4380,68 @@ def _assignment_boundary_path(args) -> Path | None:
     return Path(value) if value else None
 
 
+def _confirm_exact_batch_submissions(
+    client: ApiClient, path: Path, benchmark_id: str,
+    batch_id: str, active: list[dict],
+) -> None:
+    """Reconcile only disappeared IDs durably submitted by this account."""
+    if not path.exists():
+        return
+    state, digest = assignment_boundary.snapshot(path)
+    if state.get("benchmark_id") != benchmark_id or state.get("batch_id") != batch_id:
+        raise assignment_boundary.BoundaryError(
+            "saved boundary does not match the requested benchmark and batch"
+        )
+    expected = state["expected"]
+    if not expected or any(
+        not isinstance(saved, dict)
+        or saved.get("batch_id") != batch_id
+        or any(not saved.get(key) for key in ("task_id", "model", "effort"))
+        for saved in expected.values()
+    ):
+        raise assignment_boundary.BoundaryError(
+            "saved boundary lacks exact assignment batch metadata"
+        )
+    active_by_id = {item.get("assignment_id"): item for item in active}
+    if set(active_by_id) - set(expected):
+        return  # prepare() retains the existing outside-boundary rejection.
+    if any(
+        any(saved.get(key) != active_by_id[aid].get(key)
+            for key in ("batch_id", "task_id", "model", "effort"))
+        for aid, saved in expected.items() if aid in active_by_id
+    ):
+        raise assignment_boundary.BoundaryError(
+            "saved assignment identity differs from the current lease"
+        )
+    settled = {
+        aid for aid, outcome in state["outcomes"].items()
+        if outcome.get("outcome") in assignment_boundary.SETTLED_OUTCOMES
+    }
+    missing = set(expected) - settled - set(active_by_id)
+    if not missing:
+        return
+    for aid in sorted(missing):
+        row = client.assignment_recovery_status(aid)
+        saved = expected[aid]
+        if not isinstance(row, dict) or row.get("has_submission") is not True or any(
+            row.get(key) != value for key, value in (
+                ("assignment_id", aid),
+                ("batch_id", batch_id),
+                ("benchmark_id", benchmark_id),
+                ("task_id", saved["task_id"]),
+                ("model", saved["model"]),
+                ("effort", saved["effort"]),
+                ("status", "submitted"),
+            )
+        ):
+            raise assignment_boundary.BoundaryError(
+                f"server did not confirm a matching submission for {aid}"
+            )
+    assignment_boundary.confirm_server_submissions(
+        path, digest, set(active_by_id), missing,
+    )
+
+
 def _prepare_assignment_boundary(
     args,
     client: ApiClient,
@@ -4516,12 +4542,20 @@ def _prepare_assignment_boundary(
             HOME, benchmark_id, scoped_batch_id,
         )
         batches = assignment_boundary.admitted_batches(saved_path)
+        if scoped_batch_id is not None and saved_path.exists() and batches != [scoped_batch_id]:
+            raise assignment_boundary.BoundaryError(
+                "exact-batch boundary contains unknown or different batch attribution"
+            )
         if len(batches) > 1:
             # Exact batch resume still executes only its requested batch. The shared
             # ledger must see its siblings too, including after a spawn failure.
             # Retain the requested inventory so an out-of-campaign batch
             # cannot be hidden by the sibling union and pass admission.
             active = active + _BatchInventory(client, batches).get_assignment()["active"]
+        if scoped_batch_id is not None and batch_id == scoped_batch_id and not precise:
+            _confirm_exact_batch_submissions(
+                client, saved_path, benchmark_id, scoped_batch_id, active,
+            )
         path = assignment_boundary.prepare(
             HOME,
             benchmark_id,
@@ -5176,10 +5210,14 @@ def cmd_go(args) -> int:
         getattr(args, "refill_model", None),
         getattr(args, "refill_effort", None),
         getattr(args, "refill_order", None),
+        getattr(args, "refill_mode", None),
     )
     if any(value is not None for value in refill_options) and not getattr(args, "refill", False):
         sys.exit("refill limits and scope filters require --refill")
     if getattr(args, "refill", False):
+        if (getattr(args, "refill_mode", None) == "rolling-submitted"
+                and not getattr(args, "fleet_pool", False)):
+            sys.exit("rolling refill requires an exact Fleet run-plan campaign")
         if (
             getattr(args, "expect_assignment", None)
             or getattr(args, "forget_assignment_boundary", False)
@@ -5227,7 +5265,6 @@ def cmd_go(args) -> int:
         _align_refill_target_with_workers(args)
     if (auto_workers or workers > 1) and not getattr(args, "worker_child", False):
         try:
-            _preflight_scoped_provider(args)
             result = _run_worker_pool(args)
         except (KeyboardInterrupt, EOFError) as exc:
             # The pool parent returns from cmd_go before the single-worker
@@ -5245,11 +5282,6 @@ def cmd_go(args) -> int:
         )
         return result
     try:
-        _preflight_scoped_provider(args)
-    except BaseException as exc:
-        _publish_fleet_startup_failure(args, exc)
-        raise
-    try:
         cfg = _run_config(args)
         cfg["benchmark"] = (
             getattr(args, "benchmark", None)
@@ -5258,6 +5290,8 @@ def cmd_go(args) -> int:
         )
         client = _client(cfg, auto_register=True)
         _scope_client_to_batch(client, args.batch_id)
+        client.require_runner_reservation_protocol()
+        _preflight_scoped_provider(args)
     except BaseException as exc:
         _publish_fleet_startup_failure(args, exc)
         raise
@@ -5935,6 +5969,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
     """Prepare one batch, then supervise several ordinary resume processes."""
     if prepared is not None:
         cfg, client, active = prepared
+        client.require_runner_reservation_protocol()
         if not args.yes:
             answer = input(
                 f"start {len(active)} held tasks across their exact batches "
@@ -5974,6 +6009,10 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             )
             client = _client(cfg, auto_register=True)
             _scope_client_to_batch(client, getattr(args, "batch_id", None))
+            # The parent can claim before any child starts. Check admission
+            # before capacity inventory, environment preparation or claims.
+            client.require_runner_reservation_protocol()
+            _preflight_scoped_provider(args)
             requested_options = [
                 value for value in (
                     getattr(args, "refill_to", None), getattr(args, "auto", None),
@@ -6014,6 +6053,8 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             )
             client = _client(cfg, auto_register=True)
             _scope_client_to_batch(client, getattr(args, "batch_id", None))
+            client.require_runner_reservation_protocol()
+            _preflight_scoped_provider(args)
         tasks_root = _selected_tasks_root(cfg)
         flight = FlightRecorder(HOME, client) if fleet_pool else None
 
@@ -7131,6 +7172,8 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             print(f"  -> {cleanup_blocked}")
             results.append(outcome)
             break
+        if outcome == "local-stop-requested":
+            break
         if outcome == "cleanup-unconfirmed":
             if getattr(args, "worker_child", False):
                 print(
@@ -7144,7 +7187,7 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             break
         if outcome == "environment-build-failed":
             print(
-                "stopping this batch after repeated environment setup failures; "
+                "stopping this batch after the environment setup failure; "
                 "no later cell will be started. Fix Docker/network/Pier, then run "
                 "`dradar resume`."
             )
@@ -7408,6 +7451,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
             print(f"  -> {cleanup_blocked}")
             results.append(outcome)
             break
+        if outcome == "local-stop-requested":
+            results.append(outcome)
+            break
         if outcome == "cleanup-unconfirmed":
             results.append(outcome)
             if getattr(args, "worker_child", False):
@@ -7430,8 +7476,8 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 "local environment build failed", interrupt_siblings=False,
             )
             print(
-                "stopping this worker before the next checkout after repeated "
-                "environment setup failures. Fix Docker/network/Pier, then "
+                "stopping this worker before the next checkout after the "
+                "environment setup failure. Fix Docker/network/Pier, then "
                 "retry the original run instructions with held assignments "
                 "after their retry cooldown."
             )
@@ -7499,6 +7545,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 elif replenished.get("seed_pending"):
                     print(f"{progress}; waiting for "
                           f"{replenished['seed_pending']} selected task(s) before auto-refill")
+                elif replenished.get("rolling_pending"):
+                    print(f"{progress}; waiting for one server-accepted submission "
+                          "before rolling refill")
                 elif replenished.get("status") == "draining":
                     print("refill limit reached; no more tasks will be claimed, "
                           "draining the existing queue")
@@ -7643,7 +7692,15 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         ))
     if args.max_estimated_quota_pct is not None:
         print(f"  estimated quota cap: {args.max_estimated_quota_pct}% {args.quota_tier}")
-    print("  order: all initially selected tasks must submit before auto-refill starts")
+    refill_mode = (
+        "rolling_submitted"
+        if getattr(args, "refill_mode", None) == "rolling-submitted"
+        else "seed_barrier"
+    )
+    if refill_mode == "rolling_submitted":
+        print("  order: each server-accepted submission permits one replacement claim")
+    else:
+        print("  order: all initially selected tasks must submit before auto-refill starts")
     print("  safety: any non-submitted task stops refill; existing work is never released")
     if not args.yes:
         answer = input("start this refill plan? [y/N] ").strip().lower()
@@ -7673,6 +7730,23 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                 raise refill_plan.RefillError(
                     "private run-plan credentials lack an authorized points tier"
                 )
+        if refill_mode == "rolling_submitted":
+            try:
+                capabilities = client.refill_campaign_capabilities()
+            except (ApiError, AttributeError) as exc:
+                raise refill_plan.RefillError(
+                    "server has not confirmed rolling refill support; no campaign was configured"
+                ) from exc
+            if (
+                not isinstance(capabilities, dict)
+                or type(capabilities.get("schema_version")) is not int
+                or capabilities["schema_version"] != 1
+                or not isinstance(capabilities.get("refill_modes"), list)
+                or "rolling_submitted" not in capabilities["refill_modes"]
+            ):
+                raise refill_plan.RefillError(
+                    "server has not confirmed rolling refill support; no campaign was configured"
+                )
         try:
             campaign_options = dict(
                 batch_id=args.batch_id,
@@ -7685,6 +7759,8 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
                 effort=args.refill_effort,
                 refill_to=target,
                 max_tasks=args.max_tasks,
+                **({"refill_mode": refill_mode}
+                   if getattr(args, "refill_mode", None) is not None else {}),
             )
             configured = client.configure_refill_campaign(**campaign_options)
         except ApiError as exc:
@@ -7695,6 +7771,10 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         if campaign.get("batch_id") != args.batch_id:
             raise refill_plan.RefillError(
                 "server returned a mismatched Fleet refill campaign"
+            )
+        if campaign.get("refill_mode", "seed_barrier") != refill_mode:
+            raise refill_plan.RefillError(
+                "server did not confirm the requested refill mode"
             )
         server_campaign_id = args.batch_id
 
@@ -7712,6 +7792,7 @@ def _setup_refill(args, client: ApiClient, active: list[dict], free_pick: bool) 
         refill_order=getattr(args, "refill_order", None) or "cost",
         server_campaign_id=server_campaign_id,
         points_tier=points_tier,
+        refill_mode=refill_mode,
         # A normal parent owns the exclusive per-machine run lock here, so no
         # live local campaign can be displaced. Manual --parallel sessions do
         # not own that proof and must keep the fail-closed conflict behavior.
@@ -7763,13 +7844,10 @@ def _wait_for_scoped_refill_work(
 ) -> list[dict]:
     """Keep one exact run-plan device healthy across an empty refill gap.
 
-    No model child exists during this phase. A normal runner heartbeat is not
-    sufficient because the exact batch may contain zero live assignments and
-    the server deliberately avoids creating an empty runner session. Instead,
-    replay the same logical device's idempotent run-plan start at the bounded
-    polling cadence. This refreshes device liveness without reserving another
-    worker or widening the plan. The shared drain marker remains authoritative
-    for a local stop request.
+    No model child may exist during this phase. Maintain only the exact active
+    admission with its revision and start ID, then read progress. This cannot
+    create or reactivate a run. A stop or newer admission makes the touch fail;
+    this loop never refreshes the revision or replays a start to bypass it.
     """
 
     if not _scoped_fleet_refill(args):
@@ -7785,20 +7863,35 @@ def _wait_for_scoped_refill_work(
             runtime = _run_config(args)
             plan_id = runtime.get("run_plan_id")
             logical_session_id = runtime.get("run_plan_logical_session_id")
+            credential_generation = runtime.get("run_plan_credential_generation")
+            intent_revision = runtime.get("run_plan_intent_revision")
+            start_intent = runtime.get("run_plan_current_start_intent_id")
             if (
                 not isinstance(plan_id, str) or not plan_id
                 or not isinstance(logical_session_id, str)
                 or not logical_session_id.startswith("drl_")
+                or type(credential_generation) is not int or credential_generation < 0
+                or type(intent_revision) is not int or intent_revision < 0
+                or not isinstance(start_intent, str) or len(start_intent) != 32
+                or any(char not in "0123456789abcdef" for char in start_intent)
             ):
                 raise refill_plan.RefillError(
                     "private run-plan credentials lack a stable device session"
                 )
-            refresh = client.start_run_plan(
+            touched = client.heartbeat_run_plan(
                 plan_id=plan_id,
-                logical_session_id=logical_session_id,
-                concurrency_mode="fixed",
-                concurrency=desired_workers,
+                current_start_intent_id=start_intent,
+                expected_intent_revision=intent_revision,
+                expected_generation=credential_generation,
             )
+            if (not isinstance(touched, dict) or touched.get("touched") is not True
+                    or touched.get("starts_new_work") is not False
+                    or touched.get("plan_id") != plan_id
+                    or touched.get("current_start_intent_id") != start_intent
+                    or type(touched.get("device_intent_revision")) is not int
+                    or touched["device_intent_revision"] != intent_revision):
+                raise refill_plan.RefillError("server did not confirm the existing run admission")
+            refresh = client.run_plan_progress(plan_id)
             envelope = refresh.get("envelope") if isinstance(refresh, dict) else None
             if not isinstance(envelope, dict):
                 raise refill_plan.RefillError(
@@ -7902,6 +7995,11 @@ def _wait_for_scoped_refill_work(
                     print(
                         "selected work is still finishing across the active "
                         "devices; this device will wait for the shared queue"
+                    )
+                elif result.get("rolling_pending"):
+                    print(
+                        "waiting for a server-accepted submission to free "
+                        "one rolling refill slot"
                     )
                 else:
                     print(

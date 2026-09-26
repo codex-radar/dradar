@@ -56,7 +56,14 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
             data = json.loads(raw) if raw and 'application/json' in self.headers.get('Content-Type', '') else {k: v[0] for k,v in parse_qs(raw.decode()).items()}
             status = 200
             with lock:
-                if path.path == '/api/v1/assignment/claim':
+                if path.path == '/api/v1/run-plans/capabilities':
+                    # This loopback server represents the supported protocol;
+                    # keep the real client's capability gate in the pyz path.
+                    result = {'schema_version': 1,
+                              'capabilities': ['runner-reservation-v1'],
+                              'stop_generation_cas': True,
+                              'close_releases_capacity': False}
+                elif path.path == '/api/v1/assignment/claim':
                     state['claims'].append(data)
                     a = dict(data, agent='fixture', expires_at='2099-01-01T00:00:00Z', assignment_id=str(len(state['claims'])), batch_id=BATCHES[0 if data['model'] == 'gemini-test' else 1])
                     state['active'].append(a)

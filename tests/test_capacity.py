@@ -124,3 +124,22 @@ def test_standalone_capacity_is_not_limited_by_one_held_task(monkeypatch):
 
     assert capacity.cmd_capacity(object()) == 0
     assert seen == [capacity.AUTO_WORKER_CAP]
+
+
+def test_cli_inventory_dispatch_preserves_original_scope(monkeypatch):
+    from dradar import cli, legacy_capacity
+    seen = []
+    monkeypatch.setattr(legacy_capacity, "cmd_legacy_inventory", lambda args: seen.append(args) or 0)
+    assert cli.main(["capacity", "--reservations", "--plan", "original-run-code",
+        "--after", "session-cursor", "--quarantine-after", "history-cursor", "--json"]) == 0
+    assert seen[0].plan == "original-run-code"
+    assert seen[0].after == "session-cursor"
+    assert seen[0].quarantine_after == "history-cursor"
+    assert seen[0].json is True
+
+
+def test_inventory_arguments_require_the_readonly_mode():
+    from dradar import cli
+    import pytest
+    with pytest.raises(SystemExit, match="require capacity --reservations"):
+        cli.main(["capacity", "--plan", "original-run-code"])

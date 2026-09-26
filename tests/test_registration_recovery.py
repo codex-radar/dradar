@@ -17,7 +17,7 @@ from dradar.telemetry import RunnerTelemetry
 
 
 @contextmanager
-def fixture(tmp_path, monkeypatch, fault="normal"):
+def fixture(tmp_path, monkeypatch, fault="normal", *, defer_abort=False):
     monkeypatch.setenv("NO_PROXY", "*")
     state = {"paths": [], "seqs": [], "events": [], "closed": False,
              "started": False, "hb": 0, "flight": 0,
@@ -93,7 +93,7 @@ def fixture(tmp_path, monkeypatch, fault="normal"):
     telemetry.bind_batch("b"*32)
     telemetry.set_phase("building", "a"*32, 1)
     assignment = {"assignment_id": "a"*32, "owner_epoch":1, "agent":"codex"}
-    window = RegistrationWindow(time.monotonic()+120, lambda: True)
+    window = RegistrationWindow(time.monotonic()+120, lambda: True, defer_abort=defer_abort)
     try:
         yield window, api, telemetry, assignment, state
     finally:
@@ -145,6 +145,58 @@ def test_ambiguous_start_requires_confirmed_close(tmp_path, monkeypatch, fault, 
         if not fenced:
             assert _mark_stopped_quietly(api,a) is False
             assert state["paths"][-1] == "/api/v1/runner/close"
+
+
+def test_deferred_ambiguous_start_keeps_fence_obligation_for_owner(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch, "start_disconnect", defer_abort=True) as (w, api, t, a, state):
+        with pytest.raises(ApiError):
+            w.bind(api, t, a)
+        assert state["started"] and not state["closed"]
+        assert a["_registration_start_uncertain"] is True
+        assert not w._abort_attempted and not w._fenced
+        # The owning runner performs local cleanup here and then calls abort.
+        w.abort()
+        assert state["closed"] and w._fenced
+        assert "_registration_start_uncertain" not in a
+        w.abort()
+        assert state["paths"].count("/api/v1/runner/close") == 1
+
+
+def test_deferred_close_has_its_own_bounded_budget_after_local_teardown(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch, "start_disconnect", defer_abort=True) as (w, api, t, a, state):
+        with pytest.raises(ApiError):
+            w.bind(api, t, a)
+        expired = time.monotonic() - 1
+        w.deadline = expired
+        start = time.monotonic()
+        w.abort()
+        assert time.monotonic() - start < registration.CLOSE_FENCE_SECONDS
+        assert state["closed"] and w._fenced
+        assert state["paths"].count("/api/v1/runner/close") == 1
+        assert w.deadline == expired
+        with pytest.raises(ApiError):
+            w.finish()
+
+
+def test_deferred_abort_still_fences_a_cancelled_late_start(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch, "cancel_late", defer_abort=True) as (w, api, t, a, state), cancellation.scope() as stop:
+        def cancel_received_start():
+            if state["start_received"].wait(5):
+                stop.requested = True
+        worker = threading.Thread(target=cancel_received_start)
+        worker.start()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                w.bind(api, t, a)
+            assert not state["closed"]
+            assert a["_registration_start_uncertain"] is True
+            cancellation.protect_finalization(cancelled=True)
+            w.abort()
+            assert state["late_done"].wait(2)
+            assert w._fenced and state["late_status"] == 409
+            assert not state["started"]
+        finally:
+            worker.join(timeout=5)
 
 
 def test_cooperative_cancel_cancels_and_awaits_inflight_request(tmp_path, monkeypatch):
