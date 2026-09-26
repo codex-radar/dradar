@@ -153,7 +153,7 @@ _TERMINAL_LOCAL_OUTCOMES = {
 }
 _NON_FAULT_RUNNER_OUTCOMES = {
     "submitted", "interrupted", "expired", "assignment-isolated",
-    "assignment-reopened",
+    "assignment-reopened", "local-stop-requested",
 }
 _ACCOUNT_TERMINAL_OUTCOMES = {
     "auth-failure", "insufficient-balance", "quota-exhausted",
@@ -3018,6 +3018,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     # stops this worker before another checkout; a prior task must never poison
     # a later explicit invocation after the user has repaired Docker.
     args._docker_cleanup_blocked = None
+    from . import run_intent
+    try:
+        run_intent.require_worker(HOME)
+    except run_intent.IntentStopped:
+        print("this worker belongs to an older stopped run; no model was started")
+        return "local-stop-requested"
     hash_match = check_task_content_hash(assignment, tasks_root)
     if hash_match is False and not getattr(args, "allow_task_drift", False):
         print(
@@ -7180,6 +7186,8 @@ def _run_batch(args, client: ApiClient, tasks_root: Path, active: list[dict],
             print(f"  -> {cleanup_blocked}")
             results.append(outcome)
             break
+        if outcome == "local-stop-requested":
+            break
         if outcome == "cleanup-unconfirmed":
             if getattr(args, "worker_child", False):
                 print(
@@ -7455,6 +7463,9 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 "本题结果已保存，但本机运行环境没有清理完整；已停止继续领取或运行下一题。"
             )
             print(f"  -> {cleanup_blocked}")
+            results.append(outcome)
+            break
+        if outcome == "local-stop-requested":
             results.append(outcome)
             break
         if outcome == "cleanup-unconfirmed":

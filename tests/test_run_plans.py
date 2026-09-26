@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -1006,7 +1007,7 @@ def test_stop_without_local_pool_invalidates_old_capacity_recheck_generation(
     ) == 1
     stale = json.loads(capsys.readouterr().out)
 
-    assert stale["error_code"] == "recheck_invalid_or_state_changed"
+    assert stale["error_code"] == "run_cancelled_by_newer_intent"
     assert stale["agent_action"] == "notify_only"
     assert "next_commands" not in stale.get("agent", {})
     assert client.start_calls == []
@@ -1053,7 +1054,7 @@ def test_valid_capacity_recheck_never_reopens_a_completed_local_run(
     assert state["intent_generation"] == generation
 
 
-def test_stop_and_old_recheck_are_linearized_by_shared_admission_lock(
+def test_stop_cancels_old_recheck_without_waiting_for_remote_response(
     tmp_path, monkeypatch, capsys,
 ):
     plan = _plan(refill=True, max_tasks=20, task_count=4)
@@ -1105,10 +1106,100 @@ def test_stop_and_old_recheck_are_linearized_by_shared_admission_lock(
 
     stale = next(
         item for item in outputs
-        if item.get("error_code") == "recheck_invalid_or_state_changed"
+        if item.get("error_code") == "run_cancelled_by_newer_intent"
     )
     assert stale["agent_action"] == "notify_only"
     assert state["pending_recheck_generation"] is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses independent POSIX CLI processes")
+@pytest.mark.parametrize("blocked_at", ["preflight", "server_start"])
+@pytest.mark.parametrize("stop_ack", [True, False])
+def test_real_cli_process_stop_cancels_pending_run_before_its_reply(
+    tmp_path, monkeypatch, blocked_at, stop_ack,
+):
+    """Run holds admission while a separate official stop process reduces work."""
+    import contextlib
+    import io
+
+    ctx = multiprocessing.get_context("fork")
+    entered, release = ctx.Event(), ctx.Event()
+    stop_sent, late_spawn = ctx.Event(), ctx.Event()
+    results = ctx.Queue()
+    plan = _plan()
+    client = FakeClient()
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client,
+                 snapshot=_snapshot(available=2, auto_workers=2))
+    monkeypatch.setattr(run_plans, "HOME", tmp_path)
+    monkeypatch.setattr(fleet, "stop_batch", lambda _batch: None)
+
+    def wait_at(stage):
+        if blocked_at == stage:
+            entered.set()
+            if not release.wait(8):
+                raise RuntimeError("test never released pending run")
+
+    def preflight(_plan):
+        wait_at("preflight")
+        return None
+
+    def start(**_kwargs):
+        wait_at("server_start")
+        return _server_response(plan)
+
+    def stop(**_kwargs):
+        stop_sent.set()
+        if not stop_ack:
+            raise ApiError("synthetic lost stop acknowledgement")
+        return _server_response(plan, _envelope(status="stopped", agent_action="stop_runner"))
+
+    def spawn(**_kwargs):
+        late_spawn.set()
+        raise AssertionError("stopped request launched Fleet")
+
+    monkeypatch.setattr(doctor, "plan_environment_issue", preflight)
+    monkeypatch.setattr(client, "start_run_plan", start)
+    monkeypatch.setattr(client, "stop_run_plan", stop)
+    monkeypatch.setattr(fleet, "add_batch", spawn)
+
+    def invoke(command):
+        output = io.StringIO()
+        args = [command, "--plan", RUN_CODE, "--json"]
+        if command == "stop":
+            args += ["--scope", "this-device"]
+        with contextlib.redirect_stdout(output):
+            rc = cli.main(args)
+        results.put((command, rc, output.getvalue()))
+
+    running = ctx.Process(target=invoke, args=("run",))
+    stopping = ctx.Process(target=invoke, args=("stop",))
+    running.start()
+    try:
+        assert entered.wait(4)
+        stopping.start()
+        assert stop_sent.wait(3), "official stop waited behind unresolved run"
+        stopping.join(3)
+        assert not stopping.is_alive(), "stop did not return while run was pending"
+        assert running.is_alive(), "pending run unexpectedly completed"
+    finally:
+        release.set()
+        running.join(5)
+        if stopping.pid is not None:
+            stopping.join(5)
+        for process in (running, stopping):
+            if process.pid is not None and process.is_alive():
+                process.terminate()
+                process.join(2)
+    assert running.exitcode == stopping.exitcode == 0
+    observed = {item[0]: item[1:] for item in (results.get(timeout=2), results.get(timeout=2))}
+    assert observed["run"][0] == 1
+    assert json.loads(observed["run"][1])["error_code"] == "run_cancelled_by_newer_intent"
+    if not stop_ack:
+        response = json.loads(observed["stop"][1])
+        assert response["error_code"] == "remote_stop_unconfirmed"
+        assert response["agent"]["local_stop_recorded"] is True
+        assert response["agent"]["remote_stop_confirmed"] is False
+    assert not late_spawn.is_set()
 
 
 def test_progress_cannot_restore_a_recheck_generation_after_stop(
@@ -1176,7 +1267,7 @@ def test_progress_cannot_restore_a_recheck_generation_after_stop(
     recheck_args.json = False
     assert run_plans.cmd_run_plan(recheck_args) == 1
     stale = outputs[-1]
-    assert stale["error_code"] == "recheck_invalid_or_state_changed"
+    assert stale["error_code"] == "run_cancelled_by_newer_intent"
     assert state["intent_generation"] == generation + 1
 
 

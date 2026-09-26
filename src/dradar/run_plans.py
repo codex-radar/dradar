@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
-from . import local_jobs, pending
+from . import local_jobs, pending, run_intent
 from .api_client import ApiClient, ApiError, normalize_batch_id
 from .local_config import HOME, _load_config
 from .agent_actions import ActionValidationError, validate_actions, validate_envelope
@@ -532,16 +532,27 @@ def _exchange(
 
 def _state_and_client(args) -> tuple[str, Path, dict[str, Any], ApiClient]:
     run_code = _validate_run_code(args.plan)
+    saved_stop = None
+    if getattr(args, "_stop_read", False):
+        digest = _run_code_digest(run_code)
+        saved_stop = next((
+            (path, state) for path, state in _iter_states(HOME) or ()
+            if secrets.compare_digest(str(state.get("run_code_hash") or ""), digest)
+        ), None)
     # Progress/run in two conversations can race on first use. Serialize the
     # exchange and re-read state under the lock so only one logical session is
     # minted for this device.
-    with _exclusive_lock(_root(HOME) / STATE_LOCK_FILE):
-        saved = _saved_state(run_code, home=HOME)
-        server = _resolve_server(getattr(args, "server", None), saved)
-        if saved is None:
-            path, state = _exchange(run_code, server, home=HOME)
-        else:
-            path, state = saved
+    if saved_stop is not None:
+        path, state = saved_stop
+        server = _resolve_server(getattr(args, "server", None), saved_stop)
+    else:
+        with _exclusive_lock(_root(HOME) / STATE_LOCK_FILE):
+            saved = _saved_state(run_code, home=HOME)
+            server = _resolve_server(getattr(args, "server", None), saved)
+            if saved is None:
+                path, state = _exchange(run_code, server, home=HOME)
+            else:
+                path, state = saved
     token = state.get("token")
     plan = state.get("plan")
     if not isinstance(token, str) or not token.startswith("drp_"):
@@ -1922,6 +1933,13 @@ def _run_command(args, operation: Callable[[], dict[str, Any]]) -> int:
             agent_action="notify_only",
         )))
         return 1
+    except run_intent.IntentStopped:
+        _output(args, _local_error_response(RunPlanClientError(
+            "run_cancelled_by_newer_intent",
+            "本机已有较新的停止或运行意图；旧请求不会再启动。请先查看进度，需要恢复时明确重新运行。",
+            agent_action="notify_only",
+        )))
+        return 1
     except ApiError as exc:
         response = _api_error_response(exc)
         if _output(args, response):
@@ -1972,6 +1990,8 @@ def cmd_run_plan(args) -> int:
         _run_code, path, state, client = _state_and_client(args)
         if getattr(args, "upload_only", False):
             return _recover_plan_uploads(state, client)
+        local_generation = args._local_run_generation
+        run_intent.require(HOME, state["batch_id"], local_generation)
         if not authoritative_recheck:
             if recheck_generation is None:
                 # Any explicit run is a newer user/Agent intent and invalidates
@@ -2062,12 +2082,14 @@ def cmd_run_plan(args) -> int:
         refill = plan["refill"]
 
         def ensure_local_pool(workers: int) -> dict[str, Any]:
+            run_intent.require(HOME, plan["batch_id"], local_generation)
             try:
                 return fleet.add_batch(
                     batch_id=plan["batch_id"],
                     workers=workers,
                     credentials_file=path,
                     plan_id=plan["plan_id"],
+                    intent_generation=local_generation,
                     retry=True,
                     refill=bool(refill.get("enabled")) and not held_only,
                     max_tasks=(refill.get("max_tasks") if not held_only else None),
@@ -2120,8 +2142,11 @@ def cmd_run_plan(args) -> int:
                 "decision": decision,
                 "decision_token": decision_token,
             }
+            run_intent.require(HOME, plan["batch_id"], local_generation)
             try:
-                return _validate_response(client.start_run_plan(**request))
+                result = _validate_response(client.start_run_plan(**request))
+                run_intent.require(HOME, plan["batch_id"], local_generation)
+                return result
             except ApiError as exc:
                 if (
                     not decision_token
@@ -2129,7 +2154,10 @@ def cmd_run_plan(args) -> int:
                 ):
                     raise
                 request.update({"decision": None, "decision_token": None})
-                return _validate_response(client.start_run_plan(**request))
+                run_intent.require(HOME, plan["batch_id"], local_generation)
+                result = _validate_response(client.start_run_plan(**request))
+                run_intent.require(HOME, plan["batch_id"], local_generation)
+                return result
 
         if already_local:
             current_workers = int(current_local.get("workers") or 1)
@@ -2492,7 +2520,19 @@ def cmd_run_plan(args) -> int:
             return _local_warn_response(response, selected=actual_workers)
         return _local_monitor_response(response, selected=actual_workers)
 
-    return _run_command(args, lambda: _run_with_admission(operate))
+    def dispatch() -> dict[str, Any]:
+        if not getattr(args, "upload_only", False):
+            _code, _path, prepared, _client = _state_and_client(args)
+            args._local_run_generation = (
+                run_intent.current(HOME, prepared["batch_id"])
+                if getattr(args, "recheck_generation", None) is not None
+                else run_intent.begin(HOME, prepared["batch_id"])
+            )
+        # Record the explicit intent before waiting. An older queued run may
+        # not reinterpret itself as a new resume after a concurrent stop.
+        return _run_with_admission(operate)
+
+    return _run_command(args, dispatch)
 
 
 def cmd_progress_plan(args) -> int:
@@ -2606,12 +2646,19 @@ def cmd_progress_plan(args) -> int:
 
 def cmd_stop_plan(args) -> int:
     def operate() -> dict[str, Any]:
+        args._stop_read = True
         _run_code, path, state, client = _state_and_client(args)
         scope = args.scope.replace("-", "_")
         decision_token = getattr(args, "decision_token", None)
         if decision_token:
             _decision_for(state, "stop", decision_token)
+        local_warning = None
+        local_stop_recorded = scope == "this_device" or bool(decision_token)
         if scope == "this_device" or decision_token:
+            # This does not share the long run/admission lock. It cancels
+            # queued Fleet launches and reaches existing local pools even
+            # when the remote stop request has no response.
+            local_warning = run_intent.stop(HOME, state["batch_id"])
             # A concrete stop is a newer local intent even when this device
             # has no Fleet item yet.  Invalidate an outstanding automatic
             # capacity recheck before contacting the server, so a lost stop
@@ -2629,6 +2676,15 @@ def cmd_stop_plan(args) -> int:
                 not decision_token
                 or exc.code not in _STALE_SERVER_DECISION_CODES
             ):
+                if local_stop_recorded:
+                    return _local_error_response(RunPlanClientError(
+                        "remote_stop_unconfirmed",
+                        "本机已记录停止新增；远端停止结果尚未确认。请保留当前运行信息并重查进度，不能据此重新启动。",
+                        retryable=True, agent_action="notify_only",
+                        agent_details={"local_stop_recorded": True,
+                                       "local_drain_published": local_warning is None,
+                                       "remote_stop_confirmed": False},
+                    ))
                 raise
             # The all-device stop confirmation changed while the user was
             # deciding.  Re-read exactly once without the stale capability;
@@ -2648,7 +2704,7 @@ def cmd_stop_plan(args) -> int:
                 pass
         return response
 
-    return _run_command(args, lambda: _run_with_admission(operate))
+    return _run_command(args, operate)
 
 
 __all__ = [

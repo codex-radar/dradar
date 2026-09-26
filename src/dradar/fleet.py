@@ -1096,6 +1096,15 @@ def _spawn_pool(
     env = _pool_environment(runtime_environment)
     env[CONTROLLER_ID_ENV] = controller_id
     env[POOL_BATCH_ENV] = batch_id
+    from . import run_intent
+    if credentials_file:
+        try:
+            generation = run_intent.current(home, batch_id)
+        except run_intent.IntentStopped:
+            generation = None
+        if generation is not None:
+            env[run_intent.BATCH_ENV] = batch_id
+            env[run_intent.GENERATION_ENV] = generation
     startup_path = _pool_startup_path(home, batch_id)
     startup_path.unlink(missing_ok=True)
     env[POOL_STARTUP_FILE_ENV] = str(startup_path)
@@ -1419,50 +1428,58 @@ def _handle_request(
             if benchmark is not None and capacity.get("benchmark") != benchmark:
                 raise FleetError("runtime benchmark differs from the requested batch")
             benchmark = capacity.get("benchmark") or benchmark
-            process, log_handle = _spawn_pool(
-                home, state, batch_id, workers,
-                refill=refill,
-                max_tasks=max_tasks,
-                refill_harness=refill_harness,
-                refill_model=refill_model,
-                refill_effort=refill_effort,
-                credentials_file=credentials_file,
-                benchmark=benchmark,
-                runtime_executable=runtime_executable,
-                runtime_environment=runtime_environment,
-            )
+            from . import run_intent
             try:
-                item = {
-                    "batch_id": batch_id,
-                    "workers": workers,
-                    "status": "starting",
-                    "startup_status": "pending",
-                    "pid": process.pid,
-                    "added_at": _now(),
-                    "updated_at": _now(),
-                    "log_path": str(
-                        _root(home) / LOG_DIR / f"batch-{batch_id}.log"
-                    ),
-                    "warnings": warnings,
-                    "capacity": capacity,
-                    "plan_id": plan_id,
-                    "credentials_file": credentials_file,
-                    "benchmark": benchmark,
-                    "refill": refill,
-                    "max_tasks": max_tasks,
-                    "refill_harness": refill_harness,
-                    "refill_model": refill_model,
-                    "refill_effort": refill_effort,
-                }
-                state["batches"][batch_id] = item
-                _write_state(home, state)
-                processes[batch_id] = process
-                logs[batch_id] = log_handle
-            except BaseException:
-                _send_interrupt(process)
-                log_handle.close()
-                state["batches"].pop(batch_id, None)
-                raise
+                lifecycle = run_intent.launch_guard(
+                    home, batch_id, request.get("intent_generation"),
+                )
+                with lifecycle:
+                    process, log_handle = _spawn_pool(
+                        home, state, batch_id, workers,
+                        refill=refill,
+                        max_tasks=max_tasks,
+                        refill_harness=refill_harness,
+                        refill_model=refill_model,
+                        refill_effort=refill_effort,
+                        credentials_file=credentials_file,
+                        benchmark=benchmark,
+                        runtime_executable=runtime_executable,
+                        runtime_environment=runtime_environment,
+                    )
+                    try:
+                        item = {
+                            "batch_id": batch_id,
+                            "workers": workers,
+                            "status": "starting",
+                            "startup_status": "pending",
+                            "pid": process.pid,
+                            "added_at": _now(),
+                            "updated_at": _now(),
+                            "log_path": str(
+                                _root(home) / LOG_DIR / f"batch-{batch_id}.log"
+                            ),
+                            "warnings": warnings,
+                            "capacity": capacity,
+                            "plan_id": plan_id,
+                            "credentials_file": credentials_file,
+                            "benchmark": benchmark,
+                            "refill": refill,
+                            "max_tasks": max_tasks,
+                            "refill_harness": refill_harness,
+                            "refill_model": refill_model,
+                            "refill_effort": refill_effort,
+                        }
+                        state["batches"][batch_id] = item
+                        _write_state(home, state)
+                        processes[batch_id] = process
+                        logs[batch_id] = log_handle
+                    except BaseException:
+                        _send_interrupt(process)
+                        log_handle.close()
+                        state["batches"].pop(batch_id, None)
+                        raise
+            except run_intent.IntentStopped as exc:
+                raise FleetError(str(exc)) from exc
             _response(home, request_id, {
                 "ok": True,
                 "already_active": False,
@@ -1985,6 +2002,7 @@ def add_batch(
     refill_effort: str | None = None,
     credentials_file: Path | str | None = None,
     plan_id: str | None = None,
+    intent_generation: str | None = None,
 ) -> dict:
     """Programmatic, idempotent Fleet add used by the intent-level CLI."""
     try:
@@ -2006,6 +2024,7 @@ def add_batch(
         "refill_effort": refill_effort,
         "credentials_file": str(credentials_file) if credentials_file else None,
         "plan_id": plan_id,
+        "intent_generation": intent_generation,
     })
     if not response.get("ok"):
         raise FleetError(str(response.get("error") or "local coordinator rejected the run"))
