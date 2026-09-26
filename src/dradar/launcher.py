@@ -78,9 +78,15 @@ def main() -> int:
                 keys = load_trusted_keys(HOME)
                 if keys and not active_invocations(root):
                     controller = UpdateController(root, trusted_keys=keys)
-                    with controller.transaction():
+                    with controller.transaction(
+                        timeout_seconds=_LAUNCH_LOCK_TIMEOUT_SECONDS,
+                    ):
                         controller.recover_on_launcher_start()
                     _activate_if_idle(root)
+            except UpdateLockBusy:
+                # Never mistake a busy update transaction for corrupt state:
+                # skipping signed selection here would run bundled old code.
+                raise
             except (OSError, ValueError, RuntimeError):
                 keys = None
             activity = register_invocation(root)
