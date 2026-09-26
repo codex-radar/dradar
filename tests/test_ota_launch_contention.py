@@ -74,18 +74,23 @@ def test_exhausted_launch_gate_fails_before_cli_work(tmp_path, monkeypatch, caps
         assert not active_invocations(tmp_path / "ota")
 
 
-def test_busy_update_transaction_never_downgrades_to_bundled_cli(
+def test_busy_update_transaction_still_selects_signed_runtime(
     tmp_path, monkeypatch, capsys,
 ):
     from dradar import cli, launcher
 
     monkeypatch.setattr(launcher, "HOME", tmp_path)
-    monkeypatch.setattr(launcher, "_LAUNCH_LOCK_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(launcher, "discover_update", lambda *_: None)
     monkeypatch.setattr(launcher, "load_trusted_keys", lambda *_: {"test": b"key"})
-    monkeypatch.setattr(cli, "main", lambda: pytest.fail("bundled CLI ran"))
+    selected = []
+    monkeypatch.setattr(
+        launcher.UpdateController, "launch_artifact",
+        lambda *_: selected.append(True) or None,
+    )
+    monkeypatch.setattr(cli, "main", lambda: 0)
     with UpdateLock(tmp_path / "ota" / "update.lock"):
-        assert launcher.main() == 75
-    assert "could not register" in capsys.readouterr().err
+        assert launcher.main() == 0
+    assert selected == [True]
+    assert capsys.readouterr().err == ""
     with UpdateLock(tmp_path / "ota" / "launch.lock"):
         assert not active_invocations(tmp_path / "ota")
