@@ -52,6 +52,8 @@ class ExecutionAudit:
     def record_spawn(self, pid, *, windows_job_id=None) -> None:
         self.spawned = True
         self.pid = pid if type(pid) is int and pid > 0 else None
+        if windows_job_id is not None and self.pid is None:
+            raise ExecutionObserverError("Windows process identity is invalid")
         if windows_job_id is not None and (
                 not isinstance(windows_job_id, str) or len(windows_job_id) != 32
                 or any(c not in "0123456789abcdef" for c in windows_job_id)):
@@ -70,6 +72,8 @@ class ExecutionAudit:
             raise ExecutionObserverError("execution exit evidence has no exact session scope")
         if os.name == "nt" and self.windows_job_id is None:
             raise ExecutionObserverError("Windows execution exit has no exact Job identity")
+        if self.windows_job_id is not None and (type(self.pid) is not int or self.pid <= 0):
+            raise ExecutionObserverError("Windows execution exit has no valid process identity")
         self.emit("confirmed_absent", pid=self.pid, pgid=self.pgid,
                   execution_started=True, process_group="absent",
                   exact_job_containers="absent",

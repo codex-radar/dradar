@@ -1038,6 +1038,37 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
 
 def _fake_runtime_exit_observations(monkeypatch, captured):
     """Explicit exit observations for inert fake processes used by this file."""
+    if os.name == "nt":
+        # The product now spawns through a Job on Windows. These artifact
+        # tests still use an inert Pier; native Job behavior has its own suite.
+        # Resolve Popen at spawn time so interruption subclasses stay active.
+        class SyntheticJob(runner_mod.WindowsJobProcess):
+            def __init__(self, cmd, **kwargs):
+                self.child = runner_mod.subprocess.Popen(cmd, **kwargs)
+                self.pid = 12345
+                self.job_id = "a" * 32
+
+            def wait(self, timeout=None):
+                return self.child.wait(timeout)
+
+            def poll(self):
+                return self.child.returncode
+
+            @property
+            def returncode(self):
+                return self.child.returncode
+
+            def terminate_tree(self):
+                self.child.terminate()
+
+            def confirm_empty(self):
+                pass
+
+            def close_checked(self):
+                pass
+
+        monkeypatch.setattr(runner_mod.WindowsJobProcess, "spawn",
+                            lambda cmd, **kwargs: SyntheticJob(cmd, **kwargs))
     monkeypatch.setattr(
         runner_mod,
         "_cleanup_exited_pier_process_group",

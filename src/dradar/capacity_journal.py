@@ -31,6 +31,8 @@ def _exit_facts_confirmed(event: dict, spawn: dict | None) -> bool:
         return (isinstance(job_id, str) and len(job_id) == 32
                 and all(c in "0123456789abcdef" for c in job_id)
                 and spawn is not None and spawn.get("windows_job_id") == job_id
+                and type(spawn.get("pid")) is int and spawn["pid"] > 0
+                and type(event.get("pid")) is int and event["pid"] > 0
                 and spawn.get("pid") == event.get("pid")
                 and spawn.get("process_identity_kind") == "exact_windows_job"
                 and event.get("evidence_kind") == "windows_job_and_exact_job_docker_recheck_v1")
