@@ -7779,6 +7779,14 @@ def _wait_for_scoped_refill_work(
                 or (exc.status_code is not None and exc.status_code >= 500)
             )
             if not transient:
+                # The pool parent reaches this wait loop outside cmd_go's
+                # single-worker finally block. An authoritative rejection
+                # must close the durable plan here, or a later invocation
+                # could silently resume a stopped/unauthorized campaign.
+                refill_plan.stop(
+                    HOME,
+                    f"exact continuation rejected (HTTP {exc.status_code})",
+                )
                 raise SystemExit(
                     "the exact continuation is no longer authorized on "
                     f"this device ({exc}); no model was started"

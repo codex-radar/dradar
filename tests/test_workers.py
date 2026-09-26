@@ -1292,6 +1292,12 @@ def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
     tmp_path, monkeypatch, status_code,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
+    refill.configure(
+        tmp_path, volunteer_id="v1", refill_to=1, max_tasks=10,
+        quota_tier="plus", max_estimated_quota_pct=None, active=[],
+        refill_harness="codex", refill_model="gpt-6-sol",
+        refill_effort="low",
+    )
     monkeypatch.setattr(runloop, "_run_config", lambda _args: {
         "run_plan_id": "plan-a",
         "run_plan_logical_session_id": "drl_same_device",
@@ -1316,6 +1322,10 @@ def test_scoped_refill_wait_does_not_retry_terminal_authorization_errors(
 
     assert client.calls == 1
     assert sleeps == []
+    assert refill.load(tmp_path)["status"] == "stopped"
+    assert refill.load(tmp_path)["stop_reason"] == (
+        f"exact continuation rejected (HTTP {status_code})"
+    )
 
 
 def test_scoped_refill_wait_honors_retry_after_for_transient_error(
