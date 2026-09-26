@@ -481,6 +481,19 @@ def _codex_linux_platforms() -> tuple[str, ...]:
     return tuple(targets)
 
 
+def _image_preflight_detail(task_path: Path, attempts: dict[str, object]) -> dict[str, object]:
+    """Only bounded structural data; never retain command output or identifiers."""
+    detail = dict(attempts)
+    try:
+        detail["task_toml_sha256"] = hashlib.sha256(
+            (task_path / "task.toml").read_bytes()
+        ).hexdigest()
+    except Exception:
+        # Diagnostics must not replace the original preflight failure.
+        detail["task_toml_sha256"] = "unknown"
+    return detail
+
+
 def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
     """Choose npm checks without requiring a prebuilt image for build tasks."""
     try:
@@ -536,20 +549,42 @@ def _codex_task_platforms(task_path: Path) -> tuple[str, ...]:
         ["docker", "buildx", "imagetools", "inspect", "--format", "{{json .Image}}", image],
     )
     manifest = None
-    for command in commands:
+    attempts: dict[str, object] = {
+        "image_local_result": "not_attempted",
+        "image_remote_result": "not_attempted",
+    }
+    for stage, command in zip(("local", "remote"), commands):
+        result_key = f"image_{stage}_result"
         try:
             proc = subprocess.run(command, capture_output=True, text=True, timeout=20)
+            if type(proc.returncode) is int and -2147483648 <= proc.returncode <= 2147483647:
+                attempts[f"image_{stage}_exit_code"] = proc.returncode
             if proc.returncode == 0:
                 manifest = json.loads(proc.stdout)
+                attempts[result_key] = "success" if isinstance(manifest, dict) else "structure_invalid"
+                # Preserve the existing stop-on-decodable-JSON contract, even
+                # for non-object JSON. Diagnostics do not change fallback.
                 break
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            continue
+            attempts[result_key] = "nonzero_exit"
+        except FileNotFoundError:
+            attempts[result_key] = "missing_command"
+        except OSError:
+            attempts[result_key] = "os_error"
+        except subprocess.TimeoutExpired:
+            attempts[result_key] = "timeout"
+        except ValueError:
+            attempts[result_key] = "json_invalid"
     if not isinstance(manifest, dict):
+        try:
+            report_detail = _image_preflight_detail(task_path, attempts)
+        except Exception:
+            report_detail = {}
         raise CodexInstallError(
             "could not verify the task Docker image architecture; no model "
             "was started. Check Docker and network, then retry the original "
             "run instructions.",
             report_code="codex_task_image_unavailable",
+            report_detail=report_detail,
         )
     architecture = manifest.get("Architecture") or manifest.get("architecture")
     os_name = manifest.get("Os") or manifest.get("os")
