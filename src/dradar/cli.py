@@ -165,6 +165,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")
+    p_capacity.add_argument("--reservations", action="store_true", help="read one page of existing reservation inventory")
+    p_capacity.add_argument("--plan", metavar="RUN_CODE", help="use the original saved plan identity without exchange")
+    p_capacity.add_argument("--server", help="must match the server saved with the original identity")
+    p_capacity.add_argument("--after", default="", help="reservation cursor returned by the previous page")
+    p_capacity.add_argument("--quarantine-after", default="", help="history cursor returned by the previous page")
+    p_capacity.add_argument("--json", action="store_true", help="emit structured reservation inventory")
     p_capacity.set_defaults(func=cmd_capacity)
 
     p_claim_receipt = sub.add_parser(
@@ -178,8 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     p_schema = sub.add_parser(
         "schema", help="show the versioned command contract used by Agents")
     schema_sub = p_schema.add_subparsers(
-        dest="schema_command", required=True, metavar="{run,progress,stop}")
-    for schema_command in ("run", "progress", "stop"):
+        dest="schema_command", required=True, metavar="{run,progress,stop,capacity}")
+    for schema_command in ("run", "progress", "stop", "capacity"):
         p_command_schema = schema_sub.add_parser(
             schema_command, help=f"show the {schema_command} command contract")
         p_command_schema.add_argument(

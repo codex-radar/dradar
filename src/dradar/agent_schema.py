@@ -42,6 +42,34 @@ def _argument(
 
 
 COMMAND_SCHEMAS = {
+    "capacity": {
+        "summary": "查看原身份的占用和迁移历史；默认模式仍为本机并发建议",
+        "result_contract": {
+            "schema_version": 1,
+            "read_only": True,
+            "mode": "--reservations",
+            "stable_fields": ["scope", "reservations", "migration_quarantines", "next_after", "next_quarantine_after", "exit_evidence"],
+            "pagination": "one page per call; use the returned cursors for subsequent pages",
+            "historical_unverified": "retained pre-migration history; not exit proof or a release receipt",
+            "counts_toward_capacity": "current unresolved occupancy; does not by itself mean the account is full",
+            "unknown_classification": "keep unknown; never infer exemption from missing fields",
+            "recovery": "no mutation or recovery in this command; verify exact original execution domains before any authorized reconciliation",
+        },
+        "arguments": [
+            _argument(name, user_intent=intent,
+                allowed_when="使用已有原账号或原计划凭证；--reservations 模式下查询",
+                default=default, state_change="只读 GET；不创建身份、exchange、刷新凭证或准备 provider",
+                decision_required=False, idempotency="重复查询不改变库存或释放占用")
+            for name, intent, default in (
+                ("--reservations", "读取一页库存", False),
+                ("--plan", "选择原本机已保存的计划", None),
+                ("--server", "核对原站点", None),
+                ("--after", "继续上一页会话库存", ""),
+                ("--quarantine-after", "继续上一页历史快照", ""),
+                ("--json", "输出结构化事实", False),
+            )
+        ],
+    },
     "run": {
         "summary": "在当前设备执行网页已经确定的这次领取",
         "environment_contract": {
