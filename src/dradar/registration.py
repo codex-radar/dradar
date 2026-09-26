@@ -83,6 +83,10 @@ class RegistrationWindow:
                 "registration_ack_state": self._diagnostic_ack,
                 "registration_close_state": "not_attempted",
             }
+            if isinstance(exc, ApiError) and exc.status_code is not None:
+                result["ack_http_status"] = exc.status_code
+                if exc.code is not None:
+                    result["ack_http_code"] = exc.code
             try:
                 now = time.monotonic()
                 elapsed = (now - self._diagnostic_started) * 1000

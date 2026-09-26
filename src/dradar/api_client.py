@@ -461,7 +461,18 @@ class ApiClient:
                 if isinstance(body, dict):
                     payload = body
                     detail = body.get("detail", resp.text)
+                    if isinstance(detail, dict):
+                        nested_detail = detail
+                        detail = (
+                            nested_detail.get("message")
+                            or nested_detail.get("detail")
+                            or resp.text
+                        )
+                    else:
+                        nested_detail = {}
                     raw_code = body.get("code")
+                    if not isinstance(raw_code, str):
+                        raw_code = nested_detail.get("code")
                     if isinstance(raw_code, str):
                         code = raw_code
                     raw_capability = body.get("required_capability")
@@ -478,11 +489,12 @@ class ApiClient:
                     if resp.status_code == 429
                     else (
                         self._maintenance_retry_after(resp)
-                        if (
-                            resp.status_code == 503
-                            and code == "deployment_maintenance"
+                        if resp.status_code == 503 and code == "deployment_maintenance"
+                        else (
+                            self._retry_after(resp)
+                            if resp.status_code == 503 and code == "mutation_busy"
+                            else None
                         )
-                        else None
                     )
                 ),
                 required_capability=required_capability,
