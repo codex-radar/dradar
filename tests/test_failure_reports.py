@@ -51,6 +51,18 @@ def test_generic_runner_failure_can_carry_only_session_correlation():
     assert failure_reports._valid_report_details(report)
 
 
+def test_generic_runner_failure_keeps_context_with_session_correlation():
+    report = failure_reports.build_report(
+        source="cli", phase="runner", failure_kind="runner_failed",
+        failure_code="runner_failed",
+        detail={"task_id": "task-1", "model": "gpt-5.5", "session_id": "a" * 32},
+    )
+    assert report["detail"] == {
+        "task_id": "task-1", "model": "gpt-5.5", "session_id": "a" * 32,
+    }
+    assert failure_reports._valid_report_details(report)
+
+
 def test_generic_runner_failure_rejects_mixed_registration_detail():
     report = failure_reports.build_report(
         source="cli", phase="runner", failure_kind="runner_failed",
