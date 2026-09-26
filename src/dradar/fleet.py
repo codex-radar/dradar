@@ -62,7 +62,8 @@ SCHEMA_VERSION = 1
 # Version 8 carries verified payloads and readable Windows lease identity.
 # Version 9 preflights each new pool in its own validated runtime environment.
 # Version 10 pins the exact batch benchmark through preflight and every worker.
-CONTROLLER_PROTOCOL_VERSION = 10
+# Version 11 binds conditional startup stops to the original pool instance.
+CONTROLLER_PROTOCOL_VERSION = 11
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -594,6 +595,11 @@ def _pool_executable_environment(
 
 def _request(command: str, payload: dict, *, home: Path = HOME) -> dict:
     state = _ensure_controller(home)
+    if (
+        command == "stop" and payload.get("only_if_startup_pending")
+        and not _controller_protocol_matches(state)
+    ):
+        raise FleetControllerUpdatePending()
     controller_id = state.get("controller_id")
     request_id = uuid.uuid4().hex
     request_path = _root(home) / REQUEST_DIR / f"{request_id}.json"
@@ -1489,6 +1495,7 @@ def _handle_request(
                     try:
                         item = {
                             "batch_id": batch_id,
+                            "startup_id": uuid.uuid4().hex,
                             "workers": workers,
                             "status": "starting",
                             "startup_status": "pending",
@@ -1550,6 +1557,14 @@ def _handle_request(
             item = state["batches"].get(batch_id) or {}
             if only_if_startup_pending:
                 with _locked(_pool_startup_lock_path(home, batch_id)):
+                    expected_startup_id = request.get("expected_startup_id")
+                    if (
+                        not isinstance(expected_startup_id, str)
+                        or not expected_startup_id
+                        or item.get("startup_id") != expected_startup_id
+                    ):
+                        condition_changed.append(batch_id)
+                        continue
                     event = _read_json(_pool_startup_path(home, batch_id))
                     if event and event.get("status") == "ready":
                         item["startup_status"] = "ready"
@@ -1946,30 +1961,53 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
     batch = response.get("batch") or {}
     if batch.get("status") != "starting":
         return response
+    startup_id = batch.get("startup_id")
+
+    def checked_observation(observed):
+        if (
+            not isinstance(startup_id, str) or not startup_id
+            or (isinstance(observed, dict)
+                and observed.get("startup_id") != startup_id)
+        ):
+            raise FleetStartupError(
+                "local_start_state_changed",
+                "本地启动实例已经变化或无法核验；请运行 `dradar fleet status`"
+                "确认当前状态后再决定下一步。",
+                retryable=False,
+            )
+        return observed if isinstance(observed, dict) else None
+
     deadline = time.monotonic() + STARTUP_OBSERVE_SECONDS
-    latest = batch
-    while time.monotonic() < deadline:
-        observed = batch_status(batch_id)
-        if isinstance(observed, dict):
-            latest = observed
-            if (
-                observed.get("status") != "starting"
-                or observed.get("startup_status") == "failed"
+    while True:
+        latest = checked_observation(batch_status(batch_id))
+        if time.monotonic() >= deadline or (latest is not None and (
+            latest.get("status") != "starting"
+            or latest.get("startup_status") == "failed"
+        )):
+            # A transient public projection can recover to pending. Keep the
+            # original deadline; only an expired observation may request stop.
+            latest = checked_observation(batch_status(batch_id))
+            if not (
+                latest is not None
+                and latest.get("status") == "starting"
+                and latest.get("startup_status") == "pending"
+                and time.monotonic() < deadline
             ):
                 break
         time.sleep(0.05)
-    # The loop's last value may predate a ready event written at the deadline.
-    # Re-read before any destructive action; the controller then performs the
-    # same pending-only condition under the startup transition lock.
-    refreshed = batch_status(batch_id)
-    if isinstance(refreshed, dict):
-        latest = refreshed
+    if latest is None:
+        raise FleetStartupError(
+            "local_start_unconfirmed",
+            "暂时无法确认本地启动状态；请运行 `dradar fleet status` 检查这次运行。",
+            retryable=False,
+        )
     status = latest.get("status")
     startup_status = latest.get("startup_status")
     if status == "starting" and startup_status == "pending":
         try:
             stopped = stop_batch(
                 batch_id, only_if_startup_pending=True,
+                expected_startup_id=startup_id,
             )
         except FleetError as exc:
             raise FleetStartupError(
@@ -1987,12 +2025,14 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
                 retryable=True,
             )
         if batch_id in (stopped.get("condition_changed") or []):
-            final = batch_status(batch_id)
+            final = checked_observation(batch_status(batch_id))
             if isinstance(final, dict):
                 latest = final
                 status = latest.get("status")
                 startup_status = latest.get("startup_status")
-            if startup_status == "ready" or status == "running":
+            if startup_status == "ready" and status not in {
+                "failed", "interrupted", "orphaned",
+            }:
                 updated = dict(response)
                 updated["batch"] = latest
                 return updated
@@ -2036,6 +2076,12 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
                 )
             ),
             retryable=bool(latest.get("startup_retryable", True)),
+        )
+    if startup_status != "ready" or status == "orphaned":
+        raise FleetStartupError(
+            "local_start_unconfirmed",
+            "本地启动尚未确认就绪；请运行 `dradar fleet status` 检查这次运行。",
+            retryable=False,
         )
     return updated
 
@@ -2256,6 +2302,7 @@ def stop_batch(
     *,
     all_batches: bool = False,
     only_if_startup_pending: bool = False,
+    expected_startup_id: str | None = None,
 ) -> dict:
     if not all_batches and not batch_id:
         raise FleetError("an exact batch is required")
@@ -2265,6 +2312,7 @@ def stop_batch(
         "batch_id": batch_id,
         "all": all_batches,
         "only_if_startup_pending": bool(only_if_startup_pending),
+        "expected_startup_id": expected_startup_id,
     })
     if not response.get("ok"):
         raise FleetError(str(response.get("error") or "local coordinator rejected the stop"))

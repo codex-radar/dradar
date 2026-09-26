@@ -783,6 +783,134 @@ def test_startup_observation_budget_is_exactly_thirty_minutes():
     assert fleet.HEARTBEAT_STALE_SECONDS == 60.0
 
 
+@pytest.mark.parametrize("ready_at", [1799.0, None])
+def test_transient_startup_projection_keeps_original_deadline(monkeypatch, ready_at):
+    clock = [0.0]
+    reads = [0]
+    stopped = []
+    initial = {
+        "batch_id": BATCH_A, "startup_id": "original-startup",
+        "status": "starting", "startup_status": "pending",
+    }
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fleet.time, "sleep", lambda _s: clock.__setitem__(
+        0, 1799.0 if clock[0] == 0 else 1800.0,
+    ))
+
+    def status(_batch_id):
+        reads[0] += 1
+        if ready_at is not None and clock[0] >= ready_at:
+            return {**initial, "status": "running", "startup_status": "ready"}
+        # The same persisted pool alternates between a transient projection
+        # and pending, including at the original deadline.
+        return {**initial, "status": "interrupted" if reads[0] % 2 else "starting"}
+
+    monkeypatch.setattr(fleet, "batch_status", status)
+    monkeypatch.setattr(fleet, "stop_batch", lambda batch_id, **kwargs: (
+        stopped.append((clock[0], kwargs)) or {"stopping": [batch_id]}
+    ))
+    if ready_at is not None:
+        result = fleet._observe_pool_startup({"batch": initial}, BATCH_A)
+        assert result["batch"]["startup_status"] == "ready"
+        assert stopped == []
+        assert clock[0] == 1799.0
+    else:
+        with pytest.raises(fleet.FleetStartupError) as raised:
+            fleet._observe_pool_startup({"batch": initial}, BATCH_A)
+        assert raised.value.code == "local_start_timeout"
+        assert stopped == [(1800.0, {
+            "only_if_startup_pending": True,
+            "expected_startup_id": "original-startup",
+        })]
+
+
+def test_unknown_startup_cannot_stop_from_stale_pending_observation(monkeypatch):
+    clock = [0.0]
+    stopped = []
+    monkeypatch.setattr(fleet.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fleet.time, "sleep", lambda _s: clock.__setitem__(0, 1800.0))
+    monkeypatch.setattr(fleet, "batch_status", lambda _id: None)
+    monkeypatch.setattr(fleet, "stop_batch", lambda *_a, **_kw: stopped.append(True))
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({"batch": {
+            "batch_id": BATCH_A, "startup_id": "original-startup",
+            "status": "starting", "startup_status": "pending",
+        }}, BATCH_A)
+    assert raised.value.code == "local_start_unconfirmed"
+    assert clock[0] == 1800.0
+    assert stopped == []
+
+
+@pytest.mark.parametrize("new_status", ["starting", "running"])
+def test_observer_cannot_report_or_stop_a_replacement_pool(monkeypatch, new_status):
+    stopped = []
+    monkeypatch.setattr(fleet, "batch_status", lambda _id: {
+        "batch_id": BATCH_A, "startup_id": "replacement-startup",
+        "status": new_status,
+        "startup_status": "pending" if new_status == "starting" else "ready",
+    })
+    monkeypatch.setattr(fleet, "stop_batch", lambda *_a, **_kw: stopped.append(True))
+    with pytest.raises(fleet.FleetStartupError) as raised:
+        fleet._observe_pool_startup({"batch": {
+            "batch_id": BATCH_A, "startup_id": "original-startup",
+            "status": "starting", "startup_status": "pending",
+        }}, BATCH_A)
+    assert raised.value.code == "local_start_state_changed"
+    assert stopped == []
+
+
+@pytest.mark.parametrize("expected_startup_id", [None, "previous-startup"])
+def test_controller_rejects_stale_timeout_before_touching_replacement(
+    tmp_path, monkeypatch, expected_startup_id,
+):
+    fleet._prepare_dirs(tmp_path)
+    state = fleet._initial_state("controller-1", None)
+    state["batches"][BATCH_A] = {
+        "batch_id": BATCH_A, "startup_id": "replacement-startup",
+        "status": "starting", "startup_status": "pending",
+    }
+    signals = []
+
+    class Process:
+        pid = os.getpid()
+
+        def poll(self):
+            return None
+
+        def send_signal(self, value):
+            signals.append(value)
+
+    startup_path = fleet._pool_startup_path(tmp_path, BATCH_A)
+    fleet._atomic_json(startup_path, {"status": "pending", "marker": "unchanged"})
+    before = startup_path.read_bytes()
+    fleet._handle_request(tmp_path, state, {BATCH_A: Process()}, {}, {
+        "request_id": "stale-timeout", "controller_id": "controller-1",
+        "command": "stop", "batch_id": BATCH_A,
+        "only_if_startup_pending": True,
+        "expected_startup_id": expected_startup_id,
+    })
+    response = fleet._read_json(fleet._root(tmp_path) / fleet.RESPONSE_DIR / "stale-timeout.json")
+    assert response["stopping"] == []
+    assert response["condition_changed"] == [BATCH_A]
+    assert signals == []
+    assert startup_path.read_bytes() == before
+    assert state["batches"][BATCH_A]["status"] == "starting"
+
+
+def test_conditional_stop_is_not_sent_to_an_incompatible_controller(tmp_path, monkeypatch):
+    fleet._prepare_dirs(tmp_path)
+    monkeypatch.setattr(fleet, "_ensure_controller", lambda _home: {
+        "controller_id": "older-controller",
+        "controller_protocol_version": fleet.CONTROLLER_PROTOCOL_VERSION - 1,
+    })
+    with pytest.raises(fleet.FleetControllerUpdatePending):
+        fleet._request("stop", {
+            "batch_id": BATCH_A, "only_if_startup_pending": True,
+            "expected_startup_id": "original-startup",
+        }, home=tmp_path)
+    assert list((fleet._root(tmp_path) / fleet.REQUEST_DIR).iterdir()) == []
+
+
 def test_real_budget_accepts_worker_ready_immediately_before_1800(monkeypatch):
     clock = {"seconds": 0.0}
     stopped = []
@@ -794,7 +922,7 @@ def test_real_budget_accepts_worker_ready_immediately_before_1800(monkeypatch):
 
     def status(_batch_id):
         return {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "running" if clock["seconds"] >= 1799.0 else "starting",
             "startup_status": "ready" if clock["seconds"] >= 1799.0 else "pending",
         }
@@ -806,7 +934,7 @@ def test_real_budget_accepts_worker_ready_immediately_before_1800(monkeypatch):
 
     response = fleet._observe_pool_startup({
         "batch": {
-            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+            "batch_id": BATCH_A, "startup_id": "startup-a", "status": "starting", "startup_status": "pending",
         },
     }, BATCH_A)
 
@@ -825,7 +953,7 @@ def test_real_budget_stops_only_after_1800_seconds(monkeypatch):
     )
     monkeypatch.setattr(
         fleet, "batch_status", lambda _batch_id: {
-            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+            "batch_id": BATCH_A, "startup_id": "startup-a", "status": "starting", "startup_status": "pending",
         },
     )
     monkeypatch.setattr(
@@ -840,12 +968,12 @@ def test_real_budget_stops_only_after_1800_seconds(monkeypatch):
     with pytest.raises(fleet.FleetStartupError) as raised:
         fleet._observe_pool_startup({
             "batch": {
-                "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+                "batch_id": BATCH_A, "startup_id": "startup-a", "status": "starting", "startup_status": "pending",
             },
         }, BATCH_A)
 
     assert raised.value.code == "local_start_timeout"
-    assert stopped_at == [(1800.0, BATCH_A, {"only_if_startup_pending": True})]
+    assert stopped_at == [(1800.0, BATCH_A, {"only_if_startup_pending": True, "expected_startup_id": "startup-a"})]
 
 
 def test_real_budget_preserves_unconfirmed_stop_failure_at_1800(monkeypatch):
@@ -857,7 +985,7 @@ def test_real_budget_preserves_unconfirmed_stop_failure_at_1800(monkeypatch):
     )
     monkeypatch.setattr(
         fleet, "batch_status", lambda _batch_id: {
-            "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+            "batch_id": BATCH_A, "startup_id": "startup-a", "status": "starting", "startup_status": "pending",
         },
     )
     monkeypatch.setattr(
@@ -870,7 +998,7 @@ def test_real_budget_preserves_unconfirmed_stop_failure_at_1800(monkeypatch):
     with pytest.raises(fleet.FleetStartupError) as raised:
         fleet._observe_pool_startup({
             "batch": {
-                "batch_id": BATCH_A, "status": "starting", "startup_status": "pending",
+                "batch_id": BATCH_A, "startup_id": "startup-a", "status": "starting", "startup_status": "pending",
             },
         }, BATCH_A)
 
@@ -895,7 +1023,7 @@ def test_startup_observation_times_out_as_failure_instead_of_returning_starting(
         fleet,
         "batch_status",
         lambda _batch_id: {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "starting",
             "startup_status": "pending",
         },
@@ -914,7 +1042,7 @@ def test_startup_observation_times_out_as_failure_instead_of_returning_starting(
     with pytest.raises(fleet.FleetStartupError) as raised:
         fleet._observe_pool_startup({
             "batch": {
-                "batch_id": BATCH_A,
+                "batch_id": BATCH_A, "startup_id": "startup-a",
                 "status": "starting",
                 "startup_status": "pending",
             },
@@ -923,7 +1051,7 @@ def test_startup_observation_times_out_as_failure_instead_of_returning_starting(
     assert raised.value.code == "local_start_timeout"
     assert "已确认停止请求，正在安全停止" in raised.value.user_message
     assert stopped == [(
-        BATCH_A, {"only_if_startup_pending": True},
+        BATCH_A, {"only_if_startup_pending": True, "expected_startup_id": "startup-a"},
     )]
 
 
@@ -942,7 +1070,7 @@ def test_startup_timeout_does_not_claim_stop_when_coordinator_rejects_it(
         fleet,
         "batch_status",
         lambda _batch_id: {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "starting",
             "startup_status": "pending",
         },
@@ -958,7 +1086,7 @@ def test_startup_timeout_does_not_claim_stop_when_coordinator_rejects_it(
     with pytest.raises(fleet.FleetStartupError) as raised:
         fleet._observe_pool_startup({
             "batch": {
-                "batch_id": BATCH_A,
+                "batch_id": BATCH_A, "startup_id": "startup-a",
                 "status": "starting",
                 "startup_status": "pending",
             },
@@ -986,12 +1114,12 @@ def test_ready_winning_at_timeout_is_returned_instead_of_stopped(monkeypatch):
         calls["status"] += 1
         if calls["status"] < 3:
             return {
-                "batch_id": BATCH_A,
+                "batch_id": BATCH_A, "startup_id": "startup-a",
                 "status": "starting",
                 "startup_status": "pending",
             }
         return {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "running",
             "startup_status": "ready",
         }
@@ -1005,7 +1133,7 @@ def test_ready_winning_at_timeout_is_returned_instead_of_stopped(monkeypatch):
 
     response = fleet._observe_pool_startup({
         "batch": {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "starting",
             "startup_status": "pending",
         },
@@ -1023,7 +1151,7 @@ def test_conditional_timeout_stop_cannot_interrupt_a_ready_parent(
     state = fleet._initial_state(controller_id, None)
     state["status"] = "active"
     state["batches"][BATCH_A] = {
-        "batch_id": BATCH_A,
+        "batch_id": BATCH_A, "startup_id": "startup-a",
         "workers": 2,
         "status": "starting",
         "startup_status": "pending",
@@ -1062,9 +1190,9 @@ def test_conditional_timeout_stop_cannot_interrupt_a_ready_parent(
             "request_id": "request-ready-race",
             "controller_id": controller_id,
             "command": "stop",
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "all": False,
-            "only_if_startup_pending": True,
+            "only_if_startup_pending": True, "expected_startup_id": "startup-a",
         },
     )
 
@@ -1088,7 +1216,7 @@ def test_ready_stop_race_preserves_drain_and_clean_exit_zero(
     state = fleet._initial_state(controller_id, None)
     state["status"] = "active"
     state["batches"][BATCH_A] = {
-        "batch_id": BATCH_A,
+        "batch_id": BATCH_A, "startup_id": "startup-a",
         "workers": 1,
         "status": "starting",
         "startup_status": "pending",
@@ -1124,7 +1252,7 @@ def test_ready_stop_race_preserves_drain_and_clean_exit_zero(
             "request_id": "request-stop-after-ready",
             "controller_id": controller_id,
             "command": "stop",
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "all": False,
             "only_if_startup_pending": False,
         },
@@ -1147,7 +1275,7 @@ def test_ready_stop_race_preserves_drain_and_clean_exit_zero(
     monkeypatch.setattr(fleet, "batch_status", lambda _batch_id: item)
     observed = fleet._observe_pool_startup({
         "batch": {
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "status": "starting",
             "startup_status": "pending",
         },
@@ -1163,7 +1291,7 @@ def test_conditional_timeout_reserves_failure_before_interrupting_parent(
     state = fleet._initial_state(controller_id, None)
     state["status"] = "active"
     state["batches"][BATCH_A] = {
-        "batch_id": BATCH_A,
+        "batch_id": BATCH_A, "startup_id": "startup-a",
         "workers": 2,
         "status": "starting",
         "startup_status": "pending",
@@ -1196,9 +1324,9 @@ def test_conditional_timeout_reserves_failure_before_interrupting_parent(
             "request_id": "request-pending-timeout",
             "controller_id": controller_id,
             "command": "stop",
-            "batch_id": BATCH_A,
+            "batch_id": BATCH_A, "startup_id": "startup-a",
             "all": False,
-            "only_if_startup_pending": True,
+            "only_if_startup_pending": True, "expected_startup_id": "startup-a",
         },
     )
 
