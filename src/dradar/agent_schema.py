@@ -43,7 +43,7 @@ def _argument(
 
 COMMAND_SCHEMAS = {
     "capacity": {
-        "summary": "查看原身份的占用和迁移历史；默认模式仍为本机并发建议",
+        "summary": "查看原身份的占用和迁移历史，或在证据齐全时核对一组历史容量",
         "result_contract": {
             "schema_version": 1,
             "read_only": True,
@@ -53,7 +53,9 @@ COMMAND_SCHEMAS = {
             "historical_unverified": "retained pre-migration history; not exit proof or a release receipt",
             "counts_toward_capacity": "current unresolved occupancy; does not by itself mean the account is full",
             "unknown_classification": "keep unknown; never infer exemption from missing fields",
-            "recovery": "no mutation or recovery in this command; verify exact original execution domains before any authorized reconciliation",
+            "recovery": "--reservations is read-only; --reconcile is one explicit, evidence-gated historical reconciliation after fresh exact-scope verification",
+            "reconcile_success": {"mode": "reconcile", "read_only": False, "status": "ok", "idempotent_replay": "server fact"},
+            "reconcile_error": {"mode": "reconcile", "read_only": False, "status": "error", "unknown_transport": "preserve evidence; never auto-replay"},
         },
         "arguments": [
             _argument(name, user_intent=intent,
@@ -68,6 +70,24 @@ COMMAND_SCHEMAS = {
                 ("--quarantine-after", "继续上一页历史快照", ""),
                 ("--json", "输出结构化事实", False),
             )
+        ] + [
+            _argument(
+                "--reconcile",
+                user_intent="核对一组原设备历史快照并提交一次精确容量恢复",
+                allowed_when="已有原计划或原账号凭证、本机保存的原 device_id、人工保留的严格退出证据，以及 fresh inventory 中同一 historical_unverified 且已映射的 quarantine",
+                default=None,
+                state_change="先读取当前原身份库存；全部 scope、snapshot 和证据字段精确匹配后只 POST 一次；失败保留证据，不自动重放",
+                decision_required=True,
+                conflicts_with=["--reservations", "未知或新建 device_id", "缺字段或未核验的退出证据"],
+                idempotency="相同原证据重放由 Server 幂等回执；scope、snapshot 或 evidence 冲突停止",
+                failure_codes=[
+                    "reconcile_evidence_unavailable", "reconcile_evidence_unverifiable",
+                    "reconcile_device_unavailable", "reconcile_device_mismatch",
+                    "reconcile_quarantine_unknown", "reconcile_scope_not_historical",
+                    "reconcile_snapshot_changed", "reconcile_scope_unmapped",
+                    "reconcile_access_denied", "reconcile_conflict", "reconcile_query_failed",
+                ],
+            ),
         ],
     },
     "run": {

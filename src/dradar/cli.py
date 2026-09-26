@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")
     p_capacity.add_argument("--reservations", action="store_true", help="read one page of existing reservation inventory")
+    p_capacity.add_argument("--reconcile", metavar="EVIDENCE_JSON", help="reconcile one exact historical reservation from a durable evidence file")
     p_capacity.add_argument("--plan", metavar="RUN_CODE", help="use the original saved plan identity without exchange")
     p_capacity.add_argument("--server", help="must match the server saved with the original identity")
     p_capacity.add_argument("--after", default="", help="reservation cursor returned by the previous page")

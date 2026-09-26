@@ -287,3 +287,144 @@ def test_empty_page_remains_an_observation_not_cleanup(wire, capsys):
     rc, output = invoke(capsys)
     assert rc == 0 and output["exit_evidence"] == "not_assessed"
     assert output["next_after"] is None and output["next_quarantine_after"] is None
+
+
+def _reconcile_evidence(device_id="drv_original_device_123456"):
+    return {
+        "schema_version": 1,
+        "device_id": device_id,
+        "quarantine_id": QID,
+        "snapshot_sha256": hashlib.sha256(json.dumps([SESSION], separators=(",", ":")).encode()).hexdigest(),
+        "evidence_id": "f" * 32,
+        "managed_process_inventory": "confirmed_absent",
+        "owned_container_inventory": "confirmed_absent",
+        "historical_scope_verified": True,
+        "execution_manifest_sha256": "a" * 64,
+    }
+
+
+@pytest.fixture
+def reconcile_wire(monkeypatch):
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        if request.method == "GET":
+            data = page()
+            data["migration_quarantines"][0]["device_id_hash"] = hashlib.sha256(
+                b"dradar:device-id-v1:drv_original_device_123456"
+            ).hexdigest()
+            return httpx.Response(200, json={
+                **data,
+                "migration_quarantines": [{**data["migration_quarantines"][0],
+                    "classification": "historical_unverified"}],
+            })
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/runner/reconcile-legacy"
+        return httpx.Response(200, json={"ok": True, "idempotent_replay": False})
+
+    original = api_client.ApiClient
+
+    def client(*a, **kw):
+        return original(*a, **kw, transport=httpx.MockTransport(handle))
+
+    monkeypatch.setattr(legacy_capacity, "ApiClient", client)
+    monkeypatch.setattr(api_client, "advertised_capabilities", lambda: ())
+    saved_plan()
+    device = local_config.HOME / "run-plans" / run_plans.DEVICE_FILE
+    save(device, {"schema_version": 1, "device_id": "drv_original_device_123456", "device_name": "old"})
+    evidence = local_config.HOME / "evidence.json"
+    save(evidence, _reconcile_evidence())
+    return seen, evidence
+
+
+def test_reconcile_posts_once_after_exact_fresh_scope(reconcile_wire, capsys):
+    seen, evidence = reconcile_wire
+    rc = legacy_capacity.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 0 and output["idempotent_replay"] is False
+    assert [item.method for item in seen] == ["GET", "POST"]
+    body = json.loads(seen[1].content)
+    assert body["quarantine_id"] == QID and body["device_id"] == "drv_original_device_123456"
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    (lambda value: value.update(device_id="drv_other_device_123456"), "reconcile_device_mismatch"),
+    (lambda value: value.update(snapshot_sha256="b" * 64), "reconcile_snapshot_changed"),
+])
+def test_reconcile_negative_scope_stops_before_post(reconcile_wire, capsys, mutation, expected):
+    seen, evidence = reconcile_wire
+    value = _reconcile_evidence()
+    mutation(value)
+    save(evidence, value)
+    rc = legacy_capacity.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1 and output["error_code"] == expected
+    assert [item.method for item in seen] == ([] if expected == "reconcile_device_mismatch" else ["GET"])
+
+
+def test_reconcile_unknown_quarantine_never_posts(reconcile_wire, capsys):
+    seen, evidence = reconcile_wire
+    value = _reconcile_evidence()
+    value["quarantine_id"] = "1" * 64
+    save(evidence, value)
+    rc = legacy_capacity.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1 and output["error_code"] == "reconcile_quarantine_unknown"
+    assert [item.method for item in seen] == ["GET", "GET"]
+
+
+def test_reconcile_unmapped_quarantine_never_posts(reconcile_wire, capsys, monkeypatch):
+    seen, evidence = reconcile_wire
+    original = api_client.ApiClient
+
+    def client(*a, **kw):
+        def handle(request):
+            seen.append(request)
+            if request.method == "GET":
+                data = page()
+                data["migration_quarantines"][0].update(classification="historical_unverified", device_id_hash=None)
+                return httpx.Response(200, json=data)
+            return httpx.Response(200, json={})
+        return original(*a, **kw, transport=httpx.MockTransport(handle))
+
+    monkeypatch.setattr(legacy_capacity, "ApiClient", client)
+    module = legacy_capacity
+    rc = module.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 1 and output["error_code"] == "reconcile_scope_unmapped"
+    assert [item.method for item in seen] == ["GET"]
+
+
+@pytest.mark.parametrize("status,body,expected", [
+    (200, {"ok": True, "idempotent_replay": True}, "ok"),
+    (409, {"code": "evidence_conflict"}, "reconcile_conflict"),
+    (503, {"detail": "temporary"}, "reconcile_query_failed"),
+])
+def test_reconcile_post_outcomes_are_explicit_and_bounded(
+    reconcile_wire, capsys, monkeypatch, status, body, expected,
+):
+    seen, evidence = reconcile_wire
+    original = api_client.ApiClient
+
+    def client(*a, **kw):
+        def handle(request):
+            seen.append(request)
+            if request.method == "GET":
+                data = page()
+                data["migration_quarantines"][0]["classification"] = "historical_unverified"
+                data["migration_quarantines"][0]["device_id_hash"] = hashlib.sha256(
+                    b"dradar:device-id-v1:drv_original_device_123456"
+                ).hexdigest()
+                return httpx.Response(200, json=data)
+            return httpx.Response(status, json=body)
+        return original(*a, **kw, transport=httpx.MockTransport(handle))
+
+    monkeypatch.setattr(legacy_capacity, "ApiClient", client)
+    rc = legacy_capacity.cmd_legacy_reconcile(args(plan=RUN_CODE, reconcile=str(evidence)))
+    output = json.loads(capsys.readouterr().out)
+    assert [item.method for item in seen] == ["GET", "POST"]
+    if expected == "ok":
+        assert rc == 0 and output["read_only"] is False and output["idempotent_replay"] is True
+    else:
+        assert rc == 1 and output["read_only"] is False and output["error_code"] == expected

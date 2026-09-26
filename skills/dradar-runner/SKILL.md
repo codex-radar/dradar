@@ -28,6 +28,7 @@ description: 在已有授权范围用正式 DRadar CLI 运行、观察、诊断�
 | --- | --- |
 | 观察原计划 | `dradar progress --plan <CODE> --json`。读取顶层状态、动作、原因和可用选项；它也会做原意图/退出容量回执对账并保存状态，不能声称完全无写入。 |
 | 只读原库存 | `dradar capacity --reservations --plan <CODE> --json`；已有普通账号可省略 `--plan`。只用原凭证读取一页，以返回的两个游标继续；缺凭证不会创建新身份。先读 `schema capacity --json`。 |
+| 核对原设备历史容量 | `dradar capacity --reconcile <EVIDENCE_JSON> --plan <CODE> --json`；仅在已保留原计划/账号凭证、本机原 `device_id`、严格退出证据和 fresh inventory 中同一 `historical_unverified` 且已映射的 quarantine 时使用。入口先做精确 GET，再由代码校验 device、plan、snapshot 和证据字段，最多提交一次 POST；相同证据由 Server 幂等回执。未知/错误设备、unknown 或 unmapped quarantine、snapshot 变化、证据冲突、transport unknown 都保留证据并停止，不创建 ID、不猜测、不自动重放；`--reconcile` 与 `--reservations` 互斥。先读 `schema capacity --json`。 |
 | 运行或明确恢复 | `dradar run --plan <CODE> --json`；已获授权时可给 `--concurrency N` 或 `auto`。默认路径可能补题，须符合原范围；运行回包不等于题目完成。 |
 | 只处理仍有效的已领题 | `dradar run --plan <CODE> --held-only --json`。会重新准入并运行模型，不开始或延长补题。 |
 | 只补交原成果 | `dradar run --plan <CODE> --upload-only --json`。用于正式进度指向的成果恢复；不重跑模型，不混入并发/决策参数。待审核或清理未知不会因此变成可上传。 |

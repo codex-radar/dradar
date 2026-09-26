@@ -193,9 +193,14 @@ def print_report(report: CapacityReport) -> None:
 
 def cmd_capacity(args) -> int:
     if getattr(args, "reservations", False):
+        if getattr(args, "reconcile", None):
+            raise SystemExit("capacity --reservations and --reconcile are mutually exclusive")
         from .legacy_capacity import cmd_legacy_inventory
         return cmd_legacy_inventory(args)
-    if any(getattr(args, name, None) for name in ("plan", "server", "after", "quarantine_after", "json")):
+    if getattr(args, "reconcile", None):
+        from .legacy_capacity import cmd_legacy_reconcile
+        return cmd_legacy_reconcile(args)
+    if any(getattr(args, name, None) for name in ("plan", "server", "after", "quarantine_after", "json", "reconcile")):
         raise SystemExit("inventory arguments require capacity --reservations")
     # Local imports avoid making a read-only machine probe participate in the
     # identity module's import graph.
