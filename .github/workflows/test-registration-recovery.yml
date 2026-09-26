@@ -12,6 +12,7 @@ on:
       - 'scripts/ota_release.py'
       - 'tests/test_packaged_adapter_resources.py'
       - 'tests/test_registration*.py'
+      - 'tests/test_windows_job_probe.py'
       - 'tests/test_pier_codex_managed.py'
       - '.github/workflows/test-registration-recovery.yml'
   workflow_dispatch:
@@ -41,6 +42,7 @@ jobs:
         run: >-
           python -m pytest -q tests/test_registration_recovery.py
           tests/test_registration_native.py tests/test_worker_start_native.py
+          tests/test_windows_job_probe.py
           --junitxml=evidence/registration.xml
       - name: Actual managed adapter dependency
         if: matrix.python == '3.13'
