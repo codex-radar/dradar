@@ -227,6 +227,8 @@ def test_registration_abort_network_follows_local_cleanup(runtime, monkeypatch):
             assert runtime["process"].returncode is not None
             assert not list(runtime["work"].glob("*.worker-start.json"))
             runtime["calls"].append("remote_abort")
+        def finalize_failure_report(self, error):
+            assert runtime["calls"][-1] == "remote_abort"
     monkeypatch.setattr(registration, "RegistrationWindow", Window)
     def reject(event):
         raise runner.RunnerError("registration rejected")
@@ -386,3 +388,39 @@ def test_stop_before_local_launch_has_no_child_and_keeps_no_launch_evidence(
         run(runtime)
     assert "popen" not in runtime["calls"]
     assert [e["event"] for e in runtime["events"]] == ["entered", "never_started"]
+
+
+def test_deferred_abort_final_close_reaches_runner_error_report(runtime, monkeypatch):
+    from types import SimpleNamespace
+    import threading
+    from dradar import registration
+    snapshots = []
+
+    async def close(window):
+        assert runtime['container'] is False
+        assert runtime['process'].returncode is not None
+        window._close_diagnostic('confirmed')
+        window._fenced = True
+        window.assignment.pop('_registration_start_uncertain', None)
+
+    monkeypatch.setattr(registration.RegistrationWindow, '_close_fence', close)
+
+    def register(event):
+        window = event['_registration_window']
+        window.assignment = runtime['assignment']
+        window.assignment['_registration_start_uncertain'] = True
+        window.started_sent = True
+        window.telemetry = SimpleNamespace(_stop=threading.Event(), _wake=threading.Event())
+        window._diagnostic = {'session_id': 'a'*32, 'worker_event_id': 'b'*32}
+        window._observe(stage='start_request', ack='persisted')
+        window._snapshot(window._error('no response', 'transport_error'))
+        snapshot = dict(window._diagnostic)
+        snapshots.append(snapshot)
+        raise runner.RunnerError('lost start response', report_code='assignment-start-transport', report_detail=snapshot)
+
+    register._uses_registration_window = True
+    with pytest.raises(runner.RunnerError, match='lost start response') as caught:
+        run(runtime, on_worker_registered=register)
+    assert snapshots[0]['registration_close_state'] == 'not_attempted'
+    assert caught.value.report_detail == {**snapshots[0], 'registration_close_state': 'confirmed'}
+    assert runtime['events'][-1]['event'] == 'confirmed_absent'

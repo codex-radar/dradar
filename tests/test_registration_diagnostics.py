@@ -181,3 +181,64 @@ def test_clock_read_failure_omits_only_numbers(monkeypatch):
     result = diagnostic(window, window._error('worker exited', 'worker_exited'))
     assert result['registration_failure_reason'] == 'worker_exited'
     assert 'registration_elapsed_ms' not in result and 'registration_remaining_ms' not in result
+
+
+@pytest.mark.parametrize('fault,close', [
+    ('start_disconnect', 'confirmed'), ('close_disconnect', 'transport_error'),
+])
+def test_deferred_close_refreshes_report_without_rewriting_failure(tmp_path, monkeypatch, fault, close):
+    from dradar.runner import RunnerError
+    with fixture(tmp_path, monkeypatch, fault, defer_abort=True) as (window, api, telemetry, assignment, state):
+        with pytest.raises(ApiError):
+            window.bind(api, telemetry, assignment)
+        snapshot = telemetry.worker_registration_diagnostic
+        assert snapshot['registration_local_substage'] == 'unknown'
+        assert snapshot['registration_close_state'] == 'not_attempted'
+        error = RunnerError('failure', report_code='assignment-start-transport', report_detail=snapshot)
+        window.abort()
+        window.finalize_failure_report(error)
+        assert error.report_detail == {**snapshot, 'registration_close_state': close}
+        assert snapshot['registration_close_state'] == 'not_attempted'
+        assert state['paths'].count('/api/v1/assignment/started') == 1
+        assert state['paths'].count('/api/v1/runner/close') == 1
+        assert ('_registration_start_uncertain' in assignment) == (close != 'confirmed')
+        report = reports.build_report(source='cli', phase='runner', failure_kind='runner_failed',
+            failure_code=error.report_code, detail=error.report_detail)
+        assert report['detail']['registration_close_state'] == close
+        assert report['detail']['registration_failure_stage'] == 'start_request'
+        assert report['detail']['registration_failure_reason'] == 'transport_error'
+        assert report['detail']['registration_ack_state'] == 'persisted'
+        assert report['detail']['registration_local_substage'] == 'unknown'
+
+
+def test_close_report_does_not_cross_exact_worker_identity(monkeypatch):
+    window = RegistrationWindow(registration.time.monotonic()+30, lambda: True)
+    window._diagnostic = {'session_id': 'a'*32, 'worker_event_id': 'b'*32}
+    window._observe(stage='start_request')
+    window._snapshot(window._error('failure', 'transport_error'))
+    window._close_diagnostic('confirmed')
+    for changed in ({'session_id': 'c'*32}, {'worker_event_id': 'd'*32}, {'worker_event_id': None}):
+        detail = {**window._diagnostic, **changed, 'registration_close_state': 'not_attempted'}
+        error = SimpleNamespace(report_detail=detail)
+        window.finalize_failure_report(error)
+        assert error.report_detail is detail
+
+
+def test_stage_change_clears_local_breadcrumb_but_same_stage_retains_it():
+    window = RegistrationWindow(registration.time.monotonic()+30, lambda: True)
+    window._observe(stage='ack_persist', local_substage='pending_write')
+    window._observe(stage='ack_persist', ack='persisted')
+    assert window._diagnostic_local_substage == 'pending_write'
+    window._observe(stage='start_preflight')
+    assert window._diagnostic_local_substage == 'unknown'
+    window._observe(stage='local_state', local_substage='state_lock')
+    assert window._diagnostic_local_substage == 'state_lock'
+
+
+def test_final_report_observation_failure_is_nonfatal():
+    window = RegistrationWindow(registration.time.monotonic()+30, lambda: True)
+    window._diagnostic_frozen = True
+    window._diagnostic = None
+    error = SimpleNamespace(report_detail={'session_id': 'a'*32})
+    window.finalize_failure_report(error)
+    assert error.report_detail == {'session_id': 'a'*32}

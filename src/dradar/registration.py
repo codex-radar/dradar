@@ -62,6 +62,8 @@ class RegistrationWindow:
         # Diagnostics are best effort and must never change control flow.
         try:
             if stage is not None:
+                if stage != self._diagnostic_stage:
+                    self._diagnostic_local_substage = "unknown"
                 self._diagnostic_stage = stage
             if ack is not None:
                 self._diagnostic_ack = ack
@@ -126,6 +128,28 @@ class RegistrationWindow:
             self._publish_diagnostic()
         except Exception:
             pass
+
+    def finalize_failure_report(self, error):
+        """Keep the failure snapshot; attach this window's final close outcome.
+
+        The runner calls this after deferred abort. Failure fields describe the
+        original failure, while close_state describes the later fence attempt.
+        Never borrow cleanup diagnostics from another worker/session.
+        """
+        try:
+            detail = getattr(error, "report_detail", None)
+            if not isinstance(detail, dict) or not self._diagnostic_frozen:
+                return
+            if any(not self._diagnostic.get(key) or
+                   detail.get(key) != self._diagnostic[key]
+                   for key in ("session_id", "worker_event_id")):
+                return
+            close = self._diagnostic.get("registration_close_state")
+            from .registration_diagnostics import safe_value
+            if safe_value("registration_close_state", close) is not None:
+                error.report_detail = {**detail, "registration_close_state": close}
+        except Exception:
+            pass  # Observation must never change teardown or recovery.
 
     def check(self):
         if cancellation.requested():
