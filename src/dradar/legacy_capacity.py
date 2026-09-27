@@ -70,6 +70,23 @@ def _existing_client(args):
             state = run_plans._read_private_json(path)
             if state and isinstance(state.get("run_code_hash"), str) and secrets.compare_digest(state["run_code_hash"], digest):
                 matches.append(state)
+    if len(matches) > 1:
+        # Explicit recovery retains older credentials for exact-result uploads.
+        # They may coexist only within the same original plan scope.
+        scopes = set()
+        for candidate in matches:
+            embedded = candidate.get("plan")
+            if not isinstance(embedded, dict) or any(candidate.get(a) != embedded.get(b) for a, b in (
+                ("plan_id", "plan_id"), ("batch_id", "batch_id"), ("benchmark", "benchmark_id"),
+            )):
+                raise InventoryError("inventory_plan_evidence_missing", "原计划范围无法核对；请保留原文件。")
+            scopes.add((run_plans.validate_server_url(candidate.get("server")),
+                        _identifier(candidate.get("plan_id"), maximum=160),
+                        _identifier(candidate.get("batch_id")),
+                        _identifier(candidate.get("benchmark"), maximum=160)))
+        if len(scopes) != 1:
+            raise InventoryError("inventory_plan_evidence_missing", "原计划凭证范围冲突；请保留原文件。")
+        matches = [state for state in matches if not state.get("retired_for_new_execution")]
     if len(matches) != 1:
         raise InventoryError("inventory_plan_evidence_missing", "无法唯一读取原计划凭证；请保留原记录，库存查询不会 exchange。")
     state = matches[0]
