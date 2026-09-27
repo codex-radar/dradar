@@ -2098,6 +2098,24 @@ def _capacity_reservation(exc: ApiError) -> dict[str, Any] | None:
         )
     server = _api_error_response(exc)
     capacity = {key: payload[key] for key in integer_fields}
+    sources = payload.get("reservation_sources")
+    if sources is not None:
+        valid = (isinstance(sources, dict) and type(sources.get("schema_version")) is int
+                 and sources["schema_version"] == 1)
+        for scope, total in (("account", "account_concurrency_in_use"),
+                             ("plan", "plan_concurrency_in_use")):
+            counts = sources.get(scope) if isinstance(sources, dict) else None
+            valid = valid and isinstance(counts, dict) and set(counts) == {
+                "active_reports", "exit_unconfirmed", "device_reserved"}
+            if isinstance(counts, dict):
+                valid = valid and all(type(v) is int and v >= 0 for v in counts.values())
+                valid = valid and sum(counts.values()) == payload[total]
+        if not valid:
+            raise RunPlanClientError("protocol_invalid", "运行占用信息不完整，请保留原计划并检查服务状态。")
+        sources = {"schema_version": 1, "account": dict(sources["account"]),
+                   "plan": dict(sources["plan"])}
+        capacity["reservation_sources"] = sources
+        server.setdefault("agent", {})["reservation_sources"] = sources
     capacity.update({
         "original_concurrency_mode": payload["original_concurrency_mode"],
         "limiting_scope": payload["limiting_scope"],
@@ -2686,14 +2704,41 @@ def cmd_run_plan(args) -> int:
                     int(snapshot["available"]), supply_limit,
                 )
                 if available < 1:
+                    sources = reservation["capacity"].get("reservation_sources")
+                    limiting_scope = reservation["capacity"]["limiting_scope"]
+                    blocked_scope = next((scope for scope in ("account", "plan")
+                        if sources and sources[scope]["exit_unconfirmed"] >=
+                        reservation["capacity"][scope + "_concurrency"]), None)
+                    if blocked_scope is not None:
+                        counts = sources[blocked_scope]
+                        return {
+                            "schema_version": SCHEMA_VERSION, "status": "review_required",
+                            "interaction": "notify", "decision_required": False,
+                            "error_code": "concurrency_capacity_reserved",
+                            "agent_action": "notify_only", "retryable": False, "choices": [],
+                            "user_message": (
+                                f"运行名额已占满：近期上报活动 {counts['active_reports']} 个，"
+                                f"退出未确认 {counts['exit_unconfirmed']} 个，"
+                                f"设备预留 {counts['device_reserved']} 个。"
+                                "请让编程助手在原运行设备核对进度、成果和退出回执，"
+                                "确认后再继续当前计划；反复重试不会解除这类占用。"
+                            ),
+                            "agent": {"reservation_sources": sources,
+                                      "server_status": reservation["server"],
+                                      "recovery_scope": "original_execution_device"},
+                        }
                     return _plan_recheck_response(
                     local_generation=local_generation,
                         path=path,
                         state=state,
                         error_code="concurrency_capacity_reserved",
                         user_message=(
-                            "当前暂时没有空余运行位置；会按建议间隔重新检查。"
-                            "无需手动更改设置。"
+                            (f"运行名额已占满：近期上报活动 {sources[limiting_scope]['active_reports']} 个，"
+                             f"退出未确认 {sources[limiting_scope]['exit_unconfirmed']} 个，"
+                             f"设备预留 {sources[limiting_scope]['device_reserved']} 个。"
+                             "会按建议间隔重新检查；退出未确认的占用仍需在原运行设备核对。")
+                            if sources else
+                            "当前暂时没有空余运行位置；会按建议间隔重新检查。无需手动更改设置。"
                         ),
                         server_status=reservation["server"],
                     )

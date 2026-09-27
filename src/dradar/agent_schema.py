@@ -112,6 +112,7 @@ COMMAND_SCHEMAS = {
             "capacity_changed_during_start_auto": "retry_lower_then_warn",
             "capacity_changed_during_start_fixed": "confirm_lower_or_cancel",
             "capacity_temporarily_zero": "poll_then_replay_base_run_without_old_choices",
+            "capacity_exit_unknown_fills_scope": "inspect_original_execution_scope_without_auto_recheck",
             "missing_current_tool": "notify_before_server_start",
             "completed_result_upload_recovery": "exact_batch_upload_only_no_runner_start",
             "stopped_refill_held_recovery": "same_plan_device_readmission_without_new_claims",
