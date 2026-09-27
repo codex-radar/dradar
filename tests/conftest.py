@@ -20,7 +20,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 def _isolate_real_dradar_home(monkeypatch, tmp_path):
     """Unit tests must never inspect or refresh a volunteer's real secrets."""
 
-    monkeypatch.setenv("DRADAR_HOME", str(tmp_path / "dradar-home"))
+    isolated = tmp_path / "dradar-home"
+    monkeypatch.setenv("DRADAR_HOME", str(isolated))
+    # Modules imported during collection already captured the default HOME.
+    # Keep those constants in the same per-test scope as subprocesses.
+    from dradar import local_config
+    for name, module in list(sys.modules.items()):
+        if name.startswith("dradar.") and hasattr(module, "HOME"):
+            monkeypatch.setattr(module, "HOME", isolated)
+    monkeypatch.setattr(local_config, "CONFIG_PATH", isolated / "config.json")
 
 
 @pytest.fixture(autouse=True)

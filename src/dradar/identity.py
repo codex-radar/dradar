@@ -56,6 +56,10 @@ def _client(cfg: dict, auto_register: bool = False) -> ApiClient:
     )
     if cfg.get("benchmark"):
         client.benchmark_id = cfg["benchmark"]
+    generation = cfg.get("run_plan_credential_generation")
+    if generation is not None and (type(generation) is not int or generation < 0):
+        raise ValueError("invalid run-plan credential generation")
+    client.credential_generation = generation
     return client
 
 

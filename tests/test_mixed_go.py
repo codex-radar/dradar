@@ -22,6 +22,9 @@ class Server:
         self.fail_claim = fail_claim
 
     def request(self, req):
+        if req.url.path == '/api/v1/run-plans/capabilities':
+            return httpx.Response(200, json={'schema_version': 1, 'capabilities': ['runner-reservation-v1'],
+                                            'stop_generation_cas': True, 'close_releases_capacity': False})
         if req.url.path.endswith('/claim'):
             data = {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
             self.claims.append(data)

@@ -47,6 +47,14 @@ class ExactBatchClient:
     batch_id = BATCH
     account_scope = "fixture-account"
 
+    def require_runner_reservation_protocol(self):
+        from dradar.api_client import ApiClient
+        return ApiClient.require_runner_reservation_protocol(self)
+
+    def run_plan_capabilities(self):
+        return {"schema_version": 1, "capabilities": ["runner-reservation-v1"],
+                "stop_generation_cas": True, "close_releases_capacity": False}
+
     def __init__(self, inventories):
         self.inventories = list(inventories)
         self.reads = 0

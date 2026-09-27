@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from dradar import runloop
-from test_workers import _args, _patch_pool_setup
+from test_workers import _args, _patch_pool_setup, _ReservationReadyClient
 
 TAIL = 'pool ended before startup acknowledgement'
 
@@ -57,7 +57,7 @@ def test_parent_replacement_uses_return_proof_and_keeps_historical_failure(monke
                started_at=None, execution_state='waiting', runner_state='waiting', heartbeat_running=False,
                runner_phase=None)
     active = [row]
-    class Client:
+    class Client(_ReservationReadyClient):
         def get_assignment(self):
             return {'active': active}
         def mark_stopped(self, *_a, **_k):

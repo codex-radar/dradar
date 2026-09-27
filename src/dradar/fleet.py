@@ -62,7 +62,8 @@ SCHEMA_VERSION = 1
 # Version 8 carries verified payloads and readable Windows lease identity.
 # Version 9 preflights each new pool in its own validated runtime environment.
 # Version 10 pins the exact batch benchmark through preflight and every worker.
-CONTROLLER_PROTOCOL_VERSION = 10
+# Version 11 binds conditional startup stops to the original pool instance.
+CONTROLLER_PROTOCOL_VERSION = 11
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -594,6 +595,11 @@ def _pool_executable_environment(
 
 def _request(command: str, payload: dict, *, home: Path = HOME) -> dict:
     state = _ensure_controller(home)
+    if (
+        command == "stop" and payload.get("only_if_startup_pending")
+        and not _controller_protocol_matches(state)
+    ):
+        raise FleetControllerUpdatePending()
     controller_id = state.get("controller_id")
     request_id = uuid.uuid4().hex
     request_path = _root(home) / REQUEST_DIR / f"{request_id}.json"
@@ -1066,6 +1072,7 @@ def _spawn_pool(
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
+    refill_mode: str = "seed_barrier",
     credentials_file: str | None = None,
     benchmark: str | None = None,
     runtime_executable: str | None = None,
@@ -1093,9 +1100,20 @@ def _spawn_pool(
             "--refill-model", str(refill_model),
             "--refill-effort", str(refill_effort),
         ))
+        if refill_mode == "rolling_submitted":
+            command.extend(("--refill-mode", "rolling-submitted"))
     env = _pool_environment(runtime_environment)
     env[CONTROLLER_ID_ENV] = controller_id
     env[POOL_BATCH_ENV] = batch_id
+    from . import run_intent
+    if credentials_file:
+        try:
+            generation = run_intent.current(home, batch_id)
+        except run_intent.IntentStopped:
+            generation = None
+        if generation is not None:
+            env[run_intent.BATCH_ENV] = batch_id
+            env[run_intent.GENERATION_ENV] = generation
     startup_path = _pool_startup_path(home, batch_id)
     startup_path.unlink(missing_ok=True)
     env[POOL_STARTUP_FILE_ENV] = str(startup_path)
@@ -1205,11 +1223,40 @@ def _stop_run_plan_device(item: dict, reason: str) -> str | None:
         plan_id = cfg.get("run_plan_id")
         if not isinstance(plan_id, str) or not plan_id:
             raise ValueError("missing run plan ID")
+        from . import plan_intents, run_intent
+        batch_id = cfg.get("batch_id") or cfg.get("run_plan_batch_id")
+        if not batch_id:
+            raise ValueError("missing exact run plan batch")
+        local_warning = None
+        local_generation = item.get("intent_generation")
+        if local_generation is not None:
+            try:
+                run_intent.stop(HOME, batch_id, expected_generation=local_generation)
+            except run_intent.IntentStopped:
+                return "the original local lifecycle is already stopped or superseded"
+        elif cfg.get("run_plan_intent_protocol", 0) == 1:
+            return "the original local lifecycle is unconfirmed; no newer local run was stopped"
+        else:
+            run_intent.stop(HOME, batch_id)
         remote = _client(cfg)
-        remote.stop_run_plan(plan_id=plan_id, scope="this_device")
+        request = dict(plan_id=plan_id, scope="this_device",
+                       expected_generation=cfg.get("run_plan_credential_generation"))
+        revision = cfg.get("run_plan_intent_revision")
+        if cfg.get("run_plan_intent_protocol", 0) == 1:
+            revision = item.get("run_plan_intent_revision")
+            original_generation = item.get("run_plan_credential_generation")
+            if type(revision) is not int or type(original_generation) is not int:
+                return "the original remote admission is unconfirmed; no later admission was stopped"
+            request["expected_generation"] = original_generation
+        if revision is None and cfg.get("run_plan_intent_protocol", 0) == 0:
+            remote.stop_run_plan(**request)
+        else:
+            plan_intents.execute(HOME, remote, operation="stop", request=request,
+                expected_revision=revision,
+                local_intent=run_intent._stop_digest(run_intent._paths(HOME, batch_id)[1]))
     except (ApiError, KeyError, OSError, ValueError) as exc:
         return f"could not confirm this device stopped after {reason}: {exc}"
-    return None
+    return local_warning
 
 
 def _response(home: Path, request_id: str, payload: dict) -> None:
@@ -1260,12 +1307,13 @@ def _handle_request(
                     "refill_harness": request.get("refill_harness"),
                     "refill_model": request.get("refill_model"),
                     "refill_effort": request.get("refill_effort"),
+                    "refill_mode": request.get("refill_mode", "seed_barrier"),
                 }
                 if (request.get("benchmark") is not None
                         and request["benchmark"] != current.get("benchmark")):
                     raise FleetError("batch is already active with a different benchmark")
                 if any(
-                    current.get(key) != value
+                    current.get(key, "seed_barrier" if key == "refill_mode" else None) != value
                     for key, value in requested_shape.items()
                 ):
                     raise FleetError(
@@ -1305,6 +1353,7 @@ def _handle_request(
             refill_harness = request.get("refill_harness")
             refill_model = request.get("refill_model")
             refill_effort = request.get("refill_effort")
+            refill_mode = request.get("refill_mode", "seed_barrier")
             credentials_file = request.get("credentials_file")
             plan_id = request.get("plan_id")
             benchmark = request.get("benchmark")
@@ -1341,8 +1390,12 @@ def _handle_request(
                         "saved run-plan identity is incomplete; use the "
                         "original website run instructions to recover safely"
                     )
-                credentials_file = saved_credentials
-                plan_id = saved_plan_id
+                raise FleetError(
+                    "this batch belongs to a website run plan; Fleet retry "
+                    "cannot reauthorize a stopped device. Use the original "
+                    "`dradar run --plan ... --held-only` instructions to "
+                    "resume only its still-held assignments"
+                )
             if credentials_file is not None and not isinstance(credentials_file, str):
                 raise FleetError("invalid private run-plan credentials file")
             if plan_id is not None and (
@@ -1350,6 +1403,10 @@ def _handle_request(
                 or credentials_file is None
             ):
                 raise FleetError("a run plan requires its private credentials file")
+            if not isinstance(refill_mode, str) or refill_mode not in {"seed_barrier", "rolling_submitted"}:
+                raise FleetError("invalid refill mode")
+            if not refill and refill_mode != "seed_barrier":
+                raise FleetError("rolling mode requires refill")
             if refill:
                 if (
                     not isinstance(max_tasks, int)
@@ -1415,50 +1472,66 @@ def _handle_request(
             if benchmark is not None and capacity.get("benchmark") != benchmark:
                 raise FleetError("runtime benchmark differs from the requested batch")
             benchmark = capacity.get("benchmark") or benchmark
-            process, log_handle = _spawn_pool(
-                home, state, batch_id, workers,
-                refill=refill,
-                max_tasks=max_tasks,
-                refill_harness=refill_harness,
-                refill_model=refill_model,
-                refill_effort=refill_effort,
-                credentials_file=credentials_file,
-                benchmark=benchmark,
-                runtime_executable=runtime_executable,
-                runtime_environment=runtime_environment,
-            )
+            from . import run_intent
             try:
-                item = {
-                    "batch_id": batch_id,
-                    "workers": workers,
-                    "status": "starting",
-                    "startup_status": "pending",
-                    "pid": process.pid,
-                    "added_at": _now(),
-                    "updated_at": _now(),
-                    "log_path": str(
-                        _root(home) / LOG_DIR / f"batch-{batch_id}.log"
-                    ),
-                    "warnings": warnings,
-                    "capacity": capacity,
-                    "plan_id": plan_id,
-                    "credentials_file": credentials_file,
-                    "benchmark": benchmark,
-                    "refill": refill,
-                    "max_tasks": max_tasks,
-                    "refill_harness": refill_harness,
-                    "refill_model": refill_model,
-                    "refill_effort": refill_effort,
-                }
-                state["batches"][batch_id] = item
-                _write_state(home, state)
-                processes[batch_id] = process
-                logs[batch_id] = log_handle
-            except BaseException:
-                _send_interrupt(process)
-                log_handle.close()
-                state["batches"].pop(batch_id, None)
-                raise
+                lifecycle = run_intent.launch_guard(
+                    home, batch_id, request.get("intent_generation"),
+                )
+                with lifecycle:
+                    original_plan = runtime_config(credentials_file) if credentials_file else {}
+                    process, log_handle = _spawn_pool(
+                        home, state, batch_id, workers,
+                        refill=refill,
+                        max_tasks=max_tasks,
+                        refill_harness=refill_harness,
+                        refill_model=refill_model,
+                        refill_effort=refill_effort,
+                        refill_mode=refill_mode,
+                        credentials_file=credentials_file,
+                        benchmark=benchmark,
+                        runtime_executable=runtime_executable,
+                        runtime_environment=runtime_environment,
+                    )
+                    try:
+                        item = {
+                            "batch_id": batch_id,
+                            "startup_id": uuid.uuid4().hex,
+                            "workers": workers,
+                            "status": "starting",
+                            "startup_status": "pending",
+                            "pid": process.pid,
+                            "added_at": _now(),
+                            "updated_at": _now(),
+                            "log_path": str(
+                                _root(home) / LOG_DIR / f"batch-{batch_id}.log"
+                            ),
+                            "warnings": warnings,
+                            "capacity": capacity,
+                            "plan_id": plan_id,
+                            "intent_generation": request.get("intent_generation"),
+                            "run_plan_credential_generation": original_plan.get("run_plan_credential_generation"),
+                            "run_plan_intent_revision": original_plan.get("run_plan_intent_revision"),
+                            "run_plan_current_start_intent_id": original_plan.get("run_plan_current_start_intent_id"),
+                            "credentials_file": credentials_file,
+                            "benchmark": benchmark,
+                            "refill": refill,
+                            "max_tasks": max_tasks,
+                            "refill_harness": refill_harness,
+                            "refill_model": refill_model,
+                            "refill_effort": refill_effort,
+                            "refill_mode": refill_mode,
+                        }
+                        state["batches"][batch_id] = item
+                        _write_state(home, state)
+                        processes[batch_id] = process
+                        logs[batch_id] = log_handle
+                    except BaseException:
+                        _send_interrupt(process)
+                        log_handle.close()
+                        state["batches"].pop(batch_id, None)
+                        raise
+            except run_intent.IntentStopped as exc:
+                raise FleetError(str(exc)) from exc
             _response(home, request_id, {
                 "ok": True,
                 "already_active": False,
@@ -1484,6 +1557,14 @@ def _handle_request(
             item = state["batches"].get(batch_id) or {}
             if only_if_startup_pending:
                 with _locked(_pool_startup_lock_path(home, batch_id)):
+                    expected_startup_id = request.get("expected_startup_id")
+                    if (
+                        not isinstance(expected_startup_id, str)
+                        or not expected_startup_id
+                        or item.get("startup_id") != expected_startup_id
+                    ):
+                        condition_changed.append(batch_id)
+                        continue
                     event = _read_json(_pool_startup_path(home, batch_id))
                     if event and event.get("status") == "ready":
                         item["startup_status"] = "ready"
@@ -1832,6 +1913,11 @@ def _print_add_response(response: dict) -> int:
 
 
 def cmd_fleet_add(args) -> int:
+    refill_mode = (
+        "rolling_submitted"
+        if getattr(args, "refill_mode", None) == "rolling-submitted"
+        else "seed_barrier"
+    )
     if args.refill and (
         args.max_tasks is None
         or args.refill_harness is None
@@ -1845,7 +1931,7 @@ def cmd_fleet_add(args) -> int:
     if not args.refill and any(
         value is not None for value in (
             args.max_tasks, args.refill_harness, args.refill_model,
-            args.refill_effort,
+            args.refill_effort, getattr(args, "refill_mode", None),
         )
     ):
         raise SystemExit("Fleet refill limits and scope require --refill")
@@ -1860,6 +1946,7 @@ def cmd_fleet_add(args) -> int:
             refill_harness=args.refill_harness,
             refill_model=args.refill_model,
             refill_effort=args.refill_effort,
+            refill_mode=refill_mode,
         )
     except FleetError as exc:
         raise SystemExit(str(exc)) from exc
@@ -1874,30 +1961,53 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
     batch = response.get("batch") or {}
     if batch.get("status") != "starting":
         return response
+    startup_id = batch.get("startup_id")
+
+    def checked_observation(observed):
+        if (
+            not isinstance(startup_id, str) or not startup_id
+            or (isinstance(observed, dict)
+                and observed.get("startup_id") != startup_id)
+        ):
+            raise FleetStartupError(
+                "local_start_state_changed",
+                "本地启动实例已经变化或无法核验；请运行 `dradar fleet status`"
+                "确认当前状态后再决定下一步。",
+                retryable=False,
+            )
+        return observed if isinstance(observed, dict) else None
+
     deadline = time.monotonic() + STARTUP_OBSERVE_SECONDS
-    latest = batch
-    while time.monotonic() < deadline:
-        observed = batch_status(batch_id)
-        if isinstance(observed, dict):
-            latest = observed
-            if (
-                observed.get("status") != "starting"
-                or observed.get("startup_status") == "failed"
+    while True:
+        latest = checked_observation(batch_status(batch_id))
+        if time.monotonic() >= deadline or (latest is not None and (
+            latest.get("status") != "starting"
+            or latest.get("startup_status") == "failed"
+        )):
+            # A transient public projection can recover to pending. Keep the
+            # original deadline; only an expired observation may request stop.
+            latest = checked_observation(batch_status(batch_id))
+            if not (
+                latest is not None
+                and latest.get("status") == "starting"
+                and latest.get("startup_status") == "pending"
+                and time.monotonic() < deadline
             ):
                 break
         time.sleep(0.05)
-    # The loop's last value may predate a ready event written at the deadline.
-    # Re-read before any destructive action; the controller then performs the
-    # same pending-only condition under the startup transition lock.
-    refreshed = batch_status(batch_id)
-    if isinstance(refreshed, dict):
-        latest = refreshed
+    if latest is None:
+        raise FleetStartupError(
+            "local_start_unconfirmed",
+            "暂时无法确认本地启动状态；请运行 `dradar fleet status` 检查这次运行。",
+            retryable=False,
+        )
     status = latest.get("status")
     startup_status = latest.get("startup_status")
     if status == "starting" and startup_status == "pending":
         try:
             stopped = stop_batch(
                 batch_id, only_if_startup_pending=True,
+                expected_startup_id=startup_id,
             )
         except FleetError as exc:
             raise FleetStartupError(
@@ -1915,12 +2025,14 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
                 retryable=True,
             )
         if batch_id in (stopped.get("condition_changed") or []):
-            final = batch_status(batch_id)
+            final = checked_observation(batch_status(batch_id))
             if isinstance(final, dict):
                 latest = final
                 status = latest.get("status")
                 startup_status = latest.get("startup_status")
-            if startup_status == "ready" or status == "running":
+            if startup_status == "ready" and status not in {
+                "failed", "interrupted", "orphaned",
+            }:
                 updated = dict(response)
                 updated["batch"] = latest
                 return updated
@@ -1965,6 +2077,12 @@ def _observe_pool_startup(response: dict, batch_id: str) -> dict:
             ),
             retryable=bool(latest.get("startup_retryable", True)),
         )
+    if startup_status != "ready" or status == "orphaned":
+        raise FleetStartupError(
+            "local_start_unconfirmed",
+            "本地启动尚未确认就绪；请运行 `dradar fleet status` 检查这次运行。",
+            retryable=False,
+        )
     return updated
 
 
@@ -1979,8 +2097,10 @@ def add_batch(
     refill_harness: str | None = None,
     refill_model: str | None = None,
     refill_effort: str | None = None,
+    refill_mode: str = "seed_barrier",
     credentials_file: Path | str | None = None,
     plan_id: str | None = None,
+    intent_generation: str | None = None,
 ) -> dict:
     """Programmatic, idempotent Fleet add used by the intent-level CLI."""
     try:
@@ -2000,8 +2120,10 @@ def add_batch(
         "refill_harness": refill_harness,
         "refill_model": refill_model,
         "refill_effort": refill_effort,
+        "refill_mode": refill_mode,
         "credentials_file": str(credentials_file) if credentials_file else None,
         "plan_id": plan_id,
+        "intent_generation": intent_generation,
     })
     if not response.get("ok"):
         raise FleetError(str(response.get("error") or "local coordinator rejected the run"))
@@ -2180,6 +2302,7 @@ def stop_batch(
     *,
     all_batches: bool = False,
     only_if_startup_pending: bool = False,
+    expected_startup_id: str | None = None,
 ) -> dict:
     if not all_batches and not batch_id:
         raise FleetError("an exact batch is required")
@@ -2189,6 +2312,7 @@ def stop_batch(
         "batch_id": batch_id,
         "all": all_batches,
         "only_if_startup_pending": bool(only_if_startup_pending),
+        "expected_startup_id": expected_startup_id,
     })
     if not response.get("ok"):
         raise FleetError(str(response.get("error") or "local coordinator rejected the stop"))

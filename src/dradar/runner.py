@@ -36,7 +36,9 @@ from .artifact_boundary import (
     preflight_artifact_platform, artifact_preflight_message,
 )
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
+from .windows_job import WindowsJobError, WindowsJobProcess
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
+from .execution_audit import ExecutionAudit, ExecutionObserverError
 from .credential_files import is_claude_metered_auth
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
@@ -439,6 +441,10 @@ class RunnerCleanupUnconfirmedError(RunnerError):
     def __init__(self, *args, job_dir: Path | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.job_dir = job_dir
+
+
+class RunnerNotStartedError(RunnerError):
+    """The launch adapter confirmed no instruction was allowed to run."""
 
 
 class RunnerTaskRetryableError(RunnerError):
@@ -4204,6 +4210,14 @@ _PIER_RUNTIME_PROJECT_RE = re.compile(
 def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
     """TERM then KILL the isolated Pier process group; return if KILL was used."""
 
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            proc.terminate_tree()
+            proc.wait(timeout=2)
+        except (WindowsJobError, subprocess.TimeoutExpired) as exc:
+            raise RunnerError("Windows Pier Job could not be terminated") from exc
+        return True
+
     pid = getattr(proc, "pid", None)
     group_signalled = False
     if os.name != "nt" and isinstance(pid, int) and pid > 0:
@@ -4264,6 +4278,12 @@ def _terminate_pier_process_tree(proc: subprocess.Popen) -> bool:
 
 def _confirm_pier_process_tree_stopped(proc: subprocess.Popen) -> None:
     """A sent signal is not proof that the isolated provider tree exited."""
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            proc.confirm_tree_stopped()
+        except WindowsJobError as exc:
+            raise RunnerError("Windows Pier Job process-tree exit could not be confirmed") from exc
+        return
     pid = getattr(proc, "pid", None)
     if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
         raise RunnerError("provider process-tree exit cannot be confirmed on this runtime")
@@ -4283,6 +4303,16 @@ def _confirm_pier_process_tree_stopped(proc: subprocess.Popen) -> None:
 
 def _cleanup_exited_pier_process_group(proc: subprocess.Popen) -> bool:
     """Reap helpers left in Pier's isolated POSIX group after its leader exits."""
+
+    if isinstance(proc, WindowsJobProcess):
+        try:
+            if proc.active_processes() == 0:
+                return False
+            proc.terminate_tree()
+            proc.confirm_tree_stopped()
+        except WindowsJobError as exc:
+            raise RunnerError("Windows Pier Job residue could not be audited") from exc
+        return True
 
     pid = getattr(proc, "pid", None)
     if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
@@ -4438,6 +4468,74 @@ def _cleanup_terminated_pier_containers(job_root: Path) -> PierContainerCleanup:
     return PierContainerCleanup(matched=len(owned), running=len(running))
 
 
+def _confirm_terminated_pier_containers_absent(job_root: Path) -> None:
+    """Fresh, bounded exact-job audit; a successful rm is not the audit."""
+    if not job_root.is_dir() or job_root.is_symlink():
+        raise RunnerError("exact-job directory is unavailable for runtime exit audit")
+    deadline = time.monotonic() + 10.0
+
+    def query(command):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RunnerError("exact-job container exit audit deadline exhausted")
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=remaining)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RunnerError("Docker container absence could not be confirmed") from exc
+        if result.returncode != 0:
+            raise RunnerError("Docker rejected the container absence audit")
+        return result.stdout
+
+    listed = query(["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project"])
+    ids = listed.split()
+    if any(re.fullmatch(r"[0-9a-f]{12,64}", item) is None for item in ids):
+        raise RunnerError("Docker returned invalid container identifiers")
+    if not ids:
+        return
+    try:
+        containers = json.loads(query(["docker", "inspect", *ids]))
+    except (ValueError, TypeError) as exc:
+        raise RunnerError("Docker container absence metadata is invalid") from exc
+    if not isinstance(containers, list) or len(containers) != len(ids):
+        raise RunnerError("Docker container absence metadata is incomplete")
+    observed = set()
+    for container in containers:
+        if not isinstance(container, dict):
+            raise RunnerError("Docker container absence metadata is invalid")
+        identity = container.get("Id")
+        if not isinstance(identity, str) or not any(identity.startswith(value) for value in ids):
+            raise RunnerError("Docker container absence identity is invalid")
+        observed.update(value for value in ids if identity.startswith(value))
+        config = container.get("Config")
+        mounts = container.get("Mounts")
+        if not isinstance(config, dict) or not isinstance(mounts, list):
+            raise RunnerError("Docker container ownership metadata is incomplete")
+        labels = config.get("Labels") or {}
+        if not isinstance(labels, dict):
+            raise RunnerError("Docker container ownership labels are invalid")
+        config_files = labels.get("com.docker.compose.project.config_files", "")
+        if not isinstance(config_files, str):
+            raise RunnerError("Docker container compose ownership is invalid")
+        for mount in mounts:
+            if not isinstance(mount, dict) or not isinstance(mount.get("Type"), str):
+                raise RunnerError("Docker container mount ownership is incomplete")
+            if mount["Type"] == "bind" and (
+                not isinstance(mount.get("Source"), str) or not mount["Source"]
+            ):
+                raise RunnerError("Docker container bind ownership is incomplete")
+        mount_owned = any(
+            mount.get("Type") == "bind" and _path_is_below(mount["Source"], job_root)
+            for mount in mounts)
+        config_owned = any(
+            _path_is_below(value.strip(), job_root)
+            for value in config_files.split(",")
+            if value.strip())
+        if mount_owned or config_owned:
+            raise RunnerError("exact-job container remains after runtime cleanup")
+    if observed != set(ids):
+        raise RunnerError("Docker container absence inventory is incomplete")
+
+
 def _cleanup_exited_pier_runtime(
     proc: subprocess.Popen,
     job_root: Path,
@@ -4454,10 +4552,12 @@ def _cleanup_exited_pier_runtime(
     process_residue = False
     try:
         process_residue = _cleanup_exited_pier_process_group(proc)
+        _confirm_pier_process_tree_stopped(proc)
     except RunnerError as exc:
         cleanup_errors.append(str(exc))
     try:
         cleanup = _cleanup_terminated_pier_containers(job_root)
+        _confirm_terminated_pier_containers_absent(job_root)
     except RunnerError as exc:
         cleanup_errors.append(str(exc))
         cleanup = PierContainerCleanup()
@@ -4468,6 +4568,7 @@ def _cleanup_exited_pier_runtime(
             "to prevent a duplicate retry ("
             + "; ".join(cleanup_errors)
             + ")",
+            job_dir=job_root,
         )
     return process_residue, cleanup
 
@@ -4755,6 +4856,49 @@ def _pier_process_options() -> dict:
     return {"start_new_session": False}
 
 
+def _spawn_pier_process(cmd, log, work_dir: Path, env: dict, *, job_dir: Path):
+    """The caller holds the stop/launch lock through Windows bind and resume."""
+    if os.name == "nt":
+        try:
+            return WindowsJobProcess.spawn(cmd, stdout=log, cwd=work_dir, env=env)
+        except WindowsJobError as exc:
+            if exc.cleanup_unknown:
+                try:
+                    _cleanup_terminated_pier_containers(job_dir)
+                except RunnerError:
+                    pass  # Best effort is not exit evidence or a release permit.
+                raise RunnerCleanupUnconfirmedError(
+                    "Windows Pier startup cleanup is unconfirmed; result is unknown",
+                    job_dir=job_dir,
+                ) from exc
+            raise RunnerNotStartedError("Windows Pier could not be safely started") from exc
+    return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                            cwd=work_dir, env=env, **_pier_process_options())
+
+
+def _finalize_pier_process(proc, job_dir: Path) -> None:
+    """Close the exact Windows Job before publishing any exit evidence."""
+    if not isinstance(proc, WindowsJobProcess):
+        return
+    cleanup_errors = []
+    try:
+        proc.close_checked()
+    except WindowsJobError as exc:
+        cleanup_errors.append(str(exc))
+    try:
+        cleanup = _cleanup_terminated_pier_containers(job_dir)
+        _confirm_terminated_pier_containers_absent(job_dir)
+        if cleanup.running:
+            cleanup_errors.append("exact-job container was still running after Pier exit")
+    except RunnerError as exc:
+        cleanup_errors.append(str(exc))
+    if cleanup_errors:
+        raise RunnerCleanupUnconfirmedError(
+            "Windows Pier process-tree cleanup is unconfirmed; result is unknown ("
+            + "; ".join(cleanup_errors) + ")", job_dir=job_dir,
+        )
+
+
 @cancellation.scoped
 def run_trial(
     assignment: dict,
@@ -4768,6 +4912,55 @@ def run_trial(
     build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
     on_auth_observed: Callable[[dict], None] | None = None,
     managed_auth_config: Path | None = None,
+    execution_observer: Callable[[dict], None] | None = None,
+) -> TrialArtifacts:
+    audit = ExecutionAudit(assignment, work_dir, execution_observer)
+    try:
+        audit.emit("entered", execution_started=False)
+        from . import run_intent
+        run_intent.require_worker(work_dir.parent)
+        return _run_trial(
+            assignment, tasks_root, work_dir, dev_agent=dev_agent,
+            on_started=on_started, on_worker_registered=on_worker_registered,
+            worker_event_source=worker_event_source,
+            environment_build_timeout_multiplier=environment_build_timeout_multiplier,
+            build_cache_mode=build_cache_mode, on_auth_observed=on_auth_observed,
+            managed_auth_config=managed_auth_config, execution_audit=audit,
+        )
+    except BaseException as exc:
+        if not audit.confirmed:
+            try:
+                if (not audit.observer_failed and not audit.spawned
+                        and (not audit.launch_pending or audit.spawn_failed)):
+                    audit.never_started("popen_failed" if audit.spawn_failed
+                                        else "before_provider_launch_boundary")
+                else:
+                    audit.unknown("execution_exit_not_confirmed")
+            except ExecutionObserverError:
+                pass  # The exception below preserves quarantine when persistence failed.
+        if audit.observer_failed or (audit.launch_pending and not audit.spawn_failed and not audit.confirmed):
+            if isinstance(exc, RunnerCleanupUnconfirmedError):
+                raise
+            raise RunnerCleanupUnconfirmedError(
+                "execution exit evidence is unavailable; keep this attempt quarantined",
+                job_dir=Path(audit.job_dir) if audit.job_dir else None,
+            ) from exc
+        raise
+
+
+def _run_trial(
+    assignment: dict,
+    tasks_root: Path,
+    work_dir: Path,
+    dev_agent: str | None = None,
+    on_started: Callable[[], None] | None = None,
+    on_worker_registered: Callable[[dict], None] | None = None,
+    worker_event_source: Callable[[], object | None] | None = None,
+    environment_build_timeout_multiplier: float | None = None,
+    build_cache_mode: str = image_cache.DEFAULT_BUILD_CACHE_MODE,
+    on_auth_observed: Callable[[dict], None] | None = None,
+    managed_auth_config: Path | None = None,
+    execution_audit: ExecutionAudit | None = None,
 ) -> TrialArtifacts:
     cancellation.begin_execution()
     try:
@@ -4983,7 +5176,9 @@ def run_trial(
         tasks_root / str(effective_assignment["task_id"]),
         environment_build_timeout_multiplier,
     )
-    terminal_error: RunnerError | KeyboardInterrupt | EOFError | None = None
+    terminal_error: BaseException | None = None
+    local_exit_confirmed = False
+    post_cleanup_error = None
     live_error_offsets: dict[Path, int] = {}
     live_error_counts: dict[str, int] = {}
     live_error_messages: dict[str, str] = {}
@@ -5187,16 +5382,28 @@ def run_trial(
             # tell "working" from "wedged" without docker-exec'ing into the
             # container (volunteer report, 2026-07-13). Once a minute, print
             # elapsed time plus the newest pier log line.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                cwd=work_dir,
-                env=env,
-                **_pier_process_options(),
-            )
+            from . import run_intent
+            # Preparation may outlive a stop. Check again at the actual local
+            # launch, using the same short lock as stop publication; all remote
+            # work and provider registration stay outside this lock.
+            with run_intent.worker_launch_guard(work_dir.parent):
+                if execution_audit is not None:
+                    execution_audit.pending(job_name, jobs_dir / job_name)
+                try:
+                    proc = _spawn_pier_process(cmd, log, work_dir, env,
+                                               job_dir=jobs_dir / job_name)
+                    provider_stack.callback(_finalize_pier_process, proc, jobs_dir / job_name)
+                except (OSError, RunnerNotStartedError):
+                    if execution_audit is not None:
+                        execution_audit.spawn_failed = True
+                    raise
             registration_window = None
             try:
+                if execution_audit is not None:
+                    if isinstance(proc, WindowsJobProcess):
+                        execution_audit.record_spawn(proc.pid, windows_job_id=proc.job_id)
+                    else:
+                        execution_audit.record_spawn(getattr(proc, "pid", None))
                 if on_worker_registered is None and worker_event_source is None:
                     # Legacy unit callers that do not request ownership binding
                     # keep the old local-only behavior. Production always passes
@@ -5221,22 +5428,27 @@ def run_trial(
                     if getattr(on_worker_registered, "_uses_registration_window", False):
                         from .registration import RegistrationWindow
                         registration_window = RegistrationWindow(
-                            event.get("start_deadline"), lambda: proc.poll() is None)
+                            event.get("start_deadline"), lambda: proc.poll() is None,
+                            defer_abort=True)
                         event["_registration_window"] = registration_window
                     if on_worker_registered is not None:
                         on_worker_registered(event)
-                    if start_gate is not None:
-                        if proc.poll() is not None:
-                            raise RunnerError("worker exited before ownership confirmation")
-                        _materialize_shared_file(start_gate, json.dumps(dict(
-                            start_identity, expires_at=(registration_window.deadline
-                                if registration_window else time.monotonic() + WORKER_START_WAIT_SEC),
-                        )).encode(), check=registration_window.check if registration_window else None)
-                    if managed_auth_config is not None:
-                        _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}',
-                            check=registration_window.check if registration_window else None)
-                    if registration_window is not None:
-                        registration_window.finish()
+                    # Remote registration is complete before this short lock.
+                    # A stop published while it was pending must win before
+                    # either ordinary or managed provider permission is written.
+                    with run_intent.worker_launch_guard(work_dir.parent):
+                        if start_gate is not None:
+                            if proc.poll() is not None:
+                                raise RunnerError("worker exited before ownership confirmation")
+                            _materialize_shared_file(start_gate, json.dumps(dict(
+                                start_identity, expires_at=(registration_window.deadline
+                                    if registration_window else time.monotonic() + WORKER_START_WAIT_SEC),
+                            )).encode(), check=registration_window.check if registration_window else None)
+                        if managed_auth_config is not None:
+                            _materialize_shared_file(managed_permit, b'{"schema":"dradar.managed_start.v1"}',
+                                check=registration_window.check if registration_window else None)
+                        if registration_window is not None:
+                            registration_window.finish()
                 # Start the local watchdog only after server ownership bind and
                 # the structured worker event. No model runtime is charged to
                 # image build/provider bootstrap.
@@ -5285,8 +5497,6 @@ def run_trial(
                         print(f"  … {int((now - started) / 60)} min elapsed — "
                               f"{_last_activity(log_path)}")
             except BaseException as exc:
-                if registration_window is not None:
-                    registration_window.abort()
                 cancellation.protect_finalization(
                     cancelled=isinstance(exc, (KeyboardInterrupt, EOFError)),
                 )
@@ -5296,9 +5506,11 @@ def run_trial(
                 # down`, and its orphaned task container keeps the agent alive —
                 # burning quota with nobody left to harvest the result.
                 cleanup_errors: list[str] = []
-                if start_gate is not None:
+                for permission in (start_gate, managed_permit):
+                    if permission is None:
+                        continue
                     try:
-                        start_gate.unlink(missing_ok=True)
+                        permission.unlink(missing_ok=True)
                     except OSError:
                         cleanup_errors.append("worker start permission could not be revoked")
                 try:
@@ -5311,15 +5523,27 @@ def run_trial(
                     # teardown completes. Always inspect and remove only a
                     # container positively bound to this exact failed job.
                     _cleanup_terminated_pier_containers(jobs_dir / job_name)
+                    _confirm_terminated_pier_containers_absent(jobs_dir / job_name)
                 except RunnerError as cleanup_error:
                     cleanup_errors.append(str(cleanup_error))
+                # Remote fencing is separate from local shutdown. A slow or
+                # lost close response must never postpone cancellation.
+                if registration_window is not None:
+                    registration_window.abort()
+                if managed_auth_config is not None:
+                    cleanup_errors.append("managed independent host process groups are not audited")
                 if cleanup_errors:
                     raise RunnerCleanupUnconfirmedError(
                         f"{exc}\nPier cleanup safety check failed: "
                         + "; ".join(cleanup_errors),
                         job_dir=jobs_dir / job_name,
                     ) from exc
+                local_exit_confirmed = True
                 from .api_client import ApiError
+                from .run_intent import IntentStopped
+                if isinstance(exc, IntentStopped):
+                    exc = RunnerError("a newer local stop cancelled provider permission",
+                                      report_code="worker-registration-stop-requested")
                 if isinstance(exc, ApiError) and getattr(on_worker_registered, "_uses_registration_window", False):
                     exc = RunnerError("worker registration lifetime was not confirmed",
                                       report_code="worker-registration-unacknowledged")
@@ -5332,17 +5556,23 @@ def run_trial(
                     # this original, actionable timeout below.
                     terminal_error = exc
                 else:
-                    raise
+                    # Keep the original callback failure, but publish the
+                    # independently confirmed exit after provider contexts
+                    # close. An application error is not uncertain execution.
+                    terminal_error = exc
+                    post_cleanup_error = exc
         cancellation.protect_finalization()
         if start_gate is not None:
             start_gate.unlink(missing_ok=True)
-        if terminal_error is None and effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT):
+        managed_permit.unlink(missing_ok=True)
+        if terminal_error is None:
             process_residue, cleanup = _cleanup_exited_pier_runtime(
                 proc, jobs_dir / job_name,
             )
-            if process_residue or cleanup.running:
+            local_exit_confirmed = True
+            if effective_agent in (ANTIGRAVITY_AGENT, ZCODE_AGENT) and (process_residue or cleanup.running):
                 if effective_agent == ZCODE_AGENT:
-                    raise RunnerTaskRetryableError(
+                    post_cleanup_error = RunnerTaskRetryableError(
                         "Pier exited while the ZCode runtime was still active; exact-job "
                         "processes and containers were stopped before the "
                         "assignment was made retryable",
@@ -5354,11 +5584,12 @@ def run_trial(
                             "agent_no_artifact",
                         ),
                     )
-                print(
-                    "  warning: Pier exited while the Antigravity runtime was still "
-                    "active; stopped exact-job residue and preserved harvested "
-                    "artifacts"
-                )
+                else:
+                    print(
+                        "  warning: Pier exited while the Antigravity runtime was still "
+                        "active; stopped exact-job residue and preserved harvested "
+                        "artifacts"
+                    )
     finally:
         if "managed_observation_reader" in locals() and managed_observation_reader is not None:
             managed_observation_reader.drain()
@@ -5366,11 +5597,23 @@ def run_trial(
             # Pass failures/cancellation through to the provider's native
             # persistence policy; close() would incorrectly report success.
             error_info = sys.exc_info()
-            if error_info[0] is None and isinstance(terminal_error, (KeyboardInterrupt, EOFError)):
-                error_info = (type(terminal_error), terminal_error, terminal_error.__traceback__)
+            if error_info[0] is None:
+                context_error = post_cleanup_error or (
+                    terminal_error if isinstance(terminal_error, (KeyboardInterrupt, EOFError)) else None)
+                if context_error is not None:
+                    error_info = (type(context_error), context_error, context_error.__traceback__)
             provider_stack.__exit__(*error_info)
         except (OSError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
+    if managed_auth_config is not None or not local_exit_confirmed:
+        raise RunnerCleanupUnconfirmedError(
+            "managed execution exit is not fully audited; keep this attempt quarantined",
+            job_dir=jobs_dir / job_name,
+        )
+    if execution_audit is not None:
+        execution_audit.absent()
+    if post_cleanup_error is not None:
+        raise post_cleanup_error
     if started is None:
         # Defensive guard for future launch-path changes: artifact harvesting
         # must never report a runtime duration when no launch boundary was

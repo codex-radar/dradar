@@ -101,6 +101,7 @@ def test_capability_advertises_software_support_before_first_key_setup():
     assert advertised_capabilities({}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
         GPT6_CAPABILITY,
+        "runner-reservation-v1",
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
         DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
@@ -109,6 +110,7 @@ def test_capability_advertises_software_support_before_first_key_setup():
     assert advertised_capabilities({DEEPSEEK_API_KEY_ENV: "key"}) == (
         TASK_PACKAGE_SYNC_CAPABILITY,
         GPT6_CAPABILITY,
+        "runner-reservation-v1",
         DEEPSEEK_CAPABILITY, DEEPSEEK_PRO_CAPABILITY,
         DEEPSEEK_FLASH_41_CAPABILITY,
         DEEPSEEK_FLASH_OFF_CAPABILITY, DEEPSEEK_PRO_OFF_CAPABILITY,
@@ -159,6 +161,7 @@ def test_corrupt_catalog_withholds_paid_provider_capability(
     assert "integrity check failed" in (deepseek_catalog_error(corrupt) or "")
     assert advertised_capabilities({}) == (
         TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY,
+        "runner-reservation-v1",
     )
 
 

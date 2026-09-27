@@ -85,6 +85,39 @@ def test_http_error_attaches_status_code_and_detail():
     assert "cell went stale" in str(ei.value)
 
 
+def test_mutation_busy_error_is_structured_and_bounded():
+    def handler(_request):
+        return httpx.Response(
+            503,
+            headers={"Retry-After": "3"},
+            json={
+                "code": "mutation_busy",
+                "detail": "server is busy; retry later",
+                "retry_after_seconds": 3,
+            },
+        )
+
+    with pytest.raises(ApiError) as ei:
+        _client(handler).mark_started("a" * 32)
+    assert ei.value.status_code == 503
+    assert ei.value.code == "mutation_busy"
+    assert ei.value.retry_after == 3
+
+
+def test_nested_mutation_busy_detail_is_unwrapped():
+    def handler(_request):
+        return httpx.Response(
+            503,
+            headers={"Retry-After": "3"},
+            json={"detail": {"code": "mutation_busy", "message": "busy"}},
+        )
+
+    with pytest.raises(ApiError) as ei:
+        _client(handler).mark_started("a" * 32)
+    assert ei.value.code == "mutation_busy"
+    assert "busy" in str(ei.value)
+
+
 def test_http_error_preserves_required_capability():
     def handler(request):
         return httpx.Response(426, json={

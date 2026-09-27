@@ -101,6 +101,7 @@ DRadar 必须把“用户交互”和“Agent 执行”设计为两个相互连�
 
 ```bash
 dradar run --plan <运行码> --server <网页 API 地址> [--concurrency 1|auto|N] [--json]
+dradar run --plan <同一运行码> [--server <网页 API 地址>] --held-only [--concurrency 1|auto|N] [--json]
 dradar run --plan <运行码> [--server <网页 API 地址>] --upload-only [--json]
 dradar progress --plan <运行码> [--server <网页 API 地址>] [--json]
 dradar stop --plan <运行码> [--server <网页 API 地址>] --scope this-device|all-devices [--json]
@@ -119,6 +120,7 @@ dradar stop --plan <运行码> [--server <网页 API 地址>] --scope this-devic
 | “只停止这台设备” | `--scope this-device` |
 | “全部设备都停止” | `--scope all-devices`，必须经过明确确认 |
 | “跑完继续补题” | 必须已在运行计划中授权；CLI 不得靠临时参数扩大范围 |
+| “补题已停，只继续这次仍持有的题目” | 使用同一运行码的 `--held-only`；重新核验设备权限，只处理原批有效租约，不配置或重启补题 |
 | “只补交本机已经完成的结果” | 仅在 Agent 收到结构化恢复动作后使用 `--upload-only`；不得登记设备或启动题目 |
 
 一个 CLI 参数只能表达一个清晰的用户意图。互相冲突的参数组合必须在改变任何状态前失败。

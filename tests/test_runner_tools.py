@@ -1032,6 +1032,43 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
 
     monkeypatch.setattr(runner_mod, "build_pier_command", fake_build)
     monkeypatch.setattr(runner_mod.subprocess, "Popen", FakePopen)
+    _fake_runtime_exit_observations(monkeypatch, captured)
+    return captured
+
+
+def _fake_runtime_exit_observations(monkeypatch, captured):
+    """Explicit exit observations for inert fake processes used by this file."""
+    if os.name == "nt":
+        # The product now spawns through a Job on Windows. These artifact
+        # tests still use an inert Pier; native Job behavior has its own suite.
+        # Resolve Popen at spawn time so interruption subclasses stay active.
+        class SyntheticJob(runner_mod.WindowsJobProcess):
+            def __init__(self, cmd, **kwargs):
+                self.child = runner_mod.subprocess.Popen(cmd, **kwargs)
+                self.pid = 12345
+                self.job_id = "a" * 32
+
+            def wait(self, timeout=None):
+                return self.child.wait(timeout)
+
+            def poll(self):
+                return self.child.returncode
+
+            @property
+            def returncode(self):
+                return self.child.returncode
+
+            def terminate_tree(self):
+                self.child.terminate()
+
+            def confirm_empty(self):
+                pass
+
+            def close_checked(self):
+                pass
+
+        monkeypatch.setattr(runner_mod.WindowsJobProcess, "spawn",
+                            lambda cmd, **kwargs: SyntheticJob(cmd, **kwargs))
     monkeypatch.setattr(
         runner_mod,
         "_cleanup_exited_pier_process_group",
@@ -1043,7 +1080,12 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
         lambda _job_root: runner_mod.PierContainerCleanup(),
     )
     monkeypatch.setattr(runner_mod, "_confirm_pier_process_tree_stopped", lambda _proc: None)
-    return captured
+    # The fake runtime has no containers; model the independent post-removal
+    # observation as well as the cleanup action. Real audit paths are covered
+    # by test_runner_exit_evidence's OS/Docker adapters.
+    def confirm_containers_absent(job_root):
+        captured["container_absence_observed"] = job_root
+    monkeypatch.setattr(runner_mod, "_confirm_terminated_pier_containers_absent", confirm_containers_absent)
 
 
 def test_run_trial_on_started_exception_terminates_launched_worker(tmp_path, monkeypatch):
@@ -1654,6 +1696,9 @@ def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
     """A paid run that reached artifacts must report cost, never vanish."""
     captured = {}
     cleaned = []
+    observed_absent = []
+    monkeypatch.setattr(runner_mod, "_confirm_terminated_pier_containers_absent",
+                        lambda job_root: observed_absent.append(job_root))
 
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
@@ -1698,6 +1743,7 @@ def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
     assert art.returncode == runner_mod.TRIAL_TIMEOUT_RETURNCODE
     assert summarize_result(art.result)["cost_usd"] == pytest.approx(0.124942)
     assert cleaned == [tmp_path / "jobs" / "aa1"]
+    assert observed_absent == cleaned
 
 
 def test_run_trial_missing_patch_raises(tmp_path, monkeypatch):
@@ -2358,6 +2404,7 @@ def test_registry_io_timeout_is_a_build_failure_with_bounded_diagnostic():
 
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
     captured = {}
+    _fake_runtime_exit_observations(monkeypatch, captured)
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
         captured["job_name"] = job_name
         return ["pier"]
@@ -2380,6 +2427,7 @@ def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch
         run_trial(_assignment("codex"), tmp_path, tmp_path)
     assert "model.patch missing" in str(exc.value)
     assert "agent auth rejected (401)" in str(exc.value)
+    assert captured["container_absence_observed"] == tmp_path / "jobs" / "aa1"
 
 
 def test_tail_keeps_only_the_last_n_lines(tmp_path):
@@ -2855,6 +2903,7 @@ def test_checkout_cooldown_distinguishes_waiting_from_checked_out():
 def test_run_trial_overrides_stale_server_pin_before_start(
         tmp_path, monkeypatch):
     captured = {}
+    _fake_runtime_exit_observations(monkeypatch, captured)
 
     def resolve(server_version, server_version_verified):
         captured["server_version"] = server_version
@@ -2891,6 +2940,7 @@ def test_run_trial_overrides_stale_server_pin_before_start(
     assert captured["server_version"] == "0.144.1"
     assert captured["server_version_verified"] is True
     assert art.codex_cli_version == "0.145.0"
+    assert captured["container_absence_observed"] == tmp_path / "jobs" / "aa1"
 
 
 def test_run_trial_registry_failure_starts_nothing(tmp_path, monkeypatch):
@@ -3133,18 +3183,32 @@ def test_managed_runner_permit_follows_successful_owner_bind(tmp_path, monkeypat
     _fake_pier(monkeypatch,tmp_path)
     monkeypatch.setattr(runner_mod,'_wait_for_worker_registration',lambda *a,**k: {'profile':'codex_managed_at'})
     monkeypatch.setattr(runner_mod,'resolve_latest_codex_cli_version',lambda *a,**k: pytest.fail('dynamic version resolved'))
+    permitted = []
+    bound = []
+    materialize = runner_mod._materialize_shared_file
+    def observe_permit(path, *args, **kwargs):
+        if path.name.endswith('.managed-start.json'):
+            assert bound == [True]
+            permitted.append(path)
+        return materialize(path, *args, **kwargs)
+    monkeypatch.setattr(runner_mod, '_materialize_shared_file', observe_permit)
     def bind(event):
         assert not list(tmp_path.glob('*.managed-start.json'))
         if not bind_succeeds:
             raise RuntimeError('fixture owner rejected')
+        bound.append(True)
     assignment=_assignment('codex') | {'auth_runtime':'codex-managed-at-v1'}
     if bind_succeeds:
-        run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
-        assert len(list(tmp_path.glob('*.managed-start.json')))==1
-    else:
-        with pytest.raises(RuntimeError,match='fixture owner rejected'):
+        # Permission may be published, but independent managed host process
+        # groups still lack an exit proof. Revoke and retain quarantine.
+        with pytest.raises(runner_mod.RunnerCleanupUnconfirmedError, match='not fully audited'):
             run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
-        assert not list(tmp_path.glob('*.managed-start.json'))
+        assert len(permitted) == 1
+    else:
+        with pytest.raises(runner_mod.RunnerCleanupUnconfirmedError,match='fixture owner rejected'):
+            run_trial(assignment,tmp_path,tmp_path,on_worker_registered=bind,managed_auth_config=tmp_path/'selection.json')
+        assert permitted == []
+    assert not list(tmp_path.glob('*.managed-start.json'))
 
 
 @pytest.fixture

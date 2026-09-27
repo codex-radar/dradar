@@ -204,6 +204,22 @@ def _valid_report_details(payload):
         return False
     legacy_keys = _REGISTRATION_DETAIL_KEYS - DIAGNOSTIC_KEYS
     if detail.keys() & legacy_keys:
+        # A generic runner failure may carry only the owning runner session so
+        # the server can correlate it with the session timeline.  It is not a
+        # registration diagnostic: every other registration field remains
+        # bound to the worker/assignment-start failure contracts below.
+        if (
+            payload.get("source") == "cli"
+            and payload.get("phase") == "runner"
+            and payload.get("failure_kind") == "runner_failed"
+            and payload.get("failure_code") == "runner_failed"
+            and not (
+                detail.keys() & _REGISTRATION_DETAIL_KEYS
+            ) - {"session_id"}
+            and isinstance(detail.get("session_id"), str)
+            and re.fullmatch(r"[0-9a-f]{32}", detail["session_id"])
+        ):
+            return True
         result = detail.get("registration_result")
         if payload.get("source") != "cli" or result not in REGISTRATION_RESULTS:
             return False

@@ -240,6 +240,27 @@ def snapshot(path: Path) -> tuple[dict, str]:
             return state, hashlib.sha256(raw).hexdigest()
 
 
+def confirm_server_submissions(
+    path: Path, digest: str, active_ids: set[str], submitted_ids: set[str],
+) -> None:
+    """Record an exact, fully verified missing set without losing a concurrent edit."""
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if state is None or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise BoundaryError("saved assignment boundary changed during verification")
+            report = _report(state, active_ids)
+            if report.unexpected_ids or report.missing_ids != submitted_ids or not submitted_ids:
+                raise BoundaryError("assignment inventory changed during verification")
+            for assignment_id in submitted_ids:
+                state["outcomes"][assignment_id] = {
+                    "outcome": "submitted",
+                    "source": "server-confirmed",
+                    "updated_at": _now(),
+                }
+            _save(path, state)
+
+
 def archive_if_unchanged(path: Path, digest: str) -> Path:
     """Retire a verified boundary without destroying its diagnostic record."""
     with _PROCESS_LOCK:

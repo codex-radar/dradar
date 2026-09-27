@@ -220,14 +220,24 @@ def test_kind_only_quarantine_stops_scoped_refill_before_retry(
     monkeypatch.setattr(runloop, '_pool_abort_reason', lambda: None)
     monkeypatch.setattr(runloop, '_run_config', lambda _args: {
         'run_plan_id': 'plan', 'run_plan_logical_session_id': 'drl_session',
+        'run_plan_credential_generation': 0, 'run_plan_intent_revision': 1,
+        'run_plan_current_start_intent_id': 'a' * 32,
     })
     monkeypatch.setattr(runloop, '_pending_uploads_for_client_batch',
                         lambda _client, _batch: [row])
     monkeypatch.setattr(runloop, '_retry_pending_uploads',
                         lambda *_a, **_k: pytest.fail('quarantine must not retry'))
     class Client:
-        def start_run_plan(self, **_kwargs):
+        def heartbeat_run_plan(self, **kwargs):
+            assert kwargs == {'plan_id': 'plan', 'current_start_intent_id': 'a' * 32,
+                              'expected_intent_revision': 1, 'expected_generation': 0}
+            return {'touched': True, 'starts_new_work': False, 'plan_id': 'plan',
+                    'current_start_intent_id': 'a' * 32, 'device_intent_revision': 1}
+        def run_plan_progress(self, plan_id):
+            assert plan_id == 'plan'
             return {'envelope': {'agent_action': 'continue'}}
+        def start_run_plan(self, **_kwargs):
+            pytest.fail('continuation must not create a new admission')
     with pytest.raises(SystemExit, match='result is unknown'):
         runloop._wait_for_scoped_refill_work(
             SimpleNamespace(batch_id='batch'), Client(), desired_workers=1,

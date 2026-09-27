@@ -58,6 +58,9 @@ def runtime(tmp_path):
                 self.send(403, {'detail': 'wrong fixture account'})
             elif path == '/api/v1/whoami':
                 self.send(200, {'concurrent_limit': 4, 'claim_limit': 4})
+            elif path == '/api/v1/run-plans/capabilities':
+                self.send(200, {'schema_version': 1, 'capabilities': ['runner-reservation-v1'],
+                                'stop_generation_cas': True, 'close_releases_capacity': False})
             elif path == '/api/v1/assignment':
                 # Odd batches require Kimi; even batches represent another lane.
                 needs_kimi = int(batch[-1], 16) % 2 == 1

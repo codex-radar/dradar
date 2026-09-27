@@ -168,7 +168,8 @@ def test_older_server_receives_same_report_key_without_new_fields(tmp_path):
         def report_runner_failure(self, payload):
             self.attempts.append(payload)
             if "registration_result" in payload["detail"]:
-                raise ApiError("old detail schema", status_code=422)
+                raise ApiError("old detail schema", status_code=422,
+                               payload={"detail": "failure report detail has unsupported fields"})
             return {"status": "received"}
 
     report = failure_reports.build_report(

@@ -85,7 +85,7 @@ def install(cli):
             record('pool')
             noop = lambda *a, **k: None
             runloop._run_config = lambda *a, **k: {'benchmark': runloop.DEFAULT_BENCHMARK}
-            runloop._client = lambda *a, **k: SimpleNamespace(capabilities=(), get_assignment=lambda: {'active': []})
+            runloop._client = lambda *a, **k: SimpleNamespace(capabilities=(), require_runner_reservation_protocol=noop, get_assignment=lambda: {'active': []})
             runloop._scope_client_to_batch = noop
             runloop._selected_tasks_root = lambda *a: ROOT / 'tasks'
             for name in ('_ensure_selected_tasks_root', 'ensure_pier', '_ensure_egress_runtime',

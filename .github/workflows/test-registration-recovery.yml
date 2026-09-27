@@ -6,6 +6,10 @@ on:
       - 'src/dradar/worker_events.py'
       - 'src/dradar/pier_codex_managed.py'
       - 'src/dradar/runner.py'
+      - 'src/dradar/windows_job.py'
+      - 'src/dradar/execution_audit.py'
+      - 'src/dradar/capacity_journal.py'
+      - 'src/dradar/run_intent.py'
       - 'src/dradar/runloop.py'
       - 'src/dradar/flight_recorder.py'
       - 'src/dradar/telemetry.py'
@@ -13,6 +17,12 @@ on:
       - 'tests/test_packaged_adapter_resources.py'
       - 'tests/test_registration*.py'
       - 'tests/test_pier_codex_managed.py'
+      - 'tests/test_windows_job*.py'
+      - 'tests/test_capacity_journal.py'
+      - 'tests/test_run_plan_intent_control.py'
+      - 'tests/test_runner_strategy.py'
+      - 'tests/test_agent_schema.py'
+      - 'src/dradar/agent_schema.py'
       - '.github/workflows/test-registration-recovery.yml'
   workflow_dispatch:
 permissions:
@@ -41,6 +51,9 @@ jobs:
         run: >-
           python -m pytest -q tests/test_registration_recovery.py
           tests/test_registration_native.py tests/test_worker_start_native.py
+          tests/test_windows_job_product.py tests/test_windows_job_adapter.py
+          tests/test_capacity_journal.py tests/test_run_plan_intent_control.py
+          tests/test_runner_strategy.py tests/test_agent_schema.py
           --junitxml=evidence/registration.xml
       - name: Actual managed adapter dependency
         if: matrix.python == '3.13'

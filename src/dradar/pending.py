@@ -9,11 +9,10 @@ scrubbing writes to a fresh tempdir and never mutates the originals) plus the
 already-built client_meta and outcome. `dradar retry-upload` (and an
 automatic scan at the top of `dradar go`) replays the upload later.
 
-Entries are self-pruning: a retry that gets back 409 specifically saying
-"already submitted" (some earlier attempt actually landed) or 410 (lease
-expired — unsalvageable, the cell already reopened for someone else) removes
-the entry. A 409 recovery-generation conflict is not success and stays queued.
-Anything else keeps it for the next retry.
+Confirmed submission removes the entry. Expiry and terminal upload rejection
+retain a blocked result for review, so preserving the files also preserves the
+model-start fence. A recovery-generation conflict is not success. Unreadable
+or malformed ledgers stop admission and are never overwritten as empty.
 
 The same ledger also holds ``cleanup_unconfirmed`` safety fences. Those rows
 may have no result or trial directory. They block duplicate model starts but
@@ -32,6 +31,18 @@ from typing import Iterator
 _FILENAME = "pending_uploads.json"
 _LOCK_FILENAME = "pending_uploads.lock"
 _PROCESS_LOCK = threading.Lock()
+
+
+class PendingLedgerError(RuntimeError):
+    """The safety ledger cannot be read; absence of evidence is not empty."""
+
+
+def _ledger_error(path: Path) -> PendingLedgerError:
+    return PendingLedgerError(
+        f"Cannot verify saved results in {path}. The file was kept unchanged; "
+        "no new model work is safe. Inspect or restore the ledger before "
+        "resuming. Official stop remains available."
+    )
 
 
 def scope_fingerprint(
@@ -109,13 +120,27 @@ def _locked(home: Path) -> Iterator[None]:
 
 def _load_unlocked(home: Path) -> list[dict]:
     path = _path(home)
-    if not path.is_file():
-        return []
     try:
+        if path.is_symlink():
+            raise _ledger_error(path)
         data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except FileNotFoundError:
         return []
-    return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, UnicodeError, OSError) as exc:
+        raise _ledger_error(path) from exc
+    if not isinstance(data, list) or any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("assignment_id"), str)
+        or not row["assignment_id"]
+        or (row.get("ledger_version") is not None and (
+            type(row["ledger_version"]) is not int
+            or row["ledger_version"] not in (1, 2, 3)
+        ))
+        or row.get("record_kind") not in (None, "cleanup_quarantine")
+        for row in data
+    ):
+        raise _ledger_error(path)
+    return data
 
 
 def load(home: Path) -> list[dict]:
@@ -136,6 +161,40 @@ def is_cleanup_quarantine(entry: object) -> bool:
         entry.get("record_kind") == "cleanup_quarantine"
         or entry.get("upload_blocked") == "cleanup_unconfirmed"
     )
+
+
+def require_uploadable(entry: dict, *, request_salvage: bool = False) -> None:
+    """Check replay shape without rewriting an incomplete safety record."""
+    if is_cleanup_quarantine(entry) or (
+        entry.get("upload_blocked")
+        and not (request_salvage and entry.get("upload_blocked") == "owner_superseded")
+    ):
+        return
+    required_strings = ("assignment_id", "nonce", "task_id", "trial_dir")
+    optional_strings = ("job_dir", "runner_session_id", "batch_id",
+                        "scope_fingerprint", "outcome")
+    epochs = ("owner_epoch", "resume_generation")
+    invalid = (
+        any(not isinstance(entry.get(key), str) or not entry[key]
+            for key in required_strings)
+        or any(key in entry and entry[key] is not None
+               and (not isinstance(entry[key], str) or not entry[key])
+               for key in optional_strings)
+        or any(key in entry and (type(entry[key]) is not int
+                                or not 0 <= entry[key] < 2 ** 63)
+               for key in epochs)
+        or (entry.get("meta") is not None and not isinstance(entry["meta"], dict))
+        or any(key in entry and type(entry[key]) is not bool
+               for key in ("keep", "omit_trajectory_bundle"))
+        or any(entry.get(key) is not None and not isinstance(entry[key], dict)
+               for key in ("upload_intent", "salvaged_from", "salvage_rebind"))
+    )
+    if invalid:
+        raise PendingLedgerError(
+            "Saved result metadata is incomplete; the pending record was kept "
+            "unchanged. Verify the original assignment and artifact metadata "
+            "before upload recovery. No model work is safe for this record."
+        )
 
 
 def assignment_ids(home: Path) -> set[str]:

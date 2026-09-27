@@ -204,7 +204,6 @@ def test_transient_retry_stop_without_ack_quarantines(monkeypatch,tmp_path):
     from test_go_menu import SubmitClient,ASSIGNMENT,_args
     monkeypatch.setattr(loop,'HOME',tmp_path)
     monkeypatch.setattr(loop,'run_trial',lambda *a,**k:(_ for _ in ()).throw(loop.RunnerError('transport')))
-    monkeypatch.setattr(loop,'_retryable_zcode_network_failure',lambda *a:True)
     monkeypatch.setattr(loop,'_mark_stopped_quietly',lambda *a,**k:False)
     monkeypatch.setattr(loop,'_report_failure_quietly',lambda *a,**k:None)
     assert loop._run_and_submit(SubmitClient({}),ASSIGNMENT,tmp_path,_args(),'abc')=='cleanup-unconfirmed'

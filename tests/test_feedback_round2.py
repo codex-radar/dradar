@@ -111,7 +111,7 @@ def test_quota_share_tiny_pct_never_shows_zero():
     assert "0.00%" not in line
 
 
-# --- build-flake classification + free auto-retry (volunteer report #3) ------
+# --- build failure diagnosis and explicit recovery -------------------------
 
 import pytest
 
@@ -163,6 +163,11 @@ def _flaky_pier(monkeypatch, work_dir, fail_times, log_line, make_patch=True):
         ),
     )
     monkeypatch.setattr(runner_mod.subprocess, "Popen", FakePopen)
+    # These tests classify the log after a completed fake process. Physical
+    # process/container cleanup is exercised in test_runner_exit_evidence.
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner_mod, "_cleanup_exited_pier_runtime", lambda *a:
+                        (False, SimpleNamespace(running=False)))
     return captured
 
 
@@ -186,7 +191,7 @@ def test_non_flake_missing_patch_stays_plain_runner_error(tmp_path, monkeypatch)
     assert "model.patch missing" in str(exc.value)
 
 
-def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
+def test_build_flake_returns_after_one_attempt_for_explicit_recovery(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient, _fake_art
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     calls = {"n": 0}
@@ -206,27 +211,49 @@ def test_run_and_submit_retries_build_flake_once(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(runloop, "run_trial", flaky_run)
     monkeypatch.setattr(
         runloop.image_cache,
-        "cleanup_trial_resources",
-        lambda *_a, **_k: runloop.image_cache.TaskCleanupResult(
-            success=False,
-            note=f"Proxy-Authorization: Basic {credentials[1]}",
-        ),
+        "remove_trial_builder",
+        lambda *_a, **_k: (False, f"Proxy-Authorization: Basic {credentials[1]}"),
     )
     client = SubmitClient({})
+    client.mark_stopped = lambda *a, **k: {"ok": True}
     args = _args()
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, args, "abc")
-    assert tag == "submitted" and calls["n"] == 2
+    assert tag == "environment-build-failed" and calls["n"] == 1
+    assert client.submissions == []
     output = capsys.readouterr().out
-    assert "retrying once automatically" in output
+    assert "before explicitly resuming" in output
+    assert "retrying once automatically" not in output
     assert all(output.find(value) == -1 for value in credentials)
-    assert all(
-        args._docker_cleanup_blocked.find(value) == -1
-        for value in credentials
-    )
+
+    assert all(value not in args._docker_cleanup_blocked for value in credentials)
     assert "<redacted>" in args._docker_cleanup_blocked
 
 
-def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_path):
+def test_build_failure_does_not_restart_after_concurrent_stop(monkeypatch, tmp_path):
+    from dradar import run_intent
+    from test_go_menu import ASSIGNMENT, SubmitClient
+    home, batch = tmp_path / "home", "a" * 32
+    monkeypatch.setattr(runloop, "HOME", home)
+    generation = run_intent.begin(home, batch)
+    monkeypatch.setenv(run_intent.BATCH_ENV, batch)
+    monkeypatch.setenv(run_intent.GENERATION_ENV, generation)
+    calls = []
+    def flaky(*args, **kwargs):
+        calls.append("trial")
+        run_intent.stop(home, batch)
+        raise BuildFlakeError("controlled build failure")
+    monkeypatch.setattr(runloop, "run_trial", flaky)
+    monkeypatch.setattr(runloop.image_cache, "remove_trial_builder", lambda *a, **k: (True, None))
+    client = SubmitClient({})
+    client.mark_stopped = lambda *a, **k: {"ok": True}
+    tag = runloop._run_and_submit(client, dict(ASSIGNMENT), tmp_path, _args(), "abc")
+    assert tag == "environment-build-failed"
+    with pytest.raises(run_intent.IntentStopped):
+        run_intent.require_worker(home)
+    assert calls == ["trial"]
+
+
+def test_build_failure_drains_new_work_after_one_attempt(monkeypatch, capsys, tmp_path):
     from test_go_menu import ASSIGNMENT, SubmitClient
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
     abort = tmp_path / "pool-abort"
@@ -244,7 +271,10 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
     monkeypatch.setattr(runloop, "run_trial", always_flaky)
     client = SubmitClient({})
     stopped = []
-    client.mark_stopped = lambda aid, **kw: stopped.append((aid, kw))
+    def confirmed_stop(aid, **kw):
+        stopped.append((aid, kw))
+        return {"ok": True}
+    client.mark_stopped = confirmed_stop
     tag = runloop._run_and_submit(client, ASSIGNMENT, tmp_path, _args(), "abc")
     assert tag == "environment-build-failed"
     assert stopped == [(
@@ -255,11 +285,12 @@ def test_run_and_submit_gives_up_after_second_flake(monkeypatch, capsys, tmp_pat
         "drain:" + runloop._ENVIRONMENT_BUILD_ABORT_PREFIX
     )
     output = capsys.readouterr().out
-    assert "failed twice" in output
+    assert "before explicitly resuming" in output
+    assert "failed twice" not in output
     assert all(output.find(value) == -1 for value in credentials)
 
 
-def test_build_flake_retry_binds_started_once_per_logical_assignment(
+def test_build_failure_stops_one_bound_attempt_without_release(
     monkeypatch, tmp_path,
 ):
     from test_go_menu import ASSIGNMENT
@@ -303,20 +334,19 @@ def test_build_flake_retry_binds_started_once_per_logical_assignment(
 
     assert outcome == "environment-build-failed"
     assert counts == {
-        "run_trial": 2,
+        "run_trial": 1,
         "mark_started": 1,
         "mark_stopped": 1,
         "release": 0,
     }
 
 
-def test_zcode_retry_rebinds_started_after_confirmed_stop(
+def test_zcode_network_failure_never_automatically_rebinds(
     monkeypatch, tmp_path,
 ):
     from test_go_menu import ASSIGNMENT, SubmitClient, _fake_art
 
     monkeypatch.setattr(runloop, "HOME", tmp_path / "home")
-    monkeypatch.setattr(runloop, "_ZCODE_NETWORK_RETRY_DELAY_SECONDS", 0)
     counts = {"run_trial": 0, "mark_started": 0, "mark_stopped": 0}
 
     class LifecycleClient(SubmitClient):
@@ -364,13 +394,13 @@ def test_zcode_retry_rebinds_started_after_confirmed_stop(
         client, assignment, tmp_path, _args(), "abc",
     )
 
-    assert outcome == "submitted"
+    assert outcome == "failed"
     assert counts == {
-        "run_trial": 2,
-        "mark_started": 2,
+        "run_trial": 1,
+        "mark_started": 1,
         "mark_stopped": 1,
     }
-    assert len(client.submissions) == 1
+    assert client.submissions == []
 
 
 def test_zcode_retry_never_rebinds_when_stop_is_unconfirmed(
@@ -419,7 +449,7 @@ def test_zcode_retry_never_rebinds_when_stop_is_unconfirmed(
         "abc",
     )
 
-    assert outcome == "failed"
+    assert outcome == "cleanup-unconfirmed"
     assert counts == {
         "run_trial": 1,
         "mark_started": 1,

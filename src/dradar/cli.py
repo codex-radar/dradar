@@ -20,12 +20,13 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, local_jobs, pending, capacity_journal
 from .agent_schema import cmd_schema
 from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
 from .boundary_recovery import cmd_boundary_recover
 from .cells import cmd_cells
+from .claim_receipts import cmd_claim_receipt
 from .doctor import cmd_doctor
 from .fleet import (
     cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
@@ -164,13 +165,28 @@ def main(argv: list[str] | None = None) -> int:
 
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")
+    p_capacity.add_argument("--reservations", action="store_true", help="read one page of existing reservation inventory")
+    p_capacity.add_argument("--reconcile", metavar="EVIDENCE_JSON", help="reconcile one exact historical reservation from a durable evidence file")
+    p_capacity.add_argument("--plan", metavar="RUN_CODE", help="use the original saved plan identity without exchange")
+    p_capacity.add_argument("--server", help="must match the server saved with the original identity")
+    p_capacity.add_argument("--after", default="", help="reservation cursor returned by the previous page")
+    p_capacity.add_argument("--quarantine-after", default="", help="history cursor returned by the previous page")
+    p_capacity.add_argument("--json", action="store_true", help="emit structured reservation inventory")
     p_capacity.set_defaults(func=cmd_capacity)
+
+    p_claim_receipt = sub.add_parser(
+        "claim-receipt", help="read the receipt for an original claim request")
+    p_claim_receipt.add_argument("--request-id", required=True, metavar="ORIGINAL_ID")
+    p_claim_receipt.add_argument("--expected-fingerprint", metavar="SHA256",
+                                 help="canonical request fingerprint, not the raw JSON file hash")
+    p_claim_receipt.add_argument("--json", action="store_true")
+    p_claim_receipt.set_defaults(func=cmd_claim_receipt)
 
     p_schema = sub.add_parser(
         "schema", help="show the versioned command contract used by Agents")
     schema_sub = p_schema.add_subparsers(
-        dest="schema_command", required=True, metavar="{run,progress,stop}")
-    for schema_command in ("run", "progress", "stop"):
+        dest="schema_command", required=True, metavar="{run,progress,stop,capacity}")
+    for schema_command in ("run", "progress", "stop", "capacity"):
         p_command_schema = schema_sub.add_parser(
             schema_command, help=f"show the {schema_command} command contract")
         p_command_schema.add_argument(
@@ -190,6 +206,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run_plan.add_argument(
         "--concurrency", type=_workers_value, default=None, metavar="N|auto",
         help="tasks to run at once, or auto (default: the website choice)",
+    )
+    p_run_plan.add_argument(
+        "--held-only", action="store_true",
+        help="resume this run's held assignments without starting or extending refill",
     )
     p_run_plan.add_argument(
         "--upload-only", action="store_true",
@@ -260,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     p_fleet_add.add_argument(
         "--refill", action="store_true",
         help="after every seed assignment submits, keep this exact campaign filled",
+    )
+    p_fleet_add.add_argument(
+        "--refill-mode", choices=("seed-barrier", "rolling-submitted"),
+        help="explicit campaign mode; rolling-submitted refills an accepted submission slot",
     )
     p_fleet_add.add_argument(
         "--max-tasks", type=int, metavar="N",
@@ -645,6 +669,10 @@ def main(argv: list[str] | None = None) -> int:
             help="target number of held/running tasks while refill is active",
         )
         p.add_argument(
+            "--refill-mode", choices=("seed-barrier", "rolling-submitted"),
+            help="explicit Fleet campaign mode (default: wait for all seed submissions)",
+        )
+        p.add_argument(
             "--refill-harness", metavar="HARNESS",
             help="restrict every auto-refill claim to one harness (for example "
                  "claude-code, dsh, kimi-code, zcode, grok-build, codebuddy, "
@@ -703,6 +731,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except (pending.PendingLedgerError, local_jobs.LocalEvidenceError, capacity_journal.CapacityEvidenceError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except (KeyboardInterrupt, EOFError):
         # single choke point for every command: Ctrl-C during a run (the
         # batch banner promises it's safe) or EOF from piped/non-tty stdin
