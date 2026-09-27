@@ -1231,7 +1231,8 @@ def _stop_run_plan_device(item: dict, reason: str) -> str | None:
         local_generation = item.get("intent_generation")
         if local_generation is not None:
             try:
-                run_intent.stop(HOME, batch_id, expected_generation=local_generation)
+                run_intent.stop(HOME, batch_id, expected_generation=local_generation,
+                                allow_already_stopped=True)
             except run_intent.IntentStopped:
                 return "the original local lifecycle is already stopped or superseded"
         elif cfg.get("run_plan_intent_protocol", 0) == 1:

@@ -16,6 +16,7 @@ from .api_client import normalize_batch_id
 
 BATCH_ENV = "DRADAR_RUN_INTENT_BATCH"
 GENERATION_ENV = "DRADAR_RUN_INTENT_GENERATION"
+POOL_STOP_ENV = "DRADAR_POOL_ABORT_FILE"
 
 
 class IntentStopped(RuntimeError):
@@ -118,21 +119,32 @@ def lifecycle_snapshot(home: Path, batch: str) -> tuple[str, str]:
 
 
 @contextmanager
-def stop_publication(home: Path, batch: str, *, expected_generation: str | None = None):
+def stop_publication(home: Path, batch: str, *, expected_generation: str | None = None,
+                     allow_already_stopped: bool = False):
     """Publish reduction and let the caller capture evidence under this short lock."""
     from .run_plans import _atomic_json, _exclusive_lock
     from .fleet import _request_pool_drain
-    _path, stopped, lock = _paths(home, batch)
+    path, stopped, lock = _paths(home, batch)
     with _exclusive_lock(lock):
         if expected_generation is not None:
-            require(home, batch, expected_generation)
+            if allow_already_stopped:
+                state = _read(path)
+                if state["generation"] != expected_generation:
+                    raise IntentStopped("a newer run superseded this stop")
+                if state["stop_digest"] != _stop_digest(stopped):
+                    yield _request_pool_drain(home, batch, "this device was asked to stop")
+                    return
+            else:
+                require(home, batch, expected_generation)
         _atomic_json(stopped, {"schema_version": 1, "stop_id": uuid.uuid4().hex})
         yield _request_pool_drain(home, batch, "this device was asked to stop")
 
 
-def stop(home: Path, batch: str, *, expected_generation: str | None = None) -> str | None:
+def stop(home: Path, batch: str, *, expected_generation: str | None = None,
+         allow_already_stopped: bool = False) -> str | None:
     """Persist reduction and publish local drain without waiting for the API."""
-    with stop_publication(home, batch, expected_generation=expected_generation) as warning:
+    with stop_publication(home, batch, expected_generation=expected_generation,
+                          allow_already_stopped=allow_already_stopped) as warning:
         return warning
 
 
@@ -141,17 +153,36 @@ def require_worker(home: Path) -> None:
     generation = os.environ.get(GENERATION_ENV)
     if batch or generation:
         require(home, batch, generation)
+    _require_pool_running()
+
+
+def _require_pool_running() -> None:
+    raw = os.environ.get(POOL_STOP_ENV)
+    if raw and os.path.lexists(raw):
+        raise IntentStopped("this worker pool stopped; use an explicit run to resume")
 
 
 @contextmanager
-def worker_launch_guard(home: Path):
-    """Order a worker's final local launch with durable stop publication."""
+def worker_control_guard(home: Path):
+    """Serialize pool reduction with the existing exact-scope launch lock."""
     batch = os.environ.get(BATCH_ENV)
     generation = os.environ.get(GENERATION_ENV)
     if batch or generation:
         with launch_guard(home, batch, generation):
             yield
+    elif os.environ.get(POOL_STOP_ENV):
+        from .run_plans import _exclusive_lock
+        with _exclusive_lock(Path(os.environ[POOL_STOP_ENV]).with_suffix(".lock")):
+            yield
     else:
+        yield
+
+
+@contextmanager
+def worker_launch_guard(home: Path):
+    """Order final launch with both explicit stop and failure reduction."""
+    with worker_control_guard(home):
+        _require_pool_running()
         yield
 
 

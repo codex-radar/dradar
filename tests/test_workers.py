@@ -2369,9 +2369,9 @@ def test_task_failure_after_checkout_keeps_anti_cascade_cutoff(
     assert "existing waiting work is frozen" in capsys.readouterr().out
 
 
-def test_server_confirmed_stopped_assignment_backfills_after_retry_time(
+def test_server_confirmed_return_does_not_authorize_failure_backfill(
         monkeypatch, capsys):
-    """A stopped child may refill only its exact authoritative waiting row."""
+    """Elapsed cooldown and a return ACK do not authorize a second attempt."""
     old_lease = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     returned = {
         "assignment_id": "returned",
@@ -2419,13 +2419,10 @@ def test_server_confirmed_stopped_assignment_backfills_after_retry_time(
     monkeypatch.setattr(runloop.subprocess, "Popen", popen)
 
     assert runloop._run_worker_pool(_args(workers=2)) == 1
-    assert [p.env["DRADAR_WORKER_INDEX"] for p in calls] == ["1", "2", "2"]
-    assert calls[2].env[
-        runloop._POOL_RETURNED_ASSIGNMENTS_SNAPSHOT_ENV
-    ] == '["returned"]'
+    assert [p.env["DRADAR_WORKER_INDEX"] for p in calls] == ["1", "2"]
     output = capsys.readouterr().out
     assert "existing waiting work is frozen" in output
-    assert "restoring worker slot 2/2" in output
+    assert "restoring worker slot" not in output
 
 
 def test_backfill_v2_kill_switch_restores_previous_last_exit_behavior(
@@ -2857,7 +2854,7 @@ def test_ready_assignment_filter_excludes_running_paused_and_bad_retry_time():
     )
 
 
-def test_returned_assignment_bypasses_old_lease_only_with_complete_safe_state():
+def test_returned_assignment_never_bypasses_failure_cutoff():
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=1)
     assignment = {
@@ -2872,7 +2869,7 @@ def test_returned_assignment_bypasses_old_lease_only_with_complete_safe_state():
         "runner_phase": None,
     }
 
-    assert runloop._assignment_is_ready_for_checkout(
+    assert not runloop._assignment_is_ready_for_checkout(
         assignment, now=now, claimed_after=cutoff,
         returned_assignment_ids={"returned"},
     )
@@ -2944,15 +2941,10 @@ def test_surviving_worker_excludes_pre_failure_inventory(
     assert runloop._pool_degraded_exclusions(Client()) == {"old"}
 
 
-def test_replacement_worker_accepts_exact_returned_pre_failure_assignment(
+def test_replacement_worker_excludes_returned_pre_failure_assignment(
         tmp_path, monkeypatch,
 ):
-    """The child must receive the safe-return proof used to spawn it.
-
-    Regression for 0.5.142: the parent counted this row as ready, but the
-    replacement child's degraded checkout filter excluded the same row and
-    exited without checkout until its slot was permanently suppressed.
-    """
+    """Parent and child both require explicit recovery of a returned failure."""
     cutoff = datetime.now(timezone.utc)
     cutoff_file = tmp_path / "failure-cutoff"
     cutoff_file.write_text(cutoff.isoformat())
@@ -2992,7 +2984,7 @@ def test_replacement_worker_accepts_exact_returned_pre_failure_assignment(
                 },
             ]}
 
-    assert runloop._pool_degraded_exclusions(Client()) == {"unrelated-old"}
+    assert runloop._pool_degraded_exclusions(Client()) == {"returned", "unrelated-old"}
 
 
 def test_malformed_returned_assignment_proof_fails_closed(tmp_path, monkeypatch):

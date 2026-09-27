@@ -176,6 +176,7 @@ _REPEAT_FAILURE_STATE_ENV = "DRADAR_REPEAT_FAILURE_STATE_FILE"
 _ASSIGNMENT_BOUNDARY_ENV = "DRADAR_ASSIGNMENT_BOUNDARY_FILE"
 _PINNED_TASKS_ROOT_ENV = "DRADAR_PINNED_TASKS_ROOT"
 _POOL_DRAIN_PREFIX = "drain:"
+_FAILURE_DRAIN_PREFIX = "runtime failure: "
 # EX_TEMPFAIL: a supervised child uses this to distinguish one unsafe slot
 # from a generic failure that must freeze the pool's shared waiting queue.
 _WORKER_SLOT_QUARANTINED_EXIT_CODE = 75
@@ -262,6 +263,10 @@ _TERMINAL_FAILURE_OUTCOMES = {
     # claiming another one just burns a lease against the same wall.
     "region-blocked": (
         "region-blocked", "provider does not serve this egress region",
+    ),
+    "provider-transport": (
+        "provider-transport-failed",
+        _FAILURE_DRAIN_PREFIX + "provider transport failed",
     ),
 }
 
@@ -472,19 +477,56 @@ def _signal_pool_abort(reason: str, *, interrupt_siblings: bool = True) -> None:
     path = _pool_abort_path()
     if path is None:
         return
+    from . import run_intent
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
-        payload = reason if interrupt_siblings else f"{_POOL_DRAIN_PREFIX}{reason}"
-        path.write_text(payload)
-    except OSError:
-        # The worker that observed the terminal condition still stops locally.
-        # Never turn a best-effort sibling signal into another task failure.
-        pass
+        with run_intent.worker_control_guard(HOME):
+            # Keep the first stop directive; a later failure must not replace
+            # an explicit interrupt or change the original failure reason.
+            if path.exists():
+                return
+            payload = reason if interrupt_siblings else f"{_POOL_DRAIN_PREFIX}{reason}"
+            with temporary.open("x", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+    except run_intent.IntentStopped:
+        # A newer explicit stop already fences this generation's launches.
+        return
+    except OSError as exc:
+        print("warning: could not publish this pool's stop; preserving local failure: "
+              + image_cache.redact_docker_diagnostic(exc, limit=300))
+        # A planned run has a second, existing durable launch fence. Keep
+        # upload/finalization alive while cancelling this exact generation.
+        batch = os.environ.get(run_intent.BATCH_ENV)
+        generation = os.environ.get(run_intent.GENERATION_ENV)
+        if batch and generation:
+            try:
+                warning = run_intent.stop(HOME, batch, expected_generation=generation)
+                if warning:
+                    print("warning: " + image_cache.redact_docker_diagnostic(warning, limit=300))
+            except run_intent.IntentStopped:
+                pass  # This generation has already lost launch permission.
+            except OSError as stop_exc:
+                print("warning: local stop is unconfirmed; preserve this run for review: "
+                      + image_cache.redact_docker_diagnostic(stop_exc, limit=300))
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _pool_stop_directive(path: Path | None = None) -> tuple[bool, str] | None:
     """Return ``(interrupt_siblings, reason)`` for the shared stop marker."""
     path = path or _pool_abort_path()
     if path is None or not path.is_file():
+        from . import run_intent
+        try:
+            run_intent.require_worker(HOME)
+        except run_intent.IntentStopped:
+            return False, "this run intent was stopped"
         return None
     try:
         value = path.read_text().strip()
@@ -3007,6 +3049,7 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
     # stops this worker before another checkout; a prior task must never poison
     # a later explicit invocation after the user has repaired Docker.
     args._docker_cleanup_blocked = None
+    assignment.pop("_confirmed_upload_outcome", None)
     from . import run_intent
     try:
         run_intent.require_worker(HOME)
@@ -3341,6 +3384,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             )
         failure_kind = classify_exception_message(str(exc))
         terminal_outcome = _terminal_failure_outcome(failure_kind)
+        if terminal_outcome is None:
+            # Publish before returning ownership: cleanup is not permission
+            # for a sibling or replacement to run the failure again.
+            _signal_pool_abort(
+                _FAILURE_DRAIN_PREFIX + "runner failed", interrupt_siblings=False,
+            )
         diagnostic = exc.failure_diagnostic or {}
         # Record the observed transport class; recovery policy belongs to the
         # caller. A network error can occur after paid model work has begun.
@@ -3821,6 +3870,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         and not getattr(args, "yes", False)
         and not getattr(args, "parallel", False)
     ))
+    if upload_outcome in assignment_boundary.SETTLED_OUTCOMES:
+        assignment["_confirmed_upload_outcome"] = upload_outcome
     _record_empty_submission_outcome(args, client, assignment, upload_outcome)
     if telemetry:
         upload_succeeded = upload_outcome in {
@@ -4604,6 +4655,12 @@ def _record_assignment_boundary(args, assignment: dict, outcome: str) -> bool:
     path = _assignment_boundary_path(args)
     if path is None:
         return True
+    if outcome == "provider-transport-failed":
+        # Scheduling stops after this provider failure, while the accepted
+        # interrupted submission remains settled and must never run again.
+        settled = assignment.get("_confirmed_upload_outcome")
+        if settled in assignment_boundary.SETTLED_OUTCOMES:
+            outcome = settled
     try:
         assignment_boundary.record_outcome(path, assignment, outcome)
     except (assignment_boundary.BoundaryError, OSError) as exc:
@@ -5549,43 +5606,22 @@ def _assignment_is_ready_for_checkout(
     Fresh controller claims have no ``started_at`` value and are safe for the
     server's atomic checkout endpoint to assign.
     """
-    assignment_id = assignment.get("assignment_id")
-    confirmed_return = bool(
-        assignment_id
-        and returned_assignment_ids
-        and assignment_id in returned_assignment_ids
-        and assignment.get("execution_state") == "waiting"
-        and assignment.get("runner_state") == "waiting"
-        and assignment.get("heartbeat_running") is False
-        and assignment.get("runner_phase") is None
-    )
     if (assignment.get("started_at")
             or assignment.get("execution_state") not in (None, "waiting")
             or assignment.get("checkpoint_id")):
         return False
     if claimed_after is not None:
-        if confirmed_return:
-            # This exact child checked the assignment out, received a
-            # successful assignment/stopped acknowledgement, and has now
-            # exited. The server independently confirms that the still-leased
-            # row is waiting, unowned and has no retired state marker. It is therefore
-            # safe to bypass only the older leased_at cutoff for this ID.
-            pass
-        else:
-            leased_at = assignment.get("leased_at")
-            try:
-                claimed_at = datetime.fromisoformat(
-                    str(leased_at).replace("Z", "+00:00")
-                )
-            except (TypeError, ValueError):
-                # Old servers do not expose leased_at. A degraded pool must
-                # fail closed rather than rotate a local fault through an
-                # assignment it cannot prove was claimed after the failure.
-                return False
-            if claimed_at.tzinfo is None:
-                claimed_at = claimed_at.replace(tzinfo=timezone.utc)
-            if claimed_at <= claimed_after:
-                return False
+        # Returned ownership proves cleanup, not a new recovery decision.
+        # Even a complete return receipt cannot bypass this execution's fence.
+        leased_at = assignment.get("leased_at")
+        try:
+            claimed_at = datetime.fromisoformat(str(leased_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return False
+        if claimed_at.tzinfo is None:
+            claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+        if claimed_at <= claimed_after:
+            return False
     retry_after = assignment.get("retry_after")
     if not retry_after:
         return True
@@ -5988,7 +6024,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         registry_mirrors = ()
     else:
         configured_abort_file = _pool_abort_path()
-        if configured_abort_file is not None and configured_abort_file.is_file():
+        if _pool_abort_reason():
             print(
                 f"worker pool is circuit-broken: {_pool_abort_reason() or 'account stop'}; "
                 "not claiming or starting model workers"
@@ -6417,7 +6453,12 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             env[_ASSIGNMENT_BOUNDARY_ENV] = str(boundary_path)
         from .child_entrypoint import popen_options
         child_kwargs = {**popen_kwargs, **popen_options(env)}
-        process = subprocess.Popen(worker_command, env=env, **child_kwargs)
+        from . import run_intent
+        try:
+            with run_intent.worker_launch_guard(HOME):
+                process = subprocess.Popen(worker_command, env=env, **child_kwargs)
+        except run_intent.IntentStopped as exc:
+            raise OSError("this run stopped before worker launch") from exc
         processes.append(process)
         active_processes[slot] = process
         print(f"  worker {slot}/{count}: pid {process.pid}")
@@ -6617,7 +6658,8 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             new_target = _read_pool_target(
                 target_file, default=target, maximum=maximum,
             )
-            if new_target != target:
+            directive = _pool_stop_directive(pool_abort_file)
+            if new_target != target and directive is None and not backfill_disabled:
                 direction = "up" if new_target > target else "down"
                 print(f"scaling worker pool {direction}: {target} -> {new_target}")
                 if getattr(args, "refill", False):
@@ -6640,9 +6682,8 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                             f"failure ({exc}); active workers will finish"
                         )
                 target = new_target
-            if pool_abort_file.is_file():
+            if directive is not None:
                 if abort_reason is None:
-                    directive = _pool_stop_directive(pool_abort_file)
                     abort_interrupts_siblings, abort_reason = (
                         directive or (True, "account stop")
                     )
@@ -6924,7 +6965,10 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                 "startup failure"
             )
             return 1
-        return 0
+        return 1 if (
+            abort_reason.startswith(_FAILURE_DRAIN_PREFIX)
+            or any(code != 0 for _slot, code in returncodes)
+        ) else 0
     if fleet_pool and not startup_ready:
         print(
             "worker pool never reached verified child readiness "
@@ -7375,6 +7419,12 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 "earlier failure."
             )
             break
+        if _pool_abort_reason():
+            # The stop may have arrived while checkout was in flight. Return
+            # only this unstarted ownership stamp and preserve the lease.
+            stopped = _mark_stopped_quietly(client, assignment, defer_seconds=0)
+            results.append("local-stop-requested" if stopped else "cleanup-unconfirmed")
+            break
         try:
             assignment_boundary.add_expected(
                 _assignment_boundary_path(args), [assignment],
@@ -7384,6 +7434,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 ),
             )
         except (assignment_boundary.BoundaryError, OSError) as exc:
+            _signal_pool_abort(
+                _FAILURE_DRAIN_PREFIX + "checkout boundary unavailable",
+                interrupt_siblings=False,
+            )
             _mark_stopped_quietly(
                 client, assignment, defer_seconds=0,
                 failure_kind="runner_failed",
@@ -7397,6 +7451,10 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         if not _record_supervised_worker_checkout(
             args, assignment["assignment_id"],
         ):
+            _signal_pool_abort(
+                _FAILURE_DRAIN_PREFIX + "checkout activity unavailable",
+                interrupt_siblings=False,
+            )
             _mark_stopped_quietly(
                 client, assignment, defer_seconds=0,
                 failure_kind="runner_failed",
@@ -7488,6 +7546,13 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
         ).lower() in {
             "1", "true", "yes", "on",
         }
+        if _pool_abort_reason():
+            if getattr(args, "refill", False):
+                if outcome in ("submitted", "interrupted"):
+                    refill_plan.mark_submitted(HOME, assignment["assignment_id"])
+                refill_plan.stop(HOME, "this runtime stopped before refill")
+            results.append(outcome)
+            break
         if getattr(args, "refill", False):
             if outcome not in _NON_FAULT_RUNNER_OUTCOMES:
                 refill_plan.stop(HOME, f"task outcome={outcome}")
