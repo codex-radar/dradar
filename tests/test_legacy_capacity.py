@@ -452,3 +452,35 @@ def test_reconcile_evidence_shape_is_required_before_network(reconcile_wire, cap
     output = json.loads(capsys.readouterr().out)
     assert rc == 1 and output["error_code"] == "reconcile_evidence_unverifiable"
     assert seen == []
+
+
+@pytest.mark.parametrize("retired_count", [1, 2])
+def test_recovered_plan_inventory_selects_only_current_credential(wire, capsys, retired_count):
+    path, state = saved_plan()
+    for i in range(retired_count):
+        save(path.with_name(f"plan-old-{i}.json"), {**state,
+            "retired_for_new_execution": True, "token": f"drp_retired_{i}"})
+    rc, output = invoke(capsys, plan=RUN_CODE)
+    assert rc == 0 and len(wire[0]) == 1
+    assert wire[0][0].headers["Authorization"] == f"Bearer {PLAN_TOKEN}"
+    assert output["scope"]["batch_id"] == BATCH
+
+
+@pytest.mark.parametrize("conflict", ["server", "plan_id", "batch_id", "benchmark", "embedded", "all_retired"])
+def test_recovered_inventory_rejects_scope_conflicts_and_no_unique_current(wire, capsys, conflict):
+    path, state = saved_plan()
+    old = copy.deepcopy(state)
+    old["retired_for_new_execution"] = True
+    if conflict == "all_retired":
+        save(path, old)
+    elif conflict == "embedded":
+        old["plan"]["batch_id"] = "e" * 32
+    else:
+        old[conflict] = "https://other.invalid" if conflict == "server" else "e" * 32
+        nested = {"plan_id": "plan_id", "batch_id": "batch_id", "benchmark": "benchmark_id"}
+        if conflict in nested:
+            old["plan"][nested[conflict]] = old[conflict]
+    save(path.with_name("plan-old.json"), old)
+    rc, output = invoke(capsys, plan=RUN_CODE)
+    assert rc == 1 and output["error_code"] == "inventory_plan_evidence_missing"
+    assert not wire[0]
