@@ -37,6 +37,7 @@ class RegistrationWindow:
         self._diagnostic = {}
         self._diagnostic_stage = "local_state"
         self._diagnostic_ack = "not_received"
+        self._diagnostic_local_substage = "unknown"
         self._diagnostic_frozen = False
         self.deadline = min(now + REGISTRATION_SECONDS,
                             worker_deadline - HANDOFF_MARGIN_SECONDS)
@@ -57,13 +58,15 @@ class RegistrationWindow:
         error.registration_reason = reason
         return error
 
-    def _observe(self, *, stage=None, ack=None):
+    def _observe(self, *, stage=None, ack=None, local_substage=None):
         # Diagnostics are best effort and must never change control flow.
         try:
             if stage is not None:
                 self._diagnostic_stage = stage
             if ack is not None:
                 self._diagnostic_ack = ack
+            if local_substage is not None:
+                self._diagnostic_local_substage = local_substage
         except Exception:
             pass
 
@@ -77,12 +80,18 @@ class RegistrationWindow:
                 reason = ("http_rejected" if isinstance(exc, ApiError) and exc.status_code is not None
                           else "local_state_error" if isinstance(exc, (OSError, ValueError, TypeError))
                           else "unknown")
+            prior_diagnostic = self._diagnostic if isinstance(self._diagnostic, dict) else {}
             result = {
                 "registration_failure_stage": self._diagnostic_stage,
                 "registration_failure_reason": reason,
                 "registration_ack_state": self._diagnostic_ack,
                 "registration_close_state": "not_attempted",
+                "registration_local_substage": self._diagnostic_local_substage,
             }
+            for key in ("session_id", "worker_event_id"):
+                value = prior_diagnostic.get(key)
+                if isinstance(value, str) and len(value) == 32 and all(c in "0123456789abcdef" for c in value):
+                    result[key] = value
             if isinstance(exc, ApiError) and exc.status_code is not None:
                 result["ack_http_status"] = exc.status_code
                 if exc.code is not None:
@@ -211,8 +220,10 @@ class RegistrationWindow:
             if type(response.get("owner_epoch")) is int:
                 assignment["owner_epoch"] = response["owner_epoch"]
             assignment["_runner_session_id"] = telemetry.session_id
+            self._observe(local_substage="state_lock")
             with _checked_lock(telemetry._lock, self.check):
                 previous_phase = telemetry._phase
+                self._observe(local_substage="phase_transition")
                 telemetry._phase = "running"
                 telemetry._active_assignment_id = assignment["assignment_id"]
                 telemetry._owner_epoch = assignment.get("owner_epoch")
@@ -244,17 +255,27 @@ class RegistrationWindow:
         recorder = t.flight_recorder
         if recorder is None or not t._batch_id or t._disabled:
             raise ApiError("worker registration recorder unavailable")
+        self._observe(local_substage="state_lock")
         with _checked_lock(t._send_lock, self.check):
             self.check()
             with _checked_lock(t._lock, self.check):
                 batch, session, assignment_id = t._batch_id, t.session_id, a["assignment_id"]
                 owner_epoch = t._owner_epoch
+            if isinstance(self._diagnostic, dict):
+                self._diagnostic["session_id"] = session
+            else:
+                self._diagnostic = {"session_id": session}
+            self._observe(local_substage="recorder_event_record")
             event = recorder.record("worker_registered", component="provider",
                                     batch_id=batch, session_id=session,
                                     assignment_id=assignment_id,
                                     attributes={"provider": a.get("agent") or "codex"},
                                     _registration_check=self.check)
             diagnostic = {"session_id": session, "worker_event_id": event["event_id"]}
+            if isinstance(self._diagnostic, dict):
+                self._diagnostic.update(diagnostic)
+            else:
+                self._diagnostic = dict(diagnostic)
             t._registration_diagnostic_local.value = diagnostic
             async with self._client() as client:
                 # Retry the same logical registration with a fresh sequence;
@@ -298,11 +319,15 @@ class RegistrationWindow:
                     raise self._error("exact worker event was not acknowledged", "invalid_response")
                 self._observe(stage="ack_persist", ack="received")
                 diagnostic["registration_result"] = "flight_ack_persist_error"
+                self._observe(local_substage="ack_file_lock")
                 with _checked_lock(recorder._lock, self.check):
                     with _exclusive_file_lock(recorder.lock_path, check=self.check):
                         self.check()
+                        self._observe(local_substage="ack_file_write")
                         recorder._write_acknowledged_ids_unlocked({event["event_id"]})
+                        self._observe(local_substage="pending_read")
                         pending = recorder._load(recorder.pending_path)
+                        self._observe(local_substage="pending_write")
                         recorder._write(recorder.pending_path,
                                         [e for e in pending if e.get("event_id") != event["event_id"]])
                         self.check()

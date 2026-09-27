@@ -16,6 +16,10 @@ ENUMS = {
     "registration_ack_state": frozenset({"not_received", "received", "persisted", "unknown"}),
     "registration_close_state": frozenset({"not_attempted", "confirmed", "http_rejected",
         "transport_error", "budget_expired", "invalid_response", "unknown"}),
+    "registration_local_substage": frozenset({
+        "recorder_event_record", "ack_file_lock", "ack_file_write",
+        "pending_read", "pending_write", "state_lock", "phase_transition", "unknown",
+    }),
 }
 LIMITS = {"registration_elapsed_ms": 120000, "registration_remaining_ms": 15000}
 DIAGNOSTIC_KEYS = frozenset(ENUMS) | frozenset(LIMITS)

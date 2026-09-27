@@ -95,8 +95,21 @@ def test_ack_received_but_persistence_failed(tmp_path, monkeypatch):
         with pytest.raises(ApiError): window.bind(api, telemetry, assignment)
         d = telemetry.worker_registration_diagnostic
         assert (d['registration_ack_state'], d['registration_failure_stage'], d['registration_failure_reason']) == ('received','ack_persist','local_state_error')
+        assert d['registration_local_substage'] == 'ack_file_write'
         assert not state['started']
         assert 'private path' not in json.dumps(d)
+
+
+@pytest.mark.parametrize('substage', [
+    'recorder_event_record', 'ack_file_lock', 'ack_file_write',
+    'pending_read', 'pending_write', 'state_lock', 'phase_transition', 'unknown',
+])
+def test_local_substage_is_bounded(substage):
+    assert reports._safe_detail('registration_local_substage', substage) == substage
+
+
+def test_local_substage_rejects_free_text():
+    assert reports._safe_detail('registration_local_substage', '/private/path') is None
 
 
 def test_diagnostic_failure_does_not_block_close(tmp_path, monkeypatch):

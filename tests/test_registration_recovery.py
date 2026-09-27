@@ -241,6 +241,53 @@ def test_local_ack_persistence_failure_never_starts(tmp_path, monkeypatch):
         assert t.worker_registration_diagnostic["registration_result"]=="flight_ack_persist_error"
 
 
+def test_recorder_event_failure_is_named_without_leaking_local_error(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch) as (w, api, t, a, state):
+        original = t.flight_recorder.record
+
+        def fail_worker_registration(kind, *args, **kwargs):
+            if kind == "worker_registered":
+                raise OSError("private recorder path")
+            return original(kind, *args, **kwargs)
+
+        monkeypatch.setattr(t.flight_recorder, "record", fail_worker_registration)
+        with pytest.raises(ApiError):
+            w.bind(api, t, a)
+        detail = t.worker_registration_diagnostic
+        assert detail["registration_local_substage"] == "recorder_event_record"
+        assert "private recorder path" not in json.dumps(detail)
+        assert not state["started"]
+
+
+def test_state_lock_failure_after_start_is_named(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch) as (w, api, t, a, state):
+        after_start = {"value": False}
+        original_request = w._start_request
+
+        def mark_start(method, path, **kwargs):
+            response = original_request(method, path, **kwargs)
+            if path == "/api/v1/assignment/started":
+                after_start["value"] = True
+            return response
+
+        original_checked_lock = registration._checked_lock
+
+        def fail_after_start(lock, check=None):
+            if after_start["value"] and lock is t._lock:
+                raise OSError("state lock unavailable")
+            return original_checked_lock(lock, check)
+
+        monkeypatch.setattr(w, "_start_request", mark_start)
+        monkeypatch.setattr(registration, "_checked_lock", fail_after_start)
+        with pytest.raises(ApiError):
+            w.bind(api, t, a)
+        detail = t.worker_registration_diagnostic
+        assert detail["registration_failure_stage"] == "local_state"
+        assert detail["registration_local_substage"] == "state_lock"
+        assert "state lock unavailable" not in json.dumps(detail)
+        assert state["started"]
+
+
 def test_worker_deadline_and_expiry_are_fail_closed():
     for value in (None, float("nan"), time.monotonic()-1, time.monotonic()+130):
         with pytest.raises(ApiError): RegistrationWindow(value, lambda: True)
