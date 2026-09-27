@@ -3921,3 +3921,74 @@ def test_invalid_plan_or_nested_schema_version_fails_closed():
     with pytest.raises(run_plans.RunPlanClientError) as raised:
         run_plans._agent_response_from_server(response)
     assert raised.value.code == "schema_version_unsupported"
+
+
+def test_exit_unknown_capacity_reports_sources_without_endless_recheck(tmp_path, monkeypatch, capsys):
+    plan = _plan(refill=True, max_tasks=20, task_count=4)
+    error = _capacity_error(requested=4, available=0, original_mode='auto')
+    sources = dict(active_reports=0, exit_unconfirmed=8, device_reserved=0)
+    error.payload['reservation_sources'] = {'schema_version': 1, 'account': sources, 'plan': sources,
+                                            'untrusted_extra': 'must not leak'}
+    client = FakeClient(starts=[error])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client,
+                 snapshot=_snapshot(available=4, auto_workers=4))
+    monkeypatch.setattr(fleet, 'add_batch', lambda **kwargs: pytest.fail('unknown exit cannot start Fleet'))
+    run_plans.cmd_run_plan(_args())
+    payload = json.loads(capsys.readouterr().out)
+    assert payload['status'] == 'review_required'
+    assert payload['agent_action'] == 'notify_only' and payload['retryable'] is False
+    assert '退出未确认 8' in payload['user_message']
+    assert '原运行设备' in payload['user_message']
+    assert 'next_commands' not in payload['agent']
+    assert payload['agent']['reservation_sources']['account'] == sources
+    assert 'must not leak' not in json.dumps(payload)
+    assert len(client.start_calls) == 1
+
+
+@pytest.mark.parametrize('counts', [
+    dict(active_reports=1, exit_unconfirmed=7, device_reserved=1),
+    dict(active_reports=1, exit_unconfirmed=-1, device_reserved=8),
+    dict(active_reports=True, exit_unconfirmed=7, device_reserved=0),
+])
+def test_capacity_source_counts_must_match_authoritative_occupancy(counts):
+    error = _capacity_error(requested=4, available=0, original_mode='auto')
+    error.payload['reservation_sources'] = {'schema_version': 1, 'account': counts, 'plan': counts}
+    with pytest.raises(run_plans.RunPlanClientError, match='运行占用信息不完整'):
+        run_plans._capacity_reservation(error)
+
+
+def test_mixed_unknown_and_active_capacity_keeps_bounded_recheck(tmp_path, monkeypatch, capsys):
+    plan = _plan(refill=True, max_tasks=20, task_count=2, mode='fixed', concurrency=2)
+    error = _capacity_error(requested=2, available=0, original_mode='fixed')
+    error.payload.update(account_concurrency=2, account_concurrency_in_use=2,
+                         plan_concurrency=2, plan_concurrency_in_use=2)
+    counts = dict(active_reports=1, exit_unconfirmed=1, device_reserved=0)
+    error.payload['reservation_sources'] = {'schema_version': 1, 'account': counts, 'plan': counts}
+    client = FakeClient(starts=[error])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client,
+                 snapshot=_snapshot(available=2, auto_workers=2))
+    monkeypatch.setattr(fleet, 'add_batch', lambda **kwargs: pytest.fail('zero capacity cannot start Fleet'))
+    run_plans.cmd_run_plan(_args())
+    payload = json.loads(capsys.readouterr().out)
+    assert payload['agent_action'] == 'recheck_plan' and payload['retryable'] is True
+    assert '退出未确认 1' in payload['user_message']
+    assert len(client.start_calls) == 1
+    assert client.start_calls[0]['concurrency'] == 2
+
+
+def test_plan_unknown_full_blocks_even_when_account_is_tied_limiter(tmp_path, monkeypatch, capsys):
+    plan = _plan(refill=True, max_tasks=20, task_count=2)
+    error = _capacity_error(requested=2, available=0, original_mode='auto')
+    error.payload.update(account_concurrency=8, account_concurrency_in_use=8,
+                         plan_concurrency=2, plan_concurrency_in_use=2)
+    error.payload['reservation_sources'] = {'schema_version': 1,
+        'account': dict(active_reports=6, exit_unconfirmed=2, device_reserved=0),
+        'plan': dict(active_reports=0, exit_unconfirmed=2, device_reserved=0)}
+    client = FakeClient(starts=[error])
+    _prepare_run(monkeypatch, tmp_path, plan=plan, client=client,
+                 snapshot=_snapshot(available=2, auto_workers=2))
+    monkeypatch.setattr(fleet, 'add_batch', lambda **kwargs: pytest.fail('unknown exit cannot start Fleet'))
+    run_plans.cmd_run_plan(_args())
+    payload = json.loads(capsys.readouterr().out)
+    assert payload['agent_action'] == 'notify_only'
+    assert '退出未确认 2' in payload['user_message']
