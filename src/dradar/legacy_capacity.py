@@ -261,8 +261,12 @@ def cmd_legacy_reconcile(args) -> int:
         if not secrets.compare_digest(quarantine["device_id_hash"], _device_id_hash(device_id)):
             raise InventoryError("reconcile_device_mismatch", "历史快照不属于本机原设备；不会释放容量。")
         response = client.reconcile_legacy_runner_capacity(evidence)
-        if not isinstance(response, dict):
-            raise InventoryError("reconcile_response_invalid", "Server 回执无法核验；证据已保留。")
+        if (not isinstance(response, dict)
+                or response.get("ok") is not True
+                or response.get("reconciled") is not True
+                or type(response.get("idempotent_replay")) is not bool):
+            raise InventoryError("reconcile_response_invalid", "恢复回执未知；证据已保留，不自动重放。")
+        response = {key: response[key] for key in ("ok", "reconciled", "idempotent_replay")}
         encoded = json.dumps(response, ensure_ascii=False, sort_keys=True)
         if any(secret and secret in encoded for secret in secret_values):
             raise InventoryError("reconcile_response_invalid", "Server 回执包含凭证；不会输出或继续。")

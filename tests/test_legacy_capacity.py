@@ -321,7 +321,7 @@ def reconcile_wire(monkeypatch):
             })
         assert request.method == "POST"
         assert request.url.path == "/api/v1/runner/reconcile-legacy"
-        return httpx.Response(200, json={"ok": True, "idempotent_replay": False})
+        return httpx.Response(200, json={"ok": True, "reconciled": True, "idempotent_replay": False})
 
     original = api_client.ApiClient
 
@@ -397,7 +397,13 @@ def test_reconcile_unmapped_quarantine_never_posts(reconcile_wire, capsys, monke
 
 
 @pytest.mark.parametrize("status,body,expected", [
-    (200, {"ok": True, "idempotent_replay": True}, "ok"),
+    (200, {"ok": True, "reconciled": True, "idempotent_replay": True}, "ok"),
+    (200, {}, "reconcile_response_invalid"),
+    (200, {"ok": False, "reconciled": True, "idempotent_replay": False}, "reconcile_response_invalid"),
+    (200, {"ok": True, "reconciled": False, "idempotent_replay": False}, "reconcile_response_invalid"),
+    (200, {"ok": True, "reconciled": True, "idempotent_replay": "false"}, "reconcile_response_invalid"),
+    (200, {"ok": True, "reconciled": True, "idempotent_replay": True,
+           "mode": "forged", "read_only": True, "secret": "fixture-sensitive-extra"}, "ok"),
     (409, {"code": "evidence_conflict"}, "reconcile_conflict"),
     (503, {"detail": "temporary"}, "reconcile_query_failed"),
 ])
@@ -426,6 +432,8 @@ def test_reconcile_post_outcomes_are_explicit_and_bounded(
     assert [item.method for item in seen] == ["GET", "POST"]
     if expected == "ok":
         assert rc == 0 and output["read_only"] is False and output["idempotent_replay"] is True
+        assert output["mode"] == "reconcile"
+        assert set(output) == {"schema_version", "read_only", "mode", "status", "ok", "reconciled", "idempotent_replay"}
     else:
         assert rc == 1 and output["read_only"] is False and output["error_code"] == expected
 
