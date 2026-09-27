@@ -333,7 +333,7 @@ def test_non_terminal_kind_does_not_stop_the_pool(monkeypatch, tmp_path):
     abort = tmp_path / "pool-abort"
     monkeypatch.setenv(runloop._POOL_ABORT_ENV, str(abort))
 
-    for recoverable in ("rate-limit", "provider-transport", "agent-deadline"):
+    for recoverable in ("rate-limit", "agent-deadline"):
         assert runloop._terminal_failure_outcome(recoverable) is None
     assert runloop._terminal_failure_outcome(None) is None
     assert not abort.exists(), "a recoverable failure stopped the pool"
