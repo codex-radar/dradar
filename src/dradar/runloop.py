@@ -6948,6 +6948,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                 + (
                     "a shared environment build failure: "
                     if abort_reason.startswith(_ENVIRONMENT_BUILD_ABORT_PREFIX)
+                    else "" if abort_reason.startswith(_FAILURE_DRAIN_PREFIX)
                     else "account stop: "
                 )
                 + abort_reason
