@@ -5530,6 +5530,7 @@ def _run_trial(
                 # lost close response must never postpone cancellation.
                 if registration_window is not None:
                     registration_window.abort()
+                    registration_window.finalize_failure_report(exc)
                 if managed_auth_config is not None:
                     cleanup_errors.append("managed independent host process groups are not audited")
                 if cleanup_errors:
