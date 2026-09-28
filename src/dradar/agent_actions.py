@@ -21,7 +21,7 @@ ACTIONS = frozenset({
     "check_environment", "wait_and_retry", "review_failure",
 })
 HARNESS = frozenset({
-    "codex", "dsh-minimal", "claude-code", "grok-build", "kimi-code",
+    "codex", "dsh-minimal", "claude-code", "kiro", "grok-build", "kimi-code",
     "zcode", "antigravity", "codebuddy",
 })
 PROVIDERS = frozenset({

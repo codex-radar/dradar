@@ -24,6 +24,10 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from .gpt6 import GPT6_CAPABILITY
+from .kiro_provider import (
+    KIRO_AGENT, KIRO_PROVIDER, KIRO_MODEL, KIRO_CLI_VERSION,
+    KIRO_CAPABILITY, KIRO_SUPPORTED_EFFORTS, kiro_status,
+)
 from .codebuddy_provider import (
     CODEBUDDY_AGENT,
     CODEBUDDY_CAPABILITY,
@@ -347,6 +351,7 @@ HONEY_OUTER_ISOLATION = "pier-docker-exact-egress-minimal-credentials-v1"
 HONEY_SECURITY_AGENTS = frozenset({
     "codex",
     CLAUDE_AGENT,
+    KIRO_AGENT,
     DSH_AGENT,
     ZCODE_AGENT,
     KIMI_AGENT,
@@ -362,6 +367,7 @@ REFILL_HARNESS_ALIASES = {
     "openai": "codex",
     "claude": CLAUDE_AGENT,
     "claude-code": CLAUDE_AGENT,
+    "kiro": KIRO_AGENT,
     "dsh": DSH_AGENT,
     "dsh-minimal": DSH_AGENT,
     "deepseek-harness": DSH_AGENT,
@@ -377,6 +383,7 @@ REFILL_HARNESS_ALIASES = {
 }
 REFILL_HARNESS_CONSTRAINTS = {
     CLAUDE_AGENT: (CLAUDE_MODELS, CLAUDE_SUPPORTED_EFFORTS),
+    KIRO_AGENT: (frozenset({KIRO_MODEL}), KIRO_SUPPORTED_EFFORTS),
     DSH_AGENT: (frozenset(DSH_MODELS), DSH_SUPPORTED_EFFORTS),
     KIMI_AGENT: (KIMI_MODELS, KIMI_SUPPORTED_EFFORTS),
     GROK_AGENT: (GROK_MODELS, GROK_SUPPORTED_EFFORTS),
@@ -390,6 +397,7 @@ REFILL_HARNESS_CONSTRAINTS = {
 }
 REFILL_HARNESS_PROVIDERS = {
     CLAUDE_AGENT: CLAUDE_PROVIDER,
+    KIRO_AGENT: KIRO_PROVIDER,
     DSH_AGENT: DEEPSEEK_PROVIDER,
     KIMI_AGENT: KIMI_PROVIDER,
     GROK_AGENT: GROK_PROVIDER,
@@ -398,7 +406,7 @@ REFILL_HARNESS_PROVIDERS = {
     ZCODE_AGENT: ZCODE_PROVIDER,
 }
 SUBSCRIPTION_REFILL_AGENTS = frozenset({
-    CLAUDE_AGENT, KIMI_AGENT, GROK_AGENT, ZCODE_AGENT, ANTIGRAVITY_AGENT,
+    CLAUDE_AGENT, KIRO_AGENT, KIMI_AGENT, GROK_AGENT, ZCODE_AGENT, ANTIGRAVITY_AGENT,
     CODEBUDDY_AGENT,
 })
 PAID_API_REFILL_AGENTS = frozenset({DSH_AGENT})
@@ -2171,6 +2179,8 @@ def advertised_capabilities(
         and bundled_adapter_error("pier_claude.py") is None
     ):
         capabilities.extend((CLAUDE_CAPABILITY, CLAUDE_OPUS_55_CAPABILITY))
+    if kiro_status()[0] and bundled_adapter_error("pier_kiro.py") is None:
+        capabilities.append(KIRO_CAPABILITY)
     if kimi_cli_path(environ) and kimi_auth_error() is None:
         capabilities.extend((KIMI_CAPABILITY, KIMI_K28_CAPABILITY))
     if (

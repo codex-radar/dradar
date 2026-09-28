@@ -38,6 +38,10 @@ from .artifact_boundary import (
 from . import agent_stderr, cancellation, egress, image_cache, net_probe
 from .windows_job import WindowsJobError, WindowsJobProcess
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
+from .kiro_provider import (
+    KIRO_AGENT, KIRO_PROVIDER, KIRO_MODEL, KIRO_REQUEST_MODEL,
+    KIRO_CLI_VERSION, KIRO_SUPPORTED_EFFORTS, kiro_subscription_session,
+)
 from .execution_audit import ExecutionAudit, ExecutionObserverError
 from .credential_files import is_claude_metered_auth
 from .codebuddy_provider import (
@@ -223,6 +227,8 @@ CODEX_AGENT_IMPORT_PATH = "_dradar_pier_codex:CodexRegistered"
 CODEX_AGENT_MODULE_FILENAME = "_dradar_pier_codex.py"
 CLAUDE_AGENT_IMPORT_PATH = "_dradar_pier_claude:ClaudeCodeSubscription"
 CLAUDE_AGENT_MODULE_FILENAME = "_dradar_pier_claude.py"
+KIRO_AGENT_IMPORT_PATH = "_dradar_pier_kiro:KiroOpus55"
+KIRO_AGENT_MODULE_FILENAME = "_dradar_pier_kiro.py"
 CLAUDE_USAGE_MODULE_FILENAME = "_dradar_claude_usage.py"
 GROK_AGENT_IMPORT_PATH = "_dradar_pier_grok:GrokBuild"
 GROK_AGENT_MODULE_FILENAME = "_dradar_pier_grok.py"
@@ -270,7 +276,7 @@ PIER_ENVIRONMENT_START_ATTEMPTS = 2
 ENVIRONMENT_BUILD_WATCHDOG_SLACK_SEC = 120
 WORKER_REGISTRATION_GRACE_SEC = 30 * 60
 BETA_SUBSCRIPTION_AGENTS = frozenset({
-    CLAUDE_AGENT, GROK_AGENT, KIMI_AGENT, ZCODE_AGENT, ANTIGRAVITY_AGENT,
+    CLAUDE_AGENT, KIRO_AGENT, GROK_AGENT, KIMI_AGENT, ZCODE_AGENT, ANTIGRAVITY_AGENT,
     CODEBUDDY_AGENT,
 })
 
@@ -1104,6 +1110,14 @@ def _ensure_claude_agent_module(home: Path) -> Path:
     )
 
 
+def _ensure_kiro_agent_module(home: Path) -> Path:
+    source = importlib.resources.files("dradar").joinpath("pier_kiro.py")
+    if not source.is_file():
+        raise RunnerError("Kiro Pier adapter is missing; reinstall or upgrade dradar")
+    _ensure_worker_event_module(home)
+    return _materialize_shared_file(home / KIRO_AGENT_MODULE_FILENAME, source.read_bytes())
+
+
 def _ensure_runtime_safety_module(home: Path) -> Path:
     source = importlib.resources.files("dradar").joinpath("pier_runtime_safety.py")
     if not source.is_file():
@@ -1440,6 +1454,15 @@ def _validate_claude_assignment(assignment: dict) -> None:
         )
 
 
+def _validate_kiro_assignment(assignment: dict) -> None:
+    if (assignment.get("agent") != KIRO_AGENT
+            or assignment.get("provider") != KIRO_PROVIDER
+            or assignment.get("model") != KIRO_MODEL
+            or assignment.get("effort") not in KIRO_SUPPORTED_EFFORTS
+            or assignment.get("agent_version") != KIRO_CLI_VERSION):
+        raise RunnerError("Kiro requires its isolated Opus 5.5 high subscription cell")
+
+
 def _validate_kimi_assignment(assignment: dict) -> None:
     if assignment.get("provider") != KIMI_PROVIDER:
         raise RunnerError(
@@ -1551,6 +1574,7 @@ def _pier_process_env(
     egress_environment: dict[str, str] | None = None,
     codex_module_dir: Path | None = None,
     claude_module_dir: Path | None = None,
+    kiro_module_dir: Path | None = None,
     deepseek_module_dir: Path | None = None,
     grok_module_dir: Path | None = None,
     kimi_module_dir: Path | None = None,
@@ -1570,6 +1594,7 @@ def _pier_process_env(
     python_dirs = [
         path for path in (
             pier_bootstrap_dir, codex_module_dir, claude_module_dir,
+            kiro_module_dir,
             deepseek_module_dir,
             grok_module_dir,
             kimi_module_dir, antigravity_module_dir,
@@ -1595,6 +1620,11 @@ def _pier_process_env(
     if assignment.get("agent") == CLAUDE_AGENT:
         for name in tuple(env):
             if name in CLAUDE_API_KEY_ENVS or is_claude_metered_auth(name) or name == "CLAUDE_CODE_OAUTH_TOKEN":
+                env.pop(name, None)
+    if assignment.get("agent") == KIRO_AGENT:
+        for name in tuple(env):
+            if (name.startswith("AWS_") or name.startswith("KIRO_")
+                    or name in {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}):
                 env.pop(name, None)
     if assignment.get("agent") == KIMI_AGENT:
         for name in KIMI_API_KEY_ENVS:
@@ -1754,6 +1784,7 @@ def _auth_source_hooks() -> dict[str, Callable]:
     return {
         "codex_auth_path": codex_auth_path,
         "claude_subscription_session": claude_subscription_session,
+        "kiro_subscription_session": kiro_subscription_session,
         "grok_subscription_session": grok_subscription_session,
         "kimi_subscription_session": kimi_subscription_session,
         "antigravity_subscription_session": antigravity_subscription_session,
@@ -1855,6 +1886,10 @@ def build_pier_command(
         _validate_claude_assignment(assignment)
         _ensure_claude_agent_module(home)
         agent_args = ["--agent-import-path", CLAUDE_AGENT_IMPORT_PATH]
+    elif agent == KIRO_AGENT:
+        _validate_kiro_assignment(assignment)
+        _ensure_kiro_agent_module(home)
+        agent_args = ["--agent-import-path", KIRO_AGENT_IMPORT_PATH]
     elif agent == GROK_AGENT:
         _validate_grok_assignment(assignment)
         _ensure_grok_agent_module(home)
@@ -1990,6 +2025,14 @@ def build_pier_command(
             "--ae", "API_TIMEOUT_MS=3000000",
             "--ae", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000",
             "--ae", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000",
+        ]
+    elif agent == KIRO_AGENT:
+        if provider_auth_path is None or not provider_auth_path.is_file():
+            raise RunnerError("Kiro CLI social session is unavailable")
+        cmd += [
+            "--model", assignment["model"],
+            "--ak", "reasoning_effort=high",
+            "--ak", f"version={KIRO_CLI_VERSION}",
         ]
     elif agent == DSH_AGENT:
         if provider_auth_path is None or not provider_auth_path.is_file():
@@ -5052,6 +5095,10 @@ def _run_trial(
             "agent_version": assignment["agent_version"],
         }
         print(f"verified pinned Claude Code subscription CLI: {assignment['agent_version']}")
+    elif effective_agent == KIRO_AGENT:
+        _validate_kiro_assignment(assignment)
+        effective_assignment = {**assignment, "agent_version": KIRO_CLI_VERSION}
+        print(f"verified pinned Kiro subscription CLI: {KIRO_CLI_VERSION}")
     elif effective_agent == GROK_AGENT:
         _validate_grok_assignment(assignment)
         effective_assignment = {
@@ -5185,6 +5232,7 @@ def _run_trial(
     watch_live_account_errors = (
         (dev_agent or effective_assignment["agent"]) in (
             "codex", CLAUDE_AGENT, DSH_AGENT, GROK_AGENT, KIMI_AGENT,
+            KIRO_AGENT,
             ANTIGRAVITY_AGENT, ZCODE_AGENT, CODEBUDDY_AGENT,
         )
     )
@@ -5294,6 +5342,7 @@ def _run_trial(
             claude_module_dir=(
                 work_dir if effective_agent == CLAUDE_AGENT else None
             ),
+            kiro_module_dir=(work_dir if effective_agent == KIRO_AGENT else None),
             deepseek_module_dir=(
                 work_dir if codex_provider == DEEPSEEK_PROVIDER else None
             ),

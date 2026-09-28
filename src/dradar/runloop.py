@@ -21,6 +21,7 @@ from .artifact_boundary import (
 
 import copy
 import json
+import math
 import os
 import re
 import signal
@@ -65,6 +66,7 @@ from .providers import (
     ANTIGRAVITY_RUN_CONFIG_VERSION,
     ANTIGRAVITY_RUNTIME_PROFILE,
     CLAUDE_AGENT,
+    KIRO_AGENT,
     CLAUDE_MODELS,
     claude_subscription_error,
     CLAUDE_CLI_VERSION,
@@ -1575,6 +1577,7 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         return None
     expected_provider = (
         "claude-code" if meta.get("claude_cli_version")
+        else "kiro" if meta.get("kiro_cli_version")
         else "antigravity" if meta.get("antigravity_cli_version")
         else "zcode" if meta.get("zcode_cli_version")
         else "kimi-code" if meta.get("kimi_cli_version")
@@ -1597,10 +1600,42 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         or value.get("observed_model_status") != "native-response-verified"
     ):
         return None
+    if expected_provider == "kiro" and (
+        value.get("model") != "kiro-claude-opus-5.5"
+        or value.get("observed_model") != "claude-opus-5.5"
+        or value.get("observed_model_status") != "session-metadata-verified"
+    ):
+        return None
+    if expected_provider == "kiro":
+        if (value.get("complete") is not False
+                or value.get("request_usage_observed") is not False
+                or value.get("usage_incomplete_reason")
+                != "kiro_cli_does_not_expose_token_ledger"
+                or any(value.get(name) is not None for name in (
+                    "request_count", "n_input_tokens", "n_cache_tokens", "n_output_tokens"
+                ))):
+            return None
+        credits = value.get("kiro_credits")
+        estimate = value.get("kiro_estimated_usd")
+        if credits is not None:
+            if (not isinstance(credits, (int, float)) or isinstance(credits, bool)
+                    or not math.isfinite(credits) or credits < 0
+                    or not isinstance(estimate, (int, float))
+                    or isinstance(estimate, bool) or not math.isfinite(estimate)
+                    or abs(estimate - credits * 0.04) > 0.000001
+                    or value.get("kiro_credit_rate_version")
+                    != "stationmaster-2026-09-28-v1"
+                    or value.get("kiro_credit_source")
+                    != "official-kiro-cli-per-turn-metering"):
+                return None
+        elif estimate is not None:
+            return None
+        return value
     complete = value.get("complete") is True
     incomplete_reason = value.get("usage_incomplete_reason")
     allowed_incomplete_reasons = {
         "claude-code": {"request_ledger_unavailable_or_invalid"},
+        "kiro": {"kiro_cli_does_not_expose_token_ledger"},
         "antigravity": {
             "terminal_aggregate_missing_or_inconsistent",
             "request_ledger_unavailable_or_invalid",
@@ -2281,6 +2316,8 @@ def _upload_trial_checked(
             "thinking_effort_verified", "verified_thinking_effort",
             "model_identity_basis", "requested_runtime_model",
             "observed_model", "observed_model_status",
+            "kiro_credits", "kiro_estimated_usd", "kiro_credit_rate_usd",
+            "kiro_credit_rate_version", "kiro_credit_source",
             "terminal_recovery",
         ):
             source_key = "sessions" if key == "agent_session_usage" else key
@@ -3674,6 +3711,15 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "claude_native_efforts": ["low", "medium", "high", "xhigh", "max"],
             "claude_credential_mode": "private-file-process-env-v1",
             "claude_customizations": "disabled-isolated-config-v1",
+        })
+    if assignment.get("agent") == KIRO_AGENT:
+        meta.update({
+            "model_config_version": "kiro-opus-5-5-workspace-default-v1",
+            "model_runtime_profile": "pier-kiro-official-cli-private-social-v1",
+            "subscription_oauth": True,
+            "kiro_cli_version": assignment["agent_version"],
+            "kiro_model": assignment["model"],
+            "kiro_credential_mode": "private-file-validated-merge-v1",
         })
     if assignment.get("agent") == GROK_AGENT:
         grok_config, grok_profile = GROK_MODEL_RUNTIME_TUPLES[assignment["model"]]
