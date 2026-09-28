@@ -9,7 +9,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from . import assignment_boundary, fleet, local_jobs
+from . import assignment_boundary, fleet, local_jobs, launcher_handoff
 from .api_client import ApiError
 from .identity import _client
 from .local_config import DEFAULT_BENCHMARK, HOME, _load_config
@@ -131,16 +131,33 @@ def _check_processes(home: Path) -> None:
     if os.name != "nt":
         try:
             proc = subprocess.run(
-                ["ps", "-axo", "pid=,command="], capture_output=True,
+                ["ps", "-axo", "pid=,ppid=,command="], capture_output=True,
                 text=True, timeout=10, check=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RecoveryBlocked("runner process inspection failed") from exc
+        processes = {}
         for line in proc.stdout.splitlines():
-            match = re.match(r"\s*(\d+)\s+(.+)", line)
-            if not match or int(match.group(1)) == os.getpid():
+            match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(.+)", line)
+            if not match or int(match.group(1)) in processes:
+                raise RecoveryBlocked("runner process inspection returned an unknown row")
+            processes[int(match.group(1))] = (int(match.group(2)), match.group(3))
+        own = processes.get(os.getpid())
+        if own is None or own[0] != os.getppid():
+            raise RecoveryBlocked("runner process ancestry could not be verified")
+        supervisor = launcher_handoff.supervisor()
+        if supervisor is not None and supervisor[0] not in processes:
+            raise RecoveryBlocked("runner launcher process is missing")
+        for pid, (_ppid, command) in processes.items():
+            if pid == os.getpid():
                 continue
-            command = match.group(2)
+            if supervisor is not None and pid == supervisor[0] == own[0]:
+                try:
+                    if launcher_handoff.argv_digest(shlex.split(command)) == supervisor[1]:
+                        continue
+                except ValueError:
+                    pass
+                raise RecoveryBlocked("runner launcher identity could not be verified")
             if _looks_like_runner_process(command):
                 raise RecoveryBlocked("another DRadar runner process may be active")
     else:  # Windows cannot inspect other processes' arguments with tasklist.
