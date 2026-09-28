@@ -106,7 +106,7 @@ source.unlink()
 
 _VERIFY = r'''import json,sys
 from pathlib import Path
-stream=Path(sys.argv[1]);home=Path(sys.argv[2]);expected=sys.argv[3]
+stream=Path(sys.argv[1]);home=Path(sys.argv[2]);expected=sys.argv[3];expected_effort=sys.argv[4]
 events=[json.loads(line) for line in stream.read_text().splitlines() if line.strip()]
 finishes=[e.get('data',{}) for e in events if e.get('type')=='runFinished']
 if len(finishes)!=1 or finishes[0].get('status')!='success':
@@ -128,18 +128,23 @@ try:
                 or '/app' not in data['rootPaths']):
             raise ValueError('native session identity mismatch')
         actual=data['modelId']
+        observed_effort=data.get('effortLevel')
     else:
         sid=data['session_id']
         if sid!=sidecars[0].stem or data['cwd']!='/app':
             raise ValueError('native session identity mismatch')
         actual=data['session_state']['rts_model_state']['model_info']['model_id']
+        observed_effort=None
 except (OSError,KeyError,TypeError,ValueError):
     raise SystemExit('DRADAR_KIRO_ATTESTATION=model_evidence_missing')
 if actual!=expected:
     raise SystemExit('DRADAR_KIRO_ATTESTATION=model_mismatch')
+if observed_effort!=expected_effort:
+    raise SystemExit('DRADAR_KIRO_ATTESTATION=effort_mismatch')
 attestation={'schema':'dradar-kiro-model-v1','requested_model':expected,
              'observed_model':actual,'session_id':sid,
-             'stream_session_id':stream_sid,'run_status':'success'}
+             'stream_session_id':stream_sid,'run_status':'success',
+             'requested_effort':expected_effort,'observed_effort':observed_effort}
 Path('/logs/agent/kiro-attestation.json').write_text(json.dumps(attestation))
 metered=[]
 if sidecars[0].name=='session.json':
@@ -269,12 +274,12 @@ class KiroOpus55(BaseInstalledAgent):
             raise RuntimeError("Kiro Opus 5.5 catalog preflight failed")
         stream="/logs/agent/"+self._STREAM
         command=(f"{shlex.quote(cli)} chat --v3 --no-interactive --trust-all-tools "
-                 f"--effort high --output-format stream-json {shlex.quote(instruction)} "
+                 f"--effort {shlex.quote(self._effort)} --output-format stream-json {shlex.quote(instruction)} "
                  f"> {shlex.quote(stream)} 2> /logs/agent/kiro-stderr.log")
         try:
             await self.exec_as_agent(environment,command=command,env=env,cwd="/app")
             verify="python3 -c "+shlex.quote(_VERIFY)+" "+" ".join(map(shlex.quote,
-                (stream,home,REQUEST_MODEL)))
+                (stream,home,REQUEST_MODEL,self._effort)))
             await self.exec_as_agent(environment,command=verify,env=env)
         finally:
             db=home+"/.local/share/kiro-cli/data.sqlite3"
@@ -297,6 +302,9 @@ class KiroOpus55(BaseInstalledAgent):
         except (OSError,ValueError):
             return
         if evidence.get("observed_model")!=REQUEST_MODEL:
+            return
+        if (evidence.get("requested_effort")!=self._effort
+                or evidence.get("observed_effort")!=self._effort):
             return
         text_parts=[]
         credit_values=[]
@@ -328,7 +336,7 @@ class KiroOpus55(BaseInstalledAgent):
         credits=sum(credit_values,Decimal(0)) if credit_valid and credit_values else None
         estimated_usd=(credits*KIRO_CREDIT_USD_RATE if credits is not None else None)
         steps=[Step(step_id=1,source="agent",message="".join(text_parts) or "Kiro run completed",
-                    model_name=LANE_MODEL,reasoning_effort="high",llm_call_count=None)]
+                    model_name=LANE_MODEL,reasoning_effort=self._effort,llm_call_count=None)]
         metrics=FinalMetrics(total_prompt_tokens=None,total_completion_tokens=None,
             total_cached_tokens=None,total_cost_usd=None,total_steps=1,
             extra={"billing_basis":"subscription","cost_not_reported":True})
@@ -343,6 +351,8 @@ class KiroOpus55(BaseInstalledAgent):
             "schema":"dradar-subscription-provider-usage-v1",
             "provider":"kiro","model":LANE_MODEL,"observed_model":REQUEST_MODEL,
             "observed_model_status":"session-metadata-verified",
+            "thinking_effort_verified":True,
+            "verified_thinking_effort":self._effort,
             "kiro_credits":float(credits) if credits is not None else None,
             "kiro_estimated_usd":float(estimated_usd) if estimated_usd is not None else None,
             "kiro_credit_rate_usd":float(KIRO_CREDIT_USD_RATE),

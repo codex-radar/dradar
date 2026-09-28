@@ -1604,6 +1604,8 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
         value.get("model") != "kiro-claude-opus-5.5"
         or value.get("observed_model") != "claude-opus-5.5"
         or value.get("observed_model_status") != "session-metadata-verified"
+        or value.get("thinking_effort_verified") is not True
+        or value.get("verified_thinking_effort") != meta.get("kiro_effort")
     ):
         return None
     if expected_provider == "kiro":
@@ -3714,11 +3716,12 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         })
     if assignment.get("agent") == KIRO_AGENT:
         meta.update({
-            "model_config_version": "kiro-opus-5-5-workspace-default-v1",
+            "model_config_version": "kiro-opus-5-5-workspace-default-v2",
             "model_runtime_profile": "pier-kiro-official-cli-private-social-v1",
             "subscription_oauth": True,
             "kiro_cli_version": assignment["agent_version"],
             "kiro_model": assignment["model"],
+            "kiro_effort": assignment["effort"],
             "kiro_credential_mode": "private-file-validated-merge-v1",
         })
     if assignment.get("agent") == GROK_AGENT:
