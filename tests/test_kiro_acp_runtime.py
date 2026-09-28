@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import signal
 import subprocess
@@ -423,6 +424,43 @@ def test_cold_registry_rejects_pre_response_side_effects(tmp_path: Path, mode: s
     assert not any(event["type"] == "runFinished" for event in _events(stream))
     if mode == "registry_pre_permission":
         assert any(entry.get("outcome") == {"outcome": "cancelled"} for entry in recorded)
+
+
+@pytest.mark.parametrize("mode,phase,method", [
+    ("handshake_pre_session_unknown", "new_session", "_unknown.dev/event"),
+    ("registry_pre_unknown", "model_set", "_unknown/event"),
+    ("handshake_unknown_notification", "final_confirmation", "_kiro.dev/unknown"),
+])
+def test_unknown_notification_records_only_phase_and_method_hash(tmp_path: Path, mode: str, phase: str, method: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args + ["--handshake-only"], env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    events = [e["data"] for e in _events(stream) if e["type"] == "handshakeRejected"]
+    assert events == [{"phase": phase, "methodType": "string",
+                       "methodSha256": hashlib.sha256(method.encode()).hexdigest()}]
+    assert method not in stream.read_text()
+    assert "session/prompt" not in [entry["method"] for entry in _events(trace)]
+
+
+@pytest.mark.parametrize("mode", ["handshake_pre_session_unknown", "registry_pre_unknown",
+                                  "handshake_unknown_notification"])
+def test_diagnostic_observes_extensions_but_never_prompts(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args + ["--handshake-diagnostic"], env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stderr
+    assert any(e['type']=='handshakeNotice' for e in _events(stream))
+    assert not any(e['type']=='runFinished' for e in _events(stream))
+    assert 'session/prompt' not in [e['method'] for e in _events(trace)]
+
+
+@pytest.mark.parametrize("mode", ["registry_pre_permission", "registry_pre_tool",
+                                  "registry_pre_foreign", "final_ack_drift"])
+def test_diagnostic_never_relaxes_core_config_or_side_effect_rules(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args + ["--handshake-diagnostic"], env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert 'session/prompt' not in [e['method'] for e in _events(trace)]
+    assert not any(e.get('outcome',{}).get('outcome')=='selected' for e in _events(trace) if isinstance(e.get('outcome'),dict))
 
 
 def test_acp_fails_closed_on_transient_model_effort_drift(tmp_path: Path) -> None:

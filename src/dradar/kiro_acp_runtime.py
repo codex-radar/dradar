@@ -8,6 +8,7 @@ task lifecycle; this process owns only its Kiro ACP child and one session.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import signal
@@ -83,7 +84,8 @@ def _probe_pwd_check(value: object) -> tuple[str | None, dict]:
 
 
 class ACPClient:
-    def __init__(self, cli: str, stream: Path, *, handshake_only: bool = False):
+    def __init__(self, cli: str, stream: Path, *, handshake_only: bool = False,
+                 handshake_diagnostic: bool = False):
         self.stream = stream
         self.events = stream.open("w", encoding="utf-8")
         self.proc = subprocess.Popen(
@@ -105,8 +107,10 @@ class ACPClient:
         self.registry_target: tuple[str, str] | None = None
         self.registry_model_confirmed = False
         self.config_drift = False
-        self.handshake_only = handshake_only
+        self.handshake_only = handshake_only or handshake_diagnostic
+        self.handshake_diagnostic = handshake_diagnostic
         self.ignored_kiro_notifications = 0
+        self.protocol_phase = "initialize"
         self.probe_pwd_only = os.environ.get("DRADAR_KIRO_PROBE_PWD_ONLY") == "1"
         self.probe_native_local = os.environ.get("DRADAR_KIRO_PROBE_NATIVE_LOCAL") == "1"
         if self.probe_pwd_only and self.probe_native_local:
@@ -150,13 +154,32 @@ class ACPClient:
             self.cancel_sent = True
 
     def _handshake_notification(self, method: str) -> None:
+        if self.handshake_diagnostic and isinstance(method, str) and method.startswith("_"):
+            # Diagnostic-only ACP extension observation. This mode cannot send
+            # a prompt or grant tool permission; it does not change production
+            # acceptance of any notification, nor prove it safe to ignore.
+            self._rejected_message(method, kind="handshakeNotice")
+            self.ignored_kiro_notifications += 1
+            if self.ignored_kiro_notifications > 32:
+                raise ACPFailure("handshake_notification_flood")
+            return
         if method != "_kiro.dev/commands/available":
+            self._rejected_message(method)
             raise ACPFailure("handshake_unexpected_message")
         # Kiro documents this passive notification after session/new. It
         # neither changes config nor authorizes a tool.
         self.ignored_kiro_notifications += 1
         if self.ignored_kiro_notifications > 8:
             raise ACPFailure("handshake_notification_flood")
+
+    def _rejected_message(self, method: object, *, kind: str = "handshakeRejected") -> None:
+        # Match the hash against installed protocol definitions offline. Never
+        # persist arbitrary provider strings, params, URLs or session payloads.
+        self._event(kind, {
+            "phase": self.protocol_phase,
+            "methodType": "string" if isinstance(method, str) else "other",
+            "methodSha256": hashlib.sha256(method.encode()).hexdigest() if isinstance(method, str) else None,
+        })
 
     def _handle_update(self, message: dict) -> None:
         params = message.get("params")
@@ -374,6 +397,9 @@ class ACPClient:
     def request(self, method: str, params: dict, timeout: float | None = 30) -> dict:
         if self.cancelled.is_set():
             raise ACPFailure("cancelled")
+        self.protocol_phase = ({"initialize": "initialize", "session/new": "new_session",
+                                "session/prompt": "prompt"}.get(method)
+                               or ("model_set" if params.get("configId") == "model" else "effort_set"))
         request_id = self.next_id
         self.next_id += 1
         self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
@@ -452,6 +478,7 @@ class ACPClient:
         registry manager later pushes the complete session config. Never
         infer selection from our request or issue a prompt to warm it up.
         """
+        self.protocol_phase = "registry_wait"
         deadline = time.monotonic() + timeout
         updates = 0
         if self.registry_config is not None:
@@ -478,7 +505,8 @@ class ACPClient:
             if "id" in message:
                 raise ACPFailure("config_registry_unexpected_request")
             method = message.get("method")
-            if method == "_kiro.dev/commands/available":
+            if method == "_kiro.dev/commands/available" or (
+                    self.handshake_diagnostic and isinstance(method, str) and method.startswith("_")):
                 self._handshake_notification(method)
                 continue
             params = message.get("params")
@@ -498,6 +526,7 @@ class ACPClient:
 
     def observe_handshake(self, grace: float = 0.3) -> None:
         """Catch immediate post-ack drift without issuing a prompt or tool call."""
+        self.protocol_phase = "final_confirmation"
         deadline = time.monotonic() + grace
         while True:
             if self.cancelled.is_set():
@@ -529,9 +558,11 @@ class ACPClient:
                 self._handle_update(message)
                 if self.config_drift:
                     raise ACPFailure("config_drift")
-            elif method == "_kiro.dev/commands/available" and "id" not in message:
+            elif "id" not in message and (method == "_kiro.dev/commands/available" or (
+                    self.handshake_diagnostic and isinstance(method, str) and method.startswith("_"))):
                 self._handshake_notification(method)
             else:
+                self._rejected_message(method)
                 raise ACPFailure("handshake_unexpected_message")
 
     def close(self) -> None:
@@ -559,8 +590,10 @@ class ACPClient:
 
 
 def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
-        *, handshake_only: bool = False) -> None:
-    client = ACPClient(cli, stream, handshake_only=handshake_only)
+        *, handshake_only: bool = False, handshake_diagnostic: bool = False) -> None:
+    handshake_only = handshake_only or handshake_diagnostic
+    client = ACPClient(cli, stream, handshake_only=handshake_only,
+                       handshake_diagnostic=handshake_diagnostic)
     old_term = signal.signal(signal.SIGTERM, lambda _s, _f: client.cancelled.set())
     old_int = signal.signal(signal.SIGINT, lambda _s, _f: client.cancelled.set())
     try:
@@ -651,12 +684,14 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
 
 
 def main() -> int:
-    if len(sys.argv) not in (6, 7) or (len(sys.argv) == 7 and sys.argv[6] != "--handshake-only"):
+    if len(sys.argv) not in (6, 7) or (len(sys.argv) == 7 and sys.argv[6] not in (
+            "--handshake-only", "--handshake-diagnostic")):
         print("DRADAR_KIRO_ACP=invalid_arguments", file=sys.stderr)
         return 2
     try:
         run(sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5],
-            handshake_only=len(sys.argv) == 7)
+            handshake_only=len(sys.argv) == 7,
+            handshake_diagnostic=len(sys.argv) == 7 and sys.argv[6] == "--handshake-diagnostic")
     except (ACPFailure, OSError) as exc:
         code = str(exc) if isinstance(exc, ACPFailure) else "process_error"
         print("DRADAR_KIRO_ACP=" + code, file=sys.stderr)
