@@ -77,6 +77,10 @@ def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
     monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([], True))
     monkeypatch.setattr(runloop, "_top_up_picks", lambda *_a, **_kw: claimed.append(C) or [fresh])
     args = _args()
+    # cmd_go does this preflight before _go_menu/_prepare_batch. It must not
+    # reject the old personal boundary before the fresh admission proof runs.
+    assert runloop._prepare_assignment_boundary(args, client, "deep-swe") is None
+    assert old_path.read_bytes() == before
     active, _ = runloop._prepare_batch(args, client)
     assert claimed == [C] and active == [fresh]
     new_path = runloop._prepare_assignment_boundary(args, client, "deep-swe", active)
@@ -162,6 +166,19 @@ def test_historical_proof_cannot_start_continuous_refill(tmp_path, monkeypatch):
     monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: pytest.fail(
         "continuous refill reached the claim path"))
     with pytest.raises(SystemExit, match="continuous refill"):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+def test_real_preflight_defers_but_old_contract_blocks_before_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    assert runloop._prepare_assignment_boundary(args, client, "deep-swe") is None
+    client.rows[A].pop("admission_evidence_version")
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: pytest.fail(
+        "old Server contract reached a claim"))
+    with pytest.raises(SystemExit, match="No new assignment was claimed"):
         runloop._prepare_batch(args, client)
     assert path.read_bytes() == before
 

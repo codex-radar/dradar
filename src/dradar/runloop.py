@@ -4595,6 +4595,20 @@ def _prepare_assignment_boundary(
         return inherited
     if getattr(args, "refill", False):
         return None
+    if (active is None and inherited is None and not precise
+            and not exact_batch_resume and not getattr(args, "fleet_pool", False)):
+        old_path = assignment_boundary.state_path(HOME, benchmark_id)
+        if old_path.exists() and not old_path.is_symlink():
+            try:
+                old_state, _ = assignment_boundary.snapshot(old_path)
+                unfinished = not assignment_boundary._report(old_state, set()).complete
+            except (assignment_boundary.BoundaryError, OSError):
+                unfinished = False  # The ordinary preflight reports this error.
+            if unfinished:
+                # cmd_go calls this before _prepare_batch. Defer the personal
+                # boundary check until its fresh historical proof is read
+                # before any claim; then prepare the new exact-batch boundary.
+                return None
     if active is None:
         try:
             active = list(_active_by_id(client).values())
