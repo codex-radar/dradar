@@ -23,6 +23,15 @@ class ACPFailure(RuntimeError):
     pass
 
 
+# Observed as one-way notifications in the approved 2.24.1 handshake and
+# identified against the official bundle. They advertise state/catalogs;
+# they do not request client work or acknowledge model/effort selection.
+PASSIVE_KIRO_NOTIFICATIONS = frozenset({
+    "_kiro.dev/commands/available", "_kiro/governance/state", "_kiro/mcp/status",
+    "_kiro/powers/items_changed", "_kiro/steering/documents_changed",
+})
+
+
 def _option(options: object, name: str, phase: str) -> dict:
     # Only fixed protocol stages and option names reach this helper. Error
     # codes expose the failed handshake step, never provider response values.
@@ -111,6 +120,7 @@ class ACPClient:
         self.handshake_diagnostic = handshake_diagnostic
         self.ignored_kiro_notifications = 0
         self.protocol_phase = "initialize"
+        self.pending_metadata_session_ids: set[str] = set()
         self.probe_pwd_only = os.environ.get("DRADAR_KIRO_PROBE_PWD_ONLY") == "1"
         self.probe_native_local = os.environ.get("DRADAR_KIRO_PROBE_NATIVE_LOCAL") == "1"
         if self.probe_pwd_only and self.probe_native_local:
@@ -153,24 +163,67 @@ class ACPClient:
                         "params": {"sessionId": self.session_id}})
             self.cancel_sent = True
 
-    def _handshake_notification(self, method: str) -> None:
+    def _metadata_scope(self, params: object, *, require_session: bool = False) -> None:
+        if not isinstance(params, dict):
+            raise ACPFailure("handshake_metadata_shape_invalid")
+        sid = params.get("sessionId")
+        if sid is None and not require_session:
+            return
+        if not isinstance(sid, str) or not sid:
+            raise ACPFailure("handshake_foreign_session")
+        if self.session_id is None:
+            self.pending_metadata_session_ids.add(sid)
+            if len(self.pending_metadata_session_ids) > 1:
+                raise ACPFailure("handshake_foreign_session")
+        elif sid != self.session_id:
+            raise ACPFailure("handshake_foreign_session")
+
+    def _count_metadata(self) -> None:
+        self.ignored_kiro_notifications += 1
+        if self.ignored_kiro_notifications > 32:
+            raise ACPFailure("handshake_notification_flood")
+
+    def _handshake_notification(self, method: str, params: object = None) -> None:
+        if not isinstance(method, str):
+            self._rejected_message(method)
+            raise ACPFailure("handshake_unexpected_message")
         if self.handshake_diagnostic and isinstance(method, str) and method.startswith("_"):
             # Diagnostic-only ACP extension observation. This mode cannot send
             # a prompt or grant tool permission; it does not change production
             # acceptance of any notification, nor prove it safe to ignore.
             self._rejected_message(method, kind="handshakeNotice")
-            self.ignored_kiro_notifications += 1
-            if self.ignored_kiro_notifications > 32:
-                raise ACPFailure("handshake_notification_flood")
+            self._count_metadata()
             return
-        if method != "_kiro.dev/commands/available":
+        if method not in PASSIVE_KIRO_NOTIFICATIONS:
             self._rejected_message(method)
             raise ACPFailure("handshake_unexpected_message")
-        # Kiro documents this passive notification after session/new. It
-        # neither changes config nor authorizes a tool.
-        self.ignored_kiro_notifications += 1
-        if self.ignored_kiro_notifications > 8:
-            raise ACPFailure("handshake_notification_flood")
+        self._metadata_scope(params, require_session=method != "_kiro.dev/commands/available")
+        # These method names carry both success and failure payloads in Kiro
+        # 2.24.1. Never let a catalog-load failure become a successful run.
+        if params.get("error") or params.get("errors"):
+            raise ACPFailure("handshake_metadata_failed")
+        catalog = {
+            "_kiro/powers/items_changed": "powers",
+            "_kiro/steering/documents_changed": "documents",
+        }.get(method)
+        if catalog:
+            if params.get("status") != "success":
+                raise ACPFailure("handshake_metadata_failed")
+            if not isinstance(params.get(catalog), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+        elif method == "_kiro/mcp/status":
+            if not isinstance(params.get("servers"), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+        elif method == "_kiro/governance/state":
+            if params.get("disabledReason") == "api_failure":
+                raise ACPFailure("handshake_metadata_failed")
+            # admin_disabled describes feature policy, not model failure.
+            # Keep provider policy intact; this notification grants nothing.
+            if (not isinstance(params.get("isEnterprise"), bool)
+                    or not isinstance(params.get("features"), dict)
+                    or params.get("disabledReason") not in (None, "admin_disabled")):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+        self._count_metadata()
 
     def _rejected_message(self, method: object, *, kind: str = "handshakeRejected") -> None:
         # Match the hash against installed protocol definitions offline. Never
@@ -193,9 +246,18 @@ class ACPClient:
                 raise ACPFailure("handshake_malformed_update")
             return
         kind = update.get("sessionUpdate")
+        if (self.handshake_only or not self.prompt_pending) and kind == "available_commands_update":
+            # ACP's standard slash-command advertisement is not invocation.
+            # No command text is copied into a prompt or executed by this client.
+            self._metadata_scope(params, require_session=True)
+            if not isinstance(update.get("availableCommands"), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+            self._count_metadata()
+            return
         if (self.handshake_only or not self.prompt_pending) and kind in ("tool_call", "tool_call_update"):
             raise ACPFailure("handshake_unexpected_tool")
         if (self.handshake_only or not self.prompt_pending) and kind != "config_option_update":
+            self._rejected_message(kind, kind="handshakeUpdateRejected")
             raise ACPFailure("handshake_unexpected_update")
         if params.get("sessionId") != self.session_id:
             if self.handshake_only or not self.prompt_pending:
@@ -393,6 +455,7 @@ class ACPClient:
         self.unexpected_request = True
         self._send({"jsonrpc": "2.0", "id": request_id,
                     "error": {"code": -32601, "message": "Unsupported client request"}})
+        raise ACPFailure("unsupported_client_request")
 
     def request(self, method: str, params: dict, timeout: float | None = 30) -> dict:
         if self.cancelled.is_set():
@@ -436,7 +499,7 @@ class ACPClient:
                         self._cancel()
                         raise ACPFailure("config_drift")
                 elif self.handshake_only or not self.prompt_pending:
-                    self._handshake_notification(message["method"])
+                    self._handshake_notification(message["method"], message.get("params"))
                 continue
             if message.get("id") != request_id:
                 raise ACPFailure("unexpected_response")
@@ -505,9 +568,9 @@ class ACPClient:
             if "id" in message:
                 raise ACPFailure("config_registry_unexpected_request")
             method = message.get("method")
-            if method == "_kiro.dev/commands/available" or (
+            if (isinstance(method, str) and method in PASSIVE_KIRO_NOTIFICATIONS) or (
                     self.handshake_diagnostic and isinstance(method, str) and method.startswith("_")):
-                self._handshake_notification(method)
+                self._handshake_notification(method, message.get("params"))
                 continue
             params = message.get("params")
             if (method not in ("session/update", "session/notification")
@@ -515,6 +578,9 @@ class ACPClient:
                     or params.get("sessionId") != self.session_id):
                 raise ACPFailure("config_registry_unexpected_message")
             update = params.get("update")
+            if isinstance(update, dict) and update.get("sessionUpdate") == "available_commands_update":
+                self._handle_update(message)
+                continue
             if not isinstance(update, dict) or update.get("sessionUpdate") != "config_option_update":
                 raise ACPFailure("config_registry_unexpected_update")
             updates += 1
@@ -558,9 +624,9 @@ class ACPClient:
                 self._handle_update(message)
                 if self.config_drift:
                     raise ACPFailure("config_drift")
-            elif "id" not in message and (method == "_kiro.dev/commands/available" or (
+            elif "id" not in message and ((isinstance(method, str) and method in PASSIVE_KIRO_NOTIFICATIONS) or (
                     self.handshake_diagnostic and isinstance(method, str) and method.startswith("_"))):
-                self._handshake_notification(method)
+                self._handshake_notification(method, message.get("params"))
             else:
                 self._rejected_message(method)
                 raise ACPFailure("handshake_unexpected_message")
@@ -604,6 +670,9 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
         if not isinstance(sid, str) or not sid:
             raise ACPFailure("session_missing")
         client.session_id = sid
+        if client.pending_metadata_session_ids - {sid}:
+            raise ACPFailure("handshake_foreign_session")
+        client.pending_metadata_session_ids.clear()
         # Kiro 2.24.1 can return session/new before its model selector is
         # populated. The set response is the required source of truth.
         initial = created.get("configOptions")

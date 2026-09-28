@@ -45,6 +45,32 @@ for line in sys.stdin:
     if method=='initialize':
         send({'id':msg['id'],'result':{'protocolVersion':1,'agentCapabilities':{}}})
     elif method=='session/new':
+        if mode.startswith('passive_'):
+            # Actual approved diagnostic method order; params below are a
+            # synthetic success fixture, not a retained provider payload.
+            for notice in ('_kiro/governance/state','_kiro/mcp/status',
+                           '_kiro/powers/items_changed','_kiro/steering/documents_changed'):
+                payload={'sessionId':'foreign' if mode in ('passive_foreign','passive_foreign_deferred') else 'sess_test'}
+                if notice=='_kiro/governance/state':payload.update(isEnterprise=False,features={})
+                if notice=='_kiro/mcp/status':payload['servers']=[]
+                if notice=='_kiro/powers/items_changed':payload.update(status='success',powers=[])
+                if notice=='_kiro/steering/documents_changed':payload.update(status='success',documents=[])
+                if mode=='passive_powers_failed' and 'powers' in payload:payload.update(status='failed',error='SYNTHETIC_FAILURE')
+                if mode=='passive_powers_errors' and 'powers' in payload:payload['errors']=['SYNTHETIC_FAILURE']
+                if mode=='passive_documents_failed' and 'documents' in payload:payload.update(status='failed',error='SYNTHETIC_FAILURE')
+                if mode=='passive_governance_failed' and 'features' in payload:payload['disabledReason']='api_failure'
+                if mode=='passive_governance_admin' and 'features' in payload:payload['disabledReason']='admin_disabled'
+                send({'method':notice,'params':payload})
+            if mode=='passive_request':
+                send({'id':88,'method':'_kiro/mcp/status','params':{}})
+                continue
+            if mode=='passive_error':send({'method':'_kiro/policy/error','params':{}})
+            # Separate standard-protocol fixture. The real failing core
+            # update kind is unknown and is NOT claimed to be this event.
+            if mode!='passive_foreign_deferred':
+                send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                    'sessionUpdate':'available_commands_update',
+                    'availableCommands':[] if mode!='passive_bad_commands' else 'bad'}}})
         if mode=='handshake_pre_session_commands':
             send({'method':'_kiro.dev/commands/available','params':{'commands':[]}})
         if mode=='handshake_pre_session_unknown':
@@ -121,6 +147,10 @@ for line in sys.stdin:
         if mode.startswith('registry_') and mode!='registry_before_response' and params['configId']=='model':
             import time
             time.sleep(0.05)
+            if mode=='registry_passive':
+                send({'method':'_kiro/mcp/status','params':{'sessionId':'sess_test','servers':[]}})
+                send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                    'sessionUpdate':'available_commands_update','availableCommands':[]}}})
             current=options()
             if mode=='registry_wrong_model':current[0]['currentValue']='auto'
             if mode=='registry_missing_effort':current=current[:1]
@@ -136,6 +166,10 @@ for line in sys.stdin:
                 'sessionUpdate':'config_option_update','configOptions':options()}}})
         if mode=='handshake_kiro_commands' and params['configId']=='effortLevel':
             send({'method':'_kiro.dev/commands/available','params':{'commands':[]}})
+        if mode=='passive_final' and params['configId']=='effortLevel':
+            send({'method':'_kiro/steering/documents_changed','params':{'sessionId':'sess_test','status':'success','documents':[]}})
+            send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                'sessionUpdate':'available_commands_update','availableCommands':[]}}})
         if mode=='handshake_unknown_notification' and params['configId']=='effortLevel':
             send({'method':'_kiro.dev/unknown','params':{}})
         if mode=='handshake_unknown_update' and params['configId']=='effortLevel':
@@ -461,6 +495,33 @@ def test_diagnostic_never_relaxes_core_config_or_side_effect_rules(tmp_path: Pat
     assert result.returncode == 1
     assert 'session/prompt' not in [e['method'] for e in _events(trace)]
     assert not any(e.get('outcome',{}).get('outcome')=='selected' for e in _events(trace) if isinstance(e.get('outcome'),dict))
+
+
+@pytest.mark.parametrize('mode',['passive_normal','registry_passive','passive_final','passive_governance_admin'])
+def test_observed_passive_method_order_and_standard_command_advertisement(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stderr
+    assert [e['method'] for e in _events(trace)].count('session/prompt') == 1
+
+
+@pytest.mark.parametrize('mode,code', [
+    ('passive_powers_failed','handshake_metadata_failed'),
+    ('passive_powers_errors','handshake_metadata_failed'),
+    ('passive_documents_failed','handshake_metadata_failed'),
+    ('passive_governance_failed','handshake_metadata_failed'),
+    ('passive_foreign','handshake_foreign_session'),
+    ('passive_foreign_deferred','handshake_foreign_session'),
+    ('passive_request','unsupported_client_request'),
+    ('passive_error','handshake_unexpected_message'),
+    ('passive_bad_commands','handshake_metadata_shape_invalid'),
+])
+def test_passive_metadata_cannot_hide_foreign_session_request_or_error(tmp_path: Path, mode: str, code: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert result.stderr.strip()=='DRADAR_KIRO_ACP='+code
+    assert 'session/prompt' not in [e['method'] for e in _events(trace)]
 
 
 def test_acp_fails_closed_on_transient_model_effort_drift(tmp_path: Path) -> None:
