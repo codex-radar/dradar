@@ -1244,18 +1244,30 @@ def _claim_cell(
 
 def _claim_picks(
     client: ApiClient, specs: list[str], *, automatic: bool = True,
+    before_claim=None, expected_batch_id: str | None = None,
 ) -> list[dict]:
     """`dradar go --pick task:model:effort` (repeatable): claim exact cells by
     ID instead of picking from the web or auto-suggesting."""
     cells = [_parse_pick(spec) for spec in specs]
     claimed = []
+    batch_id = expected_batch_id
     try:
         for task_id, model, effort in cells:
+            if before_claim is not None:
+                before_claim()
             a = _claim_cell(
                 client, task_id, model, effort, automatic=automatic,
             )
             if a is not None:
                 claimed.append(a)
+                if before_claim is not None:
+                    if not a.get("batch_id") or (
+                        batch_id is not None and a["batch_id"] != batch_id
+                    ):
+                        raise boundary_recovery.RecoveryBlocked(
+                            "new claim crossed the exact admitted batch"
+                        )
+                    batch_id = a["batch_id"]
     except _ConcurrentCapHit as exc:
         print(f"  stopping — {exc}")
     except (ApiError, KeyboardInterrupt, EOFError):
@@ -1264,12 +1276,21 @@ def _claim_picks(
             for batch_id in dict.fromkeys(a.get("batch_id") for a in claimed):
                 print(f"  {batch_id or 'unknown — inspect dradar leases'}")
         raise
+    except boundary_recovery.RecoveryBlocked as exc:
+        if claimed:
+            print("historical admission stopped after partial claims; preserve these held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise SystemExit(
+            f"historical admission changed before the next claim: {exc}. "
+            "No model was started; inspect the held leases before retrying."
+        ) from exc
     return claimed
 
 
 def _top_up_picks(
     client: ApiClient, active: list[dict], specs: list[str], *,
-    automatic: bool = True,
+    automatic: bool = True, before_claim=None,
 ) -> list[dict]:
     """Claim exact requested cells that are not already held.
 
@@ -1290,10 +1311,14 @@ def _top_up_picks(
             continue
         seen.add(cell)
         missing.append(spec)
-    return active + _claim_picks(client, missing, automatic=automatic)
+    return active + _claim_picks(
+        client, missing, automatic=automatic, before_claim=before_claim,
+        expected_batch_id=active[0].get("batch_id") if active else None,
+    )
 
 
-def _claim_auto(client: ApiClient, n: int) -> list[dict]:
+def _claim_auto(client: ApiClient, n: int, *, before_claim=None,
+                expected_batch_id: str | None = None) -> list[dict]:
     """`dradar go --auto [N]`: auto-pick + claim up to N cells via the
     server's weighted-random suggester (/api/v1/suggest — the same primitive
     behind the web's 雷达随机推荐 button), so a headless/Agent run never needs
@@ -1305,16 +1330,42 @@ def _claim_auto(client: ApiClient, n: int) -> list[dict]:
         print("no eligible cells to auto-pick right now")
         return []
     claimed = []
+    batch_id = expected_batch_id
     try:
         for c in cells:
+            if before_claim is not None:
+                before_claim()
             a = _claim_cell(
                 client, c["task_id"], c["model"], c["effort"],
                 cell_metadata=c,
             )
             if a is not None:
                 claimed.append(a)
+                if before_claim is not None:
+                    if not a.get("batch_id") or (
+                        batch_id is not None and a["batch_id"] != batch_id
+                    ):
+                        raise boundary_recovery.RecoveryBlocked(
+                            "new claim crossed the exact admitted batch"
+                        )
+                    batch_id = a["batch_id"]
     except _ConcurrentCapHit as exc:
         print(f"  stopping — {exc}")
+    except (ApiError, KeyboardInterrupt, EOFError):
+        if claimed:
+            print("automatic selection stopped after partial claims; inspect held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise
+    except boundary_recovery.RecoveryBlocked as exc:
+        if claimed:
+            print("historical admission stopped after partial claims; preserve these held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise SystemExit(
+            f"historical admission changed before the next claim: {exc}. "
+            "No model was started; inspect the held leases before retrying."
+        ) from exc
     return claimed
 
 
@@ -6094,6 +6145,20 @@ def _prepared_batch_ids(active):
     return ids
 
 
+def _scope_historical_worker_pool(args, client, active: list[dict]) -> None:
+    """Bind finite historical-exception workers to the admitted new batch."""
+    if getattr(args, "_historical_admission_digest", None) is None:
+        return
+    batches = {item.get("batch_id") for item in active}
+    if len(batches) != 1 or not next(iter(batches)):
+        raise SystemExit(
+            "historical admission needs one exact new batch; no worker started"
+        )
+    batch_id = next(iter(batches))
+    args.batch_id = batch_id
+    _scope_client_to_batch(client, batch_id)
+
+
 def _run_worker_pool(args, *, prepared=None) -> int:
     """Prepare one batch, then supervise several ordinary resume processes."""
     if prepared is not None:
@@ -6333,6 +6398,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         boundary_path = _prepare_assignment_boundary(
             args, client, cfg["benchmark"], active,
         )
+    _scope_historical_worker_pool(args, client, active)
     if mixed and boundary_path is not None:
         assignment_boundary.add_expected(boundary_path, active)
     ready_now = (
@@ -8304,7 +8370,13 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                             "files are retained. The Server still decides actual admission."
                         )
     active, free_pick = _acquire_batch(
-        client, args.yes, allow_new_claims=allow_new_claims,
+        client, args.yes,
+        # With explicit selection, do not let a menu claim one cell first.
+        allow_new_claims=(allow_new_claims and not (
+            getattr(args, "_historical_admission_digest", None) is not None
+            and (getattr(args, "pick", None)
+                 or getattr(args, "auto", None) is not None)
+        )),
         allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
         allow_empty_exact_campaign=(
             bool(getattr(args, "fleet_pool", False))
@@ -8315,6 +8387,19 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
+    before_historical_claim = None
+    if getattr(args, "_historical_admission_digest", None) is not None:
+        held_batches = {item.get("batch_id") for item in active}
+        if len(held_batches) > 1 or (active and not next(iter(held_batches))):
+            raise SystemExit(
+                "historical admission found multiple or unknown held batches. "
+                "No additional assignment was claimed."
+            )
+
+        def before_historical_claim():
+            boundary_recovery.historical_unknown_allows_claim(
+                client, state, digest, path, HOME,
+            )
     if blocked_by_boundary:
         print("unfinished personal assignment boundary: no new task was claimed; "
               "existing held work may still run. Inspect exact saved IDs with "
@@ -8329,6 +8414,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         try:
             active = _top_up_picks(
                 client, active, wants_pick, automatic=args.yes,
+                before_claim=before_historical_claim,
             )
         except ApiError as exc:
             _exit_for(exc)
@@ -8339,7 +8425,10 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         missing = max(0, auto_target - len(active))
         if missing:
             try:
-                active += _claim_auto(client, missing)
+                active += _claim_auto(
+                    client, missing, before_claim=before_historical_claim,
+                    expected_batch_id=active[0].get("batch_id") if active else None,
+                )
             except ApiError as exc:
                 _exit_for(exc)
         else:
