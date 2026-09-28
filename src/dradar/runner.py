@@ -2290,6 +2290,24 @@ def trial_artifact_paths(trial_dir: Path) -> tuple[Path, Path | None, Path | Non
     return patch, trajectory, (result if result.exists() or result.is_symlink() else None)
 
 
+def _completed_trial_artifact_paths(
+    trial_dir: Path, *, terminal_error: BaseException | None = None,
+) -> tuple[Path, Path | None, Path | None]:
+    """Reject invalid output through normal failure handling after exit audit."""
+    try:
+        return trial_artifact_paths(trial_dir)
+    except (UnsafeArtifact, OSError, ValueError) as exc:
+        if terminal_error is not None:
+            raise terminal_error from exc
+        reason = str(exc) if isinstance(exc, UnsafeArtifact) else "artifact_read_failed"
+        if reason not in {"required_trajectory_missing", "invalid_post_run_output",
+                          "invalid_post_run_state", "post_run_not_finalized", "artifact_read_failed"}:
+            reason = "unsafe_trial_artifact"
+        raise RunnerError(
+            f"trial artifacts rejected: {reason}; original files retained"
+        ) from exc
+
+
 def _verify_antigravity_export(trial_dir: Path, patch: Path, assignment: dict) -> None:
     try:
         value = json.loads(read_trial_file(trial_dir, ".dradar/agy-export.json"))
@@ -5649,7 +5667,9 @@ def _run_trial(
                 ),
             )
         raise
-    patch, trajectory, result = trial_artifact_paths(trial_dir)
+    patch, trajectory, result = _completed_trial_artifact_paths(
+        trial_dir, terminal_error=terminal_error,
+    )
     if effective_agent == ZCODE_AGENT:
         quota_facts = _zcode_quota_limit_facts(
             trial_dir / "agent" / "zcode-outcome.json",
