@@ -2,6 +2,7 @@
 
 import json
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -267,11 +268,12 @@ def _finite_cells(n=20):
     ]
 
 
+@pytest.mark.parametrize("retained", (False, True))
 @pytest.mark.parametrize("selection", ("pick", "auto"))
 def test_historical_proof_admits_finite_twenty_in_one_batch(
-    tmp_path, monkeypatch, selection,
+    tmp_path, monkeypatch, selection, retained,
 ):
-    path, client = _fixture(tmp_path, monkeypatch)
+    path, client = (_retained_eighteen if retained else _fixture)(tmp_path, monkeypatch)
     before = path.read_bytes()
     cells = _finite_cells()
     args = _args()
@@ -331,11 +333,12 @@ def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, mon
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("retained", (False, True))
 @pytest.mark.parametrize("failure", ("evidence_flip", "response_unknown", "cross_batch"))
 def test_finite_selection_stops_after_partial_claims_without_starting(
-    tmp_path, monkeypatch, failure,
+    tmp_path, monkeypatch, failure, retained,
 ):
-    path, client = _fixture(tmp_path, monkeypatch)
+    path, client = (_retained_eighteen if retained else _fixture)(tmp_path, monkeypatch)
     before = path.read_bytes()
     cells = _finite_cells(5)
     args = _args()
@@ -401,3 +404,75 @@ def test_prior_nonblocking_read_is_never_cached(tmp_path, monkeypatch):
     with pytest.raises(boundary_recovery.RecoveryBlocked):
         boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
     assert client.reads == 4
+
+
+def _retained_eighteen(tmp_path, monkeypatch):
+    """Actual 0227 topology, with synthetic IDs: 14+2 settled, 2 unknown."""
+    monkeypatch.setattr(runloop, 'HOME', tmp_path)
+    monkeypatch.setattr(boundary_recovery, '_check_processes', lambda _home: None)
+    fixture = json.loads((Path(__file__).parent / 'fixtures/0227_mixed_boundary.json').read_text())
+    assignments = [{'assignment_id': row['assignment_id'], **row['saved']}
+                   for row in fixture['rows']]
+    path = assignment_boundary.prepare(tmp_path, 'deep-swe', assignments)
+    for row, assignment in zip(fixture['rows'], assignments):
+        if row['outcome']:
+            assignment_boundary.record_outcome(path, assignment, row['outcome'])
+    client = Client()
+    client.rows = {row['assignment_id']: row for row in fixture['proofs']}
+    return path, client
+
+
+def test_real_eighteen_boundary_only_unresolved_need_review(tmp_path, monkeypatch):
+    path, client = _retained_eighteen(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    state, digest = assignment_boundary.snapshot(path)
+    assert len(state['expected']) == 18 and len(state['outcomes']) == 16
+    assert boundary_recovery.historical_unknown_allows_claim(
+        client, state, digest, path, tmp_path) == 2
+    assert client.reads == 2
+    assert client.historical_admission_reference == '0227-original-reviewed:' + 'f' * 64
+    assert path.read_bytes() == before
+    # Also enter through the real go preparation, stopping before a claim.
+    args = _args()
+    assert runloop._prepare_assignment_boundary(args, client, 'deep-swe') is None
+    class ReachedReadOnlyAcquisition(Exception):
+        pass
+    def no_claim(*_a, **kw):
+        assert kw['allow_new_claims'] is False
+        return [], True
+    monkeypatch.setattr(runloop, '_acquire_batch', no_claim)
+    monkeypatch.setattr(runloop, '_claim_cell', lambda *_a, **_kw: (_ for _ in ()).throw(ReachedReadOnlyAcquisition()))
+    with pytest.raises(ReachedReadOnlyAcquisition):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('extra', ('same_batch_unknown', 'other_batch_unknown',
+                                  'missing_batch_unknown', 'forged_proof', 'settled_in_proof',
+                                  'settled_metadata_missing', 'proof_revoked', 'proof_expired', 'duplicate_proof_id'))
+def test_retained_history_never_hides_unreviewed_unknown(tmp_path, monkeypatch, extra):
+    path, client = _retained_eighteen(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    state, digest = assignment_boundary.snapshot(path)
+    if extra.endswith('_unknown'):
+        aid = f'{0 if extra == "same_batch_unknown" else 15:032x}'
+        state['outcomes'].pop(aid)
+        if extra == 'missing_batch_unknown':
+            state['expected'][aid]['batch_id'] = None
+        client.rows[aid] = _reviewed_response(aid, 1)
+    elif extra == 'settled_metadata_missing':
+        state['expected']['0' * 32].pop('model')
+    elif extra == 'proof_revoked':
+        client.rows[A]['admission_evidence']['state'] = 'blocked'
+    elif extra == 'proof_expired':
+        client.rows[A] = boundary_recovery.ApiError('410 proof expired')
+    elif extra == 'duplicate_proof_id':
+        client.rows[A]['admission_evidence']['result_assignment_ids'] = [A, A, B]
+    elif extra == 'forged_proof':
+        client.rows[B]['admission_evidence']['manifest_sha256'] = '0' * 64
+    else:
+        client.rows[A]['admission_evidence']['result_assignment_ids'].append('0' * 32)
+    with pytest.raises(boundary_recovery.RecoveryBlocked):
+        boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
+    assert client.historical_admission_reference is None
+    assert path.read_bytes() == before
