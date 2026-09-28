@@ -23,6 +23,16 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def _recovery_seal_digest(state: dict) -> str:
+    fixed = {key: state[key] for key in (
+        "schema_version", "session_id", "server", "batch_id", "owner_identity",
+        "state", "attempts", "close_request", "execution_manifest", "recovery_source_sha256",
+    )}
+    fixed["release_request"] = {key: value for key, value in state["release_request"].items()
+                                if key not in {"device_generation", "device_id"}}
+    return hashlib.sha256(_canonical(fixed)).hexdigest()
+
+
 def _exit_facts_confirmed(event: dict, spawn: dict | None) -> bool:
     if event.get("process_group") != "absent" or event.get("exact_job_containers") != "absent":
         return False
@@ -76,11 +86,25 @@ def _read(path: Path) -> dict:
                     raise ValueError("invalid attempt identity")
                 allowed = {"entered": {"registered"}, "launch_pending": {"entered"},
                            "spawned": {"launch_pending"}, "confirmed_absent": {"spawned"},
-                           "never_started": {"entered", "launch_pending"}}
+                           "never_started": {"entered", "launch_pending"},
+                           "recovered_absent": {"spawned", "unknown"}}
                 if kind != "unknown" and previous not in allowed.get(kind, set()):
                     raise ValueError("invalid execution order")
                 if kind == "confirmed_absent" and not _exit_facts_confirmed(event, spawn):
                     raise ValueError("missing exit facts")
+                if kind == "recovered_absent":
+                    recovery = event.get("recovery", {})
+                    if (spawn is None or event.get("evidence_kind") != "linux_crash_recheck_v1"
+                            or recovery.get("prior_events_sha256") != hashlib.sha256(_canonical(attempt["events"][:attempt["events"].index(event)])).hexdigest()
+                            or recovery.get("process_group") != "absent"
+                            or recovery.get("linux_identity") != spawn.get("linux_identity")
+                            or not recovery.get("linux_identity")
+                            or recovery.get("owner_identity") != state.get("owner_identity")
+                            or not recovery.get("owner_identity")
+                            or recovery.get("docker", {}).get("daemon") != spawn.get("docker_identity")
+                            or not spawn.get("docker_identity")
+                            or recovery.get("docker", {}).get("running") is not False):
+                        raise ValueError("invalid crash recovery evidence")
                 if kind == "spawned":
                     spawn = event
                 if kind == "never_started" and (event.get("execution_started") is not False or (previous == "launch_pending" and event.get("reason") != "popen_failed")):
@@ -95,9 +119,20 @@ def _read(path: Path) -> dict:
             )}
             if (state["state"] != "sealed" or state.get("execution_manifest") != manifest
                     or request["session_id"] != state["session_id"] or request["batch_id"] != state["batch_id"]
-                    or any(attempt["status"] not in {"confirmed_absent", "never_started"} for attempt in state["attempts"].values())
+                    or any(attempt["status"] not in {"confirmed_absent", "never_started", "recovered_absent"} for attempt in state["attempts"].values())
                     or request["execution_manifest_sha256"] != hashlib.sha256(_canonical(manifest)).hexdigest()):
                 raise ValueError("sealed evidence changed")
+        if state.get("recovery_source_sha256") is not None:
+            if state.get("recovery_seal_sha256") != _recovery_seal_digest(state):
+                raise ValueError("recovery seal changed")
+            request = state["release_request"]
+            if state.get("recovery_request_sha256") is not None:
+                if ("device_generation" not in request or "device_id" not in request
+                        or state["recovery_request_sha256"] != hashlib.sha256(
+                            _canonical(request)).hexdigest()):
+                    raise ValueError("recovery request changed")
+            elif "device_generation" in request or "device_id" in request:
+                raise ValueError("recovery request binding is missing")
         return state
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CapacityEvidenceError("Execution evidence cannot be verified; preserve the journal and reservation.") from exc
@@ -121,10 +156,13 @@ class CapacityJournal:
         with _exclusive_lock(self.lock):
             if self.path.exists() or self.path.is_symlink():
                 raise CapacityEvidenceError("An execution journal already exists for this session.")
+            from .runtime_identity import process_identity
+            import os
             _write(self.path, {
                 "schema_version": 1, "session_id": session_id,
                 "server": server.rstrip("/"), "batch_id": None,
                 "device_generation": None, "state": "open", "attempts": {},
+                "owner_identity": process_identity(os.getpid()),
                 "release_request": None, "released": False,
             })
 
@@ -163,7 +201,7 @@ class CapacityJournal:
         def begin(state):
             if state["state"] != "open" or state["batch_id"] != binding["batch_id"]:
                 raise CapacityEvidenceError("This session is sealed or its execution scope changed.")
-            if any(item.get("status") not in {"confirmed_absent", "never_started"}
+            if any(item.get("status") not in {"confirmed_absent", "never_started", "recovered_absent"}
                    for item in state["attempts"].values()):
                 raise CapacityEvidenceError("An earlier execution exit is unknown; this slot cannot start another attempt.")
             if not isinstance(binding["assignment_id"], str) or not binding["assignment_id"]:
@@ -214,7 +252,7 @@ class CapacityJournal:
                         and saved.get("reason") != "popen_failed")
                 ):
                     raise CapacityEvidenceError("A pending launch cannot be declared never started.")
-                if attempt["status"] in {"confirmed_absent", "never_started"} and saved["event"] != "unknown":
+                if attempt["status"] in {"confirmed_absent", "never_started", "recovered_absent"} and saved["event"] != "unknown":
                     raise CapacityEvidenceError("An audited attempt cannot launch again.")
                 attempt["events"].append(saved)
                 attempt["status"] = saved["event"]
@@ -230,7 +268,7 @@ class CapacityJournal:
             state["close_request"] = {"session_id": state["session_id"], "batch_id": state["batch_id"],
                                       "seq": close_seq, "reason": reason}
             if not state["batch_id"] or any(
-                item.get("status") not in {"confirmed_absent", "never_started"}
+                item.get("status") not in {"confirmed_absent", "never_started", "recovered_absent"}
                 for item in state["attempts"].values()
             ):
                 return False
@@ -293,6 +331,8 @@ def reconcile_file(path: Path, client) -> bool:
             request["device_generation"] = receipt["device_generation"]
             request["device_id"] = None
             state["device_generation"] = receipt["device_generation"]
+            if state.get("recovery_source_sha256") is not None:
+                state["recovery_request_sha256"] = hashlib.sha256(_canonical(request)).hexdigest()
             _write(path, state)  # Durable identical request before mutation.
         if not receipt["capacity_released"]:
             try:

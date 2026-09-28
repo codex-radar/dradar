@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from .api_client import ApiClient, ApiError
-from . import capacity_journal
+from . import capacity_journal, cancellation
 from .flight_recorder import FlightRecorder, _checked_lock
 
 
@@ -464,7 +464,9 @@ class RunnerTelemetry:
             self._wake.wait(interval)
             self._wake.clear()
 
+    @cancellation.scoped
     def close(self, reason: str) -> None:
+        cancellation.protect_finalization()
         if reason not in {"completed", "paused", "interrupted", "error"}:
             raise ValueError(f"unknown close reason {reason!r}")
         self._stop.set()

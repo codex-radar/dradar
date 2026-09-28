@@ -963,6 +963,10 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
     """Stub build_pier_command + subprocess.run; the fake 'pier' lays down the
     trial-dir layout the real one would. Returns a dict capturing job_name."""
     captured = {}
+    # Docker identity is a separate adapter: the fake Pier Popen below must
+    # not construct a second trial when that read-only probe runs.
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
 
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home,
                    dev_agent=None, **provider_kwargs):
