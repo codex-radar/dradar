@@ -96,7 +96,7 @@ def test_legacy_forget_option_is_rejected_before_any_run():
 
 @pytest.mark.parametrize("selection", ["pick", "auto", "menu"])
 def test_unfinished_personal_boundary_blocks_before_claim(
-    tmp_path, monkeypatch, selection,
+    tmp_path, monkeypatch, capsys, selection,
 ):
     monkeypatch.setattr(runloop, "HOME", tmp_path)
     assignment_boundary.prepare(tmp_path, "deep-swe", [assignment(A)])
@@ -124,6 +124,7 @@ def test_unfinished_personal_boundary_blocks_before_claim(
     if selection == "menu":
         # The no-option menu path must not claim when an old boundary exists.
         runloop._prepare_batch(args, client)
+        assert "unfinished personal assignment boundary" in capsys.readouterr().out
     else:
         with pytest.raises(SystemExit, match="No new assignment was claimed"):
             runloop._prepare_batch(args, client)
@@ -191,6 +192,14 @@ def test_mixed_recovery_keeps_unknown_then_retries_without_losing_prior_evidence
     tmp_path, monkeypatch,
 ):
     path, args = fixture(tmp_path, monkeypatch)
+    original = json.loads(path.read_text())
+    original["outcomes"] = {}  # #0227 has no saved local outcome tags.
+    path.write_text(json.dumps(original))
+    submitted_trial = tmp_path / "work" / "jobs" / f"a{B}-fixture" / "trial"
+    (submitted_trial / "result.json").write_text(json.dumps({
+        "finished_at": "2026-09-24T03:40:00Z", "n_completed": 1,
+    }))
+    (submitted_trial / "artifacts" / "model.patch").write_text("original accepted patch")
     responses = {
         A: {**assignment(A), "batch_id": None, "benchmark_id": "deep-swe",
             "recovery_evidence_version": 1, "status": "expired",
@@ -217,8 +226,9 @@ def test_mixed_recovery_keeps_unknown_then_retries_without_losing_prior_evidence
     assert path.exists()
     partial = json.loads(path.read_text())
     assert partial["outcomes"][A]["outcome"] == "not_started_terminal"
-    assert partial["outcomes"][B]["outcome"] == "failed"
+    assert B not in partial["outcomes"]
     assert len(list((tmp_path / "work" / "jobs").rglob("result.json"))) == 2
+    assert (submitted_trial / "artifacts" / "model.patch").read_text() == "original accepted patch"
 
     responses[B]["exit_evidence"] = "cleanup_receipt_confirmed"
     monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {B}")
@@ -230,6 +240,7 @@ def test_mixed_recovery_keeps_unknown_then_retries_without_losing_prior_evidence
     assert state["outcomes"][A]["outcome"] == "not_started_terminal"
     assert state["outcomes"][B]["outcome"] == "submitted"
     assert len(list((tmp_path / "work" / "jobs").rglob("result.json"))) == 2
+    assert (submitted_trial / "artifacts" / "model.patch").read_text() == "original accepted patch"
 
 
 def test_interrupted_recovery_before_commit_keeps_original_boundary(tmp_path, monkeypatch):

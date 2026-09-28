@@ -8206,6 +8206,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     """Claim/configure once, shared by the serial and supervised run paths."""
     allow_new_claims = getattr(args, "allow_new_claims", True)
     wants_refill = getattr(args, "refill", False)
+    blocked_by_boundary = False
     # A personal boundary is checked before _acquire_batch: that helper can
     # claim from a menu even when go has no --pick/--auto option. Existing held
     # work may still be resumed, but an unfinished campaign cannot grow here.
@@ -8236,6 +8237,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                             "use `dradar boundary recover` only with exact evidence."
                         )
                     allow_new_claims = False
+                    blocked_by_boundary = True
     active, free_pick = _acquire_batch(
         client, args.yes, allow_new_claims=allow_new_claims,
         allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
@@ -8248,7 +8250,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
-    if not allow_new_claims and wants:
+    if blocked_by_boundary:
+        print("unfinished personal assignment boundary: no new task was claimed; "
+              "existing held work may still run. Inspect exact saved IDs with "
+              "`dradar boundary recover`.")
+    elif not allow_new_claims and wants:
         print("disk safety floor reached — not claiming new tasks; already held work "
               "can still run. Use `dradar cleanup --docker --dry-run` to inspect cleanup.")
     elif not allow_new_claims and not active:

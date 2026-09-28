@@ -211,7 +211,10 @@ def _classify(client, state: dict, expected: set[str], home: Path) -> tuple[dict
             outcome = _verified_outcome(client, state, aid)
             if aid in pending:
                 raise RecoveryBlocked(f"{aid}: original pending upload remains")
-            _check_jobs(home, {aid})
+            if outcome == "not_started_terminal":
+                # Completed result files and patches are normal for a server-
+                # accepted submission. Recovery never removes or uploads them.
+                _check_jobs(home, {aid})
             verified[aid] = outcome
         except RecoveryBlocked as exc:
             unknown.append(str(exc))
