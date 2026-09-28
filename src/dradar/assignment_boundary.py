@@ -384,6 +384,14 @@ def prepare(
                             "active assignment(s) are outside the unfinished "
                             f"boundary: {unexpected}"
                         )
+                    if explicit is not None and state.get("strict") is not True:
+                        # An exact batch can be claimed interactively before
+                        # its assignment ID is known. Once the caller supplies
+                        # that exact set, keep it closed against later held
+                        # cells appearing during the run.
+                        state["strict"] = True
+                        state["updated_at"] = _now()
+                        _save(path, state)
                     return path
             selected = explicit if explicit is not None else list(active)
             if not selected:

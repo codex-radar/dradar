@@ -286,6 +286,29 @@ def test_strict_boundary_cannot_be_extended_after_creation(tmp_path):
         assignment_boundary.add_expected(path, [_assignment("a2")])
 
 
+def test_exact_resume_seals_existing_interactive_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    held = {**_assignment("a1"), "batch_id": "batch-a",
+            "benchmark_id": "deep-swe"}
+    legacy = assignment_boundary.prepare(tmp_path, "deep-swe", [held])
+    assert json.loads(legacy.read_text())["strict"] is False
+
+    path = runloop._prepare_assignment_boundary(
+        _exact_resume_args("batch-a", "a1"),
+        SimpleNamespace(batch_id="batch-a"), "deep-swe", [held],
+    )
+
+    assert path == legacy
+    assert json.loads(legacy.read_text())["strict"] is True
+    with pytest.raises(
+        assignment_boundary.BoundaryError,
+        match="outside the explicit boundary.*a2",
+    ):
+        assignment_boundary.add_expected(
+            path, [{**_assignment("a2"), "batch_id": "batch-a"}],
+        )
+
+
 def test_forget_replaces_only_the_named_benchmark_boundary(tmp_path):
     old = [_assignment("old")]
     path = assignment_boundary.prepare(tmp_path, "bench", old)
