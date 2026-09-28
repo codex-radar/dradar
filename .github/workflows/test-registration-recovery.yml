@@ -9,6 +9,9 @@ on:
       - 'src/dradar/windows_job.py'
       - 'src/dradar/execution_audit.py'
       - 'src/dradar/capacity_journal.py'
+      - 'src/dradar/session_recovery.py'
+      - 'src/dradar/runtime_identity.py'
+      - 'src/dradar/launcher.py'
       - 'src/dradar/run_intent.py'
       - 'src/dradar/runloop.py'
       - 'src/dradar/flight_recorder.py'
@@ -19,6 +22,8 @@ on:
       - 'tests/test_pier_codex_managed.py'
       - 'tests/test_windows_job*.py'
       - 'tests/test_capacity_journal.py'
+      - 'tests/test_session_crash_recovery.py'
+      - 'tests/test_launcher_cancellation.py'
       - 'tests/test_run_plan_intent_control.py'
       - 'tests/test_runner_strategy.py'
       - 'tests/test_agent_schema.py'
@@ -53,6 +58,7 @@ jobs:
           tests/test_registration_native.py tests/test_worker_start_native.py
           tests/test_windows_job_product.py tests/test_windows_job_adapter.py
           tests/test_capacity_journal.py tests/test_run_plan_intent_control.py
+          tests/test_session_crash_recovery.py tests/test_launcher_cancellation.py
           tests/test_runner_strategy.py tests/test_agent_schema.py
           --junitxml=evidence/registration.xml
       - name: Actual managed adapter dependency

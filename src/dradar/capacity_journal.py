@@ -125,10 +125,14 @@ def _read(path: Path) -> dict:
         if state.get("recovery_source_sha256") is not None:
             if state.get("recovery_seal_sha256") != _recovery_seal_digest(state):
                 raise ValueError("recovery seal changed")
-            if "device_generation" in state["release_request"] and (
-                    state.get("recovery_request_sha256") != hashlib.sha256(
-                        _canonical(state["release_request"])).hexdigest()):
-                raise ValueError("recovery request changed")
+            request = state["release_request"]
+            if state.get("recovery_request_sha256") is not None:
+                if ("device_generation" not in request or "device_id" not in request
+                        or state["recovery_request_sha256"] != hashlib.sha256(
+                            _canonical(request)).hexdigest()):
+                    raise ValueError("recovery request changed")
+            elif "device_generation" in request or "device_id" in request:
+                raise ValueError("recovery request binding is missing")
         return state
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CapacityEvidenceError("Execution evidence cannot be verified; preserve the journal and reservation.") from exc

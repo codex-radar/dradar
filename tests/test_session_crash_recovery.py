@@ -221,3 +221,17 @@ def test_command_reports_lost_receipt_without_replacing_evidence(setup, monkeypa
     assert recovery.cmd_recover(args)==0
     assert json.loads(capsys.readouterr().out)['status']=='released'
     assert journal._read(local.path)['release_request']['evidence_id']==evidence
+
+
+def test_removing_generation_cannot_bypass_persisted_request_binding(setup):
+    home,local,server,_=setup
+    pre=recovery.recover(home,SID,server)
+    recovery.recover(home,SID,server,execute=True,expected_digest=pre['journal_sha256'])
+    state=json.loads(local.path.read_text())
+    del state['release_request']['device_generation']
+    del state['release_request']['device_id']
+    local.path.write_text(json.dumps(state))
+    calls=list(server.calls)
+    with pytest.raises(journal.CapacityEvidenceError):
+        recovery.recover(home,SID,server,execute=True,expected_digest=pre['journal_sha256'])
+    assert server.calls==calls
