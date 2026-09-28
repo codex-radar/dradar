@@ -2336,6 +2336,37 @@ def trial_artifact_paths(trial_dir: Path) -> tuple[Path, Path | None, Path | Non
     return patch, trajectory, (result if result.exists() or result.is_symlink() else None)
 
 
+def _completed_trial_artifact_paths(trial_dir: Path, *, agent: str,
+                                    terminal_error: BaseException | None = None) -> tuple[Path, Path | None, Path | None]:
+    """Reject unsafe results through the runner's normal failure/stop path.
+
+    Called only after physical cleanup is audited. No partial artifact is made
+    uploadable and an earlier execution error takes precedence over harvesting.
+    """
+    try:
+        return trial_artifact_paths(trial_dir)
+    except (UnsafeArtifact, OSError, ValueError) as exc:
+        if terminal_error is not None:
+            raise terminal_error from exc
+        reason = str(exc) if isinstance(exc, UnsafeArtifact) else "artifact_read_failed"
+        # These are host boundary codes, not provider error text.
+        if reason not in {"required_trajectory_missing", "invalid_post_run_output",
+                          "invalid_post_run_state", "post_run_not_finalized", "artifact_read_failed"}:
+            reason = "unsafe_trial_artifact"
+        primary = None
+        if agent == KIRO_AGENT:
+            try:
+                marker = read_trial_file(trial_dir, "agent/kiro-stderr.log", max_bytes=4096).decode("utf-8").strip()
+                # Exact local runtime markers only: never copy arbitrary stderr.
+                if marker in {"DRADAR_KIRO_ACP=rpc_session_prompt",
+                              "DRADAR_KIRO_ACP=prompt_not_completed"}:
+                    primary = marker.split("=", 1)[1]
+            except (OSError, ValueError, UnicodeError, UnsafeArtifact):
+                pass
+        message = (f"Kiro execution failed: {primary}; " if primary else "")
+        raise RunnerError(message + f"trial artifacts rejected: {reason}; original files retained") from exc
+
+
 def _verify_antigravity_export(trial_dir: Path, patch: Path, assignment: dict) -> None:
     try:
         value = json.loads(read_trial_file(trial_dir, ".dradar/agy-export.json"))
@@ -5711,7 +5742,9 @@ def _run_trial(
                 ),
             )
         raise
-    patch, trajectory, result = trial_artifact_paths(trial_dir)
+    patch, trajectory, result = _completed_trial_artifact_paths(
+        trial_dir, agent=effective_agent, terminal_error=terminal_error,
+    )
     if effective_agent == ZCODE_AGENT:
         quota_facts = _zcode_quota_limit_facts(
             trial_dir / "agent" / "zcode-outcome.json",

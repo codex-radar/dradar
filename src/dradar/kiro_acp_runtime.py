@@ -34,6 +34,27 @@ PASSIVE_KIRO_NOTIFICATIONS = frozenset({
 })
 
 
+def _rpc_error_summary(error: object) -> dict:
+    """Keep protocol evidence, never free-form provider messages or data."""
+    obj = error if isinstance(error, dict) else {}
+    code = obj.get("code")
+    known = {-32700: "parse_error", -32600: "invalid_request",
+             -32601: "method_not_found", -32602: "invalid_params",
+             -32603: "internal_error"}
+    protocol_code = code if type(code) is int and -32768 <= code <= -32000 else None
+    message = obj.get("message")
+    data = obj.get("data")
+    return {
+        "errorShape": "object" if isinstance(error, dict) else "other",
+        "protocolCode": protocol_code,
+        "reason": known.get(protocol_code, "server_error" if protocol_code is not None else "unclassified_rpc_error"),
+        "messagePresent": isinstance(message, str),
+        "messageSha256": hashlib.sha256(message.encode("utf-8", "surrogatepass")).hexdigest() if isinstance(message, str) else None,
+        "dataShape": ("object" if isinstance(data, dict) else "array" if isinstance(data, list)
+                      else "null" if data is None else "scalar"),
+    }
+
+
 def _option(options: object, name: str, phase: str) -> dict:
     # Only fixed protocol stages and option names reach this helper. Error
     # codes expose the failed handshake step, never provider response values.
@@ -626,6 +647,8 @@ class ACPClient:
             if message.get("id") != request_id:
                 raise ACPFailure("unexpected_response")
             if "error" in message:
+                self._event("rpcFailure", {"phase": self.protocol_phase,
+                                           **_rpc_error_summary(message["error"])})
                 raise ACPFailure("rpc_" + method.replace("/", "_"))
             result = message.get("result")
             if not isinstance(result, dict):

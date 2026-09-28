@@ -424,3 +424,43 @@ def test_deferred_abort_final_close_reaches_runner_error_report(runtime, monkeyp
     assert snapshots[0]['registration_close_state'] == 'not_attempted'
     assert caught.value.report_detail == {**snapshots[0], 'registration_close_state': 'confirmed'}
     assert runtime['events'][-1]['event'] == 'confirmed_absent'
+
+
+@pytest.mark.parametrize('state_text', [
+    '{"complete":false,"outputs":[],"reason":"required_trajectory_missing"}',
+    '{"complete":false,"outputs":[],"reason":"invalid_post_run_output"}',
+    'not-json',
+])
+def test_rejected_artifacts_still_finish_physical_exit_and_raise_runner_error(runtime, monkeypatch, state_text):
+    original = runner.trial_artifact_paths
+    def rejected(trial):
+        output = trial / '.dradar/host-output'
+        output.mkdir(parents=True)
+        (output / 'state.json').write_text(state_text)
+        return original(trial)
+    monkeypatch.setattr(runner, 'trial_artifact_paths', rejected)
+    with pytest.raises(runner.RunnerError, match='trial artifacts rejected'):
+        run(runtime)
+    assert runtime['events'][-1]['event'] == 'confirmed_absent'
+    assert not runtime['container']
+    assert not (runtime['work'] / 'jobs/aa1/task__t0/.dradar/host-output/trajectory.json').exists()
+
+
+def test_kiro_missing_trajectory_preserves_prompt_error_and_does_not_forge_output(tmp_path):
+    trial = tmp_path / 'trial'
+    private_trial(trial)
+    (trial / '.dradar/host-output').mkdir(parents=True)
+    (trial / '.dradar/host-output/state.json').write_text(
+        '{"complete":false,"outputs":[],"reason":"required_trajectory_missing"}')
+    (trial / 'agent').mkdir()
+    (trial / 'agent/kiro-stderr.log').write_text('DRADAR_KIRO_ACP=rpc_session_prompt\n')
+    with pytest.raises(runner.RunnerError, match='rpc_session_prompt.*required_trajectory_missing'):
+        runner._completed_trial_artifact_paths(trial, agent='kiro')
+    prior = runner.RunnerError('original execution failure')
+    with pytest.raises(runner.RunnerError) as caught:
+        runner._completed_trial_artifact_paths(trial, agent='kiro', terminal_error=prior)
+    assert caught.value is prior
+    (trial / 'agent/kiro-stderr.log').write_text('DRADAR_KIRO_ACP=PRIVATE_SECRET\n')
+    with pytest.raises(runner.RunnerError) as caught:
+        runner._completed_trial_artifact_paths(trial, agent='kiro')
+    assert 'PRIVATE_SECRET' not in str(caught.value)

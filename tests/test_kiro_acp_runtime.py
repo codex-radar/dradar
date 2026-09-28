@@ -225,6 +225,10 @@ for line in sys.stdin:
         assert params['prompt'] in ([{'type':'text','text':'Reply with exactly OK.'}],
                                     [{'type':'text','text':'In the empty local /app directory, use the terminal to run pwd once, then reply exactly OK. Do not inspect files, access the network, or write anything.'}])
         pending=msg['id']
+        if mode=='prompt_rpc_error':
+            send({'id':pending,'error':{'code':-32603,'message':'SYNTHETIC_SECRET bearer body '+chr(0xd800),
+                 'data':{'token':'SYNTHETIC_SECRET','prompt':'PRIVATE_BODY','code':'untrusted'}}})
+            continue
         if mode=='cancel':continue
         if mode in ('drift_restore','config_confirm','config_missing_effort'):
             if mode=='drift_restore':
@@ -889,3 +893,31 @@ def test_surrogate_protocol_names_fail_with_sanitized_diagnostics(tmp_path: Path
     assert result.stderr.startswith("DRADAR_KIRO_ACP=handshake_unexpected_")
     assert _events(stream)[-1] == {"type": "handshakeFailure", "data": {"phase": "new_session"}}
     assert "session/prompt" not in [e["method"] for e in _events(trace)]
+
+
+def test_prompt_rpc_error_retains_safe_reason_without_provider_body(tmp_path):
+    args, env, stream, trace = _args(tmp_path, "prompt_rpc_error")
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert result.stderr.strip() == "DRADAR_KIRO_ACP=rpc_session_prompt"
+    events = _events(stream)
+    assert [e['type'] for e in events] == ['configSelected', 'rpcFailure']
+    assert events[-1]['data'] == {
+        'phase': 'prompt', 'errorShape': 'object', 'protocolCode': -32603,
+        'reason': 'internal_error', 'messagePresent': True,
+        'messageSha256': hashlib.sha256(('SYNTHETIC_SECRET bearer body '+chr(0xd800)).encode('utf-8','surrogatepass')).hexdigest(),
+        'dataShape': 'object',
+    }
+    assert 'SYNTHETIC_SECRET' not in stream.read_text() + result.stderr
+    assert 'PRIVATE_BODY' not in stream.read_text()
+    assert not any(e['type'] == 'runFinished' for e in events)
+
+
+@pytest.mark.parametrize('error', [None, 'PRIVATE_BODY', {'code':True},
+    {'code':'PRIVATE_BODY','message':{'token':'SECRET'}}, {'code':12345678901234567890}])
+def test_rpc_error_summary_rejects_nonprotocol_codes_and_raw_values(error):
+    from dradar.kiro_acp_runtime import _rpc_error_summary
+    result = _rpc_error_summary(error)
+    assert result['protocolCode'] is None
+    assert result['reason'] == 'unclassified_rpc_error'
+    assert 'PRIVATE_BODY' not in json.dumps(result) and 'SECRET' not in json.dumps(result)

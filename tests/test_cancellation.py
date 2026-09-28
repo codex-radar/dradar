@@ -383,3 +383,30 @@ def test_private_post_run_creates_valid_empty_agent_snapshot(isolated):
     with TrialFiles(art.trial_dir) as boundary:
         boundary.parent(".dradar/host-output/state.json", create=True)
         assert boundary.read(".dradar/host-output/state.json")
+
+
+@pytest.mark.parametrize('stop_confirmed', [True, False])
+def test_missing_trajectory_follows_formal_stop_without_upload(isolated, monkeypatch, stop_confirmed):
+    from dradar import runner
+    trial = isolated / 'broken-trial'
+    private_trial(trial)
+    output = trial / '.dradar/host-output'
+    output.mkdir(parents=True)
+    (output / 'state.json').write_text('{"complete":false,"outputs":[],"reason":"required_trajectory_missing"}')
+    (trial / 'agent').mkdir()
+    (trial / 'agent/kiro-stderr.log').write_text('DRADAR_KIRO_ACP=rpc_session_prompt\n')
+    monkeypatch.setattr(runloop, 'run_trial', lambda *a, **k:
+        runner._completed_trial_artifact_paths(trial, agent='kiro'))
+    stopped = []
+    def stop(client, assignment, **kwargs):
+        stopped.append(assignment['assignment_id'])
+        return stop_confirmed
+    monkeypatch.setattr(runloop, '_mark_stopped_quietly', stop)
+    monkeypatch.setattr(runloop, '_report_failure_quietly', lambda *a, **k: None)
+    client = SubmitClient({})
+    result = runloop._run_and_submit(client, dict(ASSIGNMENT), isolated, _args(), 'abc')
+    assert result == ('failed' if stop_confirmed else 'cleanup-unconfirmed')
+    assert stopped == [ASSIGNMENT['assignment_id']]
+    assert client.submissions == []
+    assert pending.load(runloop.HOME) == []
+    assert not (output / 'trajectory.json').exists()
