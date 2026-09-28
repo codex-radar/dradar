@@ -8363,12 +8363,20 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                         blocked_by_boundary = True
                     else:
                         args._historical_admission_digest = digest
-                        print(
-                            f"{count} historical exit-unknown assignment(s) remain saved; "
-                            "fresh Server evidence says they do not occupy new capacity. "
-                            "Their result and exit status stay unknown, and all original "
-                            "files are retained. The Server still decides actual admission."
-                        )
+                        if getattr(client, "historical_admission_reference", None):
+                            print(
+                                f"{count} original exit-unknown assignment(s) remain saved; "
+                                "the reviewed batch retains its counted reservations. "
+                                "Results and exit status stay unknown, and original files remain. "
+                                "The Server checks the batch review and account capacity on each claim."
+                            )
+                        else:
+                            print(
+                                f"{count} historical exit-unknown assignment(s) remain saved; "
+                                "fresh Server evidence says they do not occupy new capacity. "
+                                "Their result and exit status stay unknown, and all original "
+                                "files are retained. The Server still decides actual admission."
+                            )
     active, free_pick = _acquire_batch(
         client, args.yes,
         # With explicit selection, do not let a menu claim one cell first.

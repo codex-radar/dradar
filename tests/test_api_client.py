@@ -198,6 +198,26 @@ def test_lost_claim_response_is_not_replayed_and_has_safe_stage():
     assert "secret" not in str(raised.value)
 
 
+def test_reviewed_batch_reference_is_sent_with_each_claim():
+    forms = []
+
+    def handler(request):
+        if request.url.path == "/api/v1/whoami":
+            return httpx.Response(200, json={"volunteer_id": "d" * 32})
+        if request.url.path == "/api/v1/assignment/claim":
+            forms.append(urllib.parse.parse_qs(request.read().decode()))
+            return httpx.Response(200, json={"assignment": {}})
+        raise AssertionError(request.url.path)
+
+    client = _client(handler)
+    client.historical_admission_reference = "0227-reviewed:" + "f" * 64
+    client.claim_assignment("t1", "m", "high")
+    client.claim_assignment("t2", "m", "high")
+    assert [form["historical_admission_ref"] for form in forms] == [
+        [client.historical_admission_reference], [client.historical_admission_reference],
+    ]
+
+
 def test_partial_json_body_is_a_transport_failure_not_a_claim_response():
     class BrokenBody(httpx.SyncByteStream):
         def __iter__(self):

@@ -214,6 +214,7 @@ def historical_unknown_allows_claim(
     The historical boundary remains on disk. Every later claim attempt must
     repeat this read; the Server's actual claim/capacity gate still decides.
     """
+    client.historical_admission_reference = None
     if (state.get("benchmark_id") != getattr(client, "benchmark_id", None)
             or state.get("batch_id") is not None
             or getattr(client, "batch_id", None) is not None
@@ -230,23 +231,57 @@ def historical_unknown_allows_claim(
         raise RecoveryBlocked("no unresolved historical outcome needs admission review")
     if _pending_ids(home):
         raise RecoveryBlocked("a pending upload remains")
+    reviewed_ref = None
+    reviewed_shape = None
+    legacy_seen = False
     for aid in unresolved:
         row = _scoped_status(client, state, aid)
         proof = row.get("admission_evidence")
-        if (row.get("admission_evidence_version") != 1
-                or row.get("status") not in ("submitted", "invalid")
+        if (row.get("status") not in ("submitted", "invalid")
                 or row.get("has_submission") is not True
                 or row.get("start_evidence") != "unknown_or_started"
                 or row.get("exit_evidence") != "unknown"
                 or not isinstance(proof, dict)
-                or proof.get("classification") != "historical_unverified"
                 or proof.get("state") != "exit_unknown"
-                or proof.get("closed") is not True
-                or proof.get("counts_toward_capacity") is not False
-                or proof.get("all_related_sessions_linked") is not True
                 or type(proof.get("related_session_count")) is not int
                 or proof["related_session_count"] < 1
                 or proof.get("result_status") != "preserve_unknown"):
+            raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
+        if row.get("admission_evidence_version") == 2:
+            ids = proof.get("result_assignment_ids")
+            operation_id = proof.get("operation_id")
+            sha = proof.get("manifest_sha256")
+            shape = (proof.get("batch_id"), proof.get("batch_session_count"),
+                     proof.get("unlinked_session_count"), proof.get("counted_session_count"),
+                     tuple(ids) if isinstance(ids, list) else None)
+            if (legacy_seen or len(unresolved) != len(state["expected"])
+                    or proof.get("classification") != "batch_admission_reviewed"
+                    or proof.get("closed") is not False
+                    or proof.get("all_batch_sessions_reviewed") is not True
+                    or proof.get("physical_exit") != "unknown"
+                    or shape[0] != next(iter(saved_batches))
+                    or any(type(value) is not int or value < 0 for value in shape[1:4])
+                    or shape[1] < 1 or max(shape[2], shape[3]) > shape[1]
+                    or proof["related_session_count"] > shape[1] - shape[2]
+                    or proof.get("counts_toward_capacity") is not (shape[3] > 0)
+                    or proof.get("all_related_sessions_linked") is not (shape[2] == 0)
+                    or ids != sorted(state["expected"])
+                    or not isinstance(operation_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", operation_id)
+                    or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+                raise RecoveryBlocked(f"{aid}: reviewed original-batch proof is incomplete")
+            reference = operation_id + ":" + sha
+            if reviewed_ref is not None and (reference != reviewed_ref or shape != reviewed_shape):
+                raise RecoveryBlocked("original results disagree on the batch review")
+            reviewed_ref, reviewed_shape = reference, shape
+        elif (row.get("admission_evidence_version") == 1
+              and proof.get("classification") == "historical_unverified"
+              and proof.get("closed") is True
+              and proof.get("counts_toward_capacity") is False
+              and proof.get("all_related_sessions_linked") is True
+              and reviewed_ref is None):
+            legacy_seen = True
+        else:
             raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
     # Close local races before the new claim. No state is recorded as settled
     # or cached for a future invocation.
@@ -256,6 +291,7 @@ def historical_unknown_allows_claim(
     _, current_digest = assignment_boundary.snapshot(path)
     if current_digest != digest:
         raise RecoveryBlocked("saved personal boundary changed during review")
+    client.historical_admission_reference = reviewed_ref
     return len(unresolved)
 
 
