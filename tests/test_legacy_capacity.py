@@ -234,6 +234,35 @@ def test_optional_classification_is_reported_as_server_fact(wire, capsys):
     assert output["reservations"][1]["classification"] == "current_reservation"
 
 
+def test_modern_admission_quarantine_is_consumed_as_unknown_nonblocking(wire, capsys):
+    data = page()
+    data["reservations"][0].update(
+        reservation_protocol=1, classification="admission_quarantined",
+        counts_toward_capacity=False,
+    )
+    wire[1][:] = [httpx.Response(200, json=data)]
+    rc, output = invoke(capsys)
+    assert rc == 0
+    row = output["reservations"][0]
+    assert row["classification"] == "admission_quarantined"
+    assert row["counts_toward_capacity"] is False
+    assert row["state"] == "exit_unknown"
+
+
+@pytest.mark.parametrize("bad", [
+    {"reservation_protocol": 0}, {"counts_toward_capacity": True},
+])
+def test_modern_admission_quarantine_rejects_inconsistent_server_claim(wire, capsys, bad):
+    data = page()
+    data["reservations"][0].update({
+        "reservation_protocol": 1, "classification": "admission_quarantined",
+        "counts_toward_capacity": False, **bad,
+    })
+    wire[1][:] = [httpx.Response(200, json=data)]
+    rc, output = invoke(capsys)
+    assert rc == 1 and output["error_code"] == "inventory_unverifiable"
+
+
 def test_history_snapshot_does_not_overwrite_a_current_member(wire, capsys):
     data = page()
     data["reservations"][0].update(classification="current_reservation", counts_toward_capacity=True)
