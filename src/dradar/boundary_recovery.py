@@ -220,15 +220,24 @@ def historical_unknown_allows_claim(
             or getattr(client, "batch_id", None) is not None
             or getattr(client, "plan_scoped", False)):
         raise RecoveryBlocked("personal boundary identity or scope differs")
-    saved_batches = {row.get("batch_id") for row in state["expected"].values()}
-    if len(saved_batches) != 1 or not next(iter(saved_batches)):
-        raise RecoveryBlocked("historical assignments have incomplete batch scope")
+    if any(
+        not isinstance(saved.get(key), str) or not saved[key]
+        for saved in state["expected"].values()
+        for key in ("task_id", "model", "effort", "batch_id")
+    ):
+        raise RecoveryBlocked("historical assignment metadata is incomplete")
     unresolved = sorted(set(state["expected"]) - {
         aid for aid, record in state["outcomes"].items()
         if record.get("outcome") in assignment_boundary.SETTLED_OUTCOMES
     })
     if not unresolved:
         raise RecoveryBlocked("no unresolved historical outcome needs admission review")
+    # A personal boundary retains settled history from earlier batches. Only
+    # unresolved outcomes require this fresh admission, but every unresolved
+    # ID must belong to the same reviewed batch and appear in its exact proof.
+    saved_batches = {state["expected"][aid].get("batch_id") for aid in unresolved}
+    if len(saved_batches) != 1 or not next(iter(saved_batches)):
+        raise RecoveryBlocked("historical assignments have incomplete batch scope")
     if _pending_ids(home):
         raise RecoveryBlocked("a pending upload remains")
     reviewed_ref = None
@@ -254,7 +263,7 @@ def historical_unknown_allows_claim(
             shape = (proof.get("batch_id"), proof.get("batch_session_count"),
                      proof.get("unlinked_session_count"), proof.get("counted_session_count"),
                      tuple(ids) if isinstance(ids, list) else None)
-            if (legacy_seen or len(unresolved) != len(state["expected"])
+            if (legacy_seen
                     or proof.get("classification") != "batch_admission_reviewed"
                     or proof.get("closed") is not False
                     or proof.get("all_batch_sessions_reviewed") is not True
@@ -265,7 +274,7 @@ def historical_unknown_allows_claim(
                     or proof["related_session_count"] > shape[1] - shape[2]
                     or proof.get("counts_toward_capacity") is not (shape[3] > 0)
                     or proof.get("all_related_sessions_linked") is not (shape[2] == 0)
-                    or ids != sorted(state["expected"])
+                    or ids != unresolved
                     or not isinstance(operation_id, str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", operation_id)
                     or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
