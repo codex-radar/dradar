@@ -21,7 +21,7 @@ def fixture(tmp_path, monkeypatch, fault="normal", *, defer_abort=False):
     monkeypatch.setenv("NO_PROXY", "*")
     state = {"paths": [], "seqs": [], "events": [], "closed": False,
              "started": False, "hb": 0, "flight": 0,
-             "start_payloads": [], "received_at": [],
+             "start_payloads": [], "flight_payloads": [], "received_at": [],
              "start_received": threading.Event(), "close_received": threading.Event(),
              "late_done": threading.Event(), "late_status": None}
     class Handler(BaseHTTPRequestHandler):
@@ -56,6 +56,7 @@ def fixture(tmp_path, monkeypatch, fault="normal", *, defer_abort=False):
                     status = 429
             elif self.path.endswith("/flight-events"):
                 state["flight"] += 1
+                state["flight_payloads"].extend(data["events"])
                 ids = [e["event_id"] for e in data["events"]]
                 state["events"].append(ids)
                 if fault == "flight_disconnect" and state["flight"] == 1:
@@ -120,6 +121,27 @@ def fixture(tmp_path, monkeypatch, fault="normal", *, defer_abort=False):
         api._client.close()
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["codex", "kiro"])
+def test_provider_registration_records_serializes_and_starts(tmp_path, monkeypatch, provider):
+    with fixture(tmp_path, monkeypatch) as (w, api, t, a, state):
+        a["agent"] = provider
+        assert w.bind(api, t, a)["ok"]
+        w.finish()
+        events = [e for e in state["flight_payloads"] if e["event_type"] == "worker_registered"]
+        assert len(events) == 1
+        assert events[0]["attributes"] == {"provider": provider}
+        assert state["started"] is True
+        assert state["paths"].count("/api/v1/assignment/started") == 1
+
+
+def test_unknown_provider_is_rejected_before_registration_http(tmp_path, monkeypatch):
+    with fixture(tmp_path, monkeypatch) as (w, api, t, a, state):
+        a["agent"] = "unapproved-provider"
+        with pytest.raises(ApiError):
+            w.bind(api, t, a)
+        assert state["paths"] == []
 
 
 @pytest.mark.parametrize("fault", ["normal", "first_disconnect", "delay_first", "flight_disconnect"])

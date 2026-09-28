@@ -192,7 +192,7 @@ PHASES = frozenset({
 })
 PROVIDERS = frozenset({
     "codex", "claude-code", "dsh-minimal", "grok-build", "kimi-code",
-    "zcode", "antigravity", "codebuddy",
+    "zcode", "antigravity", "codebuddy", "kiro",
 })
 UPDATE_STATES = frozenset({
     "detected", "downloaded", "verified", "staged", "waiting_safe_point",
