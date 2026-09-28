@@ -166,6 +166,15 @@ class CapacityJournal:
                 "release_request": None, "released": False,
             })
 
+    def record_registration_request(self, payload: dict) -> None:
+        def save(state):
+            if state["state"] != "open" or state["attempts"]:
+                return
+            digests = state.setdefault("registration_request_sha256", [])
+            digests.append(hashlib.sha256(_canonical(payload)).hexdigest())
+            del digests[:-8]
+        self._update(save)
+
     def _update(self, operation):
         from .run_plans import _exclusive_lock
         with _exclusive_lock(self.lock):
@@ -290,6 +299,14 @@ class CapacityJournal:
 
 def _receipt(client, state: dict) -> dict:
     receipt = client.runner_session_receipt(state["session_id"], batch_id=state["batch_id"])
+    if isinstance(receipt, dict) and receipt.get("registration_state") == "not_created":
+        if (receipt.get("session_id") != state["session_id"]
+                or receipt.get("batch_id") != state["batch_id"]
+                or receipt.get("schema_version") != 1 or receipt.get("fenced") is not True
+                or state["attempts"] or state["device_generation"] is not None
+                or receipt.get("request_sha256") not in state.get("registration_request_sha256", [])):
+            raise CapacityEvidenceError("Uncreated-session proof does not match this empty session's request.")
+        return receipt
     if (not isinstance(receipt, dict)
             or receipt.get("session_id") != state["session_id"]
             or receipt.get("batch_id") != state["batch_id"]
@@ -319,6 +336,11 @@ def reconcile_file(path: Path, client) -> bool:
         if request.get("execution_manifest_sha256") != digest:
             raise CapacityEvidenceError("Saved exit evidence changed; preserve it for review.")
         receipt = _receipt(client, state)
+        if receipt.get("registration_state") == "not_created":
+            state["registration_not_created"] = receipt
+            _write(path, state)
+            # This is settled without claiming any process exit or release.
+            return True
         if not receipt["closed"]:
             try:
                 client.runner_close(state["close_request"])
@@ -361,7 +383,7 @@ def reconcile_saved(home: Path, client, *, batch_id: str) -> dict[str, int]:
         state = _read(path)
         if state["server"] != str(client.server).rstrip("/") or state.get("batch_id") != batch_id:
             continue
-        if state.get("released") is True:
+        if state.get("released") is True or state.get("registration_not_created"):
             continue
         if state["state"] != "sealed" or not state.get("release_request"):
             counts["unknown"] += 1
@@ -370,5 +392,8 @@ def reconcile_saved(home: Path, client, *, batch_id: str) -> dict[str, int]:
             released = reconcile_file(path, client)
         except ApiError:
             released = False
-        counts["released" if released else "pending"] += 1
+        if released and _read(path).get("registration_not_created"):
+            counts["not_created"] = counts.get("not_created", 0) + 1
+        else:
+            counts["released" if released else "pending"] += 1
     return counts

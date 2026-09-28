@@ -280,14 +280,26 @@ class RunnerTelemetry:
     ) -> int:
         """Send once and return the server-selected next interval."""
         with self._send_lock:
+            if getattr(self, "require_explicit_batch", False) and not self._batch_id:
+                return self._interval
+            rejected = getattr(self, "_registration_error", None)
+            if rejected is not None:
+                if propagate_errors:
+                    raise rejected
+                return self._interval
             if self._disabled:
                 if diagnostic_out is not None:
                     diagnostic_out["registration_result"] = "heartbeat_disabled"
                 return self._interval
             try:
                 self.record_event("heartbeat_sent", component="heartbeat")
-                response = self.client.runner_heartbeat(self._payload())
+                payload = self._payload()
+                if self.capacity_journal is not None and not self._last_heartbeat_accepted:
+                    self.capacity_journal.record_registration_request(payload)
+                response = self.client.runner_heartbeat(payload)
             except ApiError as exc:
+                if exc.code in {"runner_session_capacity_reached", "runner_reservation_capacity_reached", "runner_registration_rejected"}:
+                    self._registration_error = exc
                 # Older servers have no endpoint. Silence and disable rather than
                 # alarming users or producing a 404 every two minutes forever.
                 if exc.status_code == 404:

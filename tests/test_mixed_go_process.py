@@ -64,14 +64,15 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
                     # This loopback server represents the supported protocol;
                     # keep the real client's capability gate in the pyz path.
                     result = {'schema_version': 1,
-                              'capabilities': ['runner-reservation-v1'],
+                              'capabilities': ['runner-reservation-v1', 'explicit-pick-batch-v1'],
                               'stop_generation_cas': True,
                               'close_releases_capacity': False}
                 elif path.path == '/api/v1/assignment/claim':
                     state['claims'].append(data)
                     a = dict(data, agent='fixture', expires_at='2099-01-01T00:00:00Z', assignment_id=str(len(state['claims'])), batch_id=BATCHES[0 if data['model'] == 'gemini-test' else 1])
                     state['active'].append(a)
-                    result = {'assignment': a}
+                    result = {'assignment': a, 'selection_batch_created': data.get('new_batch') == 'true',
+                              'selection_id': data.get('selection_id')}
                     if scenario == 'partial-claim' and len(state['claims']) == 3:
                         state['active'].remove(a)
                         status, result = 503, {'detail': 'injected claim failure'}

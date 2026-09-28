@@ -883,6 +883,10 @@ class ApiClient:
             data["benchmark_id"] = self.benchmark_id
         if self.batch_id:
             data["batch_id"] = self.batch_id
+        if getattr(self, "new_pick_batch", False):
+            data["new_batch"] = "true"
+            data["selection_id"] = self.pick_selection_id
+            data.pop("batch_id", None)
         if refill_campaign_id:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
@@ -892,6 +896,13 @@ class ApiClient:
             data["historical_admission_ref"] = admission_ref
         from .acquisition_recovery import recover
         result = recover(self, 'assignment_claim', data, check=retry_check)
+        if getattr(self, "new_pick_batch", False):
+            assignment = result.get("assignment", {})
+            selected = assignment.get("batch_id")
+            if (not selected or result.get("selection_batch_created") is not True
+                    or result.get("selection_id") != self.pick_selection_id):
+                raise ApiError("Server did not confirm the new batch; inspect held leases before retrying.",
+                               code="batch_scope_unconfirmed")
         if profile is not None:
             assignment=result.get('assignment') if isinstance(result,dict) else None
             if (not isinstance(assignment,dict) or assignment.get('auth_runtime')!=profile

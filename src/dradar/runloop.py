@@ -5508,6 +5508,9 @@ def cmd_go(args) -> int:
         target_workers = 1
     telemetry = RunnerTelemetry(client, target_workers=target_workers, home=HOME)
     telemetry.bind_batch(args.batch_id)
+    # Explicit selection must not register this new session in another held
+    # batch while task preparation is still in progress.
+    telemetry.require_explicit_batch = bool(getattr(args, "pick", None))
     telemetry.start()
     close_reason = "error"
     transport_interrupted = False
@@ -8379,21 +8382,36 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                                 "Their result and exit status stay unknown, and all original "
                                 "files are retained. The Server still decides actual admission."
                             )
-    active, free_pick = _acquire_batch(
-        client, args.yes,
-        # With explicit selection, do not let a menu claim one cell first.
-        allow_new_claims=(allow_new_claims and not (
-            getattr(args, "_historical_admission_digest", None) is not None
-            and (getattr(args, "pick", None)
-                 or getattr(args, "auto", None) is not None)
-        )),
-        allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
-        allow_empty_exact_campaign=(
-            bool(getattr(args, "fleet_pool", False))
-            and bool(wants_refill)
-            and bool(getattr(args, "batch_id", None))
-        ),
+    fresh_pick = bool(getattr(args, "pick", None)) and not (
+        getattr(args, "resume", False) or getattr(args, "batch_id", None)
+        or getattr(client, "plan_scoped", False)
     )
+    if fresh_pick:
+        if allow_new_claims:
+            capabilities = client.run_plan_capabilities()
+            if "explicit-pick-batch-v1" not in capabilities.get("capabilities", []):
+                raise SystemExit("Server upgrade required for safe explicit selection; no task was claimed.")
+            client.new_pick_batch = True
+            client.pick_selection_id = uuid.uuid4().hex
+        # New selection owns only its new claims. Existing held work stays
+        # untouched and remains available through explicit resume.
+        active, free_pick = [], True
+    else:
+        active, free_pick = _acquire_batch(
+            client, args.yes,
+            # With explicit selection, do not let a menu claim one cell first.
+            allow_new_claims=(allow_new_claims and not (
+                getattr(args, "_historical_admission_digest", None) is not None
+                and (getattr(args, "pick", None)
+                     or getattr(args, "auto", None) is not None)
+            )),
+            allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
+            allow_empty_exact_campaign=(
+                bool(getattr(args, "fleet_pool", False))
+                and bool(wants_refill)
+                and bool(getattr(args, "batch_id", None))
+            ),
+        )
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
@@ -8502,6 +8520,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         else:
             print("no work available right now — thank you, check back later")
         return [], free_pick
+    if fresh_pick:
+        client.new_pick_batch = False
+        batch_ids = {a.get("batch_id") for a in active}
+        if len(batch_ids) == 1 and next(iter(batch_ids)):
+            _scope_client_to_batch(client, next(iter(batch_ids)))
     return active, free_pick
 
 
