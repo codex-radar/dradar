@@ -5421,7 +5421,8 @@ def _run_trial(
                     if isinstance(proc, WindowsJobProcess):
                         execution_audit.record_spawn(proc.pid, windows_job_id=proc.job_id)
                     else:
-                        execution_audit.record_spawn(getattr(proc, "pid", None))
+                        execution_audit.record_spawn(getattr(proc, "pid", None),
+                                                     crash_recovery_supported=managed_auth_config is None)
                 if on_worker_registered is None and worker_event_source is None:
                     # Legacy unit callers that do not request ownership binding
                     # keep the old local-only behavior. Production always passes

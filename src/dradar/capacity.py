@@ -192,6 +192,13 @@ def print_report(report: CapacityReport) -> None:
 
 
 def cmd_capacity(args) -> int:
+    if getattr(args, "recover_session", None):
+        if any(getattr(args, k, None) for k in ("reservations", "reconcile", "after", "quarantine_after")):
+            raise SystemExit("session recovery cannot be combined with inventory or legacy reconciliation")
+        from .session_recovery import cmd_recover
+        return cmd_recover(args)
+    if getattr(args, "execute", False) or getattr(args, "journal_sha256", None):
+        raise SystemExit("--execute and --journal-sha256 require --recover-session")
     if getattr(args, "reservations", False):
         if getattr(args, "reconcile", None):
             raise SystemExit("capacity --reservations and --reconcile are mutually exclusive")
