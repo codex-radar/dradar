@@ -1,0 +1,316 @@
+"""Historical unknown exits can be nonblocking without becoming settled."""
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from dradar import assignment_boundary, boundary_recovery, runloop
+
+
+A, B, C = (letter * 32 for letter in "abc")
+OLD_BATCH, NEW_BATCH = "d" * 32, "e" * 32
+
+
+def _assignment(aid, batch):
+    return {"assignment_id": aid, "batch_id": batch,
+            "benchmark_id": "deep-swe", "task_id": f"task-{aid[0]}",
+            "model": "gpt-6-sol", "effort": "high"}
+
+
+def _response(aid, batch, count):
+    return {**_assignment(aid, batch), "recovery_evidence_version": 1,
+            "admission_evidence_version": 1, "status": "invalid",
+            "has_submission": True, "start_evidence": "unknown_or_started",
+            "exit_evidence": "unknown", "admission_evidence": {
+                "classification": "historical_unverified", "state": "exit_unknown",
+                "closed": True, "counts_toward_capacity": False,
+                "all_related_sessions_linked": True,
+                "related_session_count": count,
+                "result_status": "preserve_unknown",
+            }}
+
+
+class Client:
+    benchmark_id = "deep-swe"
+    batch_id = None
+    plan_scoped = False
+
+    def __init__(self):
+        self.rows = {A: _response(A, OLD_BATCH, 1), B: _response(B, OLD_BATCH, 2)}
+        self.reads = 0
+
+    def assignment_recovery_status(self, aid):
+        self.reads += 1
+        value = self.rows[aid]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def _fixture(tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(boundary_recovery, "_check_processes", lambda _home: None)
+    old = [_assignment(A, OLD_BATCH), _assignment(B, OLD_BATCH)]
+    path = assignment_boundary.prepare(tmp_path, "deep-swe", old)
+    for item in old:
+        assignment_boundary.record_outcome(path, item, "failed")
+    return path, Client()
+
+
+def _args(*, pick=True):
+    return SimpleNamespace(
+        yes=True, allow_new_claims=True, resume=False, batch_id=None,
+        pick=["task-c:gpt-6-sol:high"] if pick else None,
+        auto=None, refill=False, fleet_pool=False, assignment=None,
+        expect_assignment=None, forget_assignment_boundary=False,
+    )
+
+
+def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
+    tmp_path, monkeypatch,
+):
+    old_path, client = _fixture(tmp_path, monkeypatch)
+    before = old_path.read_bytes()
+    fresh = _assignment(C, NEW_BATCH)
+    claimed = []
+    acquisition_options = []
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **kw: (
+        acquisition_options.append(kw) or [], True))
+    monkeypatch.setattr(runloop, "_top_up_picks", lambda *_a, **_kw: claimed.append(C) or [fresh])
+    args = _args()
+    # cmd_go does this preflight before _go_menu/_prepare_batch. It must not
+    # reject the old personal boundary before the fresh admission proof runs.
+    assert runloop._prepare_assignment_boundary(args, client, "deep-swe") is None
+    assert old_path.read_bytes() == before
+    active, _ = runloop._prepare_batch(args, client)
+    assert claimed == [C] and active == [fresh]
+    assert acquisition_options[0]["allow_new_claims"] is False
+    new_path = runloop._prepare_assignment_boundary(args, client, "deep-swe", active)
+    assert new_path == assignment_boundary.state_path(tmp_path, "deep-swe", NEW_BATCH)
+    assert old_path.read_bytes() == before
+    assert set(json.loads(old_path.read_text())["expected"]) == {A, B}
+    assert set(json.loads(new_path.read_text())["expected"]) == {C}
+
+    # The same saved old outcomes are rechecked after a process restart. The
+    # new lease resumes from its exact batch; no second claim or old upload is
+    # inferred from the historical evidence.
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([fresh], True))
+    restart = _args(pick=False)
+    active, _ = runloop._prepare_batch(restart, client)
+    assert runloop._prepare_assignment_boundary(restart, client, "deep-swe", active) == new_path
+    assert claimed == [C] and client.reads == 8
+    assert old_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("problem", (
+    "old_contract", "offline", "wrong_scope", "no_submission", "modern_unknown",
+    "counts_false_only", "open_session", "missing_link", "zero_sessions",
+    "new_activity", "one_of_two_unknown", "pending", "other_pending",
+    "batch_scoped", "mixed_old_batches", "process",
+))
+def test_historical_admission_fails_closed_without_changing_old_boundary(
+    tmp_path, monkeypatch, problem,
+):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    if problem == "old_contract":
+        client.rows[A].pop("admission_evidence_version")
+    elif problem == "offline":
+        client.rows[A] = boundary_recovery.ApiError("offline")
+    elif problem == "wrong_scope":
+        client.rows[A]["batch_id"] = NEW_BATCH
+    elif problem == "no_submission":
+        client.rows[A]["has_submission"] = False
+    elif problem == "modern_unknown":
+        client.rows[A]["admission_evidence"]["classification"] = "current_reservation"
+    elif problem == "counts_false_only":
+        client.rows[A]["admission_evidence"]["classification"] = "unknown"
+    elif problem == "open_session":
+        client.rows[A]["admission_evidence"]["closed"] = False
+    elif problem == "missing_link":
+        client.rows[A]["admission_evidence"]["all_related_sessions_linked"] = False
+    elif problem == "zero_sessions":
+        client.rows[A]["admission_evidence"]["related_session_count"] = 0
+    elif problem == "new_activity":
+        client.rows[A]["admission_evidence"]["state"] = "active"
+    elif problem == "one_of_two_unknown":
+        client.rows[B]["exit_evidence"] = "unknown"
+        client.rows[B]["admission_evidence"]["classification"] = "unknown"
+    elif problem == "pending":
+        (tmp_path / "pending_uploads.json").write_text(json.dumps([{"assignment_id": A}]))
+    elif problem == "other_pending":
+        (tmp_path / "pending_uploads.json").write_text(json.dumps([{"assignment_id": C}]))
+    elif problem == "batch_scoped":
+        client.batch_id = NEW_BATCH
+    elif problem == "mixed_old_batches":
+        state, digest = assignment_boundary.snapshot(path)
+        state["expected"][B]["batch_id"] = NEW_BATCH
+        with pytest.raises(boundary_recovery.RecoveryBlocked):
+            boundary_recovery.historical_unknown_allows_claim(
+                client, state, digest, path, tmp_path,
+            )
+        assert path.read_bytes() == before
+        return
+    elif problem == "process":
+        monkeypatch.setattr(boundary_recovery, "_check_processes", lambda _home: (
+            _ for _ in ()).throw(boundary_recovery.RecoveryBlocked("runner active")))
+    state, digest = assignment_boundary.snapshot(path)
+    with pytest.raises(boundary_recovery.RecoveryBlocked):
+        boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
+    assert path.read_bytes() == before
+
+
+def test_historical_proof_cannot_start_continuous_refill(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    args.refill = True
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: pytest.fail(
+        "continuous refill reached the claim path"))
+    with pytest.raises(SystemExit, match="continuous refill"):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+def _finite_cells(n=20):
+    return [
+        {**_assignment(f"{i + 100:032x}", NEW_BATCH), "task_id": f"task-{i}"}
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize("selection", ("pick", "auto"))
+def test_historical_proof_admits_finite_twenty_in_one_batch(
+    tmp_path, monkeypatch, selection,
+):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    cells = _finite_cells()
+    args = _args()
+    args.workers = 20
+    if selection == "pick":
+        args.pick = [f"task-{i}:gpt-6-sol:high" for i in range(20)]
+    else:
+        args.pick = None
+        args.auto = 20
+        client.suggest = lambda n: {"cells": [
+            {"task_id": f"task-{i}", "model": "gpt-6-sol", "effort": "high"}
+            for i in range(n)
+        ]}
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **kw: (
+        [], True) if kw["allow_new_claims"] is False else pytest.fail(
+            "menu claimed outside the explicit finite selection"))
+    claimed = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: (
+        claimed.append(cells[len(claimed)]) or claimed[-1]))
+    active, _ = runloop._prepare_batch(args, client)
+    assert active == cells and len(claimed) == args.workers == 20
+    assert runloop._prepared_batch_ids(active) == []
+    assert client.reads == 42  # initial proof and fresh proof before all 20 claims
+    new_path = runloop._prepare_assignment_boundary(args, client, "deep-swe", active)
+    assert new_path == assignment_boundary.state_path(tmp_path, "deep-swe", NEW_BATCH)
+    assert set(json.loads(new_path.read_text())["expected"]) == {
+        cell["assignment_id"] for cell in cells
+    }
+    assert client.reads == 44  # fresh proof again after all claims
+    assert path.read_bytes() == before
+    monkeypatch.setattr(runloop, "_worker_entrypoint", lambda: ["dradar"])
+    args.keep = False
+    args.allow_task_drift = False
+    args.dev_agent = None
+    runloop._scope_historical_worker_pool(args, client, active)
+    assert args.batch_id == client.batch_id == NEW_BATCH
+    command = runloop._worker_command(args)
+    assert command[command.index("--batch-id") + 1] == NEW_BATCH
+    assert command[command.index("--workers") + 1] == "1"
+
+
+def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    cells = _finite_cells(3)
+    args = _args()
+    args.pick = [f"task-{i}:gpt-6-sol:high" for i in range(1, 3)]
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **kw: (
+        [cells[0]], True) if kw["allow_new_claims"] is False else pytest.fail(
+            "menu claimed before explicit top-up"))
+    claimed = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: (
+        claimed.append(cells[len(claimed) + 1]) or claimed[-1]))
+    active, _ = runloop._prepare_batch(args, client)
+    assert active == cells and len(claimed) == 2
+    assert client.reads == 6
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ("evidence_flip", "response_unknown", "cross_batch"))
+def test_finite_selection_stops_after_partial_claims_without_starting(
+    tmp_path, monkeypatch, failure,
+):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    cells = _finite_cells(5)
+    args = _args()
+    args.pick = [f"task-{i}:gpt-6-sol:high" for i in range(5)]
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([], True))
+    claimed = []
+
+    def claim(*_a, **_kw):
+        if failure == "response_unknown" and len(claimed) == 2:
+            raise boundary_recovery.ApiError("claim response unknown")
+        item = dict(cells[len(claimed)])
+        if failure == "cross_batch" and len(claimed) == 1:
+            item["batch_id"] = "f" * 32
+        claimed.append(item)
+        if failure == "evidence_flip" and len(claimed) == 3:
+            client.rows[B]["admission_evidence"]["state"] = "active"
+        return item
+
+    monkeypatch.setattr(runloop, "_claim_cell", claim)
+    with pytest.raises(SystemExit):
+        runloop._prepare_batch(args, client)
+    assert len(claimed) == {"evidence_flip": 3, "response_unknown": 2,
+                            "cross_batch": 2}[failure]
+    assert path.read_bytes() == before
+    assert not assignment_boundary.state_path(tmp_path, "deep-swe", NEW_BATCH).exists()
+
+
+def test_real_preflight_defers_but_old_contract_blocks_before_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    assert runloop._prepare_assignment_boundary(args, client, "deep-swe") is None
+    client.rows[A].pop("admission_evidence_version")
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: pytest.fail(
+        "old Server contract reached a claim"))
+    with pytest.raises(SystemExit, match="No new assignment was claimed"):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+def test_historical_proof_does_not_chase_new_free_picks(monkeypatch, tmp_path):
+    fresh = _assignment(C, NEW_BATCH)
+    args = _args(pick=False)
+    args.yes = False
+    args._historical_admission_digest = "old-proof"
+    monkeypatch.setattr(runloop, "_prepare_batch", lambda *_a: ([fresh], True))
+    monkeypatch.setattr(runloop, "_prepared_batch_ids", lambda *_a: [])
+    monkeypatch.setattr(runloop, "_prepare_assignment_boundary", lambda *_a: tmp_path / "new.json")
+    monkeypatch.setattr(assignment_boundary, "add_expected", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_run_batch", lambda *_a, **_kw: 0)
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: pytest.fail(
+        "a second claim needs a new invocation and proof"))
+    assert runloop._go_menu(args, {"benchmark": "deep-swe"}, Client(), tmp_path) == 0
+
+
+def test_prior_nonblocking_read_is_never_cached(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    state, digest = assignment_boundary.snapshot(path)
+    assert boundary_recovery.historical_unknown_allows_claim(
+        client, state, digest, path, tmp_path,
+    ) == 2
+    client.rows[B]["admission_evidence"]["counts_toward_capacity"] = True
+    with pytest.raises(boundary_recovery.RecoveryBlocked):
+        boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
+    assert client.reads == 4
