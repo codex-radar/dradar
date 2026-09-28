@@ -27,7 +27,7 @@ class Server:
         if req.url.path.startswith('/api/v1/write-receipts/'):
             return httpx.Response(404, json={'detail': {'code': 'receipt_not_found'}})
         if req.url.path == '/api/v1/run-plans/capabilities':
-            return httpx.Response(200, json={'schema_version': 1, 'capabilities': ['runner-reservation-v1'],
+            return httpx.Response(200, json={'schema_version': 1, 'capabilities': ['runner-reservation-v1', 'explicit-pick-batch-v1'],
                                             'stop_generation_cas': True, 'close_releases_capacity': False})
         if req.url.path.endswith('/claim'):
             data = {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
@@ -37,7 +37,7 @@ class Server:
             batch = BATCHES[0 if data['model'] == 'gemini-test' else 1]
             a = dict(data, assignment_id=str(len(self.claims)), batch_id=batch)
             self.active.append(a)
-            return httpx.Response(200, json={'assignment': a})
+            return httpx.Response(200, json={'assignment': a, 'selection_batch_created': data.get('new_batch') == 'true'})
         if req.url.path == '/api/v1/assignment':
             batch = req.url.params.get('batch_id')
             self.reads.append(batch)

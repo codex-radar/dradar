@@ -885,6 +885,8 @@ class ApiClient:
             data["batch_id"] = self.batch_id
         if getattr(self, "new_pick_batch", False):
             data["new_batch"] = "true"
+            data["selection_id"] = self.pick_selection_id
+            data.pop("batch_id", None)
         if refill_campaign_id:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
@@ -900,8 +902,6 @@ class ApiClient:
             if not selected or result.get("selection_batch_created") is not True:
                 raise ApiError("Server did not confirm the new batch; inspect held leases before retrying.",
                                code="batch_scope_unconfirmed")
-            self.set_batch_id(selected)
-            self.new_pick_batch = False
         if profile is not None:
             assignment=result.get('assignment') if isinstance(result,dict) else None
             if (not isinstance(assignment,dict) or assignment.get('auth_runtime')!=profile

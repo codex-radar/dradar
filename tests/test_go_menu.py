@@ -73,7 +73,6 @@ class FakeClient:
         if getattr(self, "new_pick_batch", False) and result.get("assignment"):
             result = {**result, "assignment": {**result["assignment"], "batch_id": "c" * 32}}
             self.batch_id = "c" * 32
-            self.new_pick_batch = False
         return result
 
     def suggest(self, n):

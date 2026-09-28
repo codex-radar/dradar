@@ -8392,6 +8392,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
             if "explicit-pick-batch-v1" not in capabilities.get("capabilities", []):
                 raise SystemExit("Server upgrade required for safe explicit selection; no task was claimed.")
             client.new_pick_batch = True
+            client.pick_selection_id = uuid.uuid4().hex
         # New selection owns only its new claims. Existing held work stays
         # untouched and remains available through explicit resume.
         active, free_pick = [], True
@@ -8519,6 +8520,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         else:
             print("no work available right now — thank you, check back later")
         return [], free_pick
+    if fresh_pick:
+        client.new_pick_batch = False
+        batch_ids = {a.get("batch_id") for a in active}
+        if len(batch_ids) == 1 and next(iter(batch_ids)):
+            _scope_client_to_batch(client, next(iter(batch_ids)))
     return active, free_pick
 
 
