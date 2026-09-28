@@ -257,13 +257,14 @@ def historical_unknown_allows_claim(
             if (legacy_seen or len(unresolved) != len(state["expected"])
                     or proof.get("classification") != "batch_admission_reviewed"
                     or proof.get("closed") is not False
-                    or proof.get("counts_toward_capacity") is not True
-                    or proof.get("all_related_sessions_linked") is not False
                     or proof.get("all_batch_sessions_reviewed") is not True
                     or proof.get("physical_exit") != "unknown"
                     or shape[0] != next(iter(saved_batches))
                     or any(type(value) is not int or value < 0 for value in shape[1:4])
-                    or shape[1] < 1 or shape[2] + shape[3] > shape[1]
+                    or shape[1] < 1 or max(shape[2], shape[3]) > shape[1]
+                    or proof["related_session_count"] > shape[1] - shape[2]
+                    or proof.get("counts_toward_capacity") is not (shape[3] > 0)
+                    or proof.get("all_related_sessions_linked") is not (shape[2] == 0)
                     or ids != sorted(state["expected"])
                     or not isinstance(operation_id, str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", operation_id)

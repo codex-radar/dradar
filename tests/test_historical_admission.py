@@ -130,13 +130,18 @@ def test_reviewed_batch_proof_sets_exact_claim_reference_without_settling(tmp_pa
     assert path.read_bytes() == before
 
 
-def test_reviewed_batch_accepts_other_consistent_reviewed_counts(tmp_path, monkeypatch):
+@pytest.mark.parametrize('sessions,unlinked,counted', ((4, 1, 1), (3, 0, 0), (7, 4, 4)))
+def test_reviewed_batch_accepts_other_consistent_reviewed_counts(
+    tmp_path, monkeypatch, sessions, unlinked, counted,
+):
     path, client = _fixture(tmp_path, monkeypatch)
     before = path.read_bytes()
     client.rows = {A: _reviewed_response(A, 1), B: _reviewed_response(B, 2)}
     for row in client.rows.values():
         row['admission_evidence'].update(
-            batch_session_count=4, unlinked_session_count=1, counted_session_count=1)
+            batch_session_count=sessions, unlinked_session_count=unlinked,
+            counted_session_count=counted, counts_toward_capacity=counted > 0,
+            all_related_sessions_linked=unlinked == 0)
     state, digest = assignment_boundary.snapshot(path)
     assert boundary_recovery.historical_unknown_allows_claim(
         client, state, digest, path, tmp_path) == 2
@@ -147,6 +152,7 @@ def test_reviewed_batch_accepts_other_consistent_reviewed_counts(tmp_path, monke
 @pytest.mark.parametrize("drift", (
     "partial_boundary", "missing_result", "different_operation", "counted_false",
     "not_reviewed", "physical_exit_claimed", "different_batch", "different_counts",
+    "linked_true", "linked_count_impossible", "counted_exceeds", "unlinked_exceeds",
 ))
 def test_reviewed_batch_proof_fails_closed_on_incomplete_scope(tmp_path, monkeypatch, drift):
     path, client = _fixture(tmp_path, monkeypatch)
@@ -169,6 +175,14 @@ def test_reviewed_batch_proof_fails_closed_on_incomplete_scope(tmp_path, monkeyp
         client.rows[A]["admission_evidence"]["batch_id"] = NEW_BATCH
     elif drift == "different_counts":
         client.rows[B]["admission_evidence"]["counted_session_count"] = 2
+    elif drift == "linked_true":
+        client.rows[A]["admission_evidence"]["all_related_sessions_linked"] = True
+    elif drift == "linked_count_impossible":
+        client.rows[A]["admission_evidence"]["related_session_count"] = 4
+    elif drift == "counted_exceeds":
+        client.rows[A]["admission_evidence"]["counted_session_count"] = 9
+    elif drift == "unlinked_exceeds":
+        client.rows[A]["admission_evidence"]["unlinked_session_count"] = 9
     with pytest.raises(boundary_recovery.RecoveryBlocked):
         boundary_recovery.historical_unknown_allows_claim(
             client, state, digest, path, tmp_path)
