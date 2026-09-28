@@ -887,6 +887,9 @@ class ApiClient:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
             data["tier"] = tier
+        admission_ref = getattr(self, "historical_admission_reference", None)
+        if admission_ref is not None:
+            data["historical_admission_ref"] = admission_ref
         from .acquisition_recovery import recover
         result = recover(self, 'assignment_claim', data, check=retry_check)
         if profile is not None:

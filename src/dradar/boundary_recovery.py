@@ -9,7 +9,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from . import assignment_boundary, fleet, local_jobs
+from . import assignment_boundary, fleet, local_jobs, launcher_handoff
 from .api_client import ApiError
 from .identity import _client
 from .local_config import DEFAULT_BENCHMARK, HOME, _load_config
@@ -131,16 +131,33 @@ def _check_processes(home: Path) -> None:
     if os.name != "nt":
         try:
             proc = subprocess.run(
-                ["ps", "-axo", "pid=,command="], capture_output=True,
+                ["ps", "-axo", "pid=,ppid=,command="], capture_output=True,
                 text=True, timeout=10, check=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RecoveryBlocked("runner process inspection failed") from exc
+        processes = {}
         for line in proc.stdout.splitlines():
-            match = re.match(r"\s*(\d+)\s+(.+)", line)
-            if not match or int(match.group(1)) == os.getpid():
+            match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(.+)", line)
+            if not match or int(match.group(1)) in processes:
+                raise RecoveryBlocked("runner process inspection returned an unknown row")
+            processes[int(match.group(1))] = (int(match.group(2)), match.group(3))
+        own = processes.get(os.getpid())
+        if own is None or own[0] != os.getppid():
+            raise RecoveryBlocked("runner process ancestry could not be verified")
+        supervisor = launcher_handoff.supervisor()
+        if supervisor is not None and supervisor[0] not in processes:
+            raise RecoveryBlocked("runner launcher process is missing")
+        for pid, (_ppid, command) in processes.items():
+            if pid == os.getpid():
                 continue
-            command = match.group(2)
+            if supervisor is not None and pid == supervisor[0] == own[0]:
+                try:
+                    if launcher_handoff.argv_digest(shlex.split(command)) == supervisor[1]:
+                        continue
+                except ValueError:
+                    pass
+                raise RecoveryBlocked("runner launcher identity could not be verified")
             if _looks_like_runner_process(command):
                 raise RecoveryBlocked("another DRadar runner process may be active")
     else:  # Windows cannot inspect other processes' arguments with tasklist.
@@ -214,39 +231,83 @@ def historical_unknown_allows_claim(
     The historical boundary remains on disk. Every later claim attempt must
     repeat this read; the Server's actual claim/capacity gate still decides.
     """
+    client.historical_admission_reference = None
     if (state.get("benchmark_id") != getattr(client, "benchmark_id", None)
             or state.get("batch_id") is not None
             or getattr(client, "batch_id", None) is not None
             or getattr(client, "plan_scoped", False)):
         raise RecoveryBlocked("personal boundary identity or scope differs")
-    saved_batches = {row.get("batch_id") for row in state["expected"].values()}
-    if len(saved_batches) != 1 or not next(iter(saved_batches)):
-        raise RecoveryBlocked("historical assignments have incomplete batch scope")
+    if any(
+        not isinstance(saved.get(key), str) or not saved[key]
+        for saved in state["expected"].values()
+        for key in ("task_id", "model", "effort", "batch_id")
+    ):
+        raise RecoveryBlocked("historical assignment metadata is incomplete")
     unresolved = sorted(set(state["expected"]) - {
         aid for aid, record in state["outcomes"].items()
         if record.get("outcome") in assignment_boundary.SETTLED_OUTCOMES
     })
     if not unresolved:
         raise RecoveryBlocked("no unresolved historical outcome needs admission review")
+    # A personal boundary retains settled history from earlier batches. Only
+    # unresolved outcomes require this fresh admission, but every unresolved
+    # ID must belong to the same reviewed batch and appear in its exact proof.
+    saved_batches = {state["expected"][aid].get("batch_id") for aid in unresolved}
+    if len(saved_batches) != 1 or not next(iter(saved_batches)):
+        raise RecoveryBlocked("historical assignments have incomplete batch scope")
     if _pending_ids(home):
         raise RecoveryBlocked("a pending upload remains")
+    reviewed_ref = None
+    reviewed_shape = None
+    legacy_seen = False
     for aid in unresolved:
         row = _scoped_status(client, state, aid)
         proof = row.get("admission_evidence")
-        if (row.get("admission_evidence_version") != 1
-                or row.get("status") not in ("submitted", "invalid")
+        if (row.get("status") not in ("submitted", "invalid")
                 or row.get("has_submission") is not True
                 or row.get("start_evidence") != "unknown_or_started"
                 or row.get("exit_evidence") != "unknown"
                 or not isinstance(proof, dict)
-                or proof.get("classification") != "historical_unverified"
                 or proof.get("state") != "exit_unknown"
-                or proof.get("closed") is not True
-                or proof.get("counts_toward_capacity") is not False
-                or proof.get("all_related_sessions_linked") is not True
                 or type(proof.get("related_session_count")) is not int
                 or proof["related_session_count"] < 1
                 or proof.get("result_status") != "preserve_unknown"):
+            raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
+        if row.get("admission_evidence_version") == 2:
+            ids = proof.get("result_assignment_ids")
+            operation_id = proof.get("operation_id")
+            sha = proof.get("manifest_sha256")
+            shape = (proof.get("batch_id"), proof.get("batch_session_count"),
+                     proof.get("unlinked_session_count"), proof.get("counted_session_count"),
+                     tuple(ids) if isinstance(ids, list) else None)
+            if (legacy_seen
+                    or proof.get("classification") != "batch_admission_reviewed"
+                    or proof.get("closed") is not False
+                    or proof.get("all_batch_sessions_reviewed") is not True
+                    or proof.get("physical_exit") != "unknown"
+                    or shape[0] != next(iter(saved_batches))
+                    or any(type(value) is not int or value < 0 for value in shape[1:4])
+                    or shape[1] < 1 or max(shape[2], shape[3]) > shape[1]
+                    or proof["related_session_count"] > shape[1] - shape[2]
+                    or proof.get("counts_toward_capacity") is not (shape[3] > 0)
+                    or proof.get("all_related_sessions_linked") is not (shape[2] == 0)
+                    or ids != unresolved
+                    or not isinstance(operation_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}", operation_id)
+                    or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+                raise RecoveryBlocked(f"{aid}: reviewed original-batch proof is incomplete")
+            reference = operation_id + ":" + sha
+            if reviewed_ref is not None and (reference != reviewed_ref or shape != reviewed_shape):
+                raise RecoveryBlocked("original results disagree on the batch review")
+            reviewed_ref, reviewed_shape = reference, shape
+        elif (row.get("admission_evidence_version") == 1
+              and proof.get("classification") == "historical_unverified"
+              and proof.get("closed") is True
+              and proof.get("counts_toward_capacity") is False
+              and proof.get("all_related_sessions_linked") is True
+              and reviewed_ref is None):
+            legacy_seen = True
+        else:
             raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
     # Close local races before the new claim. No state is recorded as settled
     # or cached for a future invocation.
@@ -256,6 +317,7 @@ def historical_unknown_allows_claim(
     _, current_digest = assignment_boundary.snapshot(path)
     if current_digest != digest:
         raise RecoveryBlocked("saved personal boundary changed during review")
+    client.historical_admission_reference = reviewed_ref
     return len(unresolved)
 
 

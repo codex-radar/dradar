@@ -6475,26 +6475,14 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         print(f"live worker target: {target_file} (range 0..{maximum})")
     command = _worker_command(args)
     parent_capabilities = tuple(getattr(client, "capabilities", ()) or ())
-    pool_abort_file = configured_abort_file or (
-        Path(tempfile.gettempdir())
-        / f"dradar-pool-abort-{os.getpid()}-{time.time_ns()}"
-    )
-    repeat_failure_state_file = (
-        Path(tempfile.gettempdir())
-        / f"dradar-repeat-failure-{os.getpid()}-{time.time_ns()}.json"
-    )
-    failure_cutoff_file = (
-        Path(tempfile.gettempdir())
-        / f"dradar-pool-failure-cutoff-{os.getpid()}-{time.time_ns()}"
-    )
-    returned_assignments_file = (
-        Path(tempfile.gettempdir())
-        / f"dradar-pool-returned-{os.getpid()}-{time.time_ns()}.json"
-    )
-    worker_activity_prefix = (
-        Path(tempfile.gettempdir())
-        / f"dradar-pool-worker-{os.getpid()}-{time.time_ns()}"
-    )
+    # The launch/stop lock makes its parent private. Never point that lock
+    # at the shared system temporary directory itself (e.g. root-owned /tmp).
+    pool_control_dir = Path(tempfile.mkdtemp(prefix="dradar-pool-"))
+    pool_abort_file = configured_abort_file or (pool_control_dir / "abort")
+    repeat_failure_state_file = pool_control_dir / "repeat-failure.json"
+    failure_cutoff_file = pool_control_dir / "failure-cutoff"
+    returned_assignments_file = pool_control_dir / "returned.json"
+    worker_activity_prefix = pool_control_dir / "worker"
     owns_abort_file = configured_abort_file is None
     popen_kwargs = {}
     if os.name == "nt":
@@ -6581,9 +6569,15 @@ def _run_worker_pool(args, *, prepared=None) -> int:
             attributes={"target_workers": target},
         )
 
-    def cleanup_abort_file() -> None:
+    def cleanup_abort_file(*, preserve: bool = False) -> None:
+        # A killed child may not yet have exited. Keep its shared stop/lock
+        # inode and diagnostic state, and retain failed-run evidence as well.
+        if preserve or any(process.poll() != 0 for process in processes):
+            print(f"worker pool control evidence retained: {pool_control_dir}")
+            return
         if owns_abort_file:
             pool_abort_file.unlink(missing_ok=True)
+            pool_abort_file.with_suffix(".lock").unlink(missing_ok=True)
         repeat_failure_state_file.unlink(missing_ok=True)
         repeat_failure_state_file.with_name(
             f"{repeat_failure_state_file.name}.lock"
@@ -6592,6 +6586,10 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         returned_assignments_file.unlink(missing_ok=True)
         for path in worker_activity_files.values():
             path.unlink(missing_ok=True)
+        try:
+            pool_control_dir.rmdir()  # Never recursively delete unknown files.
+        except OSError:
+            print(f"worker pool control evidence retained: {pool_control_dir}")
 
     slot_batches = {}
     batch_cursor = 0
@@ -7040,7 +7038,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         _signal_workers(processes)
         if not fleet_pool:
             _maintain_image_cache(client, cfg, phase="after interrupted worker pool")
-        cleanup_abort_file()
+        cleanup_abort_file(preserve=True)
         raise
     except OSError as exc:
         # A later spawn can fail after earlier children are already live
@@ -7051,7 +7049,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         _signal_workers(processes)
         if not fleet_pool:
             _maintain_image_cache(client, cfg, phase="after failed worker pool")
-        cleanup_abort_file()
+        cleanup_abort_file(preserve=True)
         return 1
     if fleet_pool and not startup_ready:
         if abort_reason is not None:
@@ -7104,7 +7102,6 @@ def _run_worker_pool(args, *, prepared=None) -> int:
                     ),
                     reason_code=startup_reason,
                 )
-    cleanup_abort_file()
     environment_build_failures = [
         (slot, rc) for slot, rc in returncodes
         if rc == _ENVIRONMENT_BUILD_FAILED_EXIT_CODE
@@ -7120,6 +7117,11 @@ def _run_worker_pool(args, *, prepared=None) -> int:
     if not fleet_pool:
         _maintain_image_cache(client, cfg, phase="after worker pool")
     boundary_safe = _finish_assignment_boundary(client, boundary_path)
+    cleanup_abort_file(preserve=(
+        not boundary_safe or abort_reason is not None
+        or backfill_error is not None or backfill_exhausted
+        or (fleet_pool and not startup_ready) or startup_failure_published
+    ))
     if not boundary_safe:
         return 1
     if abort_reason is not None:
@@ -8412,12 +8414,20 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                         blocked_by_boundary = True
                     else:
                         args._historical_admission_digest = digest
-                        print(
-                            f"{count} historical exit-unknown assignment(s) remain saved; "
-                            "fresh Server evidence says they do not occupy new capacity. "
-                            "Their result and exit status stay unknown, and all original "
-                            "files are retained. The Server still decides actual admission."
-                        )
+                        if getattr(client, "historical_admission_reference", None):
+                            print(
+                                f"{count} original exit-unknown assignment(s) remain saved; "
+                                "the reviewed batch retains its counted reservations. "
+                                "Results and exit status stay unknown, and original files remain. "
+                                "The Server checks the batch review and account capacity on each claim."
+                            )
+                        else:
+                            print(
+                                f"{count} historical exit-unknown assignment(s) remain saved; "
+                                "fresh Server evidence says they do not occupy new capacity. "
+                                "Their result and exit status stay unknown, and all original "
+                                "files are retained. The Server still decides actual admission."
+                            )
     active, free_pick = _acquire_batch(
         client, args.yes,
         # With explicit selection, do not let a menu claim one cell first.

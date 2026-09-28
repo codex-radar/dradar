@@ -87,6 +87,7 @@ def popen_options(env: dict[str, str], *, extra_fds: tuple[int, ...] = ()) -> di
     prefix = command()
     bundled = len(prefix) == 2
     env.pop(_WINDOWS_HANDLE_ENV, None)
+    env.pop("DRADAR_LAUNCHER_HANDOFF_FD", None)
     env.pop("DRADAR_OTA_SELF_TEST", None)
     env.pop("DRADAR_OTA_SOURCE_CHILD", None)
     if bundled:

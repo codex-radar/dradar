@@ -1,0 +1,261 @@
+{
+  "source": "De-identified 2026-09-28 PREGO snapshots; 18 expected / 16 settled / 2 unknown, two batches. IDs, task names, operation and digest replaced; metadata/outcome/proof topology retained.",
+  "rows": [
+    {
+      "assignment_id": "00000000000000000000000000000000",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-00"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-01"
+      },
+      "outcome": null
+    },
+    {
+      "assignment_id": "00000000000000000000000000000001",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-02"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000002",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-03"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000003",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-04"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000004",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-05"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000005",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-06"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000006",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-07"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000007",
+      "saved": {
+        "batch_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "effort": "high",
+        "model": "gpt-6-luna",
+        "task_id": "task-08"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000008",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-09"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "00000000000000000000000000000009",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-10"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000a",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-11"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000b",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-12"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000c",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-13"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000d",
+      "saved": {
+        "batch_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "effort": "low",
+        "model": "gpt-6-luna",
+        "task_id": "task-14"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000e",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-15"
+      },
+      "outcome": "not_started_terminal"
+    },
+    {
+      "assignment_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-16"
+      },
+      "outcome": null
+    },
+    {
+      "assignment_id": "0000000000000000000000000000000f",
+      "saved": {
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "effort": "max",
+        "model": "gpt-6-sol",
+        "task_id": "task-17"
+      },
+      "outcome": "not_started_terminal"
+    }
+  ],
+  "proofs": [
+    {
+      "http_status": 200,
+      "cache_control": "private, no-store",
+      "recovery_evidence_version": 1,
+      "admission_evidence_version": 2,
+      "admission_evidence": {
+        "classification": "batch_admission_reviewed",
+        "state": "exit_unknown",
+        "closed": false,
+        "counts_toward_capacity": true,
+        "all_related_sessions_linked": false,
+        "related_session_count": 1,
+        "all_batch_sessions_reviewed": true,
+        "batch_session_count": 8,
+        "unlinked_session_count": 5,
+        "counted_session_count": 3,
+        "physical_exit": "unknown",
+        "result_status": "preserve_unknown",
+        "operation_id": "0227-original-reviewed",
+        "manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "result_assignment_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      },
+      "assignment_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "batch_id": "dddddddddddddddddddddddddddddddd",
+      "benchmark_id": "deep-swe",
+      "task_id": "task-01",
+      "model": "gpt-6-sol",
+      "effort": "max",
+      "status": "invalid",
+      "has_submission": true,
+      "start_evidence": "unknown_or_started",
+      "exit_evidence": "unknown"
+    },
+    {
+      "http_status": 200,
+      "cache_control": "private, no-store",
+      "recovery_evidence_version": 1,
+      "admission_evidence_version": 2,
+      "admission_evidence": {
+        "classification": "batch_admission_reviewed",
+        "state": "exit_unknown",
+        "closed": false,
+        "counts_toward_capacity": true,
+        "all_related_sessions_linked": false,
+        "related_session_count": 2,
+        "all_batch_sessions_reviewed": true,
+        "batch_session_count": 8,
+        "unlinked_session_count": 5,
+        "counted_session_count": 3,
+        "physical_exit": "unknown",
+        "result_status": "preserve_unknown",
+        "operation_id": "0227-original-reviewed",
+        "manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "batch_id": "dddddddddddddddddddddddddddddddd",
+        "result_assignment_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      },
+      "assignment_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "batch_id": "dddddddddddddddddddddddddddddddd",
+      "benchmark_id": "deep-swe",
+      "task_id": "task-16",
+      "model": "gpt-6-sol",
+      "effort": "max",
+      "status": "invalid",
+      "has_submission": true,
+      "start_evidence": "unknown_or_started",
+      "exit_evidence": "unknown"
+    }
+  ]
+}
