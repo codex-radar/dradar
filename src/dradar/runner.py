@@ -40,7 +40,8 @@ from .windows_job import WindowsJobError, WindowsJobProcess
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .kiro_provider import (
     KIRO_AGENT, KIRO_PROVIDER, KIRO_MODEL, KIRO_REQUEST_MODEL,
-    KIRO_CLI_VERSION, KIRO_SUPPORTED_EFFORTS, kiro_subscription_session,
+    KIRO_CLI_VERSION, KIRO_SUPPORTED_EFFORTS, KiroCredentialMergeConflict,
+    KiroCredentialReturnFailure, kiro_subscription_session,
 )
 from .execution_audit import ExecutionAudit, ExecutionObserverError
 from .credential_files import is_claude_metered_auth
@@ -5657,6 +5658,16 @@ def _run_trial(
             provider_stack.__exit__(*error_info)
         except (OSError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
+        except (KiroCredentialMergeConflict, KiroCredentialReturnFailure) as exc:
+            if not local_exit_confirmed:
+                raise RunnerCleanupUnconfirmedError(
+                    "Kiro private credential recovery requires manual inspection; "
+                    "local cleanup was not confirmed",
+                    job_dir=jobs_dir / job_name,
+                ) from exc
+            raise RunnerError(
+                str(exc), report_code="kiro_credential_recovery_required",
+            ) from exc
     if managed_auth_config is not None or not local_exit_confirmed:
         raise RunnerCleanupUnconfirmedError(
             "managed execution exit is not fully audited; keep this attempt quarantined",
