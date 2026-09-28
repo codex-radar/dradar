@@ -15,7 +15,9 @@ dradar capacity --recover-session SESSION_ID --json
 This reads the journal, original process identities, original Docker daemon,
 exact-job Compose containers and authenticated session receipt. It does not
 signal processes, remove containers, close sessions, alter assignments or
-create a local lock file. Stop the original runtime normally before recovery.
+create a local lock file. Finish the original runtime’s normal cleanup before
+recovery. Exact-job containers must be absent, including stopped containers;
+this entrance does not remove them or reinterpret stopped as absent.
 
 For a `ready` result, use its exact `journal_sha256`:
 

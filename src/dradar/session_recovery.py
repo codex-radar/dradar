@@ -15,6 +15,7 @@ import sys
 import uuid
 
 from . import capacity_journal as journal, runtime_identity
+from .api_client import ApiError
 
 Error = journal.CapacityEvidenceError
 
@@ -51,6 +52,20 @@ def _containers(job, saved_daemon):
     if not isinstance(rows, list) or {r.get("Id") for r in rows} != set(ids) or len(rows) != len(ids):
         raise Error("Docker inventory is incomplete.")
     def owned(row):
+        config = row.get("Config")
+        mounts = row.get("Mounts")
+        if not isinstance(config, dict) or not isinstance(mounts, list):
+            raise Error("Docker ownership metadata is incomplete.")
+        labels = config.get("Labels") or {}
+        if not isinstance(labels, dict):
+            raise Error("Docker ownership labels are invalid.")
+        config_files = labels.get("com.docker.compose.project.config_files", "")
+        if not isinstance(config_files, str):
+            raise Error("Docker Compose ownership is invalid.")
+        if any(Path(value.strip()).is_absolute()
+               and Path(value.strip()).resolve().is_relative_to(job)
+               for value in config_files.split(",") if value.strip()):
+            return True
         for mount in row.get("Mounts", []):
             if (mount.get("Type") == "bind" and isinstance(mount.get("Source"), str)
                     and Path(mount["Source"]).is_relative_to(job)):
@@ -72,13 +87,9 @@ def _containers(job, saved_daemon):
     for row in rows:
         labels = row.get("Config", {}).get("Labels") or {}
         if owned(row) or labels.get("com.docker.compose.project") in projects:
-            state = row.get("State", {})
-            if (state.get("Running") is not False or state.get("Status") != "exited"
-                    or type(state.get("Pid")) is not int or state["Pid"] != 0
-                    or row.get("HostConfig", {}).get("RestartPolicy", {}).get("Name") not in {"", "no"}):
-                raise Error("An exact-job container is still active or unknown; no recovery was performed.")
-            matched.append({"id": row["Id"], "project": labels.get("com.docker.compose.project"),
-                            "status": state["Status"], "finished_at": state.get("FinishedAt")})
+            # The existing wire contract declares containers absent, not just
+            # stopped. Keep the same criterion as normal runner finalization.
+            raise Error("An exact-job container remains (even if stopped); exit remains unknown.")
     if runtime_identity.docker_identity() != daemon:
         raise Error("Docker identity changed during inspection.")
     return {"daemon": daemon, "containers": matched, "running": False}
@@ -177,6 +188,7 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None):
                 "batch_id": state["batch_id"], "evidence_id": uuid.uuid4().hex, "exit_state": "confirmed",
                 "process_tree": "confirmed_absent", "owned_containers": "confirmed_absent",
                 "execution_manifest_sha256": _digest(manifest)}
+            state["recovery_seal_sha256"] = journal._recovery_seal_digest(state)
             # Compare again before the only local transition. Save the original
             # journal in a separate immutable-by-convention evidence snapshot.
             if _digest(journal._read(path)) != digest:
@@ -209,6 +221,9 @@ def cmd_recover(args):
                          execute=args.execute, expected_digest=args.journal_sha256)
     except Error as exc:
         result = {"session_id": args.recover_session, "status": "unknown", "reason": str(exc)}
+    except ApiError:
+        result = {"session_id": args.recover_session, "status": "unknown",
+                  "reason": "Exact server receipt unavailable; retain and retry the same saved evidence."}
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         result = {"session_id": args.recover_session, "status": "unknown",
                   "reason": "Runtime inspection failed; preserve the journal and reservation."}

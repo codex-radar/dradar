@@ -124,11 +124,10 @@ def test_compose_egress_is_checked_and_unrelated_left_alone(setup, monkeypatch, 
         calls.append(argv)
         return SimpleNamespace(stdout=json.dumps(rows) if argv[1]=='inspect' else '\n'.join(r['Id'] for r in rows))
     monkeypatch.setattr(recovery.subprocess, 'run', run)
-    if running:
-        with pytest.raises(journal.CapacityEvidenceError, match='still active'):
-            recovery.recover(home, SID, server)
-    else:
-        assert recovery.recover(home, SID, server)['status']=='ready'
+    with pytest.raises(journal.CapacityEvidenceError, match='container remains'):
+        recovery.recover(home, SID, server)
+    rows[:2] = []
+    assert recovery.recover(home, SID, server)['status']=='ready'
     assert all(c[1] in ('ps','inspect') for c in calls)
 
 
@@ -168,5 +167,57 @@ def test_egress_without_main_still_blocks_from_original_trial_directory(setup,mo
     row={'Id':'a'*64,'Mounts':[], 'Config':{'Labels':{'com.docker.compose.project':'task__abc12345'}},
          'HostConfig':{'RestartPolicy':{'Name':'no'}}, 'State':{'Pid':0,'Running':True,'Status':'running'}}
     monkeypatch.setattr(recovery.subprocess,'run',lambda argv,**kw: SimpleNamespace(stdout=json.dumps([row]) if argv[1]=='inspect' else row['Id']))
-    with pytest.raises(journal.CapacityEvidenceError,match='still active'):
+    with pytest.raises(journal.CapacityEvidenceError,match='container remains'):
         recovery.recover(home,SID,server)
+
+
+def test_egress_without_main_or_trial_uses_exact_compose_config(setup, monkeypatch):
+    home,local,server,job=setup
+    row={'Id':'a'*64,'Mounts':[], 'Config':{'Labels':{
+        'com.docker.compose.project':'task__abc12345',
+        'com.docker.compose.project.config_files':str(job/'compose.yaml')}},
+         'State':{'Running':True,'Status':'running','Pid':321}}
+    monkeypatch.setattr(recovery.subprocess,'run',lambda argv,**kw: SimpleNamespace(stdout=json.dumps([row]) if argv[1]=='inspect' else row['Id']))
+    before=local.path.read_bytes()
+    with pytest.raises(journal.CapacityEvidenceError,match='container remains'):
+        recovery.recover(home,SID,server)
+    assert local.path.read_bytes()==before and 'close' not in server.calls
+
+
+@pytest.mark.parametrize('field,value', [('evidence_id','9'*32), ('device_generation',4)])
+def test_original_preflight_digest_cannot_retry_drifted_release(setup, field, value):
+    home,local,server,_=setup
+    pre=recovery.recover(home,SID,server)
+    recovery.recover(home,SID,server,execute=True,expected_digest=pre['journal_sha256'])
+    state=json.loads(local.path.read_text())
+    state['release_request'][field]=value
+    local.path.write_text(json.dumps(state))
+    calls=list(server.calls)
+    with pytest.raises(journal.CapacityEvidenceError):
+        recovery.recover(home,SID,server,execute=True,expected_digest=pre['journal_sha256'])
+    assert server.calls==calls
+
+
+def test_command_reports_lost_receipt_without_replacing_evidence(setup, monkeypatch, capsys):
+    from dradar import local_config, legacy_capacity
+    from dradar.api_client import ApiError
+    home,local,server,_=setup
+    pre=recovery.recover(home,SID,server)
+    args=SimpleNamespace(recover_session=SID,execute=True,journal_sha256=pre['journal_sha256'])
+    monkeypatch.setattr(local_config,'HOME',home)
+    monkeypatch.setattr(legacy_capacity,'_existing_client',lambda args:(server,{},()))
+    original=server.runner_session_receipt
+    count=[0]
+    def unavailable(*a,**kw):
+        count[0]+=1
+        if count[0]>=2: raise ApiError('receipt unavailable')
+        return original(*a,**kw)
+    monkeypatch.setattr(server,'runner_session_receipt',unavailable)
+    assert recovery.cmd_recover(args)==1
+    assert json.loads(capsys.readouterr().out)['status']=='unknown'
+    sealed=journal._read(local.path)
+    evidence=sealed['release_request']['evidence_id']
+    monkeypatch.setattr(server,'runner_session_receipt',original)
+    assert recovery.cmd_recover(args)==0
+    assert json.loads(capsys.readouterr().out)['status']=='released'
+    assert journal._read(local.path)['release_request']['evidence_id']==evidence

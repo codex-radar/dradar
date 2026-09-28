@@ -23,6 +23,16 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def _recovery_seal_digest(state: dict) -> str:
+    fixed = {key: state[key] for key in (
+        "schema_version", "session_id", "server", "batch_id", "owner_identity",
+        "state", "attempts", "close_request", "execution_manifest", "recovery_source_sha256",
+    )}
+    fixed["release_request"] = {key: value for key, value in state["release_request"].items()
+                                if key not in {"device_generation", "device_id"}}
+    return hashlib.sha256(_canonical(fixed)).hexdigest()
+
+
 def _exit_facts_confirmed(event: dict, spawn: dict | None) -> bool:
     if event.get("process_group") != "absent" or event.get("exact_job_containers") != "absent":
         return False
@@ -112,6 +122,13 @@ def _read(path: Path) -> dict:
                     or any(attempt["status"] not in {"confirmed_absent", "never_started", "recovered_absent"} for attempt in state["attempts"].values())
                     or request["execution_manifest_sha256"] != hashlib.sha256(_canonical(manifest)).hexdigest()):
                 raise ValueError("sealed evidence changed")
+        if state.get("recovery_source_sha256") is not None:
+            if state.get("recovery_seal_sha256") != _recovery_seal_digest(state):
+                raise ValueError("recovery seal changed")
+            if "device_generation" in state["release_request"] and (
+                    state.get("recovery_request_sha256") != hashlib.sha256(
+                        _canonical(state["release_request"])).hexdigest()):
+                raise ValueError("recovery request changed")
         return state
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CapacityEvidenceError("Execution evidence cannot be verified; preserve the journal and reservation.") from exc
@@ -310,6 +327,8 @@ def reconcile_file(path: Path, client) -> bool:
             request["device_generation"] = receipt["device_generation"]
             request["device_id"] = None
             state["device_generation"] = receipt["device_generation"]
+            if state.get("recovery_source_sha256") is not None:
+                state["recovery_request_sha256"] = hashlib.sha256(_canonical(request)).hexdigest()
             _write(path, state)  # Durable identical request before mutation.
         if not receipt["capacity_released"]:
             try:
