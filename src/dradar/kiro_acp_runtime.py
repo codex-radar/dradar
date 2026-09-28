@@ -101,6 +101,9 @@ class ACPClient:
         self.cancel_sent = False
         self.unexpected_request = False
         self.required_config: tuple[str, str] | None = None
+        self.registry_config: object = None
+        self.registry_target: tuple[str, str] | None = None
+        self.registry_model_confirmed = False
         self.config_drift = False
         self.handshake_only = handshake_only
         self.ignored_kiro_notifications = 0
@@ -158,23 +161,26 @@ class ACPClient:
     def _handle_update(self, message: dict) -> None:
         params = message.get("params")
         if not isinstance(params, dict):
-            if self.handshake_only:
+            if self.handshake_only or not self.prompt_pending:
                 raise ACPFailure("handshake_malformed_update")
             return
         update = params.get("update")
         if not isinstance(update, dict):
-            if self.handshake_only:
+            if self.handshake_only or not self.prompt_pending:
                 raise ACPFailure("handshake_malformed_update")
             return
         kind = update.get("sessionUpdate")
-        if self.handshake_only and kind in ("tool_call", "tool_call_update"):
+        if (self.handshake_only or not self.prompt_pending) and kind in ("tool_call", "tool_call_update"):
             raise ACPFailure("handshake_unexpected_tool")
-        if self.handshake_only and kind != "config_option_update":
+        if (self.handshake_only or not self.prompt_pending) and kind != "config_option_update":
             raise ACPFailure("handshake_unexpected_update")
         if params.get("sessionId") != self.session_id:
-            if self.handshake_only:
+            if self.handshake_only or not self.prompt_pending:
                 raise ACPFailure("handshake_foreign_session")
             return
+        if kind == "config_option_update" and self.registry_target is not None:
+            self.validate_registry_update(update.get("configOptions"))
+            self.registry_config = update.get("configOptions")
         if kind == "config_option_update" and self.required_config is not None:
             try:
                 observed = (_option(update.get("configOptions"), "model", "update").get("currentValue"),
@@ -285,7 +291,7 @@ class ACPClient:
         request_id = message["id"]
         method = message.get("method")
         if method == "session/request_permission":
-            if self.handshake_only:
+            if self.handshake_only or not self.prompt_pending:
                 self._send({"jsonrpc": "2.0", "id": request_id,
                             "result": {"outcome": {"outcome": "cancelled"}}})
                 raise ACPFailure("handshake_permission_denied")
@@ -366,6 +372,8 @@ class ACPClient:
                     "error": {"code": -32601, "message": "Unsupported client request"}})
 
     def request(self, method: str, params: dict, timeout: float | None = 30) -> dict:
+        if self.cancelled.is_set():
+            raise ACPFailure("cancelled")
         request_id = self.next_id
         self.next_id += 1
         self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
@@ -401,7 +409,7 @@ class ACPClient:
                     if self.config_drift:
                         self._cancel()
                         raise ACPFailure("config_drift")
-                elif self.handshake_only:
+                elif self.handshake_only or not self.prompt_pending:
                     self._handshake_notification(message["method"])
                 continue
             if message.get("id") != request_id:
@@ -417,10 +425,83 @@ class ACPClient:
                 raise ACPFailure("unsupported_client_request")
             return result
 
+    def validate_registry_update(self, options: object) -> bool:
+        """Validate every update, so a later valid one cannot hide a bad one."""
+        try:
+            selected = _option(options, "model", "model_set")
+        except ACPFailure as exc:
+            if str(exc) == "config_model_set_model_missing" and not self.registry_model_confirmed:
+                return False
+            raise
+        assert self.registry_target is not None
+        model, effort = self.registry_target
+        if selected.get("currentValue") != model:
+            raise ACPFailure("model_not_selected")
+        if not _offered(selected, model):
+            raise ACPFailure("model_unavailable")
+        if not _offered(_option(options, "effortLevel", "model_set"), effort):
+            raise ACPFailure("effort_unavailable")
+        self.registry_model_confirmed = True
+        return True
+
+    def await_model_registry(self, timeout: float = 10.0) -> list:
+        """Wait once for Kiro 2.24.1's asynchronous model registry push.
+
+        set_config_option applies the model immediately, but the official
+        server omits its selector while the model registry is empty. Its
+        registry manager later pushes the complete session config. Never
+        infer selection from our request or issue a prompt to warm it up.
+        """
+        deadline = time.monotonic() + timeout
+        updates = 0
+        if self.registry_config is not None:
+            if self.validate_registry_update(self.registry_config):
+                return self.registry_config
+        while True:
+            if self.cancelled.is_set():
+                raise ACPFailure("cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ACPFailure("config_model_registry_timeout")
+            try:
+                line = self.incoming.get(timeout=min(0.2, remaining))
+            except queue.Empty:
+                continue
+            if line is None:
+                raise ACPFailure("agent_exited")
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ACPFailure("invalid_json_rpc") from exc
+            if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+                raise ACPFailure("invalid_json_rpc")
+            if "id" in message:
+                raise ACPFailure("config_registry_unexpected_request")
+            method = message.get("method")
+            if method == "_kiro.dev/commands/available":
+                self._handshake_notification(method)
+                continue
+            params = message.get("params")
+            if (method not in ("session/update", "session/notification")
+                    or not isinstance(params, dict)
+                    or params.get("sessionId") != self.session_id):
+                raise ACPFailure("config_registry_unexpected_message")
+            update = params.get("update")
+            if not isinstance(update, dict) or update.get("sessionUpdate") != "config_option_update":
+                raise ACPFailure("config_registry_unexpected_update")
+            updates += 1
+            if updates > 16:
+                raise ACPFailure("config_registry_update_flood")
+            options = update.get("configOptions")
+            if self.validate_registry_update(options):
+                return options
+
     def observe_handshake(self, grace: float = 0.3) -> None:
         """Catch immediate post-ack drift without issuing a prompt or tool call."""
         deadline = time.monotonic() + grace
         while True:
+            if self.cancelled.is_set():
+                raise ACPFailure("cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -497,22 +578,38 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
                               if isinstance(item, dict) and item.get("id") == "model"), None) if isinstance(initial, list) else None
         if initial_model is not None and not _offered(initial_model, model):
             raise ACPFailure("model_unavailable")
+        client.registry_config = None
+        client.registry_target = (model, effort)
         selected = client.request("session/set_config_option", {
             "sessionId": sid, "configId": "model", "value": model})
-        if _option(selected.get("configOptions"), "model", "model_set").get("currentValue") != model:
+        options = selected.get("configOptions")
+        try:
+            selected_model = _option(options, "model", "model_set")
+        except ACPFailure as exc:
+            if str(exc) != "config_model_set_model_missing":
+                raise
+            options = client.await_model_registry()
+            selected_model = _option(options, "model", "model_set")
+        if selected_model.get("currentValue") != model:
             raise ACPFailure("model_not_selected")
-        effort_option = _option(selected.get("configOptions"), "effortLevel", "model_set")
+        if not _offered(selected_model, model):
+            raise ACPFailure("model_unavailable")
+        effort_option = _option(options, "effortLevel", "model_set")
         if not _offered(effort_option, effort):
             raise ACPFailure("effort_unavailable")
+        client.registry_model_confirmed = True
         selected = client.request("session/set_config_option", {
             "sessionId": sid, "configId": "effortLevel", "value": effort})
         if (_option(selected.get("configOptions"), "model", "effort_set").get("currentValue") != model
                 or _option(selected.get("configOptions"), "effortLevel", "effort_set").get("currentValue") != effort):
             raise ACPFailure("config_not_selected")
         client.required_config = (model, effort)
+        client.registry_target = None
+        # Consume already queued/post-ACK config updates before any inference.
+        # All clients use the same bounded no-tools confirmation window.
+        client.observe_handshake()
         client._event("configSelected", {"sessionId": sid, "model": model, "effort": effort})
         if handshake_only:
-            client.observe_handshake()
             client._event("configHandshake", {"sessionId": sid, "status": "selected",
                                               "ignoredKiroNotifications":
                                               client.ignored_kiro_notifications})

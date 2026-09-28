@@ -70,7 +70,7 @@ for line in sys.stdin:
         if params['configId']=='model':model=params['value']
         if params['configId']=='effortLevel' and mode!='bad_effort':effort=params['value']
         selected=options()
-        if mode=='model_set_missing_model' and params['configId']=='model':
+        if (mode=='model_set_missing_model' or mode.startswith('registry_')) and params['configId']=='model':
             selected=[x for x in selected if x['id']!='model']
         if mode=='model_set_duplicate_model' and params['configId']=='model':
             selected.append(selected[0])
@@ -81,8 +81,55 @@ for line in sys.stdin:
         if mode=='effort_set_missing_effort' and params['configId']=='effortLevel':
             selected=[x for x in selected if x['id']!='effortLevel']
         result={} if mode=='model_set_options_missing' and params['configId']=='model' else {'configOptions':selected}
+        if mode.startswith('effort_pre_') and params['configId']=='effortLevel':
+            current=options()
+            if mode=='effort_pre_wrong_model':current[0]['currentValue']='auto'
+            if mode=='effort_pre_duplicate':current.append(current[0])
+            if mode=='effort_pre_missing_effort':current=current[:1]
+            if mode=='effort_pre_missing_model':current=current[1:]
+            send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                'sessionUpdate':'config_option_update','configOptions':current}}})
+        if mode.startswith('registry_pre_') and params['configId']=='model':
+            if mode=='registry_pre_ready_missing_ready':
+                for current in (options(),options()[1:],options()):
+                    send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                        'sessionUpdate':'config_option_update','configOptions':current}}})
+            if mode=='registry_pre_permission':
+                send({'id':99,'method':'session/request_permission','params':{'sessionId':'sess_test',
+                    'options':[{'optionId':'allow-1','kind':'allow_once'}]}})
+                continue
+            if mode=='registry_pre_unknown':
+                send({'method':'_unknown/event','params':{}})
+            else:
+                current=options()
+                if mode=='registry_pre_duplicate':current.append(current[0])
+                if mode=='registry_pre_wrong_model':current[0]['currentValue']='auto'
+                if mode=='registry_pre_missing_effort':current=current[:1]
+                if mode=='registry_pre_unoffered':current[0]['options']=[{'value':'auto'}]
+                send({'method':'session/update','params':{
+                    'sessionId':'foreign' if mode=='registry_pre_foreign' else 'sess_test',
+                    'update':{'sessionUpdate':'tool_call' if mode=='registry_pre_tool' else 'config_option_update',
+                              'kind':'execute','configOptions':current}}})
+        if (mode=='registry_before_response' or mode.startswith('registry_pre_')) and params['configId']=='model':
+            send({'method':'session/update','params':{'sessionId':'sess_test','update':{
+                'sessionUpdate':'config_option_update','configOptions':options()}}})
         send({'id':msg['id'],'result':result})
-        if mode=='handshake_post_drift' and params['configId']=='effortLevel':
+        if mode=='final_ack_cancel' and params['configId']=='effortLevel':
+            import signal
+            os.kill(os.getppid(),signal.SIGTERM)
+        if mode.startswith('registry_') and mode!='registry_before_response' and params['configId']=='model':
+            import time
+            time.sleep(0.05)
+            current=options()
+            if mode=='registry_wrong_model':current[0]['currentValue']='auto'
+            if mode=='registry_missing_effort':current=current[:1]
+            if mode=='registry_duplicate':current.append(current[0])
+            if mode=='registry_unoffered':current[0]['options']=[{'value':'auto'}]
+            update={'sessionUpdate':'config_option_update','configOptions':current}
+            if mode=='registry_tool':update={'sessionUpdate':'tool_call','kind':'execute'}
+            send({'method':'session/update','params':{
+                'sessionId':'foreign' if mode=='registry_foreign' else 'sess_test','update':update}})
+        if mode in ('handshake_post_drift','final_ack_drift') and params['configId']=='effortLevel':
             effort='medium'
             send({'method':'session/update','params':{'sessionId':'sess_test','update':{
                 'sessionUpdate':'config_option_update','configOptions':options()}}})
@@ -234,7 +281,7 @@ def test_acp_selects_exact_model_and_effort_before_prompt(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("mode,code", [
     ("model_set_options_missing", "config_model_set_options_missing"),
-    ("model_set_missing_model", "config_model_set_model_missing"),
+    ("model_set_missing_model", "config_model_registry_timeout"),
     ("model_set_duplicate_model", "config_model_set_model_duplicate"),
     ("model_set_missing_effort", "config_model_set_effort_missing"),
     ("effort_set_missing_model", "config_effort_set_model_missing"),
@@ -319,6 +366,63 @@ def test_acp_accepts_late_model_selector_only_after_exact_ack(tmp_path: Path) ->
     result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
     assert result.returncode == 0, result.stderr
     assert _events(stream)[0]["data"]["model"] == MODEL
+
+
+@pytest.mark.parametrize("mode", ["registry_delayed", "registry_before_response"])
+def test_cold_registry_push_confirms_model_before_effort_and_prompt(tmp_path: Path, mode: str) -> None:
+    # Source-derived Kiro 2.24.1 timing fixture, not a captured live response.
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stderr
+    assert _events(stream)[0]["data"]["effort"] == "high"
+    methods = [entry["method"] for entry in _events(trace)]
+    assert methods.count("session/set_config_option") == 2
+    assert methods.count("session/prompt") == 1
+
+
+@pytest.mark.parametrize("mode,code", [
+    ("registry_wrong_model", "model_not_selected"),
+    ("registry_missing_effort", "config_model_set_effort_missing"),
+    ("registry_duplicate", "config_model_set_model_duplicate"),
+    ("registry_unoffered", "model_unavailable"),
+    ("registry_foreign", "config_registry_unexpected_message"),
+    ("registry_tool", "config_registry_unexpected_update"),
+])
+def test_registry_push_never_substitutes_missing_selection_evidence(tmp_path: Path, mode: str, code: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert result.stderr.strip() == "DRADAR_KIRO_ACP=" + code
+    assert "session/prompt" not in [entry["method"] for entry in _events(trace)]
+
+
+@pytest.mark.parametrize("mode,code", [
+    ("registry_pre_tool", "handshake_unexpected_tool"),
+    ("registry_pre_permission", "handshake_permission_denied"),
+    ("registry_pre_foreign", "handshake_foreign_session"),
+    ("registry_pre_unknown", "handshake_unexpected_message"),
+    ("registry_pre_duplicate", "config_model_set_model_duplicate"),
+    ("registry_pre_wrong_model", "model_not_selected"),
+    ("registry_pre_missing_effort", "config_model_set_effort_missing"),
+    ("registry_pre_unoffered", "model_unavailable"),
+    ("registry_pre_ready_missing_ready", "config_model_set_model_missing"),
+    ("effort_pre_wrong_model", "model_not_selected"),
+    ("effort_pre_duplicate", "config_model_set_model_duplicate"),
+    ("effort_pre_missing_effort", "config_model_set_effort_missing"),
+    ("effort_pre_missing_model", "config_model_set_model_missing"),
+    ("final_ack_drift", "config_drift"),
+    ("final_ack_cancel", "cancelled"),
+])
+def test_cold_registry_rejects_pre_response_side_effects(tmp_path: Path, mode: str, code: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert result.stderr.strip() == "DRADAR_KIRO_ACP=" + code
+    recorded = _events(trace)
+    assert "session/prompt" not in [entry["method"] for entry in recorded]
+    assert not any(event["type"] == "runFinished" for event in _events(stream))
+    if mode == "registry_pre_permission":
+        assert any(entry.get("outcome") == {"outcome": "cancelled"} for entry in recorded)
 
 
 def test_acp_fails_closed_on_transient_model_effort_drift(tmp_path: Path) -> None:
