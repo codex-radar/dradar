@@ -34,6 +34,7 @@ import uuid
 from . import cancellation
 from . import (
     __version__, agent_stderr, artifact_staging, assignment_boundary,
+    boundary_recovery,
     assignment_lock, egress, empty_submission_circuit, failure_circuit,
     image_cache, local_jobs, pending, refill as refill_plan,
 )
@@ -4641,6 +4642,33 @@ def _prepare_assignment_boundary(
             scoped_batch_id = None if batch_id in legacy_batches else batch_id
         else:
             scoped_batch_id = batch_id if getattr(args, "fleet_pool", False) else None
+        historical_digest = getattr(args, "_historical_admission_digest", None)
+        if historical_digest is not None:
+            # Keep the old, unresolved personal result ledger untouched. New
+            # work uses the existing exact-batch boundary, including on a
+            # later restart after this fresh Server proof is repeated.
+            if (exact_batch_resume or getattr(args, "refill", False) or not active
+                    or any(not isinstance(item, dict) or not item.get("batch_id")
+                           or item.get("benchmark_id") not in (None, benchmark_id)
+                           for item in active)):
+                raise assignment_boundary.BoundaryError(
+                    "historical admission needs one exact new batch"
+                )
+            active_batches = {item["batch_id"] for item in active}
+            if len(active_batches) != 1:
+                raise assignment_boundary.BoundaryError(
+                    "historical admission cannot combine different new batches"
+                )
+            old_path = assignment_boundary.state_path(HOME, benchmark_id)
+            old_state, fresh_digest = assignment_boundary.snapshot(old_path)
+            if fresh_digest != historical_digest:
+                raise assignment_boundary.BoundaryError(
+                    "historical personal boundary changed after the claim"
+                )
+            boundary_recovery.historical_unknown_allows_claim(
+                client, old_state, fresh_digest, old_path, HOME,
+            )
+            scoped_batch_id = next(iter(active_batches))
         saved_path = assignment_boundary.state_path(
             HOME, benchmark_id, scoped_batch_id,
         )
@@ -4670,7 +4698,8 @@ def _prepare_assignment_boundary(
             forget_existing=getattr(args, "forget_assignment_boundary", False),
             require_matching_metadata=exact_batch_resume,
         )
-    except (assignment_boundary.BoundaryError, ApiError, ValueError, OSError) as exc:
+    except (assignment_boundary.BoundaryError, boundary_recovery.RecoveryBlocked,
+            ApiError, ValueError, OSError) as exc:
         if exact_batch_resume:
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was started. "
@@ -8207,6 +8236,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     allow_new_claims = getattr(args, "allow_new_claims", True)
     wants_refill = getattr(args, "refill", False)
     blocked_by_boundary = False
+    args._historical_admission_digest = None
     # A personal boundary is checked before _acquire_batch: that helper can
     # claim from a menu even when go has no --pick/--auto option. Existing held
     # work may still be resumed, but an unfinished campaign cannot grow here.
@@ -8223,7 +8253,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                 )
             if path.exists():
                 try:
-                    state, _ = assignment_boundary.snapshot(path)
+                    state, digest = assignment_boundary.snapshot(path)
                     unfinished = not assignment_boundary._report(state, set()).complete
                 except (assignment_boundary.BoundaryError, OSError) as exc:
                     raise SystemExit(
@@ -8231,15 +8261,34 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                         "No new assignment was claimed."
                     ) from exc
                 if unfinished:
-                    if (getattr(args, "pick", None) or
-                            getattr(args, "auto", None) is not None or wants_refill):
-                        raise SystemExit(
-                            "unfinished personal assignment boundary blocks new claims. "
-                            "No new assignment was claimed. Inspect the saved IDs and "
-                            "use `dradar boundary recover` only with exact evidence."
+                    try:
+                        if wants_refill:
+                            raise boundary_recovery.RecoveryBlocked(
+                                "continuous refill cannot reuse a one-time historical proof"
+                            )
+                        count = boundary_recovery.historical_unknown_allows_claim(
+                            client, state, digest, path, HOME,
                         )
-                    allow_new_claims = False
-                    blocked_by_boundary = True
+                    except (boundary_recovery.RecoveryBlocked,
+                            assignment_boundary.BoundaryError, OSError) as exc:
+                        if (getattr(args, "pick", None) or
+                                getattr(args, "auto", None) is not None or wants_refill):
+                            raise SystemExit(
+                                "unfinished personal assignment boundary blocks new claims. "
+                                "No new assignment was claimed. Inspect the saved IDs and "
+                                "use `dradar boundary recover` only with exact evidence. "
+                                f"Current admission check: {exc}"
+                            ) from exc
+                        allow_new_claims = False
+                        blocked_by_boundary = True
+                    else:
+                        args._historical_admission_digest = digest
+                        print(
+                            f"{count} historical exit-unknown assignment(s) remain saved; "
+                            "fresh Server evidence says they do not occupy new capacity. "
+                            "Their result and exit status stay unknown, and all original "
+                            "files are retained. The Server still decides actual admission."
+                        )
     active, free_pick = _acquire_batch(
         client, args.yes, allow_new_claims=allow_new_claims,
         allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
@@ -8439,7 +8488,7 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
     # cell from being re-prompted in a loop (it stays held for a later
     # resume). Menu-mode instances keep their one-cell-per-run contract.
     seen = {a["assignment_id"] for a in active}
-    while rc == 0 and free_pick:
+    while rc == 0 and free_pick and getattr(args, "_historical_admission_digest", None) is None:
         active, _ = _acquire_batch(client, args.yes)
         fresh = [a for a in active if a["assignment_id"] not in seen]
         if not fresh:
