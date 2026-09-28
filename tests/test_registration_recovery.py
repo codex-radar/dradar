@@ -444,6 +444,11 @@ def test_registration_total_request_deadline_cancels_a_dribbling_response(monkey
 
 
 def test_continuous_lost_started_receipts_have_bounded_spaced_reconciliation(tmp_path, monkeypatch):
+    from functools import partial
+    # This fixture uses plain loopback HTTP. Avoid rebuilding platform TLS
+    # certificate stores inside its deliberately subsecond retry budget.
+    monkeypatch.setattr(registration.httpx, "AsyncClient",
+                        partial(registration.httpx.AsyncClient, verify=False))
     monkeypatch.setattr(registration, "REGISTRATION_REQUEST_SECONDS", .1)
     monkeypatch.setattr(registration, "HANDOFF_MARGIN_SECONDS", .1)
     with fixture(tmp_path, monkeypatch, "start_disconnect", defer_abort=True) as (w, api, t, a, state):
