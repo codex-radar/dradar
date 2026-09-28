@@ -99,11 +99,16 @@ class ACPClient:
                  handshake_diagnostic: bool = False):
         self.stream = stream
         self.events = stream.open("w", encoding="utf-8")
-        self.proc = subprocess.Popen(
-            [cli, "acp", "--agent-engine", "v3", "--auth-method", "cli"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding="utf-8", bufsize=1, start_new_session=True,
-        )
+        try:
+            self.proc = subprocess.Popen(
+                [cli, "acp", "--agent-engine", "v3", "--auth-method", "cli"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, encoding="utf-8", bufsize=1, start_new_session=True,
+            )
+        except OSError:
+            self._event("handshakeFailure", {"phase": "spawn"})
+            self.events.close()
+            raise
         self.incoming: queue.Queue[str | None] = queue.Queue()
         self.reader = threading.Thread(target=self._read_stdout, daemon=True)
         self.reader.start()
@@ -122,6 +127,7 @@ class ACPClient:
         self.handshake_diagnostic = handshake_diagnostic
         self.handshake_metadata = self.handshake_only and os.environ.get("DRADAR_KIRO_HANDSHAKE_METADATA") == "1"
         self.handshake_envelopes = 0
+        self.last_handshake_envelope: dict | None = None
         self.ignored_kiro_notifications = 0
         self.protocol_phase = "initialize"
         self.pending_metadata_session_ids: set[str] = set()
@@ -168,11 +174,12 @@ class ACPClient:
             self.cancel_sent = True
 
     def _observe_envelope(self, message: object) -> None:
-        if not self.handshake_metadata:
+        if self.prompt_pending or self.protocol_phase == "prompt":
             return
-        self.handshake_envelopes += 1
-        if self.handshake_envelopes > 96:
-            raise ACPFailure("handshake_diagnostic_flood")
+        if self.handshake_metadata:
+            self.handshake_envelopes += 1
+            if self.handshake_envelopes > 96:
+                raise ACPFailure("handshake_diagnostic_flood")
         def shape(value: object) -> str:
             if value is None:
                 return "absent"
@@ -182,7 +189,7 @@ class ACPClient:
                 return "list"
             return "other"
         def digest(value: object) -> str | None:
-            return hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
+            return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest() if isinstance(value, str) else None
         obj = message if isinstance(message, dict) else {}
         params = obj.get("params")
         fields = params if isinstance(params, dict) else {}
@@ -193,7 +200,18 @@ class ACPClient:
         envelope = ("request" if "id" in obj else "notification") if "method" in obj else "response"
         if not isinstance(message, dict):
             envelope = "other"
-        self._event("handshakeEnvelope", {
+        candidates = []
+        for source in (fields, obj.get("result")):
+            if isinstance(source, dict) and isinstance(source.get("sessionId"), str):
+                candidates.append(source["sessionId"])
+        if isinstance(fields.get("upserted"), list):
+            candidates.extend(entry["sessionId"] for entry in fields["upserted"]
+                              if isinstance(entry, dict) and isinstance(entry.get("sessionId"), str))
+        envelope_data = {
+            "currentSessionKnown": self.session_id is not None,
+            "candidateSessionsPresent": bool(candidates),
+            "sessionsMatchCurrent": all(sid == self.session_id for sid in candidates) if candidates and self.session_id is not None else None,
+            "sessionsMatchPending": all(sid in self.pending_metadata_session_ids for sid in candidates) if candidates and self.pending_metadata_session_ids else None,
             "phase": self.protocol_phase, "envelope": envelope,
             "methodSha256": digest(obj.get("method")), "coreKindSha256": digest(core),
             "paramsShape": shape(params), "updateShape": shape(update),
@@ -204,7 +222,10 @@ class ACPClient:
             "powersShape": shape(fields.get("powers")),
             "documentsShape": shape(fields.get("documents")),
             "serversShape": shape(fields.get("servers")),
-        })
+        }
+        self.last_handshake_envelope = envelope_data
+        if self.handshake_metadata:
+            self._event("handshakeEnvelope", envelope_data)
 
     def _metadata_scope(self, params: object, *, require_session: bool = False) -> None:
         if not isinstance(params, dict):
@@ -293,7 +314,7 @@ class ACPClient:
         self._event(kind, {
             "phase": self.protocol_phase,
             "methodType": "string" if isinstance(method, str) else "other",
-            "methodSha256": hashlib.sha256(method.encode()).hexdigest() if isinstance(method, str) else None,
+            "methodSha256": hashlib.sha256(method.encode("utf-8", "surrogatepass")).hexdigest() if isinstance(method, str) else None,
         })
 
     def _handle_update(self, message: dict) -> None:
@@ -340,6 +361,19 @@ class ACPClient:
         if (self.handshake_only or not self.prompt_pending) and kind != "config_option_update":
             self._rejected_message(kind, kind="handshakeUpdateRejected")
             raise ACPFailure("handshake_unexpected_update")
+        if self.session_id is None and kind == "config_option_update":
+            # The initial async model registry can advertise config before the
+            # session/new response. Bind its session provisionally, then check
+            # against the returned ID; no requested selection exists yet.
+            self._metadata_scope(params, require_session=True)
+            options = update.get("configOptions")
+            if (not isinstance(options, list)
+                    or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                           or not item["id"] for item in options)
+                    or len({item["id"] for item in options}) != len(options)):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+            self._count_metadata()
+            return
         if params.get("sessionId") != self.session_id:
             if self.handshake_only or not self.prompt_pending:
                 raise ACPFailure("handshake_foreign_session")
@@ -358,10 +392,13 @@ class ACPClient:
                 self.config_drift = observed != self.required_config
                 drift_reason = "value_mismatch" if self.config_drift else None
             if self.config_drift:
-                self._event("configDrift", {"sessionId": self.session_id,
-                                            "reason": drift_reason})
+                self._event("configDrift", {
+                    **({"sessionId": self.session_id} if self.prompt_pending
+                       else {"phase": self.protocol_phase}),
+                    "reason": drift_reason})
             elif not self.handshake_only:
-                self._event("configConfirmed", {"sessionId": self.session_id})
+                self._event("configConfirmed", {"sessionId": self.session_id} if self.prompt_pending
+                            else {"phase": self.protocol_phase})
         elif kind == "agent_message_chunk":
             content = update.get("content")
             if isinstance(content, dict) and content.get("type") == "text" and isinstance(content.get("text"), str):
@@ -569,6 +606,9 @@ class ACPClient:
                 message = json.loads(line)
                 self._observe_envelope(message)
             except json.JSONDecodeError as exc:
+                # Do not misattribute malformed input to a prior valid message.
+                # Its raw bytes may contain secrets; retain only "other" shape.
+                self._observe_envelope(None)
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
                 raise ACPFailure("invalid_json_rpc")
@@ -645,6 +685,9 @@ class ACPClient:
                 message = json.loads(line)
                 self._observe_envelope(message)
             except json.JSONDecodeError as exc:
+                # Do not misattribute malformed input to a prior valid message.
+                # Its raw bytes may contain secrets; retain only "other" shape.
+                self._observe_envelope(None)
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
                 raise ACPFailure("invalid_json_rpc")
@@ -693,6 +736,9 @@ class ACPClient:
                 message = json.loads(line)
                 self._observe_envelope(message)
             except json.JSONDecodeError as exc:
+                # Do not misattribute malformed input to a prior valid message.
+                # Its raw bytes may contain secrets; retain only "other" shape.
+                self._observe_envelope(None)
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
                 raise ACPFailure("invalid_json_rpc")
@@ -800,6 +846,7 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
                                               "ignoredKiroNotifications":
                                               client.ignored_kiro_notifications})
             return
+        client.last_handshake_envelope = None
         client.prompt_pending = True
         try:
             response = client.request("session/prompt", {
@@ -820,8 +867,10 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
                 raise ACPFailure("local_tool_lifecycle_incomplete")
         client._event("runFinished", {"sessionId": sid, "status": "success",
                                       "stopReason": "end_turn"})
-    except ACPFailure:
-        if client.handshake_metadata:
+    except (ACPFailure, OSError):
+        if client.protocol_phase != "prompt":
+            if not client.handshake_metadata and client.last_handshake_envelope is not None:
+                client._event("handshakeEnvelope", client.last_handshake_envelope)
             client._event("handshakeFailure", {"phase": client.protocol_phase})
         if client.probe_pwd_only:
             client._event("probeFailureCounts", {

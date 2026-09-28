@@ -62,8 +62,25 @@ for line in sys.stdin:
     record({'method':method,'params':params if method!='session/prompt' else {'sessionId':params.get('sessionId'),'prompt':params.get('prompt')},
             'outcome':msg.get('result',{}).get('outcome') if msg.get('id')==99 else None})
     if method=='initialize':
+        if mode=='startup_exit':sys.exit(1)
+        if mode=='startup_invalid_json':
+            print('SYNTHETIC_SECRET_NOT_JSON',flush=True)
+            continue
         send({'id':msg['id'],'result':{'protocolVersion':1,'agentCapabilities':{}}})
     elif method=='session/new':
+        if mode=='startup_surrogate_method':
+            send({'method':'_unknown/'+chr(0xd800),'params':{}})
+            continue
+        if mode=='startup_surrogate_kind':
+            send({'method':'session/update','params':{'sessionId':'sess_test','update':{'sessionUpdate':chr(0xd800)}}})
+            continue
+        if mode.startswith('early_config_'):
+            initial=options()
+            if mode=='early_config_duplicate':initial.append(initial[0])
+            if mode=='early_config_shape':initial='bad'
+            send({'method':'session/update','params':{
+                'sessionId':'foreign' if mode=='early_config_foreign' else 'sess_test',
+                'update':{'sessionUpdate':'config_option_update','configOptions':initial}}})
         if mode.startswith('lifecycle_'):lifecycle()
         if mode.startswith('passive_'):
             # Actual approved diagnostic method order; params below are a
@@ -793,3 +810,82 @@ def test_startup_metadata_cannot_hide_errors_or_foreign_session(tmp_path: Path, 
     assert result.returncode == 1
     assert "session/prompt" not in [e["method"] for e in _events(trace)]
     assert "SYNTHETIC_FAILURE" not in stream.read_text()
+
+
+@pytest.mark.parametrize("mode,success", [("early_config_normal", True), ("early_config_foreign", False),
+    ("early_config_duplicate", False), ("early_config_shape", False)])
+def test_initial_registry_before_new_response_defers_exact_session_binding(tmp_path: Path, mode: str, success: bool) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == (0 if success else 1)
+    assert ("session/prompt" in [e["method"] for e in _events(trace)]) is success
+    if not success:
+        events = _events(stream)
+        assert events[-1]["type"] == "handshakeFailure"
+        assert events[-1]["data"]["phase"] == "new_session"
+        assert events[-2]["type"] == "handshakeEnvelope"
+        if mode == "early_config_foreign":
+            assert events[-2]["data"]["sessionsMatchPending"] is False
+        assert "sess_test" not in stream.read_text()
+        assert "foreign" not in stream.read_text()
+
+
+def test_real_mode_failure_records_only_last_sanitized_pre_prompt_envelope(tmp_path: Path) -> None:
+    args, env, stream, trace = _args(tmp_path, "passive_powers_failed")
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    envelopes = [e["data"] for e in _events(stream) if e["type"] == "handshakeEnvelope"]
+    assert len(envelopes) == 1
+    assert envelopes[0]["status"] == "failed" and envelopes[0]["hasError"]
+    assert "SYNTHETIC_FAILURE" not in stream.read_text()
+    assert "session/prompt" not in [e["method"] for e in _events(trace)]
+
+
+@pytest.mark.parametrize("mode", ["handshake_pre_session_unknown", "passive_foreign_deferred",
+    "registry_foreign", "effort_pre_wrong_model", "final_ack_drift"])
+def test_every_protocol_startup_failure_has_phase_and_only_session_relations(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    failures = [e for e in _events(stream) if e["type"] == "handshakeFailure"]
+    assert len(failures) == 1
+    envelopes = [e["data"] for e in _events(stream) if e["type"] == "handshakeEnvelope"]
+    assert len(envelopes) == 1
+    assert type(envelopes[0]["currentSessionKnown"]) is bool
+    assert envelopes[0]["sessionsMatchCurrent"] in (True, False, None)
+    assert "sessionId" not in envelopes[0]
+    assert "sess_test" not in stream.read_text()
+    assert "session/prompt" not in [e["method"] for e in _events(trace)]
+
+
+def test_spawn_failure_persists_fixed_phase_before_cleanup(tmp_path: Path) -> None:
+    args, env, stream, trace = _args(tmp_path, "normal")
+    args[2] = str(tmp_path / "missing-cli")
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert result.stderr.strip() == "DRADAR_KIRO_ACP=process_error"
+    assert _events(stream) == [{"type": "handshakeFailure", "data": {"phase": "spawn"}}]
+
+
+@pytest.mark.parametrize("mode", ["startup_exit", "startup_invalid_json"])
+def test_no_valid_startup_message_still_records_fixed_failure(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    events = _events(stream)
+    assert events[-1] == {"type": "handshakeFailure", "data": {"phase": "initialize"}}
+    assert "SYNTHETIC_SECRET" not in stream.read_text()
+    if mode == "startup_invalid_json":
+        assert events[-2]["data"]["envelope"] == "other"
+        assert events[-2]["data"]["methodSha256"] is None
+
+
+@pytest.mark.parametrize("mode", ["startup_surrogate_method", "startup_surrogate_kind"])
+def test_surrogate_protocol_names_fail_with_sanitized_diagnostics(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert result.stderr.startswith("DRADAR_KIRO_ACP=handshake_unexpected_")
+    assert _events(stream)[-1] == {"type": "handshakeFailure", "data": {"phase": "new_session"}}
+    assert "session/prompt" not in [e["method"] for e in _events(trace)]
