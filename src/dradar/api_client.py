@@ -200,6 +200,7 @@ class ApiClient:
         self.plan_scoped = token.startswith("drp_")
         self.benchmark_id = benchmark_id
         self.batch_id = normalize_batch_id(batch_id)
+        self._explicit_transport = transport
         # write=None: large uploads over a slow tunnel must not hit a write
         # timeout; keep a bounded connect/read so a dead server fails fast.
         # No header at all when tokenless (pre-registration): an empty
@@ -397,7 +398,14 @@ class ApiClient:
             )
         while True:
             try:
-                response = self._post(path, **kw)
+                if (path in {"/api/v1/submissions", "/api/v1/submission-upload-intents"}
+                        and isinstance(maintenance_key, str)
+                        and re.fullmatch(r"[0-9a-f]{64}", maintenance_key)):
+                    import asyncio
+                    from .upload_recovery import replay
+                    response = asyncio.run(replay(self, path, maintenance_key, deadline, kw))
+                else:
+                    response = self._post(path, **kw)
             except ApiError as exc:
                 if not self._is_deployment_maintenance(exc):
                     if maintenance_key is not None:
@@ -633,17 +641,18 @@ class ApiClient:
             payload["decision_token"] = decision_token
         if intent_id is not None:
             payload = _run_plan_intent_payload("start", payload)
+        if intent_id is not None:
+            import asyncio
+            from .plan_intent_recovery import recover
+            return asyncio.run(recover(self, "start", payload))
         return self._post(
             "/api/v1/run-plans/start", json=payload,
             retry_rate_limit=False, retry_transport=False,
         )
 
     def run_plan_progress(self, plan_id: str) -> dict[str, Any]:
-        return self._post(
-            "/api/v1/run-plans/progress",
-            json={"schema_version": 1, "plan_id": plan_id},
-            retry_rate_limit=False,
-        )
+        from .plan_observation_recovery import recover
+        return recover(self, "plan_progress", {"schema_version": 1, "plan_id": plan_id})
 
     def heartbeat_run_plan(
         self, *, plan_id: str, current_start_intent_id: str,
@@ -657,10 +666,8 @@ class ApiClient:
             "expected_intent_revision": _wire_generation(expected_intent_revision),
             "expected_generation": _wire_generation(expected_generation),
         }
-        return self._post(
-            "/api/v1/run-plans/heartbeat", json=payload,
-            retry_rate_limit=False, retry_transport=False,
-        )
+        from .plan_observation_recovery import recover
+        return recover(self, "plan_heartbeat", payload)
 
     def stop_run_plan(
         self,
@@ -688,6 +695,10 @@ class ApiClient:
             payload["decision_token"] = decision_token
         if intent_id is not None:
             payload = _run_plan_intent_payload("stop", payload)
+        if intent_id is not None:
+            import asyncio
+            from .plan_intent_recovery import recover
+            return asyncio.run(recover(self, "stop", payload))
         return self._post(
             "/api/v1/run-plans/stop", json=payload,
             retry_rate_limit=False, retry_transport=False,
@@ -860,6 +871,7 @@ class ApiClient:
         *,
         refill_campaign_id: str | None = None,
         tier: str | None = None,
+        retry_check=None,
     ) -> dict[str, Any]:
         """Returns {assignment: dict, resumed: False}. Raises ApiError (409) if
         the cell went stale or the volunteer is already at the concurrent cap."""
@@ -875,7 +887,8 @@ class ApiClient:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
             data["tier"] = tier
-        result=self._post("/api/v1/assignment/claim", data=data)
+        from .acquisition_recovery import recover
+        result = recover(self, 'assignment_claim', data, check=retry_check)
         if profile is not None:
             assignment=result.get('assignment') if isinstance(result,dict) else None
             if (not isinstance(assignment,dict) or assignment.get('auth_runtime')!=profile
@@ -968,6 +981,7 @@ class ApiClient:
         self,
         exclude_assignment_ids: set[str] | list[str] | None = None,
         session_id: str | None = None,
+        retry_check=None,
     ) -> dict[str, Any]:
         """Atomically check out this volunteer's next not-yet-started cell —
         the primitive that makes parallel sessions safe: N concurrent callers
@@ -994,10 +1008,8 @@ class ApiClient:
             data["benchmark_id"] = self.benchmark_id
         if self.batch_id:
             data["batch_id"] = self.batch_id
-        return self._post(
-            "/api/v1/assignment/checkout",
-            data=data,
-        )
+        from .acquisition_recovery import recover
+        return recover(self, 'assignment_checkout', data, check=retry_check)
 
     def release_assignments(
         self,
@@ -1031,11 +1043,15 @@ class ApiClient:
         state plus five-minute aggregates, never prompts, patches or command
         output.  A short timeout keeps telemetry from holding up real work.
         """
-        return self._post("/api/v1/runner/heartbeat", json=payload, timeout=3.0)
+        import asyncio
+        from .telemetry_recovery import replay
+        return asyncio.run(replay(self, "/api/v1/runner/heartbeat", payload))
 
     def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
-        return self._post("/api/v1/runner/close", json=payload, timeout=3.0)
+        import asyncio
+        from .session_exit_recovery import recover
+        return asyncio.run(recover(self, "/api/v1/runner/close", payload))
 
     def runner_session_receipt(
         self, session_id: str, *, batch_id: str,
@@ -1051,10 +1067,9 @@ class ApiClient:
 
     def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
-        return self._post(
-            "/api/v1/runner/release-capacity", json=_cleanup_payload(payload),
-            timeout=3.0, retry_rate_limit=False, retry_transport=False,
-        )
+        import asyncio
+        from .session_exit_recovery import recover
+        return asyncio.run(recover(self, "/api/v1/runner/release-capacity", _cleanup_payload(payload)))
 
     def runner_reservations(
         self, *, limit: int = 100, after: str = "", quarantine_after: str = "",
@@ -1084,9 +1099,9 @@ class ApiClient:
 
     def flight_events(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Idempotently upload privacy-allowlisted lifecycle events."""
-        return self._post(
-            "/api/v1/runner/flight-events", json={"events": events}, timeout=3.0,
-        )
+        import asyncio
+        from .telemetry_recovery import replay
+        return asyncio.run(replay(self, "/api/v1/runner/flight-events", {"events": events}))
 
     def auth_flight_events(self, events):
         """Optional diagnostics get one bounded attempt, never core retry policy."""
@@ -1102,6 +1117,7 @@ class ApiClient:
         resume_generation: int | None = None,
         failure_kind: str | None = None,
         failure_diagnostic: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """The counterpart of mark_started: this trial died client-side
         (build flake, agent crash, abandonment) with nothing uploaded, so the
@@ -1124,15 +1140,13 @@ class ApiClient:
             data["failure_diagnostic"] = json.dumps(
                 failure_diagnostic, separators=(",", ":"), sort_keys=True,
             )
-        return self._post(
-            "/api/v1/assignment/stopped",
-            # A cross-session cooldown keeps a second `--parallel` process
-            # from immediately taking the same cell that just failed here.
-            # A user-initiated Ctrl-C passes zero because the process exits
-            # and an immediate explicit `dradar resume` must work. Older
-            # servers ignore the extra form field harmlessly.
-            data=data,
-        )
+        import uuid
+        from .stop_recovery import recover
+        request_id = request_id or uuid.uuid4().hex
+        if not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            raise ValueError("request_id must be 32 lowercase hex")
+        data["request_id"] = request_id
+        return recover(self, data)
 
     def report_runner_failure(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Send one allow-listed incident report; callers own durable retry."""

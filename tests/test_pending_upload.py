@@ -3018,3 +3018,43 @@ def test_cleanup_conflicting_sessions_does_not_send():
         "assignment_id": "synthetic", "owner_epoch": 7,
         "_runner_session_id": "one", "runner_session_id": "two",
     })
+
+
+@pytest.mark.parametrize("phase", ["intent", "submission"])
+@pytest.mark.parametrize("known_busy", [False, True])
+def test_unknown_upload_receipt_is_preserved_without_failure_terminal(tmp_path, monkeypatch, capsys, phase, known_busy):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    trial = _make_trial_dir(tmp_path)
+    original = (trial / "artifacts" / "model.patch").read_bytes()
+    def unresolved(*args, **kwargs):
+        error = ApiError("synthetic lost receipt", code="upload_recovery_incomplete")
+        error.retry_exhausted = True
+        error.write_outcome = {"status": "busy_not_executed" if known_busy else "unknown_unreconciled"}
+        raise error
+    client = FakeClient(unresolved)
+    if phase == "intent":
+        client.register_submission_upload_intent = unresolved
+    result = runloop._upload_trial(client, _entry(trial, runner_session_id="b"*32, owner_epoch=1))
+    assert result == ("upload-failed" if known_busy else "upload-unresolved")
+    if not known_busy:
+        assert result not in runloop.assignment_boundary.SETTLED_OUTCOMES
+    retained = pending.load(tmp_path)
+    assert len(retained) == 1
+    assert retained[0]["upload_receipt_status"] == ("busy_not_executed" if known_busy else "unknown_unreconciled")
+    assert (trial / "artifacts" / "model.patch").read_bytes() == original
+    assert not client.stopped
+    if phase == "intent":
+        assert not client.calls
+    output = capsys.readouterr().out
+    if not known_busy:
+        assert "upload result is unknown" in output and "upload failed" not in output
+    original_intent = retained[0]["upload_intent"]["id"]
+    before = len(client.calls)
+    # The automatic pending scan must not reopen a settled retry budget.
+    assert runloop._upload_trial(client, retained[0]) == ("upload-failed" if known_busy else "upload-unresolved")
+    assert len(client.calls) == before
+    # A formal upload-only recovery is allowed one new bounded window.
+    client._explicit_upload_recovery = True
+    assert runloop._upload_trial(client, retained[0]) == ("upload-failed" if known_busy else "upload-unresolved")
+    assert (original_intent in getattr(client, '_unresolved_upload_intents', set())) is (not known_busy)
+    assert pending.load(tmp_path)[0]["upload_intent"]["id"] == original_intent

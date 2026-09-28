@@ -56,7 +56,11 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
             data = json.loads(raw) if raw and 'application/json' in self.headers.get('Content-Type', '') else {k: v[0] for k,v in parse_qs(raw.decode()).items()}
             status = 200
             with lock:
-                if path.path == '/api/v1/run-plans/capabilities':
+                if path.path == '/api/v1/whoami':
+                    result = {'volunteer_id': 'c' * 32}
+                elif path.path.startswith('/api/v1/write-receipts/'):
+                    status, result = 404, {'detail': {'code': 'receipt_not_found'}}
+                elif path.path == '/api/v1/run-plans/capabilities':
                     # This loopback server represents the supported protocol;
                     # keep the real client's capability gate in the pyz path.
                     result = {'schema_version': 1,
@@ -134,7 +138,8 @@ def test_real_pyz_go_scopes_every_checkout_and_preserves_batch_boundary(tmp_path
     fixture.mkdir()
     shutil.copyfile(ROOT / 'tests/mixed_go_probe.py', fixture / 'sitecustomize.py')
     env = {k:v for k,v in os.environ.items() if not k.startswith('DRADAR_') and 'proxy' not in k.lower()}
-    env.update(PYTHONPATH=str(fixture), DRADAR_HOME=str(tmp_path / 'home'), PROBE_ARTIFACT=str(artifact), PROBE_SERVER=f'http://127.0.0.1:{httpd.server_port}')
+    env.update(PYTHONPATH=str(fixture), DRADAR_HOME=str(tmp_path / 'home'), PROBE_ARTIFACT=str(artifact), PROBE_SERVER=f'http://127.0.0.1:{httpd.server_port}',
+               NO_PROXY='127.0.0.1,localhost', no_proxy='127.0.0.1,localhost')
     if require_overlap:
         env['PROBE_OVERLAP_BARRIER'] = '1'
     if scenario == 'late-child':

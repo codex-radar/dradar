@@ -2088,6 +2088,25 @@ def _upload_trial_checked(
             "again automatically"
         )
         return "upload-blocked"
+    if entry.get("upload_receipt_status") in {"unknown_unreconciled", "busy_not_executed"}:
+        known_busy = entry["upload_receipt_status"] == "busy_not_executed"
+        explicit = upload_only_recovery or getattr(client, "_explicit_upload_recovery", False) is True
+        used = getattr(client, "_explicit_upload_recovery_used", None)
+        if used is None:
+            used = client._explicit_upload_recovery_used = set()
+        if not explicit or assignment_id in used:
+            pending.record(HOME, entry)
+            print(("upload was not executed because the server was busy; " if known_busy else
+                   "upload result remains unknown; ") + "automatic recovery budget ended; "
+                  "original result retained for `dradar retry-upload`")
+            return "upload-failed" if known_busy else "upload-unresolved"
+        used.add(assignment_id)
+        saved_intent = entry.get("upload_intent")
+        intent_id = saved_intent.get("id") if isinstance(saved_intent, dict) else None
+        if isinstance(intent_id, str) and not known_busy:
+            unresolved = getattr(client, "_unresolved_upload_intents", set())
+            unresolved.add(intent_id)
+            client._unresolved_upload_intents = unresolved
     outcome = entry.get("outcome", "completed")
     trial_dir = Path(entry["trial_dir"])
     job_dir = Path(entry["job_dir"]) if entry.get("job_dir") else trial_dir.parent
@@ -2099,6 +2118,22 @@ def _upload_trial_checked(
             # jobs tree; never let a crafted trial_dir turn its parent into a
             # cleanup target.
             job_dir = None
+
+    def retain_unresolved_upload(exc: ApiError) -> str | None:
+        receipt = getattr(exc, "write_outcome", None)
+        if not isinstance(receipt, dict) or receipt.get("status") not in {"unknown_unreconciled", "busy_not_executed"}:
+            return None
+        # This is an observation, not a failed task or an upload rejection.
+        # Keep the content identity and local result available to retry-upload.
+        entry["upload_receipt_status"] = receipt["status"]
+        pending.record(HOME, entry)
+        if receipt["status"] == "busy_not_executed":
+            print(f"  {task_id}: server busy; upload not executed; original result kept "
+                  "for `dradar retry-upload`")
+            return "upload-failed"
+        print(f"  {task_id}: upload result is unknown; original result kept "
+              "for reconciliation (`dradar retry-upload`)")
+        return "upload-unresolved"
 
     def cleanup_settled() -> None:
         # During an interactive completed run, keep the current directory
@@ -2658,6 +2693,8 @@ def _upload_trial_checked(
                         entry["upload_blocked"] = "content_identity_changed"
                         pending.record(HOME, entry)
                         return "upload-blocked"
+                entry["upload_intent"] = {"id": calculated_intent_id, "manifest": manifest}
+                pending.record(HOME, entry)
                 try:
                     registered_intent_id = (
                         calculated_intent_id
@@ -2671,6 +2708,8 @@ def _upload_trial_checked(
                         )
                     )
                 except ApiError as exc:
+                    if retained_outcome := retain_unresolved_upload(exc):
+                        return retained_outcome
                     if exc.status_code == 410:
                         # The assignment (or its claim batch) expired before
                         # the content-bound recovery fence could be registered.
@@ -2731,6 +2770,8 @@ def _upload_trial_checked(
                 )
                 break
             except ApiError as exc:
+                if retained_outcome := retain_unresolved_upload(exc):
+                    return retained_outcome
                 if (submit_bundle is not None
                         and _is_trajectory_bundle_rejection(exc)):
                     # The bundle is optional. Persist the downgrade before the
@@ -2967,6 +3008,9 @@ def _mark_stopped_quietly(
             return True
         except ApiError as exc:
             last_error = exc
+            if getattr(exc, "retry_exhausted", False):
+                print(json.dumps({"write_recovery": exc.write_outcome}, sort_keys=True))
+                break
             if (
                 failure_diagnostic is not None
                 and exc.status_code == 422
@@ -3878,7 +3922,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             "submitted", "interrupted", "empty-submission",
         }
         _record_flight_event(telemetry,
-            "upload_completed" if upload_succeeded else "upload_failed",
+            ("checkpoint_saved" if upload_outcome == "upload-unresolved"
+             else "upload_completed" if upload_succeeded else "upload_failed"),
             component="upload", assignment_id=assignment["assignment_id"],
             reason_code=upload_outcome,
             attributes={"outcome": upload_outcome},
@@ -3917,6 +3962,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
             failure_code=upload_outcome,
             outcome=outcome,
         )
+    if upload_outcome == "upload-unresolved":
+        return upload_outcome
     return terminal_outcome or upload_outcome
 
 
@@ -4208,6 +4255,7 @@ def cmd_retry_upload(args) -> int:
         # rewrite the saved config or the pending entry's scope fingerprint.
         cfg = {**cfg, "benchmark": selected_benchmark}
     client = _client(cfg)
+    client._explicit_upload_recovery = True
     entries = pending.load(HOME)
     if not entries:
         protected = local_jobs.protected_assignment_ids(HOME)
@@ -4315,10 +4363,14 @@ def cmd_retry_upload(args) -> int:
                 f"review; they will not be retried automatically ({reasons})"
             )
         if retryable:
-            print(
-                f"{len(retryable)} still pending and retryable (will retry "
-                "again on the next `dradar go`/`retry-upload`)"
-            )
+            ended = sum(entry.get('upload_receipt_status') in {'unknown_unreconciled', 'busy_not_executed'}
+                        for entry in retryable)
+            if ended:
+                print(f"{ended} saved upload(s) need explicit `dradar retry-upload`; "
+                      "their automatic recovery budget has ended")
+            if len(retryable) > ended:
+                print(f"{len(retryable) - ended} still pending and retryable "
+                      "(will retry again on the next `dradar go`/`retry-upload`)")
         if skipped:
             benchmark = getattr(client, "benchmark_id", None)
             if benchmark:
@@ -7333,6 +7385,11 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 & batch_assignment_ids
             )
         )
+        retry_policy = ({"retry_check": lambda: (
+            _worker_slot_is_enabled() and not _pool_abort_reason()
+            and (telemetry is None or not telemetry.stop_requested)
+            and (not getattr(args, "refill", False) or refill_plan.is_running(HOME))
+        )} if isinstance(client, ApiClient) else {})
         try:
             # A failed local cell is marked stopped so it is retryable later,
             # but this session must not immediately take the same cell again.
@@ -7349,10 +7406,12 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                 data = client.checkout(
                     exclude_assignment_ids=checkout_exclusions,
                     session_id=telemetry.session_id,
+                    **retry_policy,
                 )
             else:
                 data = client.checkout(
                     exclude_assignment_ids=checkout_exclusions,
+                    **retry_policy,
                 )
         except ApiError as exc:
             if (telemetry and exc.status_code == 409
@@ -7368,6 +7427,7 @@ def _run_checkout_loop(args, client: ApiClient, tasks_root: Path,
                     data = client.checkout(
                         exclude_assignment_ids=checkout_exclusions,
                         session_id=telemetry.session_id,
+                        **retry_policy,
                     )
                 except ApiError as retry_exc:
                     _exit_for(retry_exc)

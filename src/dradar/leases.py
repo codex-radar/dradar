@@ -152,6 +152,8 @@ def cmd_leases(args) -> int:
     """List every live cell held by the current identity."""
     cfg = _load_config()
     client = _client(cfg)
+    from .acquisition_recovery import inspect_pending
+    write_recovery = inspect_pending(client)
     try:
         active, recent_inactive = _all_inventory(client)
     except ApiError as exc:
@@ -170,8 +172,12 @@ def cmd_leases(args) -> int:
                 "stale": sum(_state(item) == "stale" for item in active),
             },
         }
+        if write_recovery:
+            payload["write_recovery"] = write_recovery
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
+    if write_recovery:
+        print(json.dumps({"write_recovery": write_recovery}, sort_keys=True))
     if not active and not recent_inactive:
         print("no active leases")
         return 0

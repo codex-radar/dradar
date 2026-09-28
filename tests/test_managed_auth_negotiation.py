@@ -11,6 +11,8 @@ def client(monkeypatch, response, *, selected=True, gpt6=False):
     calls=[]
     def request(req):
         calls.append((req.method,req.url.path,req.content))
+        if req.url.path=='/api/v1/whoami':
+            return httpx.Response(200,json={'volunteer_id':'c'*32})
         if req.method=='GET':return response
         return httpx.Response(200,json={'assignment':{'auth_runtime':selection.PROFILE,'assignment_id':'a'*32,'auth_cohort_id':'b'*32}})
     api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),capabilities=[selection.CAPABILITY,selection.TRIAL_CAPABILITY]+(["codex-gpt6-sol-luna-v1"] if gpt6 else []))
@@ -29,22 +31,25 @@ def test_matching_actual_contract_precedes_profile_claim(monkeypatch):
     contract={'schema':'dradar.auth-runtime.v1','profiles':[{'id':selection.PROFILE,'capability':selection.TRIAL_CAPABILITY,'agent':'codex','provider':'openai','agent_version':'0.154.0'}]}
     api,calls=client(monkeypatch,httpx.Response(200,json=contract))
     api.claim_assignment('fixture','gpt-5.4','low')
-    assert [method for method,_,_ in calls]==['GET','POST']
-    assert b'auth_runtime=codex-managed-at-v1' in calls[1][2]
+    assert [method for method,_,_ in calls]==['GET','GET','POST']
+    assert calls[1][1]=='/api/v1/whoami'
+    assert b'auth_runtime=codex-managed-at-v1' in calls[-1][2]
 
 
 def test_default_compatibility_does_not_probe_new_endpoint(monkeypatch):
     api,calls=client(monkeypatch,httpx.Response(404),selected=False)
     api.claim_assignment('fixture','gpt-5.4','low')
-    assert [method for method,_,_ in calls]==['POST']
-    assert b'auth_runtime' not in calls[0][2]
+    assert [method for method,_,_ in calls]==['GET','POST']
+    assert calls[0][1]=='/api/v1/whoami'
+    assert b'auth_runtime' not in calls[-1][2]
 
 
 def test_server_confirmed_other_provider_keeps_its_own_auth(monkeypatch):
     api,calls=client(monkeypatch,httpx.Response(200,json={'schema':'dradar.auth-runtime.v1','profiles':[],'applicable':False}))
     monkeypatch.setattr(selection,'load_selection',lambda:pytest.fail('unrelated Codex source checked'))
     api.claim_assignment('fixture','other-provider-model','low')
-    assert [method for method,_,_ in calls]==['GET','POST']
+    assert [method for method,_,_ in calls]==['GET','GET','POST']
+    assert calls[1][1]=='/api/v1/whoami'
     assert b'auth_runtime' not in calls[-1][2]
 
 
@@ -96,7 +101,8 @@ def test_new_model_needs_exact_managed_container_version_before_claim(monkeypatc
     assert [method for method,_,_ in calls]==['GET']
     api,calls=client(monkeypatch,httpx.Response(200,json=descriptor('0.155.1')),gpt6=True)
     api.claim_assignment('fixture',model,'medium')
-    assert [method for method,_,_ in calls]==['GET','POST']
+    assert [method for method,_,_ in calls]==['GET','GET','POST']
+    assert calls[1][1]=='/api/v1/whoami'
 
 @pytest.mark.parametrize('model', ['gpt-6-sol', 'gpt-6-luna'])
 def test_new_model_bound_continuation_checks_new_version(monkeypatch, model):

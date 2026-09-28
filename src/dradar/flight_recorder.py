@@ -166,7 +166,7 @@ REASON_CODES = frozenset({
     "api_error", "transport_error", "completed", "paused", "interrupted",
     "error", "explicit_force", "explicit_safe", "user_force", "user",
     "build_flake", "codex_install_failed", "provider_failed", "submitted", "artifact-staging-failed",
-    "upload-blocked", "upload-failed", "pending_upload", "not-uploaded",
+    "upload-blocked", "upload-failed", "upload-unresolved", "pending_upload", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
     "update_manifest_invalid", "update_policy_rejected",
     "update_download_failed", "update_verification_failed",
@@ -184,7 +184,7 @@ REASON_CODES = frozenset({
 })
 OUTCOMES = frozenset({
     "completed", "interrupted", "submitted", "artifact-staging-failed",
-    "upload-blocked", "upload-failed", "not-uploaded",
+    "upload-blocked", "upload-failed", "upload-unresolved", "not-uploaded",
     "assignment-reopened", "expired", "rejected",
 })
 PHASES = frozenset({
@@ -337,6 +337,7 @@ class FlightRecorder:
         self.root = self.home / "flight-recorder"
         self.events_path = self.root / "events.jsonl"
         self.pending_path = self.root / "pending.jsonl"
+        self.retry_reservations_path = self.root / "retry-reservations.json"
         self.client_id_path = self.root / "client_id"
         self.lock_path = self.root / _LOCK_FILENAME
         self.acknowledged_path = self.root / _ACKNOWLEDGED_FILENAME
@@ -433,6 +434,33 @@ class FlightRecorder:
             and len(value) == 32
             and all(char in "0123456789abcdef" for char in value)
         )
+
+    def _reserve_event_recovery_unlocked(self, pending, events):
+        """Give each pending identity one bounded sender, across processes.
+
+        The caller holds the recorder file lock. Reserve the entire helper's
+        attempt allowance before network I/O: a crash may leave unused
+        attempts, but cannot give another automatic flush a fresh allowance.
+        The event itself stays in pending until its exact receipt is saved.
+        """
+        from .acquisition_recovery import _save
+        try:
+            saved = json.loads(self.retry_reservations_path.read_text())
+        except FileNotFoundError:
+            saved = {"schema_version": 1, "event_ids": []}
+        except (ValueError, TypeError) as exc:
+            raise OSError("flight retry budget is unreadable") from exc
+        if (not isinstance(saved, dict) or saved.get("schema_version") != 1
+                or not isinstance(saved.get("event_ids"), list)
+                or not all(self._valid_event_id(value) for value in saved["event_ids"])):
+            raise OSError("flight retry budget is invalid")
+        pending_ids = {event["event_id"] for event in pending}
+        reserved = set(saved["event_ids"]) & pending_ids
+        selected = [event for event in events if event["event_id"] not in reserved]
+        reserved.update(event["event_id"] for event in selected)
+        _save(self.retry_reservations_path,
+              {"schema_version": 1, "event_ids": sorted(reserved)})
+        return selected
 
     def _load_acknowledged_ids_unlocked(self) -> list[str]:
         try:
@@ -732,6 +760,13 @@ class FlightRecorder:
                     if not scoped:
                         note("flight_target_not_pending")
                         return 0
+                    if not _auth_only:
+                        from .telemetry_recovery import eligible_events, retain_pending_event_budgets
+                        retain_pending_event_budgets(self.client, pending)
+                        scoped = eligible_events(self.client, scoped)
+                        if not scoped:
+                            note("flight_retry_exhausted")
+                            return 0
                     if required_event_id is not None:
                         required = next(
                             (
@@ -751,6 +786,11 @@ class FlightRecorder:
                     batch = [
                         validate_event(event) for event in scoped[:UPLOAD_BATCH_SIZE]
                     ]
+                    if not _auth_only:
+                        batch = self._reserve_event_recovery_unlocked(pending, batch)
+                        if not batch:
+                            note("flight_retry_exhausted")
+                            return 0
             except OSError:
                 # Flight evidence is best effort.  A locked/read-only home
                 # must never turn a heartbeat into a worker crash; strict
