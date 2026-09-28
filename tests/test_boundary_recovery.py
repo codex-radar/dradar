@@ -270,7 +270,7 @@ def test_process_inspection_detects_cli_and_ota_runners(tmp_path, monkeypatch, c
 
     def fake_run(args, **_kw):
         assert args[0] == "ps"
-        return SimpleNamespace(stdout=f"999999 {command}\n")
+        return SimpleNamespace(stdout=f"{boundary_recovery.os.getpid()} {boundary_recovery.os.getppid()} python test\n999999 1 {command}\n")
 
     monkeypatch.setattr(boundary_recovery.subprocess, "run", fake_run)
     with pytest.raises(boundary_recovery.RecoveryBlocked, match="runner process"):

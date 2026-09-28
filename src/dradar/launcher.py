@@ -41,6 +41,8 @@ def main() -> int:
     self_test = os.environ.pop("DRADAR_OTA_SELF_TEST", None) == "1"
     verified_child = os.environ.pop("DRADAR_OTA_DISPATCH", None) == "1"
     source_child = os.environ.pop("DRADAR_OTA_SOURCE_CHILD", None) == "1"
+    from . import launcher_handoff
+    launcher_handoff.consume(verified_child=verified_child)
     if verified_child or source_child:
         # Source workers inherit the installed payload, not a signed artifact.
         # Both kinds hold activity independently if their supervisor crashes.
@@ -105,11 +107,12 @@ def main() -> int:
                 return _run_windows_candidate(artifact.read_bytes(), sys.argv[1:])
             fd = artifact.duplicate_fd()
             try:
-                return subprocess.run(
-                    [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
-                    pass_fds=(fd,), check=False,
-                    env={**os.environ, "DRADAR_OTA_DISPATCH": "1"},
-                ).returncode
+                with launcher_handoff.handoff() as (handoff_fd, child_env):
+                    return subprocess.run(
+                        [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
+                        pass_fds=(fd, handoff_fd), check=False,
+                        env={**child_env, "DRADAR_OTA_DISPATCH": "1"},
+                    ).returncode
             finally:
                 os.close(fd)
         from .cli import main as bundled_main
