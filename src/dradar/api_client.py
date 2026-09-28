@@ -899,7 +899,8 @@ class ApiClient:
         if getattr(self, "new_pick_batch", False):
             assignment = result.get("assignment", {})
             selected = assignment.get("batch_id")
-            if not selected or result.get("selection_batch_created") is not True:
+            if (not selected or result.get("selection_batch_created") is not True
+                    or result.get("selection_id") != self.pick_selection_id):
                 raise ApiError("Server did not confirm the new batch; inspect held leases before retrying.",
                                code="batch_scope_unconfirmed")
         if profile is not None:

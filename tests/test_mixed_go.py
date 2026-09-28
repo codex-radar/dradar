@@ -37,7 +37,7 @@ class Server:
             batch = BATCHES[0 if data['model'] == 'gemini-test' else 1]
             a = dict(data, assignment_id=str(len(self.claims)), batch_id=batch)
             self.active.append(a)
-            return httpx.Response(200, json={'assignment': a, 'selection_batch_created': data.get('new_batch') == 'true'})
+            return httpx.Response(200, json={'assignment': a, 'selection_batch_created': data.get('new_batch') == 'true', 'selection_id': data.get('selection_id')})
         if req.url.path == '/api/v1/assignment':
             batch = req.url.params.get('batch_id')
             self.reads.append(batch)
