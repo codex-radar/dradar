@@ -4792,6 +4792,10 @@ def _prepare_assignment_boundary(
         )
     if path is not None:
         args._assignment_boundary_path = str(path)
+    if historical_digest is not None and getattr(client, "pick_selection_id", None):
+        # Recheck the old personal proof before changing this client's scope.
+        # Only the new exact boundary above may supply the execution batch.
+        _scope_client_to_batch(client, scoped_batch_id)
     return path
 
 
@@ -8523,8 +8527,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     if fresh_pick:
         client.new_pick_batch = False
         batch_ids = {a.get("batch_id") for a in active}
-        if len(batch_ids) == 1 and next(iter(batch_ids)):
+        if (len(batch_ids) == 1 and next(iter(batch_ids))
+                and getattr(args, "_historical_admission_digest", None) is None):
             _scope_client_to_batch(client, next(iter(batch_ids)))
+        # Historical personal admission must be freshly rechecked while the
+        # client remains personal. Boundary preparation binds it afterwards.
     return active, free_pick
 
 
