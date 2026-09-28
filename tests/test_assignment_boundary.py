@@ -50,7 +50,7 @@ def test_old_terminal_without_local_outcomes_keeps_guard_and_explains_proof(
         )
 
     assert "No model was started" in str(stopped.value)
-    assert "expired without submission" in str(stopped.value)
+    assert "exact server and local recovery evidence" in str(stopped.value)
     assert path.read_bytes() == before
 
 

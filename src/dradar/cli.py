@@ -154,13 +154,14 @@ def main(argv: list[str] | None = None) -> int:
         "boundary", help="inspect or recover a saved assignment boundary")
     boundary_sub = p_boundary.add_subparsers(dest="boundary_command", required=True)
     p_boundary_recover = boundary_sub.add_parser(
-        "recover", help="archive an exact failed, expired, unsubmitted boundary")
+        "recover", help="reconcile exact terminal assignments with durable server evidence")
     p_boundary_recover.add_argument(
         "--benchmark", help="saved benchmark channel (default: current channel)")
     p_boundary_recover.add_argument(
-        "--accept-expired-assignment", action="append", required=True,
+        "--accept-assignment", "--accept-expired-assignment",
+        dest="accept_expired_assignment", action="append", required=True,
         type=_assignment_id_value, metavar="ID",
-        help="exact old assignment ID to accept (repeat for every saved ID)")
+        help="exact saved assignment ID to review (repeat for every saved ID)")
     p_boundary_recover.set_defaults(func=cmd_boundary_recover)
 
     p_capacity = sub.add_parser(
