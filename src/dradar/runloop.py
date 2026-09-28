@@ -34,6 +34,7 @@ import uuid
 from . import cancellation
 from . import (
     __version__, agent_stderr, artifact_staging, assignment_boundary,
+    boundary_recovery,
     assignment_lock, egress, empty_submission_circuit, failure_circuit,
     image_cache, local_jobs, pending, refill as refill_plan,
 )
@@ -1243,18 +1244,30 @@ def _claim_cell(
 
 def _claim_picks(
     client: ApiClient, specs: list[str], *, automatic: bool = True,
+    before_claim=None, expected_batch_id: str | None = None,
 ) -> list[dict]:
     """`dradar go --pick task:model:effort` (repeatable): claim exact cells by
     ID instead of picking from the web or auto-suggesting."""
     cells = [_parse_pick(spec) for spec in specs]
     claimed = []
+    batch_id = expected_batch_id
     try:
         for task_id, model, effort in cells:
+            if before_claim is not None:
+                before_claim()
             a = _claim_cell(
                 client, task_id, model, effort, automatic=automatic,
             )
             if a is not None:
                 claimed.append(a)
+                if before_claim is not None:
+                    if not a.get("batch_id") or (
+                        batch_id is not None and a["batch_id"] != batch_id
+                    ):
+                        raise boundary_recovery.RecoveryBlocked(
+                            "new claim crossed the exact admitted batch"
+                        )
+                    batch_id = a["batch_id"]
     except _ConcurrentCapHit as exc:
         print(f"  stopping — {exc}")
     except (ApiError, KeyboardInterrupt, EOFError):
@@ -1263,12 +1276,21 @@ def _claim_picks(
             for batch_id in dict.fromkeys(a.get("batch_id") for a in claimed):
                 print(f"  {batch_id or 'unknown — inspect dradar leases'}")
         raise
+    except boundary_recovery.RecoveryBlocked as exc:
+        if claimed:
+            print("historical admission stopped after partial claims; preserve these held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise SystemExit(
+            f"historical admission changed before the next claim: {exc}. "
+            "No model was started; inspect the held leases before retrying."
+        ) from exc
     return claimed
 
 
 def _top_up_picks(
     client: ApiClient, active: list[dict], specs: list[str], *,
-    automatic: bool = True,
+    automatic: bool = True, before_claim=None,
 ) -> list[dict]:
     """Claim exact requested cells that are not already held.
 
@@ -1289,10 +1311,14 @@ def _top_up_picks(
             continue
         seen.add(cell)
         missing.append(spec)
-    return active + _claim_picks(client, missing, automatic=automatic)
+    return active + _claim_picks(
+        client, missing, automatic=automatic, before_claim=before_claim,
+        expected_batch_id=active[0].get("batch_id") if active else None,
+    )
 
 
-def _claim_auto(client: ApiClient, n: int) -> list[dict]:
+def _claim_auto(client: ApiClient, n: int, *, before_claim=None,
+                expected_batch_id: str | None = None) -> list[dict]:
     """`dradar go --auto [N]`: auto-pick + claim up to N cells via the
     server's weighted-random suggester (/api/v1/suggest — the same primitive
     behind the web's 雷达随机推荐 button), so a headless/Agent run never needs
@@ -1304,16 +1330,42 @@ def _claim_auto(client: ApiClient, n: int) -> list[dict]:
         print("no eligible cells to auto-pick right now")
         return []
     claimed = []
+    batch_id = expected_batch_id
     try:
         for c in cells:
+            if before_claim is not None:
+                before_claim()
             a = _claim_cell(
                 client, c["task_id"], c["model"], c["effort"],
                 cell_metadata=c,
             )
             if a is not None:
                 claimed.append(a)
+                if before_claim is not None:
+                    if not a.get("batch_id") or (
+                        batch_id is not None and a["batch_id"] != batch_id
+                    ):
+                        raise boundary_recovery.RecoveryBlocked(
+                            "new claim crossed the exact admitted batch"
+                        )
+                    batch_id = a["batch_id"]
     except _ConcurrentCapHit as exc:
         print(f"  stopping — {exc}")
+    except (ApiError, KeyboardInterrupt, EOFError):
+        if claimed:
+            print("automatic selection stopped after partial claims; inspect held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise
+    except boundary_recovery.RecoveryBlocked as exc:
+        if claimed:
+            print("historical admission stopped after partial claims; preserve these held batches:")
+            for held_batch in dict.fromkeys(a.get("batch_id") for a in claimed):
+                print(f"  {held_batch or 'unknown — inspect dradar leases'}")
+        raise SystemExit(
+            f"historical admission changed before the next claim: {exc}. "
+            "No model was started; inspect the held leases before retrying."
+        ) from exc
     return claimed
 
 
@@ -4594,6 +4646,20 @@ def _prepare_assignment_boundary(
         return inherited
     if getattr(args, "refill", False):
         return None
+    if (active is None and inherited is None and not precise
+            and not exact_batch_resume and not getattr(args, "fleet_pool", False)):
+        old_path = assignment_boundary.state_path(HOME, benchmark_id)
+        if old_path.exists() and not old_path.is_symlink():
+            try:
+                old_state, _ = assignment_boundary.snapshot(old_path)
+                unfinished = not assignment_boundary._report(old_state, set()).complete
+            except (assignment_boundary.BoundaryError, OSError):
+                unfinished = False  # The ordinary preflight reports this error.
+            if unfinished:
+                # cmd_go calls this before _prepare_batch. Defer the personal
+                # boundary check until its fresh historical proof is read
+                # before any claim; then prepare the new exact-batch boundary.
+                return None
     if active is None:
         try:
             active = list(_active_by_id(client).values())
@@ -4641,6 +4707,33 @@ def _prepare_assignment_boundary(
             scoped_batch_id = None if batch_id in legacy_batches else batch_id
         else:
             scoped_batch_id = batch_id if getattr(args, "fleet_pool", False) else None
+        historical_digest = getattr(args, "_historical_admission_digest", None)
+        if historical_digest is not None:
+            # Keep the old, unresolved personal result ledger untouched. New
+            # work uses the existing exact-batch boundary, including on a
+            # later restart after this fresh Server proof is repeated.
+            if (exact_batch_resume or getattr(args, "refill", False) or not active
+                    or any(not isinstance(item, dict) or not item.get("batch_id")
+                           or item.get("benchmark_id") not in (None, benchmark_id)
+                           for item in active)):
+                raise assignment_boundary.BoundaryError(
+                    "historical admission needs one exact new batch"
+                )
+            active_batches = {item["batch_id"] for item in active}
+            if len(active_batches) != 1:
+                raise assignment_boundary.BoundaryError(
+                    "historical admission cannot combine different new batches"
+                )
+            old_path = assignment_boundary.state_path(HOME, benchmark_id)
+            old_state, fresh_digest = assignment_boundary.snapshot(old_path)
+            if fresh_digest != historical_digest:
+                raise assignment_boundary.BoundaryError(
+                    "historical personal boundary changed after the claim"
+                )
+            boundary_recovery.historical_unknown_allows_claim(
+                client, old_state, fresh_digest, old_path, HOME,
+            )
+            scoped_batch_id = next(iter(active_batches))
         saved_path = assignment_boundary.state_path(
             HOME, benchmark_id, scoped_batch_id,
         )
@@ -4670,7 +4763,8 @@ def _prepare_assignment_boundary(
             forget_existing=getattr(args, "forget_assignment_boundary", False),
             require_matching_metadata=exact_batch_resume,
         )
-    except (assignment_boundary.BoundaryError, ApiError, ValueError, OSError) as exc:
+    except (assignment_boundary.BoundaryError, boundary_recovery.RecoveryBlocked,
+            ApiError, ValueError, OSError) as exc:
         if exact_batch_resume:
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was started. "
@@ -6051,6 +6145,20 @@ def _prepared_batch_ids(active):
     return ids
 
 
+def _scope_historical_worker_pool(args, client, active: list[dict]) -> None:
+    """Bind finite historical-exception workers to the admitted new batch."""
+    if getattr(args, "_historical_admission_digest", None) is None:
+        return
+    batches = {item.get("batch_id") for item in active}
+    if len(batches) != 1 or not next(iter(batches)):
+        raise SystemExit(
+            "historical admission needs one exact new batch; no worker started"
+        )
+    batch_id = next(iter(batches))
+    args.batch_id = batch_id
+    _scope_client_to_batch(client, batch_id)
+
+
 def _run_worker_pool(args, *, prepared=None) -> int:
     """Prepare one batch, then supervise several ordinary resume processes."""
     if prepared is not None:
@@ -6290,6 +6398,7 @@ def _run_worker_pool(args, *, prepared=None) -> int:
         boundary_path = _prepare_assignment_boundary(
             args, client, cfg["benchmark"], active,
         )
+    _scope_historical_worker_pool(args, client, active)
     if mixed and boundary_path is not None:
         assignment_boundary.add_expected(boundary_path, active)
     ready_now = (
@@ -8207,6 +8316,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     allow_new_claims = getattr(args, "allow_new_claims", True)
     wants_refill = getattr(args, "refill", False)
     blocked_by_boundary = False
+    args._historical_admission_digest = None
     # A personal boundary is checked before _acquire_batch: that helper can
     # claim from a menu even when go has no --pick/--auto option. Existing held
     # work may still be resumed, but an unfinished campaign cannot grow here.
@@ -8223,7 +8333,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                 )
             if path.exists():
                 try:
-                    state, _ = assignment_boundary.snapshot(path)
+                    state, digest = assignment_boundary.snapshot(path)
                     unfinished = not assignment_boundary._report(state, set()).complete
                 except (assignment_boundary.BoundaryError, OSError) as exc:
                     raise SystemExit(
@@ -8231,17 +8341,42 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                         "No new assignment was claimed."
                     ) from exc
                 if unfinished:
-                    if (getattr(args, "pick", None) or
-                            getattr(args, "auto", None) is not None or wants_refill):
-                        raise SystemExit(
-                            "unfinished personal assignment boundary blocks new claims. "
-                            "No new assignment was claimed. Inspect the saved IDs and "
-                            "use `dradar boundary recover` only with exact evidence."
+                    try:
+                        if wants_refill:
+                            raise boundary_recovery.RecoveryBlocked(
+                                "continuous refill cannot reuse a one-time historical proof"
+                            )
+                        count = boundary_recovery.historical_unknown_allows_claim(
+                            client, state, digest, path, HOME,
                         )
-                    allow_new_claims = False
-                    blocked_by_boundary = True
+                    except (boundary_recovery.RecoveryBlocked,
+                            assignment_boundary.BoundaryError, OSError) as exc:
+                        if (getattr(args, "pick", None) or
+                                getattr(args, "auto", None) is not None or wants_refill):
+                            raise SystemExit(
+                                "unfinished personal assignment boundary blocks new claims. "
+                                "No new assignment was claimed. Inspect the saved IDs and "
+                                "use `dradar boundary recover` only with exact evidence. "
+                                f"Current admission check: {exc}"
+                            ) from exc
+                        allow_new_claims = False
+                        blocked_by_boundary = True
+                    else:
+                        args._historical_admission_digest = digest
+                        print(
+                            f"{count} historical exit-unknown assignment(s) remain saved; "
+                            "fresh Server evidence says they do not occupy new capacity. "
+                            "Their result and exit status stay unknown, and all original "
+                            "files are retained. The Server still decides actual admission."
+                        )
     active, free_pick = _acquire_batch(
-        client, args.yes, allow_new_claims=allow_new_claims,
+        client, args.yes,
+        # With explicit selection, do not let a menu claim one cell first.
+        allow_new_claims=(allow_new_claims and not (
+            getattr(args, "_historical_admission_digest", None) is not None
+            and (getattr(args, "pick", None)
+                 or getattr(args, "auto", None) is not None)
+        )),
         allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
         allow_empty_exact_campaign=(
             bool(getattr(args, "fleet_pool", False))
@@ -8252,6 +8387,19 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
+    before_historical_claim = None
+    if getattr(args, "_historical_admission_digest", None) is not None:
+        held_batches = {item.get("batch_id") for item in active}
+        if len(held_batches) > 1 or (active and not next(iter(held_batches))):
+            raise SystemExit(
+                "historical admission found multiple or unknown held batches. "
+                "No additional assignment was claimed."
+            )
+
+        def before_historical_claim():
+            boundary_recovery.historical_unknown_allows_claim(
+                client, state, digest, path, HOME,
+            )
     if blocked_by_boundary:
         print("unfinished personal assignment boundary: no new task was claimed; "
               "existing held work may still run. Inspect exact saved IDs with "
@@ -8266,6 +8414,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         try:
             active = _top_up_picks(
                 client, active, wants_pick, automatic=args.yes,
+                before_claim=before_historical_claim,
             )
         except ApiError as exc:
             _exit_for(exc)
@@ -8276,7 +8425,10 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         missing = max(0, auto_target - len(active))
         if missing:
             try:
-                active += _claim_auto(client, missing)
+                active += _claim_auto(
+                    client, missing, before_claim=before_historical_claim,
+                    expected_batch_id=active[0].get("batch_id") if active else None,
+                )
             except ApiError as exc:
                 _exit_for(exc)
         else:
@@ -8439,7 +8591,7 @@ def _go_menu(args, cfg: dict, client: ApiClient, tasks_root: Path,
     # cell from being re-prompted in a loop (it stays held for a later
     # resume). Menu-mode instances keep their one-cell-per-run contract.
     seen = {a["assignment_id"] for a in active}
-    while rc == 0 and free_pick:
+    while rc == 0 and free_pick and getattr(args, "_historical_admission_digest", None) is None:
         active, _ = _acquire_batch(client, args.yes)
         fresh = [a for a in active if a["assignment_id"] not in seen]
         if not fresh:

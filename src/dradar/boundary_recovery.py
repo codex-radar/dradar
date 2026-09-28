@@ -171,11 +171,11 @@ def _check_processes(home: Path) -> None:
                 raise RecoveryBlocked("a DRadar job container is still running")
 
 
-def _verified_outcome(client, state: dict, aid: str) -> str:
-    """Classify only proof returned by the authenticated, exact server read."""
+def _scoped_status(client, state: dict, aid: str) -> dict:
+    """Require current authenticated evidence for the exact saved identity."""
     try:
         row = client.assignment_recovery_status(aid)
-    except (ApiError, ValueError) as exc:
+    except (ApiError, ValueError, AttributeError) as exc:
         raise RecoveryBlocked(f"{aid}: exact server status unavailable") from exc
     saved = state["expected"][aid]
     if not isinstance(row, dict) or row.get("recovery_evidence_version") != 1 or any(
@@ -189,6 +189,12 @@ def _verified_outcome(client, state: dict, aid: str) -> str:
         )
     ):
         raise RecoveryBlocked(f"{aid}: server evidence version or assignment scope differs")
+    return row
+
+
+def _verified_outcome(client, state: dict, aid: str) -> str:
+    """Classify only proof returned by the authenticated, exact server read."""
+    row = _scoped_status(client, state, aid)
     if row.get("status") in {"expired", "released"} and row.get("has_submission") is False:
         if row.get("start_evidence") == "never_started":
             return "not_started_terminal"
@@ -198,6 +204,59 @@ def _verified_outcome(client, state: dict, aid: str) -> str:
             return "submitted"
         raise RecoveryBlocked(f"{aid}: submission exists but original exit is unconfirmed")
     raise RecoveryBlocked(f"{aid}: terminal state or accepted submission is unconfirmed")
+
+
+def historical_unknown_allows_claim(
+    client, state: dict, digest: str, path: Path, home: Path,
+) -> int:
+    """Read a fresh, complete admission proof without settling old results.
+
+    The historical boundary remains on disk. Every later claim attempt must
+    repeat this read; the Server's actual claim/capacity gate still decides.
+    """
+    if (state.get("benchmark_id") != getattr(client, "benchmark_id", None)
+            or state.get("batch_id") is not None
+            or getattr(client, "batch_id", None) is not None
+            or getattr(client, "plan_scoped", False)):
+        raise RecoveryBlocked("personal boundary identity or scope differs")
+    saved_batches = {row.get("batch_id") for row in state["expected"].values()}
+    if len(saved_batches) != 1 or not next(iter(saved_batches)):
+        raise RecoveryBlocked("historical assignments have incomplete batch scope")
+    unresolved = sorted(set(state["expected"]) - {
+        aid for aid, record in state["outcomes"].items()
+        if record.get("outcome") in assignment_boundary.SETTLED_OUTCOMES
+    })
+    if not unresolved:
+        raise RecoveryBlocked("no unresolved historical outcome needs admission review")
+    if _pending_ids(home):
+        raise RecoveryBlocked("a pending upload remains")
+    for aid in unresolved:
+        row = _scoped_status(client, state, aid)
+        proof = row.get("admission_evidence")
+        if (row.get("admission_evidence_version") != 1
+                or row.get("status") not in ("submitted", "invalid")
+                or row.get("has_submission") is not True
+                or row.get("start_evidence") != "unknown_or_started"
+                or row.get("exit_evidence") != "unknown"
+                or not isinstance(proof, dict)
+                or proof.get("classification") != "historical_unverified"
+                or proof.get("state") != "exit_unknown"
+                or proof.get("closed") is not True
+                or proof.get("counts_toward_capacity") is not False
+                or proof.get("all_related_sessions_linked") is not True
+                or type(proof.get("related_session_count")) is not int
+                or proof["related_session_count"] < 1
+                or proof.get("result_status") != "preserve_unknown"):
+            raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
+    # Close local races before the new claim. No state is recorded as settled
+    # or cached for a future invocation.
+    _check_processes(home)
+    if _pending_ids(home):
+        raise RecoveryBlocked("a pending upload appeared during review")
+    _, current_digest = assignment_boundary.snapshot(path)
+    if current_digest != digest:
+        raise RecoveryBlocked("saved personal boundary changed during review")
+    return len(unresolved)
 
 
 def _classify(client, state: dict, expected: set[str], home: Path) -> tuple[dict[str, str], list[str]]:
