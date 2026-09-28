@@ -1112,9 +1112,11 @@ def _ensure_claude_agent_module(home: Path) -> Path:
 
 def _ensure_kiro_agent_module(home: Path) -> Path:
     source = importlib.resources.files("dradar").joinpath("pier_kiro.py")
-    if not source.is_file():
+    acp_source = importlib.resources.files("dradar").joinpath("kiro_acp_runtime.py")
+    if not source.is_file() or not acp_source.is_file():
         raise RunnerError("Kiro Pier adapter is missing; reinstall or upgrade dradar")
     _ensure_worker_event_module(home)
+    _materialize_shared_file(home / "_dradar_kiro_acp_runtime.py", acp_source.read_bytes())
     return _materialize_shared_file(home / KIRO_AGENT_MODULE_FILENAME, source.read_bytes())
 
 
@@ -2031,7 +2033,7 @@ def build_pier_command(
             raise RunnerError("Kiro CLI social session is unavailable")
         cmd += [
             "--model", assignment["model"],
-            "--ak", "reasoning_effort=high",
+            "--ak", f"reasoning_effort={assignment['effort']}",
             "--ak", f"version={KIRO_CLI_VERSION}",
         ]
     elif agent == DSH_AGENT:

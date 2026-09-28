@@ -1,9 +1,8 @@
-"""Pier adapter for the official Kiro CLI, pinned to Claude Opus 5.5.
+"""Pier adapter for official Kiro CLI ACP v3, pinned to Claude Opus 5.5.
 
-The Linux CLI receives only an owner-private copy of one social session. Its
-global model preference is set inside a disposable HOME. Kiro 2.24.1 can
-ignore ``--model`` in headless mode, so the persisted session model is checked
-after every run before any result can be submitted.
+The Linux CLI receives only an owner-private copy of one social session.
+ACP config selection and exact native session evidence are checked before a
+result can be submitted.
 """
 
 from __future__ import annotations
@@ -28,6 +27,10 @@ try:
     from _dradar_pier_credential_delivery import inject_private_files
 except ModuleNotFoundError:
     from dradar.pier_credential_delivery import inject_private_files
+try:
+    import _dradar_kiro_acp_runtime as kiro_acp_runtime
+except ModuleNotFoundError:
+    from dradar import kiro_acp_runtime
 try:
     from _dradar_worker_events import register_worker, verify_task_baseline
 except ModuleNotFoundError:
@@ -114,6 +117,11 @@ if len(finishes)!=1 or finishes[0].get('status')!='success':
 stream_sid=finishes[0].get('sessionId')
 if not isinstance(stream_sid,str) or not stream_sid:
     raise SystemExit('DRADAR_KIRO_ATTESTATION=session_missing')
+selected=[e.get('data',{}) for e in events if e.get('type')=='configSelected']
+if (len(selected)!=1 or selected[0].get('sessionId')!=stream_sid
+        or selected[0].get('model')!=expected
+        or selected[0].get('effort')!=expected_effort):
+    raise SystemExit('DRADAR_KIRO_ATTESTATION=acp_config_missing')
 legacy=list((home/'.kiro/sessions/cli').glob('*.json'))
 native=list((home/'.kiro/sessions').glob('*/sess_*/session.json'))
 sidecars=legacy+native
@@ -194,6 +202,7 @@ class KiroOpus55(BaseInstalledAgent):
     _HOME = PurePosixPath("/tmp/dradar-kiro-user")
     _AUTH = PurePosixPath("/tmp/dradar-kiro-auth/token.json")
     _CLI = PurePosixPath("/opt/dradar-kiro/bin/kiro-cli")
+    _ACP = PurePosixPath("/tmp/dradar-kiro-user/acp-runtime.py")
     _STREAM = "kiro-stream.jsonl"
     _STREAM_FILE = _STREAM
 
@@ -248,6 +257,7 @@ class KiroOpus55(BaseInstalledAgent):
         await self.exec_as_agent(environment,command=(
             f"mkdir -p {shlex.quote(home)} && chmod 700 {shlex.quote(home)}"
         ),env=env)
+        await environment.upload_file(Path(kiro_acp_runtime.__file__), str(self._ACP))
         # Let the official CLI create its own migration schema before adding
         # the private social token. Doctor may report no login at this point.
         await self.exec_as_agent(environment,command=(
@@ -273,14 +283,18 @@ class KiroOpus55(BaseInstalledAgent):
         if catalog.return_code != 0:
             raise RuntimeError("Kiro Opus 5.5 catalog preflight failed")
         stream="/logs/agent/"+self._STREAM
-        command=(f"{shlex.quote(cli)} chat --v3 --no-interactive --trust-all-tools "
-                 f"--effort {shlex.quote(self._effort)} --output-format stream-json {shlex.quote(instruction)} "
-                 f"> {shlex.quote(stream)} 2> /logs/agent/kiro-stderr.log")
+        command=("python3 "+shlex.quote(str(self._ACP))+" "+" ".join(map(shlex.quote,
+                 (cli,stream,REQUEST_MODEL,self._effort,instruction)))+
+                 " 2> /logs/agent/kiro-stderr.log")
         try:
-            await self.exec_as_agent(environment,command=command,env=env,cwd="/app")
+            completed=await self.exec_as_agent(environment,command=command,env=env,cwd="/app")
+            if completed.return_code != 0:
+                raise RuntimeError("Kiro ACP runner failed")
             verify="python3 -c "+shlex.quote(_VERIFY)+" "+" ".join(map(shlex.quote,
                 (stream,home,REQUEST_MODEL,self._effort)))
-            await self.exec_as_agent(environment,command=verify,env=env)
+            verified=await self.exec_as_agent(environment,command=verify,env=env)
+            if verified.return_code != 0:
+                raise RuntimeError("Kiro native model or effort attestation failed")
         finally:
             db=home+"/.local/share/kiro-cli/data.sqlite3"
             export="python3 -c "+shlex.quote(_EXPORT)+" "+" ".join(map(shlex.quote,
@@ -306,7 +320,15 @@ class KiroOpus55(BaseInstalledAgent):
         if (evidence.get("requested_effort")!=self._effort
                 or evidence.get("observed_effort")!=self._effort):
             return
+        steps=[]
         text_parts=[]
+        tool_kinds={}
+        def flush_text() -> None:
+            if text_parts:
+                steps.append(Step(step_id=len(steps)+1,source="agent",
+                    message="".join(text_parts),model_name=LANE_MODEL,
+                    reasoning_effort=self._effort,llm_call_count=None))
+                text_parts.clear()
         credit_values=[]
         credit_valid=(metering.get("schema")=="dradar-kiro-native-metering-v1"
                       and metering.get("session_id")==evidence.get("session_id"))
@@ -317,6 +339,20 @@ class KiroOpus55(BaseInstalledAgent):
                     content=update.get("content",{})
                     if isinstance(content,dict) and isinstance(content.get("text"),str):
                         text_parts.append(content["text"])
+                elif update.get("sessionUpdate") in ("tool_call","tool_call_update"):
+                    flush_text()
+                    tool_id=update.get("toolCallId")
+                    status=update.get("status")
+                    kind=update.get("kind")
+                    if isinstance(tool_id,str) and isinstance(kind,str):
+                        tool_kinds[tool_id]=kind
+                    elif isinstance(tool_id,str):
+                        kind=tool_kinds.get(tool_id)
+                    steps.append(Step(step_id=len(steps)+1,source="agent",
+                        message="Kiro ACP tool " + str(kind or "unknown") + " " + str(status or "unknown"),
+                        model_name=LANE_MODEL,reasoning_effort=self._effort,
+                        llm_call_count=None,extra={"acp_tool_call_id":tool_id,
+                            "acp_update":update["sessionUpdate"]}))
         usage=metering.get("metering_usage")
         if not isinstance(usage,list) or not usage:
             credit_valid=False
@@ -335,10 +371,12 @@ class KiroOpus55(BaseInstalledAgent):
                     credit_valid=False
         credits=sum(credit_values,Decimal(0)) if credit_valid and credit_values else None
         estimated_usd=(credits*KIRO_CREDIT_USD_RATE if credits is not None else None)
-        steps=[Step(step_id=1,source="agent",message="".join(text_parts) or "Kiro run completed",
-                    model_name=LANE_MODEL,reasoning_effort=self._effort,llm_call_count=None)]
+        flush_text()
+        if not steps:
+            steps=[Step(step_id=1,source="agent",message="Kiro run completed",
+                        model_name=LANE_MODEL,reasoning_effort=self._effort,llm_call_count=None)]
         metrics=FinalMetrics(total_prompt_tokens=None,total_completion_tokens=None,
-            total_cached_tokens=None,total_cost_usd=None,total_steps=1,
+            total_cached_tokens=None,total_cost_usd=None,total_steps=len(steps),
             extra={"billing_basis":"subscription","cost_not_reported":True})
         trajectory=Trajectory(schema_version="ATIF-v1.7",
             session_id=evidence.get("session_id") or str(uuid.uuid4()),

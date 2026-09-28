@@ -3716,8 +3716,8 @@ def _run_and_submit(client: ApiClient, assignment: dict, tasks_root: Path,
         })
     if assignment.get("agent") == KIRO_AGENT:
         meta.update({
-            "model_config_version": "kiro-opus-5-5-workspace-default-v2",
-            "model_runtime_profile": "pier-kiro-official-cli-private-social-v1",
+            "model_config_version": "kiro-opus-5-5-acp-config-v3",
+            "model_runtime_profile": "pier-kiro-official-acp-private-social-v2",
             "subscription_oauth": True,
             "kiro_cli_version": assignment["agent_version"],
             "kiro_model": assignment["model"],

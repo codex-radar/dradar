@@ -28,6 +28,15 @@ KIRO_SUPPORTED_EFFORTS = frozenset({"high"})
 _SOCIAL_TOKEN_KEY = "kirocli:social:token"
 
 
+class KiroCredentialMergeConflict(RuntimeError):
+    """A refreshed private copy could not safely replace the host session."""
+
+    def __init__(self, recovery_path: Path):
+        self.recovery_path = recovery_path
+        super().__init__("Kiro host credential changed or refresh was invalid; "
+                         "owner-only recovery copy retained")
+
+
 def kiro_cli_path() -> Path | None:
     found = shutil.which("kiro-cli")
     return Path(found).resolve() if found else None
@@ -151,6 +160,18 @@ def kiro_subscription_session(work_dir: Path):
             ):
                 raise ValueError("Kiro account cannot access Claude Opus 5.5")
             original = social_token()
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            try:
+                row = conn.execute("SELECT value FROM auth_kv WHERE key=?",
+                                   (_SOCIAL_TOKEN_KEY,)).fetchone()
+            finally:
+                conn.close()
+            original_raw = row[0] if row else None
+            observed = json.loads(original_raw) if original_raw else None
+            if (not isinstance(observed, dict)
+                    or any(observed.get(key) != value
+                           for key, value in original.items())):
+                raise ValueError("Kiro credential changed during snapshot")
             work_dir.mkdir(parents=True, exist_ok=True)
             descriptor, name = tempfile.mkstemp(prefix=".kiro-session-", suffix=".json", dir=work_dir)
             source = Path(name)
@@ -161,35 +182,56 @@ def kiro_subscription_session(work_dir: Path):
         try:
             yield source
         finally:
+            # Assume the private copy may contain the only refreshed token.
+            # Release it only after proving unchanged content or a host commit.
+            retain_recovery = True
             try:
                 fcntl.flock(lock_file, fcntl.LOCK_EX)
-                refreshed = json.loads(source.read_text(encoding="utf-8"))
-                if (isinstance(refreshed, dict)
-                        and refreshed.get("provider") == original["provider"]
-                        and refreshed.get("profile_arn") == original["profile_arn"]
-                        and all(isinstance(refreshed.get(key), str) and refreshed[key]
-                                for key in original)
-                        and datetime.fromisoformat(refreshed["expires_at"].replace("Z", "+00:00"))
-                        > datetime.fromisoformat(original["expires_at"].replace("Z", "+00:00"))):
-                    conn = sqlite3.connect(db)
+                try:
+                    refreshed = json.loads(source.read_text(encoding="utf-8"))
+                    changed = refreshed != original
+                    valid = (isinstance(refreshed, dict)
+                             and refreshed.get("provider") == original["provider"]
+                             and refreshed.get("profile_arn") == original["profile_arn"]
+                             and all(isinstance(refreshed.get(key), str) and refreshed[key]
+                                     for key in original))
+                    if changed and valid:
+                        valid = (datetime.fromisoformat(
+                            refreshed["expires_at"].replace("Z", "+00:00"))
+                            > datetime.fromisoformat(
+                                original["expires_at"].replace("Z", "+00:00")))
+                except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                    changed = True
+                    valid = False
+                if changed:
+                    # A refreshed token may have invalidated the snapshot. Keep
+                    # its owner-only recovery copy until the host commit succeeds,
+                    # including SQLite open/write/commit failures.
+                    retain_recovery = True
+                    if not valid:
+                        raise KiroCredentialMergeConflict(source)
                     try:
-                        current_row = conn.execute(
-                            "SELECT value FROM auth_kv WHERE key=?", (_SOCIAL_TOKEN_KEY,)
-                        ).fetchone()
-                        current = json.loads(current_row[0]) if current_row else {}
-                        if (current.get("provider") == original["provider"]
-                                and current.get("profile_arn") == original["profile_arn"]
-                                and datetime.fromisoformat(
-                                    current["expires_at"].replace("Z", "+00:00")
-                                ) < datetime.fromisoformat(
-                                    refreshed["expires_at"].replace("Z", "+00:00")
-                                )):
-                            conn.execute("UPDATE auth_kv SET value=? WHERE key=?", (
-                                json.dumps(refreshed, separators=(",", ":")), _SOCIAL_TOKEN_KEY,
-                            ))
+                        conn = sqlite3.connect(db)
+                        try:
+                            updated = conn.execute(
+                                "UPDATE auth_kv SET value=? WHERE key=? AND value=?",
+                                (json.dumps(refreshed, separators=(",", ":")),
+                                 _SOCIAL_TOKEN_KEY, original_raw),
+                            )
+                            if updated.rowcount != 1:
+                                raise KiroCredentialMergeConflict(source)
                             conn.commit()
-                    finally:
-                        conn.close()
+                            retain_recovery = False
+                        finally:
+                            conn.close()
+                    except sqlite3.Error as exc:
+                        raise KiroCredentialMergeConflict(source) from exc
+                else:
+                    retain_recovery = False
             finally:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
-                source.unlink(missing_ok=True)
+                if retain_recovery:
+                    if source.exists():
+                        os.chmod(source, 0o600)
+                else:
+                    source.unlink(missing_ok=True)
