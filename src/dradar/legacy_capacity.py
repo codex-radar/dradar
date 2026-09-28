@@ -115,6 +115,8 @@ def _classification(source, target, *, quarantine=False):
     # Older servers have no classification: absence never grants an exemption.
     if "classification" in source:
         allowed = {"historical_unverified", "cleanup_required" if quarantine else "current_reservation"}
+        if not quarantine:
+            allowed.add("admission_quarantined")
         if source["classification"] not in allowed:
             raise ValueError("unknown classification")
         target["classification"] = source["classification"]
@@ -151,6 +153,9 @@ def _page(value, scope):
         if scope["kind"] == "plan" and (clean["plan_id"] != scope["plan_id"] or clean["batch_id"] != scope["batch_id"]):
             raise ValueError("reservation outside original plan")
         _classification(row, clean)
+        if (clean.get("classification") == "admission_quarantined" and
+                (clean["reservation_protocol"] != 1 or clean.get("counts_toward_capacity") is not False)):
+            raise ValueError("invalid modern quarantine classification")
         output["reservations"].append(clean)
     for row in quarantines:
         if not isinstance(row, dict):
@@ -338,9 +343,10 @@ def cmd_legacy_inventory(args) -> int:
     else:
         print(f"本页库存：{len(result['reservations'])} 条 reservation，{len(result['migration_quarantines'])} 组旧历史。")
         classified = sum(row.get("classification") == "historical_unverified" for row in result["reservations"])
+        modern_quarantined = sum(row.get("classification") == "admission_quarantined" for row in result["reservations"])
         current = sum(row.get("classification") == "current_reservation" for row in result["reservations"])
         unspecified = sum("classification" not in row for row in result["reservations"])
-        print(f"历史未核验：{classified}；当期占用：{current}；分类未提供：{unspecified}。")
+        print(f"历史未核验：{classified}；受审隔离且退出未知：{modern_quarantined}；当期占用：{current}；分类未提供：{unspecified}。")
         print("当期占用以 reservation 为准，不表示账号已满；库存及 closed 状态不证明物理退出或容量释放。")
         print(f"next_after={result['next_after'] or '-'}  next_quarantine_after={result['next_quarantine_after'] or '-'}")
     return 0
