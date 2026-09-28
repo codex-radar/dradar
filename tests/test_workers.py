@@ -3181,3 +3181,83 @@ def test_later_spawn_failure_stops_already_started_worker(monkeypatch, capsys):
     assert first.poll() is not None
     assert first.signals
     assert "stopping those already started" in capsys.readouterr().out
+
+@pytest.mark.parametrize('returncode', [0, 1])
+def test_default_pool_control_uses_private_parent_and_preserves_failures(monkeypatch, tmp_path, returncode):
+    import stat
+    from dradar import run_intent, run_plans
+    _patch_pool_setup(monkeypatch, active_count=2)
+    shared = tmp_path / 'shared-temp'
+    shared.mkdir(mode=0o1777)
+    shared.chmod(0o1777)
+    before = shared.stat().st_mode
+    monkeypatch.setattr(runloop.tempfile, 'tempdir', str(shared))
+    for key in (run_intent.POOL_STOP_ENV, run_intent.BATCH_ENV, run_intent.GENERATION_ENV):
+        monkeypatch.delenv(key, raising=False)
+    calls = []
+    directories = []
+    original = run_plans.os.chmod
+    def chmod(path, mode, *args, **kw):
+        assert Path(path) != shared, 'shared temp permissions must never change'
+        return original(path, mode, *args, **kw)
+    monkeypatch.setattr(run_plans.os, 'chmod', chmod)
+    def popen(command, env, **kwargs):
+        parent = Path(env[runloop._POOL_ABORT_ENV]).parent
+        directories.append(parent)
+        assert parent.parent == shared and parent != shared
+        assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+        for key in (runloop._REPEAT_FAILURE_STATE_ENV, runloop._POOL_FAILURE_CUTOFF_ENV,
+                    runloop._POOL_RETURNED_ASSIGNMENTS_ENV, runloop._POOL_WORKER_ACTIVITY_ENV):
+            assert Path(env[key]).parent == parent
+        with monkeypatch.context() as child:
+            child.setenv(run_intent.POOL_STOP_ENV, env[runloop._POOL_ABORT_ENV])
+            with run_intent.worker_launch_guard(tmp_path / 'home'):
+                pass
+        process = _Process(command, env, returncode=returncode, **kwargs)
+        calls.append(process)
+        return process
+    monkeypatch.setattr(runloop.subprocess, 'Popen', popen)
+    assert runloop._run_worker_pool(_args(workers=2)) == returncode
+    assert len(set(directories)) == 1 and shared.stat().st_mode == before
+    directory = directories[0]
+    if returncode:
+        assert directory.is_dir() and (directory / 'abort.lock').is_file()
+        assert list(directory.glob('worker-*.started'))
+    else:
+        assert not directory.exists()
+
+
+def test_spawn_failure_retains_pool_control_for_unconfirmed_child(monkeypatch, tmp_path):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop.tempfile, 'tempdir', str(tmp_path))
+    calls = []
+    def popen(command, env, **kwargs):
+        if calls:
+            raise OSError('second worker spawn failed')
+        process = _Process(command, env, returncode=None, **kwargs)
+        calls.append(process)
+        return process
+    monkeypatch.setattr(runloop.subprocess, 'Popen', popen)
+    monkeypatch.setattr(runloop, '_signal_workers', lambda _: None)
+    assert runloop._run_worker_pool(_args(workers=2)) == 1
+    parent = Path(calls[0].env[runloop._POOL_ABORT_ENV]).parent
+    assert parent.is_dir() and list(parent.glob('worker-*.started'))
+
+@pytest.mark.parametrize('failure', ['boundary', 'drain'])
+def test_all_children_exit_zero_but_failed_pool_retains_controls(monkeypatch, tmp_path, failure):
+    _patch_pool_setup(monkeypatch, active_count=2)
+    monkeypatch.setattr(runloop.tempfile, 'tempdir', str(tmp_path))
+    if failure == 'boundary':
+        monkeypatch.setattr(runloop, '_finish_assignment_boundary', lambda *_: False)
+    parents = []
+    def popen(command, env, **kwargs):
+        marker = Path(env[runloop._POOL_ABORT_ENV])
+        parents.append(marker.parent)
+        marker.with_suffix('.lock').touch()
+        if failure == 'drain':
+            marker.write_text(runloop._POOL_DRAIN_PREFIX + runloop._FAILURE_DRAIN_PREFIX + 'test')
+        return _Process(command, env, returncode=0, **kwargs)
+    monkeypatch.setattr(runloop.subprocess, 'Popen', popen)
+    assert runloop._run_worker_pool(_args(workers=2)) == 1
+    assert parents and parents[0].is_dir()
+    assert (parents[0] / 'abort.lock').is_file()
