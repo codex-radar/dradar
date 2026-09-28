@@ -130,6 +130,20 @@ def test_reviewed_batch_proof_sets_exact_claim_reference_without_settling(tmp_pa
     assert path.read_bytes() == before
 
 
+def test_reviewed_batch_accepts_other_consistent_reviewed_counts(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    client.rows = {A: _reviewed_response(A, 1), B: _reviewed_response(B, 2)}
+    for row in client.rows.values():
+        row['admission_evidence'].update(
+            batch_session_count=4, unlinked_session_count=1, counted_session_count=1)
+    state, digest = assignment_boundary.snapshot(path)
+    assert boundary_recovery.historical_unknown_allows_claim(
+        client, state, digest, path, tmp_path) == 2
+    assert client.historical_admission_reference == '0227-original-reviewed:' + 'f' * 64
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("drift", (
     "partial_boundary", "missing_result", "different_operation", "counted_false",
     "not_reviewed", "physical_exit_claimed", "different_batch", "different_counts",
