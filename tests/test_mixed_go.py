@@ -22,6 +22,10 @@ class Server:
         self.fail_claim = fail_claim
 
     def request(self, req):
+        if req.url.path == '/api/v1/whoami':
+            return httpx.Response(200, json={'volunteer_id': 'c' * 32})
+        if req.url.path.startswith('/api/v1/write-receipts/'):
+            return httpx.Response(404, json={'detail': {'code': 'receipt_not_found'}})
         if req.url.path == '/api/v1/run-plans/capabilities':
             return httpx.Response(200, json={'schema_version': 1, 'capabilities': ['runner-reservation-v1'],
                                             'stop_generation_cas': True, 'close_releases_capacity': False})
