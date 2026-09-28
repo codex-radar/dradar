@@ -185,13 +185,15 @@ def test_lost_claim_response_is_not_replayed_and_has_safe_stage():
     calls = []
 
     def handler(request):
+        if request.url.path == '/api/v1/whoami':
+            return httpx.Response(200, json={'volunteer_id': 'd'*32})
         calls.append(request.method)
         raise httpx.RemoteProtocolError("token=secret body=private")
 
     client = _client(handler)
     with pytest.raises(ApiError) as raised:
         client.claim_assignment("task", "model", "low")
-    assert calls == ["POST"]
+    assert calls == ["POST", "GET"]  # receipt query; no blind POST replay
     assert raised.value.transport_phase == "assignment_claim"
     assert "secret" not in str(raised.value)
 
@@ -542,6 +544,8 @@ def test_selected_benchmark_is_sent_on_reads_claims_and_checkout():
     seen = []
 
     def handler(request):
+        if request.url.path == '/api/v1/whoami':
+            return httpx.Response(200, json={'volunteer_id': 'd'*32})
         seen.append((request.method, str(request.url), request.read()))
         if request.url.path.endswith("/assignment"):
             return httpx.Response(200, json={"active": []})
@@ -575,6 +579,8 @@ def test_exact_batch_is_sent_and_broader_inventory_is_filtered_locally():
     other = "123e4567e89b12d3a456426614174000"
 
     def handler(request):
+        if request.url.path == '/api/v1/whoami':
+            return httpx.Response(200, json={'volunteer_id': 'd'*32})
         seen.append((request.method, str(request.url), request.read()))
         if request.url.path.endswith("/assignment"):
             # This intentionally models an old server that ignores the query.
@@ -648,6 +654,8 @@ def test_scoped_refill_claim_sends_authorized_points_tier(tier):
     seen = {}
 
     def handler(request):
+        if request.url.path == '/api/v1/run-plans/identity':
+            return httpx.Response(200, json={'plan_id': 'd'*32})
         seen["form"] = urllib.parse.parse_qs(request.read().decode())
         return httpx.Response(200, json={"assignment": {}})
 

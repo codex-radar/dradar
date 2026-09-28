@@ -20,15 +20,15 @@ def test_clock_snapshot_omits_abnormal_values_and_freezes(monkeypatch):
     monkeypatch.setattr(registration.time, 'monotonic', lambda: clock[0])
     window = RegistrationWindow(130, lambda: True)
     window._observe(stage='start_preflight', ack='persisted')
-    clock[0] = 116
+    clock[0] = 130
     result = diagnostic(window, window._error('irrelevant', 'budget_expired'))
-    assert result['registration_elapsed_ms'] == 16000
+    assert result['registration_elapsed_ms'] == 30000
     assert result['registration_remaining_ms'] == 0
     clock[0] = 200
     window._snapshot(window._error('later', 'worker_exited'))
     window._close_diagnostic('transport_error')
     assert result['registration_failure_reason'] == 'budget_expired'
-    assert result['registration_elapsed_ms'] == 16000
+    assert result['registration_elapsed_ms'] == 30000
     assert result['registration_close_state'] == 'transport_error'
     for now in (99, 221, float('nan'), float('inf')):
         clock[0] = 100
@@ -44,7 +44,7 @@ def test_check_reasons(monkeypatch, kind, reason):
     clock = [100.0]
     monkeypatch.setattr(registration.time, 'monotonic', lambda: clock[0])
     window = RegistrationWindow(130, lambda: kind != 'alive')
-    if kind == 'deadline': clock[0] = 115
+    if kind == 'deadline': clock[0] = 129
     if kind == 'stop':
         window.telemetry = SimpleNamespace(stop_requested=True)
     with pytest.raises(ApiError) as caught: window.check()
@@ -56,7 +56,7 @@ def test_insufficient_handoff_is_preflight_and_never_posts(monkeypatch):
     monkeypatch.setattr(registration.time, 'monotonic', lambda: clock[0])
     window = RegistrationWindow(130, lambda: True)
     window._observe(stage='start_preflight')
-    clock[0] = 112
+    clock[0] = 126
     with pytest.raises(ApiError) as caught:
         window._start_request('POST', '/api/v1/assignment/started')
     detail = diagnostic(window, caught.value)
@@ -82,7 +82,8 @@ def test_real_adapter_diagnostics(tmp_path, monkeypatch, fault, stage, reason, a
         assert detail['registration_failure_reason'] == reason
         assert detail['registration_ack_state'] == ack
         assert detail['registration_close_state'] == close
-        assert state['paths'].count('/api/v1/assignment/started') <= 1
+        assert state['paths'].count('/api/v1/assignment/started') <= (3 if fault in ('start_disconnect', 'close_disconnect') else 1)
+        assert all(p == state['start_payloads'][0] for p in state['start_payloads'])
         if fault == 'close_disconnect': assert assignment['_registration_start_uncertain']
         assert reports._safe_detail('registration_elapsed_ms', detail['registration_elapsed_ms']) is not None
 
@@ -119,7 +120,8 @@ def test_diagnostic_failure_does_not_block_close(tmp_path, monkeypatch):
         monkeypatch.setattr(window, '_publish_diagnostic', lambda: (_ for _ in ()).throw(ValueError('broken diagnostic')))
         with pytest.raises(ApiError): window.bind(api, telemetry, assignment)
         assert window._fenced and '_registration_start_uncertain' not in assignment
-        assert state['paths'].count('/api/v1/assignment/started') == 1
+        assert state['paths'].count('/api/v1/assignment/started') == 3
+        assert state['start_payloads'][0] == state['start_payloads'][1]
 
 
 def payload():
@@ -199,7 +201,8 @@ def test_deferred_close_refreshes_report_without_rewriting_failure(tmp_path, mon
         window.finalize_failure_report(error)
         assert error.report_detail == {**snapshot, 'registration_close_state': close}
         assert snapshot['registration_close_state'] == 'not_attempted'
-        assert state['paths'].count('/api/v1/assignment/started') == 1
+        assert state['paths'].count('/api/v1/assignment/started') == 3
+        assert state['start_payloads'][0] == state['start_payloads'][1]
         assert state['paths'].count('/api/v1/runner/close') == 1
         assert ('_registration_start_uncertain' in assignment) == (close != 'confirmed')
         report = reports.build_report(source='cli', phase='runner', failure_kind='runner_failed',

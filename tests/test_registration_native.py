@@ -102,7 +102,8 @@ def test_real_worker_gate_socket_cancel_and_cleanup(tmp_path, monkeypatch, fault
                 else:
                     runner._confirm_pier_process_tree_stopped(child)
             assert state['hb'] <= 2 and state['flight'] <= 2
-            assert state['paths'].count('/api/v1/assignment/started') <= 1
+            assert state['paths'].count('/api/v1/assignment/started') <= (3 if fault in ('start_disconnect', 'close_disconnect') else 1)
+            assert all(p == state['start_payloads'][0] for p in state['start_payloads'])
         finally:
             if child.poll() is None:
                 child.kill()

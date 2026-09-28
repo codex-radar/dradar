@@ -355,9 +355,16 @@ def execute(home: Path, client, *, operation: str, request: dict,
         if isinstance(original.payload, dict) and "intent_status" in original.payload:
             # A durable 409 receipt is useful even without an Agent envelope.
             return _deliver(_remember(path, record, original.payload))
+        if getattr(original, "retry_exhausted", False):
+            # The bounded helper already spent its reconciliation allowance.
+            # Keep the journal for an explicit progress/run/stop invocation.
+            raise
         try:
             return read_receipt(path, client)
         except ApiError as receipt_error:
+            if getattr(original, "retry_exhausted", False):
+                receipt_error.retry_exhausted = True
+                receipt_error.write_outcome = original.write_outcome
             raise receipt_error from original
     except (ValueError, TypeError) as original:
         try:

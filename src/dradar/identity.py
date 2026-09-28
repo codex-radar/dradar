@@ -6,6 +6,7 @@ that used to share one file.
 """
 
 import sys
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -195,6 +196,13 @@ def cmd_status(args) -> int:
             sys.exit("this server doesn't support `dradar status` yet (upgrade the server)")
         sys.exit(f"status check failed: {exc}")
 
+    if getattr(args, 'json', False):
+        from .write_recovery_status import inspect_exits
+        print(json.dumps({'nickname': data['nickname'], 'points': data['points'],
+                          'submissions': data.get('submissions') or [],
+                          'pending_result_count': len(pending.load(HOME)),
+                          'write_recovery': inspect_exits(client)}, ensure_ascii=False))
+        return 0
     print(f"{data['nickname']} — {data['points']} points")
     subs = data.get("submissions") or []
     if not subs:
