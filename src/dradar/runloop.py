@@ -4734,18 +4734,16 @@ def _prepare_assignment_boundary(
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was "
                 "started. A missing local outcome does not prove the work "
-                "finished. For locally failed work that the server confirms "
-                "expired without submission, run `dradar boundary recover` "
-                "with every exact --accept-expired-assignment ID. It checks "
-                "the account, pending uploads, local results and processes, "
-                "then archives the old boundary after your confirmation. "
-                "For other states, inspect `dradar leases` and seek private "
-                "review before resuming."
+                "finished. Run `dradar boundary recover` with every exact "
+                "--accept-assignment ID. It records only assignments "
+                "with exact server and local recovery evidence; unknown IDs "
+                "remain blocked. Inspect `dradar leases` or seek private review "
+                "for unresolved execution or exit."
             )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
-            "Inspect `dradar leases`; use `dradar boundary recover` only "
-            "for verified expired, unsubmitted failures."
+            "Inspect `dradar leases`; `dradar boundary recover` preserves "
+            "unknown original outcomes."
         )
     if path is not None:
         args._assignment_boundary_path = str(path)
@@ -5284,7 +5282,7 @@ def cmd_go(args) -> int:
     if getattr(args, "forget_assignment_boundary", False):
         sys.exit(
             "--forget-assignment-boundary is no longer an unchecked recovery "
-            "shortcut. For locally failed, expired, unsubmitted work, use "
+            "shortcut. For exact terminal work with server recovery evidence, use "
             "`dradar boundary recover` with every exact assignment ID."
         )
     try:
@@ -8257,6 +8255,40 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     """Claim/configure once, shared by the serial and supervised run paths."""
     allow_new_claims = getattr(args, "allow_new_claims", True)
     wants_refill = getattr(args, "refill", False)
+    blocked_by_boundary = False
+    # A personal boundary is checked before _acquire_batch: that helper can
+    # claim from a menu even when go has no --pick/--auto option. Existing held
+    # work may still be resumed, but an unfinished campaign cannot grow here.
+    if allow_new_claims and not (
+        getattr(args, "resume", False) and getattr(args, "batch_id", None)
+    ):
+        benchmark = getattr(client, "benchmark_id", None)
+        if benchmark:
+            path = assignment_boundary.state_path(HOME, benchmark)
+            if path.is_symlink():
+                raise SystemExit(
+                    "assignment boundary check failed: saved boundary is a symlink; "
+                    "no new assignment was claimed. Inspect the original boundary."
+                )
+            if path.exists():
+                try:
+                    state, _ = assignment_boundary.snapshot(path)
+                    unfinished = not assignment_boundary._report(state, set()).complete
+                except (assignment_boundary.BoundaryError, OSError) as exc:
+                    raise SystemExit(
+                        f"assignment boundary check failed before claim: {exc}. "
+                        "No new assignment was claimed."
+                    ) from exc
+                if unfinished:
+                    if (getattr(args, "pick", None) or
+                            getattr(args, "auto", None) is not None or wants_refill):
+                        raise SystemExit(
+                            "unfinished personal assignment boundary blocks new claims. "
+                            "No new assignment was claimed. Inspect the saved IDs and "
+                            "use `dradar boundary recover` only with exact evidence."
+                        )
+                    allow_new_claims = False
+                    blocked_by_boundary = True
     active, free_pick = _acquire_batch(
         client, args.yes, allow_new_claims=allow_new_claims,
         allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
@@ -8269,7 +8301,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
-    if not allow_new_claims and wants:
+    if blocked_by_boundary:
+        print("unfinished personal assignment boundary: no new task was claimed; "
+              "existing held work may still run. Inspect exact saved IDs with "
+              "`dradar boundary recover`.")
+    elif not allow_new_claims and wants:
         print("disk safety floor reached — not claiming new tasks; already held work "
               "can still run. Use `dradar cleanup --docker --dry-run` to inspect cleanup.")
     elif not allow_new_claims and not active:

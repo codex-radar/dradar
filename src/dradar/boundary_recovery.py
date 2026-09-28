@@ -1,4 +1,4 @@
-"""Explicit recovery for expired, unsubmitted personal assignment boundaries."""
+"""Explicit, per-assignment recovery of a personal boundary."""
 
 from __future__ import annotations
 
@@ -171,31 +171,58 @@ def _check_processes(home: Path) -> None:
                 raise RecoveryBlocked("a DRadar job container is still running")
 
 
-def _verify_server_statuses(client, state: dict, expected: set[str]) -> None:
+def _verified_outcome(client, state: dict, aid: str) -> str:
+    """Classify only proof returned by the authenticated, exact server read."""
+    try:
+        row = client.assignment_recovery_status(aid)
+    except (ApiError, ValueError) as exc:
+        raise RecoveryBlocked(f"{aid}: exact server status unavailable") from exc
+    saved = state["expected"][aid]
+    if not isinstance(row, dict) or row.get("recovery_evidence_version") != 1 or any(
+        row.get(key) != value for key, value in (
+            ("assignment_id", aid),
+            ("benchmark_id", client.benchmark_id),
+            ("batch_id", saved.get("batch_id")),
+            ("task_id", saved.get("task_id")),
+            ("model", saved.get("model")),
+            ("effort", saved.get("effort")),
+        )
+    ):
+        raise RecoveryBlocked(f"{aid}: server evidence version or assignment scope differs")
+    if row.get("status") in {"expired", "released"} and row.get("has_submission") is False:
+        if row.get("start_evidence") == "never_started":
+            return "not_started_terminal"
+        raise RecoveryBlocked(f"{aid}: no durable never-started proof")
+    if row.get("status") in {"submitted", "invalid"} and row.get("has_submission") is True:
+        if row.get("exit_evidence") == "cleanup_receipt_confirmed":
+            return "submitted"
+        raise RecoveryBlocked(f"{aid}: submission exists but original exit is unconfirmed")
+    raise RecoveryBlocked(f"{aid}: terminal state or accepted submission is unconfirmed")
+
+
+def _classify(client, state: dict, expected: set[str], home: Path) -> tuple[dict[str, str], list[str]]:
+    verified: dict[str, str] = {}
+    unknown: list[str] = []
+    pending = _pending_ids(home)
     for aid in sorted(expected):
+        if state["outcomes"].get(aid, {}).get("outcome") in assignment_boundary.SETTLED_OUTCOMES:
+            continue
         try:
-            row = client.assignment_recovery_status(aid)
-        except ApiError as exc:
-            raise RecoveryBlocked(
-                f"server cannot confirm exact assignment {aid}; ask support for private review"
-            ) from exc
-        saved = state["expected"][aid]
-        if not isinstance(row, dict) or (
-            row.get("assignment_id") != aid
-            or row.get("benchmark_id") != client.benchmark_id
-            or row.get("status") != "expired"
-            or row.get("has_submission") is not False
-        ) or any(
-            saved.get(key) != row.get(key) for key in ("task_id", "model", "effort")
-        ):
-            raise RecoveryBlocked(
-                "server cannot confirm an exact expired, unsubmitted assignment "
-                f"for this account: {aid}; ask support for private review"
-            )
+            outcome = _verified_outcome(client, state, aid)
+            if aid in pending:
+                raise RecoveryBlocked(f"{aid}: original pending upload remains")
+            if outcome == "not_started_terminal":
+                # Completed result files and patches are normal for a server-
+                # accepted submission. Recovery never removes or uploads them.
+                _check_jobs(home, {aid})
+            verified[aid] = outcome
+        except RecoveryBlocked as exc:
+            unknown.append(str(exc))
+    return verified, unknown
 
 
 def cmd_boundary_recover(args) -> int:
-    """Archive only an exact expired/no-submission boundary after local review."""
+    """Settle only verified original IDs; preserve unknowns and all local work."""
     home = HOME
     cfg = _load_config()
     benchmark = args.benchmark or cfg.get("benchmark") or DEFAULT_BENCHMARK
@@ -214,34 +241,40 @@ def cmd_boundary_recover(args) -> int:
         expected = set(state["expected"])
         if not expected or selected != expected:
             raise RecoveryBlocked("accepted IDs must exactly match the saved boundary")
-        if any(state["outcomes"].get(aid, {}).get("outcome") != "failed" for aid in expected):
-            raise RecoveryBlocked("only locally failed assignments qualify for this recovery")
         client = _client(cfg)
         client.benchmark_id = benchmark
         identity = client.whoami()
-        _verify_server_statuses(client, state, expected)
-        if expected & _pending_ids(home):
-            raise RecoveryBlocked("an old assignment remains in the pending-upload queue")
-        kept = _check_jobs(home, expected)
         _check_processes(home)
+        verified, unknown = _classify(client, state, expected, home)
         print(f"Authenticated radar account: {identity.get('nickname', 'unknown')}")
-        print(f"Benchmark: {benchmark}; expired, unsubmitted assignments: {', '.join(sorted(expected))}")
-        print(f"Local failed job directories retained: {len(kept)}")
-        print("The saved boundary will be archived; failed job directories and logs stay in place.")
-        phrase = "ACCEPT " + ",".join(sorted(expected))
-        if input(f"Type {phrase} to accept these expired runs and continue later: ").strip() != phrase:
+        print(f"Benchmark: {benchmark}; verified recoverable IDs: {', '.join(sorted(verified)) or 'none'}")
+        for reason in unknown:
+            print(f"kept unknown: {reason}")
+        if not verified:
+            if assignment_boundary._report(state, set()).complete:
+                archived = assignment_boundary.archive_if_unchanged(path, digest)
+                print(f"Completed recovery boundary archived at {archived}; original jobs retained.")
+                return 0
+            raise RecoveryBlocked("no new assignment has complete recovery evidence")
+        print("Original job directories and logs stay in place. Unknown IDs stay in the boundary.")
+        phrase = "ACCEPT " + ",".join(sorted(verified))
+        if input(f"Type {phrase} to record these exact outcomes: ").strip() != phrase:
             raise RecoveryBlocked("confirmation did not match exact assignment IDs")
         # Recheck volatile evidence after the prompt; an upload or process can
         # appear while the human reads it. The ledger digest closes file races.
-        _verify_server_statuses(client, state, expected)
-        if expected & _pending_ids(home):
-            raise RecoveryBlocked("pending-upload queue changed during confirmation")
-        _check_jobs(home, expected)
         _check_processes(home)
-        archived = assignment_boundary.archive_if_unchanged(path, digest)
+        rechecked, _ = _classify(client, state, expected, home)
+        if rechecked != verified:
+            raise RecoveryBlocked("recovery evidence changed during confirmation")
+        archived = assignment_boundary.record_verified_recovery(path, digest, verified)
     except (RecoveryBlocked, assignment_boundary.BoundaryError, ApiError, OSError) as exc:
         print(f"recovery blocked: {exc}. No boundary or job was removed.")
         return 1
-    print(f"Old boundary archived at {archived}; local job evidence was retained.")
-    print("You can now run your original `dradar go --pick ...` command.")
+    if archived is None:
+        print("Verified outcomes saved; unresolved IDs remain in the original boundary.")
+        print("Do not claim new work until those IDs have exact recovery evidence.")
+        return 1
+    else:
+        print(f"Old boundary archived at {archived}; local job evidence was retained.")
+        print("You can now run your original `dradar go --pick ...` command.")
     return 0

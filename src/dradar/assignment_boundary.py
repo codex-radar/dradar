@@ -23,7 +23,7 @@ from typing import Iterator
 
 SCHEMA_VERSION = 1
 STATE_DIR = "assignment-boundaries"
-SETTLED_OUTCOMES = frozenset({"submitted", "interrupted"})
+SETTLED_OUTCOMES = frozenset({"submitted", "interrupted", "not_started_terminal"})
 _PROCESS_LOCK = threading.Lock()
 
 
@@ -268,6 +268,46 @@ def archive_if_unchanged(path: Path, digest: str) -> Path:
             state = _load(path)
             if state is None or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise BoundaryError("saved assignment boundary changed during recovery")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            archived = path.with_name(f"{path.stem}.recovered-{stamp}.json")
+            os.replace(path, archived)
+            return archived
+
+
+def record_verified_recovery(
+    path: Path, digest: str, verified: dict[str, str],
+) -> Path | None:
+    """Atomically settle verified IDs, retaining every unknown and prior tag.
+
+    A crash before this save leaves the old boundary; a retry after it sees
+    the settled tags. Archival happens only when the complete saved set is
+    settled and preserves the full evidence record.
+    """
+    if not verified or any(
+        outcome not in {"not_started_terminal", "submitted"}
+        for outcome in verified.values()
+    ):
+        raise BoundaryError("recovery requires exact verified outcomes")
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if state is None or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise BoundaryError("saved assignment boundary changed during recovery")
+            if not set(verified) <= set(state["expected"]):
+                raise BoundaryError("verified assignment is outside the saved boundary")
+            for aid, outcome in verified.items():
+                existing = state["outcomes"].get(aid, {}).get("outcome")
+                if existing in SETTLED_OUTCOMES and existing != outcome:
+                    raise BoundaryError("a verified assignment outcome changed")
+                if existing not in SETTLED_OUTCOMES:
+                    state["outcomes"][aid] = {
+                        "outcome": outcome,
+                        "source": "server-recovery-evidence-v1",
+                        "updated_at": _now(),
+                    }
+            _save(path, state)
+            if not _report(state, set()).complete:
+                return None
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             archived = path.with_name(f"{path.stem}.recovered-{stamp}.json")
             os.replace(path, archived)
