@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
+import tempfile
 import uuid
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -207,6 +210,66 @@ class KiroOpus55(BaseInstalledAgent):
     _STREAM_FILE = _STREAM
 
     @staticmethod
+    def _return_marker(source: Path) -> Path:
+        return source.with_name(source.name + ".return-pending")
+
+    def _begin_credential_return(self) -> Path:
+        # The host must retain its private snapshot if Pier exits at any point
+        # after the native CLI may have refreshed the container credential.
+        marker = self._return_marker(self._auth_file)
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, b"Kiro private credential return is pending\n")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return marker
+
+    async def _return_credential(self, environment: BaseEnvironment,
+                                 env: dict[str, str], home: str, auth: str,
+                                 marker: Path) -> None:
+        db = home + "/.local/share/kiro-cli/data.sqlite3"
+        export = "python3 -c " + shlex.quote(_EXPORT) + " " + " ".join(map(shlex.quote,
+            (db, auth)))
+        result = await self.exec_as_agent(environment, command=export, env=env)
+        if result.return_code != 0:
+            raise RuntimeError("Kiro private credential export failed; host snapshot retained")
+        fd, name = tempfile.mkstemp(prefix=self._auth_file.name + ".returned-",
+                                    dir=self._auth_file.parent)
+        os.close(fd)
+        staged = Path(name)
+        try:
+            await environment.download_file(auth, staged)
+            info = staged.lstat()
+            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise RuntimeError("Kiro returned credential is not a regular file")
+            if os.name != "nt":
+                os.chmod(staged, 0o600)
+            original = json.loads(self._auth_file.read_text(encoding="utf-8"))
+            returned = json.loads(staged.read_text(encoding="utf-8"))
+            required = ("access_token", "refresh_token", "expires_at", "provider",
+                        "profile_arn")
+            if (not isinstance(original, dict) or not isinstance(returned, dict)
+                    or any(not isinstance(returned.get(key), str) or not returned[key]
+                           for key in required)
+                    or any(returned[key] != original.get(key)
+                           for key in ("provider", "profile_arn"))):
+                raise RuntimeError("Kiro returned credential failed identity validation")
+            original_expiry = datetime.fromisoformat(original["expires_at"].replace("Z", "+00:00"))
+            returned_expiry = datetime.fromisoformat(returned["expires_at"].replace("Z", "+00:00"))
+            if (original_expiry.tzinfo is None or returned_expiry.tzinfo is None
+                    or (returned != original and returned_expiry <= original_expiry)):
+                raise RuntimeError("Kiro returned credential failed expiry validation")
+            os.replace(staged, self._auth_file)
+            marker.unlink()
+        except Exception as exc:
+            # Keep any returned bytes owner-only for manual recovery. The host
+            # context sees the marker and refuses to treat the run as complete.
+            if staged.exists() and os.name != "nt":
+                os.chmod(staged, 0o600)
+            raise RuntimeError("Kiro private credential return failed; host snapshot retained") from exc
+
+    @staticmethod
     def name() -> str:
         return "kiro"
 
@@ -272,21 +335,22 @@ class KiroOpus55(BaseInstalledAgent):
         await self.exec_as_agent(environment,command=(
             "test ! -e /app/.kiro/settings/cli.json"
         ),env=env)
-        catalog=await self.exec_as_agent(environment,command=(
-            f"{shlex.quote(cli)} chat --list-models --format json "
-            "| python3 -c "+shlex.quote(
-                "import json,sys; x=json.load(sys.stdin); "
-                "assert any(m.get('model_id')=='claude-opus-5.5' "
-                "for m in x.get('models',[]))"
-            )
-        ),env=env)
-        if catalog.return_code != 0:
-            raise RuntimeError("Kiro Opus 5.5 catalog preflight failed")
+        marker=self._begin_credential_return()
         stream="/logs/agent/"+self._STREAM
         command=("python3 "+shlex.quote(str(self._ACP))+" "+" ".join(map(shlex.quote,
                  (cli,stream,REQUEST_MODEL,self._effort,instruction)))+
                  " 2> /logs/agent/kiro-stderr.log")
         try:
+            catalog=await self.exec_as_agent(environment,command=(
+                f"{shlex.quote(cli)} chat --list-models --format json "
+                "| python3 -c "+shlex.quote(
+                    "import json,sys; x=json.load(sys.stdin); "
+                    "assert any(m.get('model_id')=='claude-opus-5.5' "
+                    "for m in x.get('models',[]))"
+                )
+            ),env=env)
+            if catalog.return_code != 0:
+                raise RuntimeError("Kiro Opus 5.5 catalog preflight failed")
             completed=await self.exec_as_agent(environment,command=command,env=env,cwd="/app")
             if completed.return_code != 0:
                 raise RuntimeError("Kiro ACP runner failed")
@@ -296,15 +360,7 @@ class KiroOpus55(BaseInstalledAgent):
             if verified.return_code != 0:
                 raise RuntimeError("Kiro native model or effort attestation failed")
         finally:
-            db=home+"/.local/share/kiro-cli/data.sqlite3"
-            export="python3 -c "+shlex.quote(_EXPORT)+" "+" ".join(map(shlex.quote,
-                (db,auth)))
-            try:
-                await self.exec_as_agent(environment,command=export,env=env)
-                await environment.download_file(auth,self._auth_file)
-                if os.name!="nt":os.chmod(self._auth_file,0o600)
-            except Exception:
-                self.logger.warning("Kiro refreshed credential could not be recovered")
+            await self._return_credential(environment, env, home, auth, marker)
 
     @private_post_run
     def populate_context_post_run(self, context: AgentContext) -> None:

@@ -37,6 +37,15 @@ class KiroCredentialMergeConflict(RuntimeError):
                          "owner-only recovery copy retained")
 
 
+class KiroCredentialReturnFailure(RuntimeError):
+    """Pier could not prove that the private container credential returned."""
+
+    def __init__(self, recovery_path: Path):
+        self.recovery_path = recovery_path
+        super().__init__("Kiro private credential return was not confirmed; "
+                         "owner-only host snapshot retained for manual recovery")
+
+
 def kiro_cli_path() -> Path | None:
     found = shutil.which("kiro-cli")
     return Path(found).resolve() if found else None
@@ -188,6 +197,8 @@ def kiro_subscription_session(work_dir: Path):
             try:
                 fcntl.flock(lock_file, fcntl.LOCK_EX)
                 try:
+                    if source.with_name(source.name + ".return-pending").exists():
+                        raise KiroCredentialReturnFailure(source)
                     refreshed = json.loads(source.read_text(encoding="utf-8"))
                     changed = refreshed != original
                     valid = (isinstance(refreshed, dict)

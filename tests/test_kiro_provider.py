@@ -161,3 +161,35 @@ def test_refresh_copy_survives_sqlite_write_failure(tmp_path, monkeypatch):
     assert json.loads(real_connect(db).execute(
         "SELECT value FROM auth_kv WHERE key='kirocli:social:token'").fetchone()[0]
     )["refresh_token"] == "original-refresh"
+
+
+def test_pending_native_return_preserves_private_snapshot(tmp_path, monkeypatch):
+    db = tmp_path / "data.sqlite3"
+    original = {"access_token": "synthetic-access", "refresh_token": "synthetic-refresh",
+                "expires_at": "2099-01-01T00:00:00Z", "provider": "github",
+                "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/test"}
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO auth_kv VALUES (?, ?)",
+                     ("kirocli:social:token", json.dumps(original)))
+    os.chmod(db, 0o600)
+    monkeypatch.setattr(kiro_provider, "kiro_auth_db", lambda: db)
+    monkeypatch.setattr(kiro_provider, "kiro_status", lambda: (True, "ready"))
+    monkeypatch.setattr(kiro_provider, "kiro_cli_path", lambda: Path("/fake/kiro-cli"))
+    monkeypatch.setattr(kiro_provider.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=0, stdout=json.dumps({
+                            "models": [{"model_id": "claude-opus-5.5"}]})))
+    source = None
+    with pytest.raises(kiro_provider.KiroCredentialReturnFailure) as error:
+        with kiro_provider.kiro_subscription_session(tmp_path) as source:
+            marker = source.with_name(source.name + ".return-pending")
+            marker.write_text("synthetic pending return")
+            os.chmod(marker, 0o600)
+    assert error.value.recovery_path == source
+    assert source is not None and source.exists()
+    assert source.stat().st_mode & 0o077 == 0
+    assert json.loads(source.read_text())["refresh_token"] == "synthetic-refresh"
+    with sqlite3.connect(db) as conn:
+        current = json.loads(conn.execute(
+            "SELECT value FROM auth_kv WHERE key='kirocli:social:token'").fetchone()[0])
+    assert current == original
