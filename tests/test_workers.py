@@ -3205,7 +3205,8 @@ def test_default_pool_control_uses_private_parent_and_preserves_failures(monkeyp
         parent = Path(env[runloop._POOL_ABORT_ENV]).parent
         directories.append(parent)
         assert parent.parent == shared and parent != shared
-        assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+        if os.name == "posix":
+            assert stat.S_IMODE(parent.stat().st_mode) == 0o700
         for key in (runloop._REPEAT_FAILURE_STATE_ENV, runloop._POOL_FAILURE_CUTOFF_ENV,
                     runloop._POOL_RETURNED_ASSIGNMENTS_ENV, runloop._POOL_WORKER_ACTIVITY_ENV):
             assert Path(env[key]).parent == parent
