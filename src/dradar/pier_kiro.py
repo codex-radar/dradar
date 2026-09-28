@@ -81,7 +81,7 @@ def _install_command() -> str:
 
 _BOOTSTRAP = r'''import json,os,sqlite3,sys
 from pathlib import Path
-source=Path(sys.argv[1]); home=Path(sys.argv[2]); model=sys.argv[3]
+source=Path(sys.argv[1]); home=Path(sys.argv[2]); model=sys.argv[3]; effort=sys.argv[4]
 token=json.loads(source.read_text())
 assert set(('access_token','refresh_token','expires_at','provider','profile_arn')) <= token.keys()
 assert token['provider'] in ('google','github')
@@ -98,7 +98,7 @@ c.commit();c.close();os.chmod(db,0o600)
 settings=home/'.kiro/settings/cli.json';settings.parent.mkdir(parents=True,exist_ok=True)
 os.chmod(settings.parent,0o700)
 settings.write_text(json.dumps({'chat.defaultModel':model,
-    'chat.modelDefaults':{model:{'effort':'high'}}},separators=(',',':')))
+    'chat.modelDefaults':{model:{'effort':effort}}},separators=(',',':')))
 os.chmod(settings,0o600)
 source.unlink()
 '''
@@ -255,7 +255,7 @@ class KiroOpus55(BaseInstalledAgent):
         ),env=env)
         await inject_private_files(self,environment,[(self._auth_file,auth)])
         bootstrap=("python3 -c "+shlex.quote(_BOOTSTRAP)+" "+" ".join(map(shlex.quote,
-            (auth,home,REQUEST_MODEL))))
+            (auth,home,REQUEST_MODEL,self._effort))))
         await self.exec_as_agent(environment,command=bootstrap,env=env)
         # A task may ship its own Kiro workspace settings. Never allow them to
         # override the private HOME model pin without explicit verification.
