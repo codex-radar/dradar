@@ -57,6 +57,9 @@ class Client:
         self.rows = {A: _response(A, OLD_BATCH, 1), B: _response(B, OLD_BATCH, 2)}
         self.reads = 0
 
+    def run_plan_capabilities(self):
+        return {"capabilities": ["explicit-pick-batch-v1"]}
+
     def assignment_recovery_status(self, aid):
         self.reads += 1
         value = self.rows[aid]
@@ -102,7 +105,7 @@ def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
     assert old_path.read_bytes() == before
     active, _ = runloop._prepare_batch(args, client)
     assert claimed == [C] and active == [fresh]
-    assert acquisition_options[0]["allow_new_claims"] is False
+    assert acquisition_options == []  # Fresh pick never reads/reuses other held work.
     new_path = runloop._prepare_assignment_boundary(args, client, "deep-swe", active)
     assert new_path == assignment_boundary.state_path(tmp_path, "deep-swe", NEW_BATCH)
     assert old_path.read_bytes() == before
@@ -113,6 +116,7 @@ def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
     # new lease resumes from its exact batch; no second claim or old upload is
     # inferred from the historical evidence.
     monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([fresh], True))
+    client.batch_id = None  # A restarted personal invocation has a fresh client.
     restart = _args(pick=False)
     active, _ = runloop._prepare_batch(restart, client)
     assert runloop._prepare_assignment_boundary(restart, client, "deep-swe", active) == new_path
@@ -315,7 +319,7 @@ def test_historical_proof_admits_finite_twenty_in_one_batch(
     assert command[command.index("--workers") + 1] == "1"
 
 
-def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, monkeypatch):
+def test_historical_fresh_pick_excludes_held_batch_with_fresh_reads(tmp_path, monkeypatch):
     path, client = _fixture(tmp_path, monkeypatch)
     before = path.read_bytes()
     cells = _finite_cells(3)
@@ -328,7 +332,7 @@ def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, mon
     monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: (
         claimed.append(cells[len(claimed) + 1]) or claimed[-1]))
     active, _ = runloop._prepare_batch(args, client)
-    assert active == cells and len(claimed) == 2
+    assert active == cells[1:] and len(claimed) == 2
     assert client.reads == 6
     assert path.read_bytes() == before
 
@@ -475,4 +479,45 @@ def test_retained_history_never_hides_unreviewed_unknown(tmp_path, monkeypatch, 
     with pytest.raises(boundary_recovery.RecoveryBlocked):
         boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
     assert client.historical_admission_reference is None
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('failure', [None, 'revoked', 'changed_proof', 'ledger_changed', 'wrong_benchmark', 'plan_scope'])
+def test_fresh_pick_rechecks_retained_history_before_binding(tmp_path, monkeypatch, failure):
+    path, client = _retained_eighteen(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    fresh = _assignment(C, NEW_BATCH)
+    args = _args()
+    claimed = []
+
+    def claim(*_a, **_kw):
+        assert client.batch_id is None
+        claimed.append(C)
+        return fresh
+
+    monkeypatch.setattr(runloop, '_claim_cell', claim)
+    assert runloop._prepare_assignment_boundary(args, client, 'deep-swe') is None
+    active, _ = runloop._prepare_batch(args, client)
+    assert claimed == [C] and client.batch_id is None
+    assert client.reads == 4  # Initial proof, then fresh proof immediately before claim.
+    if failure == 'revoked':
+        client.rows[A]['admission_evidence']['state'] = 'blocked'
+    elif failure == 'changed_proof':
+        client.rows[B]['admission_evidence']['manifest_sha256'] = '0' * 64
+    elif failure == 'ledger_changed':
+        path.write_bytes(original + b'\n')
+    elif failure == 'wrong_benchmark':
+        client.benchmark_id = 'pompeii'
+    elif failure == 'plan_scope':
+        client.plan_scoped = True
+    before = path.read_bytes()
+    new_path = assignment_boundary.state_path(tmp_path, 'deep-swe', NEW_BATCH)
+    if failure:
+        with pytest.raises(SystemExit, match='assignment boundary check failed'):
+            runloop._prepare_assignment_boundary(args, client, 'deep-swe', active)
+        assert client.batch_id is None and not new_path.exists()
+    else:
+        assert runloop._prepare_assignment_boundary(args, client, 'deep-swe', active) == new_path
+        assert client.batch_id == NEW_BATCH and client.reads == 6
+        assert set(json.loads(new_path.read_text())['expected']) == {C}
     assert path.read_bytes() == before
