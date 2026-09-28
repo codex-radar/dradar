@@ -34,6 +34,9 @@ def fixture(tmp_path, monkeypatch, *, server_ids=(A, B),
             if aid not in server_ids:
                 raise boundary_recovery.ApiError("not found", status_code=404)
             return {**assignment(aid), "status": server_status,
+                    "batch_id": None, "recovery_evidence_version": 1,
+                    "start_evidence": ("never_started" if server_status == "expired" else "unknown_or_started"),
+                    "exit_evidence": "unknown",
                     "benchmark_id": ("other" if wrong_benchmark else self.benchmark_id),
                     "has_submission": has_submission}
 
@@ -91,6 +94,42 @@ def test_legacy_forget_option_is_rejected_before_any_run():
         runloop.cmd_go(SimpleNamespace(forget_assignment_boundary=True))
 
 
+@pytest.mark.parametrize("selection", ["pick", "auto", "menu"])
+def test_unfinished_personal_boundary_blocks_before_claim(
+    tmp_path, monkeypatch, selection,
+):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    assignment_boundary.prepare(tmp_path, "deep-swe", [assignment(A)])
+
+    class Client:
+        benchmark_id = "deep-swe"
+
+        def __init__(self):
+            self.claims = 0
+
+        def get_assignment(self):
+            return {"active": [], "free_pick": selection != "menu",
+                    "menu": [assignment(B)]}
+
+        def claim_assignment(self, *_args):
+            self.claims += 1
+            return assignment(B)
+
+    client = Client()
+    args = SimpleNamespace(
+        batch_id=None, yes=True, pick=["task-b:grok-4.6:low"] if selection == "pick" else None,
+        auto=1 if selection == "auto" else None, refill=False,
+        allow_new_claims=True,
+    )
+    if selection == "menu":
+        # The no-option menu path must not claim when an old boundary exists.
+        runloop._prepare_batch(args, client)
+    else:
+        with pytest.raises(SystemExit, match="No new assignment was claimed"):
+            runloop._prepare_batch(args, client)
+    assert client.claims == 0
+
+
 @pytest.mark.parametrize("problem", ["wrong-id", "wrong-account", "submitted", "released", "wrong-benchmark", "pending", "patch", "finished", "nested-finished", "complete-state", "process", "decline"])
 def test_recovery_blocks_without_changing_ledger_or_jobs(tmp_path, monkeypatch, problem):
     server_ids = (A,) if problem == "wrong-account" else (A, B)
@@ -146,6 +185,65 @@ def test_recovery_rechecks_ledger_after_confirmation(tmp_path, monkeypatch):
     assert boundary_recovery.cmd_boundary_recover(args) == 1
     assert path.exists()
     assert not list(path.parent.glob(f"{path.stem}.recovered-*.json"))
+
+
+def test_mixed_recovery_keeps_unknown_then_retries_without_losing_prior_evidence(
+    tmp_path, monkeypatch,
+):
+    path, args = fixture(tmp_path, monkeypatch)
+    responses = {
+        A: {**assignment(A), "batch_id": None, "benchmark_id": "deep-swe",
+            "recovery_evidence_version": 1, "status": "expired",
+            "has_submission": False, "start_evidence": "never_started",
+            "exit_evidence": "unknown"},
+        B: {**assignment(B), "batch_id": None, "benchmark_id": "deep-swe",
+            "recovery_evidence_version": 1, "status": "invalid",
+            "has_submission": True, "start_evidence": "unknown_or_started",
+            "exit_evidence": "unknown"},
+    }
+
+    class Client:
+        benchmark_id = "deep-swe"
+
+        def whoami(self):
+            return {"nickname": "fixture-account"}
+
+        def assignment_recovery_status(self, aid):
+            return responses[aid]
+
+    monkeypatch.setattr(boundary_recovery, "_client", lambda _cfg: Client())
+    monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {A}")
+    assert boundary_recovery.cmd_boundary_recover(args) == 1
+    assert path.exists()
+    partial = json.loads(path.read_text())
+    assert partial["outcomes"][A]["outcome"] == "not_started_terminal"
+    assert partial["outcomes"][B]["outcome"] == "failed"
+    assert len(list((tmp_path / "work" / "jobs").rglob("result.json"))) == 2
+
+    responses[B]["exit_evidence"] = "cleanup_receipt_confirmed"
+    monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {B}")
+    assert boundary_recovery.cmd_boundary_recover(args) == 0
+    assert not path.exists()
+    archived = list(path.parent.glob(f"{path.stem}.recovered-*.json"))
+    assert len(archived) == 1
+    state = json.loads(archived[0].read_text())
+    assert state["outcomes"][A]["outcome"] == "not_started_terminal"
+    assert state["outcomes"][B]["outcome"] == "submitted"
+    assert len(list((tmp_path / "work" / "jobs").rglob("result.json"))) == 2
+
+
+def test_interrupted_recovery_before_commit_keeps_original_boundary(tmp_path, monkeypatch):
+    path, args = fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {A},{B}")
+
+    def interrupted(*_args):
+        raise OSError("interrupted write")
+
+    monkeypatch.setattr(assignment_boundary, "record_verified_recovery", interrupted)
+    assert boundary_recovery.cmd_boundary_recover(args) == 1
+    assert path.read_bytes() == before
+    assert len(list((tmp_path / "work" / "jobs").rglob("result.json"))) == 2
 
 
 @pytest.mark.parametrize("command", [
