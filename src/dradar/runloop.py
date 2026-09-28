@@ -8210,7 +8210,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     # A personal boundary is checked before _acquire_batch: that helper can
     # claim from a menu even when go has no --pick/--auto option. Existing held
     # work may still be resumed, but an unfinished campaign cannot grow here.
-    if allow_new_claims and not getattr(args, "batch_id", None):
+    if allow_new_claims and not (
+        getattr(args, "resume", False) and getattr(args, "batch_id", None)
+    ):
         benchmark = getattr(client, "benchmark_id", None)
         if benchmark:
             path = assignment_boundary.state_path(HOME, benchmark)

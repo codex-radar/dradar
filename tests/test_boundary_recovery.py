@@ -94,7 +94,7 @@ def test_legacy_forget_option_is_rejected_before_any_run():
         runloop.cmd_go(SimpleNamespace(forget_assignment_boundary=True))
 
 
-@pytest.mark.parametrize("selection", ["pick", "auto", "menu"])
+@pytest.mark.parametrize("selection", ["pick", "pick_scoped", "auto", "menu"])
 def test_unfinished_personal_boundary_blocks_before_claim(
     tmp_path, monkeypatch, capsys, selection,
 ):
@@ -117,7 +117,9 @@ def test_unfinished_personal_boundary_blocks_before_claim(
 
     client = Client()
     args = SimpleNamespace(
-        batch_id=None, yes=True, pick=["task-b:grok-4.6:low"] if selection == "pick" else None,
+        batch_id=B if selection == "pick_scoped" else None,
+        resume=False, yes=True,
+        pick=["task-b:grok-4.6:low"] if selection.startswith("pick") else None,
         auto=1 if selection == "auto" else None, refill=False,
         allow_new_claims=True,
     )
