@@ -441,7 +441,9 @@ def test_acp_rejects_unacknowledged_effort_without_inference(tmp_path: Path) -> 
     assert result.returncode == 1
     assert "DRADAR_KIRO_ACP=config_not_selected" in result.stderr
     assert "session/prompt" not in [entry["method"] for entry in _events(trace)]
-    assert not _events(stream)
+    assert [e["type"] for e in _events(stream)] == ["handshakeEnvelope", "handshakeFailure"]
+    assert _events(stream)[-1]["data"] == {"phase": "effort_set"}
+    assert "sess_test" not in stream.read_text()
 
 
 def test_acp_accepts_late_model_selector_only_after_exact_ack(tmp_path: Path) -> None:
