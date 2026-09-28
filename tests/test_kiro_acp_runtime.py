@@ -712,3 +712,34 @@ def test_acp_cancels_prompt_and_leaves_no_success_marker(tmp_path: Path) -> None
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=3)
+
+
+@pytest.mark.parametrize("mode,expected", [("passive_normal", 0), ("passive_powers_failed", 1),
+    ("handshake_unknown_update", 1), ("passive_request", 1)])
+def test_strict_handshake_metadata_is_bounded_and_redacted(tmp_path: Path, mode: str, expected: int) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    env["DRADAR_KIRO_HANDSHAKE_METADATA"] = "1"
+    result = subprocess.run(args + ["--handshake-only"], env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == expected
+    events = _events(stream)
+    envelopes = [e["data"] for e in events if e["type"] == "handshakeEnvelope"]
+    assert 0 < len(envelopes) <= 96
+    assert "SYNTHETIC_FAILURE" not in stream.read_text()
+    assert "session/prompt" not in [e["method"] for e in _events(trace)]
+    assert not any(e["type"] == "runFinished" for e in events)
+    if expected:
+        assert events[-1]["type"] == "handshakeFailure"
+    if mode == "passive_powers_failed":
+        assert any(e["status"] == "failed" and e["hasError"] for e in envelopes)
+    if mode == "handshake_unknown_update":
+        assert any(e["coreKindSha256"] == hashlib.sha256(b"unknown_side_effect").hexdigest() for e in envelopes)
+    if mode == "passive_request":
+        assert any(e["envelope"] == "request" for e in envelopes)
+
+
+def test_metadata_environment_cannot_enable_diagnostics_during_inference(tmp_path: Path) -> None:
+    args, env, stream, trace = _args(tmp_path, "passive_normal")
+    env["DRADAR_KIRO_HANDSHAKE_METADATA"] = "1"
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0
+    assert not any(e["type"] == "handshakeEnvelope" for e in _events(stream))

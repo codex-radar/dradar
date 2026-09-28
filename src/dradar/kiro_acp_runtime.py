@@ -118,6 +118,8 @@ class ACPClient:
         self.config_drift = False
         self.handshake_only = handshake_only or handshake_diagnostic
         self.handshake_diagnostic = handshake_diagnostic
+        self.handshake_metadata = self.handshake_only and os.environ.get("DRADAR_KIRO_HANDSHAKE_METADATA") == "1"
+        self.handshake_envelopes = 0
         self.ignored_kiro_notifications = 0
         self.protocol_phase = "initialize"
         self.pending_metadata_session_ids: set[str] = set()
@@ -162,6 +164,45 @@ class ACPClient:
             self._send({"jsonrpc": "2.0", "method": "session/cancel",
                         "params": {"sessionId": self.session_id}})
             self.cancel_sent = True
+
+    def _observe_envelope(self, message: object) -> None:
+        if not self.handshake_metadata:
+            return
+        self.handshake_envelopes += 1
+        if self.handshake_envelopes > 96:
+            raise ACPFailure("handshake_diagnostic_flood")
+        def shape(value: object) -> str:
+            if value is None:
+                return "absent"
+            if isinstance(value, dict):
+                return "object"
+            if isinstance(value, list):
+                return "list"
+            return "other"
+        def digest(value: object) -> str | None:
+            return hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
+        obj = message if isinstance(message, dict) else {}
+        params = obj.get("params")
+        fields = params if isinstance(params, dict) else {}
+        update = fields.get("update")
+        core = update.get("sessionUpdate") if isinstance(update, dict) else None
+        status = fields.get("status")
+        reason = fields.get("disabledReason")
+        envelope = ("request" if "id" in obj else "notification") if "method" in obj else "response"
+        if not isinstance(message, dict):
+            envelope = "other"
+        self._event("handshakeEnvelope", {
+            "phase": self.protocol_phase, "envelope": envelope,
+            "methodSha256": digest(obj.get("method")), "coreKindSha256": digest(core),
+            "paramsShape": shape(params), "updateShape": shape(update),
+            "status": status if isinstance(status, str) and status in ("success", "failed") else "absent" if status is None else "other",
+            "governance": reason if isinstance(reason, str) and reason in ("admin_disabled", "api_failure") else "absent" if reason is None else "other",
+            "hasError": bool(fields.get("error")), "hasErrors": bool(fields.get("errors")),
+            "responseError": "error" in obj,
+            "powersShape": shape(fields.get("powers")),
+            "documentsShape": shape(fields.get("documents")),
+            "serversShape": shape(fields.get("servers")),
+        })
 
     def _metadata_scope(self, params: object, *, require_session: bool = False) -> None:
         if not isinstance(params, dict):
@@ -486,6 +527,7 @@ class ACPClient:
                 raise ACPFailure("agent_exited")
             try:
                 message = json.loads(line)
+                self._observe_envelope(message)
             except json.JSONDecodeError as exc:
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -561,6 +603,7 @@ class ACPClient:
                 raise ACPFailure("agent_exited")
             try:
                 message = json.loads(line)
+                self._observe_envelope(message)
             except json.JSONDecodeError as exc:
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -608,6 +651,7 @@ class ACPClient:
                 raise ACPFailure("handshake_agent_exited")
             try:
                 message = json.loads(line)
+                self._observe_envelope(message)
             except json.JSONDecodeError as exc:
                 raise ACPFailure("invalid_json_rpc") from exc
             if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -737,6 +781,8 @@ def run(cli: str, stream: Path, model: str, effort: str, instruction: str,
         client._event("runFinished", {"sessionId": sid, "status": "success",
                                       "stopReason": "end_turn"})
     except ACPFailure:
+        if client.handshake_metadata:
+            client._event("handshakeFailure", {"phase": client.protocol_phase})
         if client.probe_pwd_only:
             client._event("probeFailureCounts", {
                 "toolCount": client.probe_tool_count,
