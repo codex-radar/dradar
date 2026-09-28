@@ -29,6 +29,8 @@ class ACPFailure(RuntimeError):
 PASSIVE_KIRO_NOTIFICATIONS = frozenset({
     "_kiro.dev/commands/available", "_kiro/governance/state", "_kiro/mcp/status",
     "_kiro/powers/items_changed", "_kiro/steering/documents_changed",
+    "_kiro/progressive_context/items_changed", "_kiro/hooks/didChange",
+    "_kiro/tools/didChange", "_kiro/sessions/changed",
 })
 
 
@@ -238,19 +240,38 @@ class ACPClient:
         if method not in PASSIVE_KIRO_NOTIFICATIONS:
             self._rejected_message(method)
             raise ACPFailure("handshake_unexpected_message")
-        self._metadata_scope(params, require_session=method != "_kiro.dev/commands/available")
+        if method == "_kiro/sessions/changed":
+            if not isinstance(params, dict) or not isinstance(params.get("upserted"), list) or not isinstance(params.get("deleted"), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+            # The private ACP process creates one local session. Roster entries
+            # bind to that session too; no global/foreign roster is accepted.
+            for entry in params["upserted"]:
+                self._metadata_scope(entry, require_session=True)
+                if (entry.get("status") not in (None, "idle") or entry.get("provisioningFailure")
+                        or entry.get("instanceStatus") == "failed" or entry.get("error") or entry.get("errors")):
+                    raise ACPFailure("handshake_metadata_failed")
+            if params["deleted"]:
+                raise ACPFailure("handshake_metadata_failed")
+        else:
+            self._metadata_scope(params, require_session=method != "_kiro.dev/commands/available")
         # These method names carry both success and failure payloads in Kiro
         # 2.24.1. Never let a catalog-load failure become a successful run.
-        if params.get("error") or params.get("errors"):
+        if (params.get("error") or params.get("errors")
+                or params.get("status") not in (None, "success")):
             raise ACPFailure("handshake_metadata_failed")
         catalog = {
             "_kiro/powers/items_changed": "powers",
             "_kiro/steering/documents_changed": "documents",
+            "_kiro/progressive_context/items_changed": "items",
         }.get(method)
         if catalog:
             if params.get("status") != "success":
                 raise ACPFailure("handshake_metadata_failed")
             if not isinstance(params.get(catalog), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+        elif method in ("_kiro/hooks/didChange", "_kiro/tools/didChange"):
+            field = "hooks" if method == "_kiro/hooks/didChange" else "tags"
+            if not isinstance(params.get(field), list):
                 raise ACPFailure("handshake_metadata_shape_invalid")
         elif method == "_kiro/mcp/status":
             if not isinstance(params.get("servers"), list):
@@ -292,6 +313,25 @@ class ACPClient:
             # No command text is copied into a prompt or executed by this client.
             self._metadata_scope(params, require_session=True)
             if not isinstance(update.get("availableCommands"), list):
+                raise ACPFailure("handshake_metadata_shape_invalid")
+            self._count_metadata()
+            return
+        if (self.handshake_only or not self.prompt_pending) and kind == "session_info_update":
+            # Kiro's initialization emits a context-usage display update using
+            # this core envelope. Other info variants include errors and turn
+            # execution: only the source-proven context_usage variant is passive.
+            self._metadata_scope(params, require_session=True)
+            meta = update.get("_meta")
+            info = meta.get("kiro") if isinstance(meta, dict) else None
+            if (not isinstance(info, dict) or info.get("kind") != "context_usage"
+                    or set(info) - {"kind", "usagePercentage", "contextUsage", "breakdown"}):
+                raise ACPFailure("handshake_unexpected_update")
+            percentage = info.get("usagePercentage")
+            display = info.get("contextUsage")
+            if (type(percentage) not in (int, float) or not 0 <= percentage <= 100
+                    or not isinstance(display, dict) or set(display) != {"usagePercentage"}
+                    or type(display.get("usagePercentage")) not in (int, float)
+                    or display["usagePercentage"] != percentage):
                 raise ACPFailure("handshake_metadata_shape_invalid")
             self._count_metadata()
             return
@@ -621,7 +661,7 @@ class ACPClient:
                     or params.get("sessionId") != self.session_id):
                 raise ACPFailure("config_registry_unexpected_message")
             update = params.get("update")
-            if isinstance(update, dict) and update.get("sessionUpdate") == "available_commands_update":
+            if isinstance(update, dict) and update.get("sessionUpdate") in ("available_commands_update", "session_info_update"):
                 self._handle_update(message)
                 continue
             if not isinstance(update, dict) or update.get("sessionUpdate") != "config_option_update":

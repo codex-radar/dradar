@@ -38,6 +38,25 @@ def options():
              'options':[{'value':x} for x in ('low','medium','high','xhigh','max')]}]
 def record(value):
     with trace.open('a') as out:out.write(json.dumps(value)+'\n')
+def lifecycle():
+    sid='foreign' if mode=='lifecycle_foreign' else 'sess_test'
+    hooks={'sessionId':sid,'hooks':[]};tools={'sessionId':sid,'tags':[]}
+    roster={'upserted':[{'sessionId':sid,'status':'idle'}],'deleted':[]}
+    info={'kind':'context_usage','usagePercentage':0,'contextUsage':{'usagePercentage':0}}
+    if mode=='lifecycle_hooks_shape':hooks['hooks']={}
+    if mode=='lifecycle_tools_shape':tools['tags']='bad'
+    if mode=='lifecycle_error':hooks['error']='SYNTHETIC_FAILURE'
+    if mode=='lifecycle_failed_status':hooks['status']='failed'
+    if mode=='lifecycle_roster_failed':roster['upserted'][0]['status']='failed'
+    if mode=='lifecycle_roster_deleted':roster['deleted']=[sid]
+    if mode=='lifecycle_roster_failure':roster['upserted'][0]['provisioningFailure']={'code':'backend'}
+    if mode=='lifecycle_context_error':info={'kind':'display_error','displayError':{'message':'SYNTHETIC_FAILURE'}}
+    if mode=='lifecycle_context_hidden_error':info['displayError']={'message':'SYNTHETIC_FAILURE'}
+    if mode=='lifecycle_context_invalid':info['usagePercentage']=float('nan')
+    if mode=='lifecycle_context_mismatch':info['contextUsage']['usagePercentage']=1
+    for method,payload in [('_kiro/hooks/didChange',hooks),('_kiro/tools/didChange',tools),('_kiro/sessions/changed',roster)]:
+        send({'method':method,'params':payload})
+    send({'method':'session/update','params':{'sessionId':sid,'update':{'sessionUpdate':'session_info_update','_meta':{'kiro':info}}}})
 for line in sys.stdin:
     msg=json.loads(line);method=msg.get('method');params=msg.get('params',{})
     record({'method':method,'params':params if method!='session/prompt' else {'sessionId':params.get('sessionId'),'prompt':params.get('prompt')},
@@ -45,16 +64,22 @@ for line in sys.stdin:
     if method=='initialize':
         send({'id':msg['id'],'result':{'protocolVersion':1,'agentCapabilities':{}}})
     elif method=='session/new':
+        if mode.startswith('lifecycle_'):lifecycle()
         if mode.startswith('passive_'):
             # Actual approved diagnostic method order; params below are a
             # synthetic success fixture, not a retained provider payload.
             for notice in ('_kiro/governance/state','_kiro/mcp/status',
-                           '_kiro/powers/items_changed','_kiro/steering/documents_changed'):
+                           '_kiro/powers/items_changed','_kiro/steering/documents_changed',
+                           '_kiro/progressive_context/items_changed'):
                 payload={'sessionId':'foreign' if mode in ('passive_foreign','passive_foreign_deferred') else 'sess_test'}
                 if notice=='_kiro/governance/state':payload.update(isEnterprise=False,features={})
                 if notice=='_kiro/mcp/status':payload['servers']=[]
                 if notice=='_kiro/powers/items_changed':payload.update(status='success',powers=[])
                 if notice=='_kiro/steering/documents_changed':payload.update(status='success',documents=[])
+                if notice=='_kiro/progressive_context/items_changed':payload.update(status='success',items=[])
+                if mode=='passive_progressive_failed' and 'items' in payload:payload.update(status='failed',error='SYNTHETIC_FAILURE')
+                if mode=='passive_progressive_shape' and 'items' in payload:payload['items']={}
+                if mode=='passive_progressive_errors' and 'items' in payload:payload['errors']=['SYNTHETIC_FAILURE']
                 if mode=='passive_powers_failed' and 'powers' in payload:payload.update(status='failed',error='SYNTHETIC_FAILURE')
                 if mode=='passive_powers_errors' and 'powers' in payload:payload['errors']=['SYNTHETIC_FAILURE']
                 if mode=='passive_documents_failed' and 'documents' in payload:payload.update(status='failed',error='SYNTHETIC_FAILURE')
@@ -147,6 +172,7 @@ for line in sys.stdin:
         if mode.startswith('registry_') and mode!='registry_before_response' and params['configId']=='model':
             import time
             time.sleep(0.05)
+            if mode=='registry_lifecycle':lifecycle()
             if mode=='registry_passive':
                 send({'method':'_kiro/mcp/status','params':{'sessionId':'sess_test','servers':[]}})
                 send({'method':'session/update','params':{'sessionId':'sess_test','update':{
@@ -166,6 +192,7 @@ for line in sys.stdin:
                 'sessionUpdate':'config_option_update','configOptions':options()}}})
         if mode=='handshake_kiro_commands' and params['configId']=='effortLevel':
             send({'method':'_kiro.dev/commands/available','params':{'commands':[]}})
+        if mode=='lifecycle_final' and params['configId']=='effortLevel':lifecycle()
         if mode=='passive_final' and params['configId']=='effortLevel':
             send({'method':'_kiro/steering/documents_changed','params':{'sessionId':'sess_test','status':'success','documents':[]}})
             send({'method':'session/update','params':{'sessionId':'sess_test','update':{
@@ -506,6 +533,9 @@ def test_observed_passive_method_order_and_standard_command_advertisement(tmp_pa
 
 
 @pytest.mark.parametrize('mode,code', [
+    ('passive_progressive_failed','handshake_metadata_failed'),
+    ('passive_progressive_shape','handshake_metadata_shape_invalid'),
+    ('passive_progressive_errors','handshake_metadata_failed'),
     ('passive_powers_failed','handshake_metadata_failed'),
     ('passive_powers_errors','handshake_metadata_failed'),
     ('passive_documents_failed','handshake_metadata_failed'),
@@ -743,3 +773,23 @@ def test_metadata_environment_cannot_enable_diagnostics_during_inference(tmp_pat
     result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
     assert result.returncode == 0
     assert not any(e["type"] == "handshakeEnvelope" for e in _events(stream))
+
+
+@pytest.mark.parametrize("mode", ["lifecycle_normal", "registry_lifecycle", "lifecycle_final"])
+def test_source_proven_startup_catalogs_and_context_display(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stderr
+    assert [e["method"] for e in _events(trace)].count("session/prompt") == 1
+
+
+@pytest.mark.parametrize("mode", ["lifecycle_foreign", "lifecycle_hooks_shape", "lifecycle_tools_shape",
+    "lifecycle_error", "lifecycle_failed_status", "lifecycle_roster_failed", "lifecycle_roster_deleted", "lifecycle_roster_failure",
+    "lifecycle_context_error", "lifecycle_context_hidden_error", "lifecycle_context_invalid",
+    "lifecycle_context_mismatch"])
+def test_startup_metadata_cannot_hide_errors_or_foreign_session(tmp_path: Path, mode: str) -> None:
+    args, env, stream, trace = _args(tmp_path, mode)
+    result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 1
+    assert "session/prompt" not in [e["method"] for e in _events(trace)]
+    assert "SYNTHETIC_FAILURE" not in stream.read_text()
