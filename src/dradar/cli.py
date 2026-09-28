@@ -403,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ren.set_defaults(func=cmd_rename)
 
     p_st = sub.add_parser("status", help="see your own recent submissions, points, and flags")
+    p_st.add_argument("--json", action="store_true", help="show status and original write receipts as JSON")
     p_st.set_defaults(func=cmd_status)
 
     p_ls = sub.add_parser(

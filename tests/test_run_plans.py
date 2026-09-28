@@ -3516,6 +3516,64 @@ def test_json_command_isolates_python_fd_and_child_process_stdout(
     assert PLAN_TOKEN not in captured.err
 
 
+@pytest.mark.parametrize("phase", ["plan_start", "plan_stop", "plan_heartbeat", "plan_progress", "submission_upload"])
+def test_json_command_preserves_unknown_write_identity_without_raw_diagnostics(phase, capsys):
+    def operation():
+        print(PLAN_TOKEN)
+        error = ApiError(PLAN_TOKEN, status_code=503, payload={"secret": PLAN_TOKEN})
+        error.write_outcome = {
+            "status": "unknown_unreconciled", "phase": phase,
+            "request_id": "a" * 32, "local_result_retained": True,
+            "next_commands": [PLAN_TOKEN], "secret": PLAN_TOKEN,
+        }
+        raise error
+
+    assert run_plans._run_command(_args(), operation) == 1
+    captured = capsys.readouterr()
+    response = json.loads(captured.out)
+    assert captured.out.count("\n") == 1
+    assert PLAN_TOKEN not in captured.out + captured.err
+    assert response["status"] == "unknown_unreconciled"
+    assert response["retryable"] is False
+    assert response["agent_action"] == "notify_only"
+    assert response["write_outcome"]["request_id"] == "a" * 32
+    assert response["write_outcome"]["local_result_retained"] is True
+    assert response["write_outcome"]["next_commands"] == [
+        "dradar retry-upload" if phase == "submission_upload"
+        else "dradar progress --plan <saved-plan-code>"
+    ]
+
+
+def test_unknown_write_output_drops_unrecognized_metadata():
+    error = ApiError("unconfirmed")
+    error.write_outcome = {"status": "unknown_unreconciled", "phase": [PLAN_TOKEN],
+                           "request_id": PLAN_TOKEN, "local_result_retained": PLAN_TOKEN}
+    response = run_plans._api_error_response(error)
+    assert response["write_outcome"] == {"status": "unknown_unreconciled", "request_id": "unknown"}
+    assert PLAN_TOKEN not in json.dumps(response)
+
+
+@pytest.mark.parametrize("status", ["busy_not_executed", "unknown_reconciled", "committed"])
+def test_write_recovery_states_are_distinct_and_never_authorize_execution(status):
+    error = ApiError("recovery stopped")
+    error.write_outcome = {"status": status, "phase": "assignment_claim", "request_id": "a"*32}
+    response = run_plans._api_error_response(error)
+    assert response["status"] == ("unknown_reconciled" if status == "committed" else status)
+    assert response["agent_action"] == "notify_only" and response["retryable"] is False
+    assert response["write_outcome"]["next_commands"] == ["dradar leases"]
+    if status == "committed":
+        assert response["write_outcome"]["execution_allowed"] is False
+
+
+def test_unknown_heartbeat_keeps_only_validated_session_sequence():
+    error = ApiError("unconfirmed")
+    error.write_outcome = {"status": "unknown_unreconciled", "phase": "heartbeat",
+        "request_identity": {"session_id": "b"*32, "seq": 7, "token": PLAN_TOKEN}}
+    response = run_plans._api_error_response(error)
+    assert response["write_outcome"]["request_identity"] == {"session_id": "b"*32, "seq": 7}
+    assert PLAN_TOKEN not in json.dumps(response)
+
+
 @pytest.mark.parametrize(
     "server_status,server_action,local_status",
     [

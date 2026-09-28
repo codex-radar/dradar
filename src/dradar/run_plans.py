@@ -2124,6 +2124,75 @@ def _capacity_reservation(exc: ApiError) -> dict[str, Any] | None:
 
 
 def _api_error_response(exc: ApiError) -> dict[str, Any]:
+    outcome = getattr(exc, "write_outcome", None)
+    messages = {
+        "unknown_unreconciled": "原请求的写入结果尚未确认，现有记录已保留。请检查原请求进度后再决定恢复操作。",
+        "busy_not_executed": "服务繁忙，已确认原请求未执行。自动重试预算已用完，原记录已保留。",
+        "unknown_reconciled": "原请求已完成对账。请根据回执和当前运行状态决定后续操作。",
+        "committed": "原请求已确认提交，但当前停止或截止条件不允许继续。请检查原请求进度。",
+    }
+    if (isinstance(outcome, dict) and isinstance(outcome.get("status"), str)
+            and outcome["status"] in messages):
+        # JSON mode suppresses helper diagnostics. Preserve the unresolved
+        # operation here without forwarding raw server payloads or commands.
+        response = _local_error_response(RunPlanClientError(
+            "write_outcome_unconfirmed",
+            messages[outcome["status"]],
+            agent_action="notify_only",
+            retryable=False,
+        ))
+        response["status"] = outcome["status"] if outcome["status"] != "committed" else "unknown_reconciled"
+        safe = {"status": response["status"]}
+        if outcome["status"] == "committed":
+            safe.update(reconciliation="committed", execution_allowed=False)
+        phases = {
+            "plan_start": ("start", "dradar progress --plan <saved-plan-code>"),
+            "plan_stop": ("exit", "dradar progress --plan <saved-plan-code>"),
+            "plan_heartbeat": ("heartbeat", "dradar progress --plan <saved-plan-code>"),
+            "plan_progress": ("progress", "dradar progress --plan <saved-plan-code>"),
+            "assignment_claim": ("claim", "dradar leases"),
+            "assignment_checkout": ("claim", "dradar leases"),
+            "assignment_stopped": ("exit", "dradar status --json"),
+            "close": ("exit", "dradar status --json"),
+            "release-capacity": ("exit", "dradar status --json"),
+            "heartbeat": ("telemetry", "dradar status --json"),
+            "flight-events": ("telemetry", "dradar status --json"),
+            "started": ("registration", "dradar status --json"),
+            "upload_intent": ("upload", "dradar retry-upload"),
+            "submission_upload": ("upload", "dradar retry-upload"),
+        }
+        phase = outcome.get("phase")
+        if isinstance(phase, str) and phase in phases:
+            category, command = phases[phase]
+            safe.update(phase=phase, category=category, next_commands=[command])
+        for key in ("request_id", "request_identity"):
+            value = outcome.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}(?:[0-9a-f]{32})?", value):
+                safe[key] = value
+            elif key in outcome:
+                safe[key] = "unknown"
+        identity = outcome.get("request_identity")
+        if isinstance(identity, dict):
+            checked = {}
+            for field in ('session_id', 'batch_id', 'evidence_id', 'assignment_id', 'worker_event_id'):
+                value = identity.get(field)
+                if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{32}', value):
+                    checked[field] = value
+            for field in ('seq', 'device_generation'):
+                value = identity.get(field)
+                if type(value) is int and 0 <= value < 2**63:
+                    checked[field] = value
+            events = identity.get('event_ids')
+            if (isinstance(events, list) and 0 < len(events) <= 100
+                    and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) for value in events)):
+                checked['event_ids'] = list(events)
+            if checked:
+                safe['request_identity'] = checked
+        for key in ("local_result_retained", "request_saved", "reconciled"):
+            if type(outcome.get(key)) is bool:
+                safe[key] = outcome[key]
+        response["write_outcome"] = safe
+        return response
     payload = exc.payload
     if isinstance(payload, dict):
         # FastAPI may place a structured application response below `detail`.
@@ -2890,6 +2959,9 @@ def cmd_run_plan(args) -> int:
 def cmd_progress_plan(args) -> int:
     def operate() -> dict[str, Any]:
         _run_code, path, state, client = _state_and_client(args)
+        from .plan_observation_recovery import reconcile_pending
+        client._explicit_write_recovery = True
+        observation_reconciliation = reconcile_pending(client, state["plan_id"])
         intent_reconciliation = [item for old, original_client in reversed(_credential_contexts(state, client))
                                  for item in plan_intents.reconcile_saved(
                                      HOME, original_client, plan_id=old["plan_id"])]
@@ -2923,6 +2995,8 @@ def cmd_progress_plan(args) -> int:
         response = _validate_response(client.run_plan_progress(state["plan_id"]))
         if intent_reconciliation:
             response.setdefault("agent", {})["intent_reconciliation"] = intent_reconciliation
+        if observation_reconciliation:
+            response.setdefault("agent", {})["observation_reconciliation"] = observation_reconciliation
 
         def merge_current_state() -> dict[str, Any] | None:
             current = _read_private_json(path)

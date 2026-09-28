@@ -552,12 +552,17 @@ def test_malformed_or_empty_ack_is_visible_and_success_marks_recovery(tmp_path):
     assert json.loads(recorder.flush_status_path.read_text())["last_reason"] == (
         "invalid_response"
     )
+    # A fresh event can still flow after an older identity used its bounded
+    # sender. Repeated flushes must not reopen the older operation's budget.
+    recorder.record("session_started", component="cli", batch_id=BATCH_ID)
     assert recorder.flush(batch_id=BATCH_ID) == 0
     status = json.loads(recorder.flush_status_path.read_text())
     assert status["last_reason"] == "unacknowledged_response"
     assert status["consecutive_failures"] == 2
 
+    recorder.record("session_started", component="cli", batch_id=BATCH_ID)
     assert recorder.flush(batch_id=BATCH_ID) == 1
+    assert len(recorder._load(recorder.pending_path)) == 2
     status = json.loads(recorder.flush_status_path.read_text())
     assert status["total_failures"] == 2
     assert status["consecutive_failures"] == 0
