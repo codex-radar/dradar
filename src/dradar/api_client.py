@@ -1064,11 +1064,12 @@ class ApiClient:
         from .telemetry_recovery import replay
         return asyncio.run(replay(self, "/api/v1/runner/heartbeat", payload))
 
-    def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def runner_close(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/close", payload))
+        return asyncio.run(recover(self, "/api/v1/runner/close", payload,
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_session_receipt(
         self, session_id: str, *, batch_id: str,
@@ -1089,11 +1090,13 @@ class ApiClient:
             timeout=10.0, retry_rate_limit=False, retry_transport=False,
         ))
 
-    def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def release_runner_capacity(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/release-capacity", _cleanup_payload(payload)))
+        return asyncio.run(recover(self, "/api/v1/runner/release-capacity",
+                                   _cleanup_payload(payload),
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_reservations(
         self, *, limit: int = 100, after: str = "", quarantine_after: str = "",

@@ -289,7 +289,7 @@ def confirm_server_submissions(
 
 
 def confirm_cleanup_recovery(
-    path: Path, *, assignment_id: str, expected: dict,
+    path: Path, *, assignment_id: str, expected_digest: str,
     request_id: str, session_id: str, journal_sha256: str,
     quarantine_sha256: str,
 ) -> None:
@@ -302,8 +302,10 @@ def confirm_cleanup_recovery(
     with _PROCESS_LOCK:
         with _locked(path):
             state = _load(path)
-            if state is None or state["expected"].get(assignment_id) != expected:
-                raise BoundaryError("saved cleanup assignment identity changed")
+            if (state is None
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected_digest
+                    or assignment_id not in state["expected"]):
+                raise BoundaryError("saved cleanup assignment boundary changed")
             existing = state["outcomes"].get(assignment_id)
             outcome = {
                 "outcome": "terminated_unsubmitted",

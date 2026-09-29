@@ -340,3 +340,37 @@ def test_signed_cleanup_entry_verifies_source_and_excludes_active_runner(
     finally:
         active.__exit__(None, None, None)
     assert reached == [ASSIGNMENT]
+
+
+def test_signed_session_exit_entry_binds_original_batch_and_digest(
+    tmp_path, monkeypatch, capsys,
+):
+    from dradar import capacity_journal, legacy_capacity, session_recovery
+
+    home, manifest, package, _ = _signed_package(tmp_path, monkeypatch)
+    monkeypatch.setattr(recovery, "HOME", home)
+    monkeypatch.setattr(sys, "argv", [str(package), "recover-session-exit"])
+    session = "c" * 32
+    digest = "d" * 64
+    monkeypatch.setattr(capacity_journal, "_read",
+                        lambda _path: {"batch_id": BATCH})
+    monkeypatch.setattr(legacy_capacity, "_existing_client",
+                        lambda _args: (object(), {"kind": "account"}, ()))
+    reached = []
+    def recover_one(home_arg, session_arg, client, **kwargs):
+        reached.append((home_arg, session_arg, kwargs))
+        return {"status": "released" if kwargs["execute"] else "ready"}
+    monkeypatch.setattr(session_recovery, "recover", recover_one)
+    args = ["--manifest", str(manifest), "--session-id", session,
+            "--batch-id", BATCH]
+    assert recovery.main_session_exit(args) == 0
+    assert reached[-1][2]["explicit_replay_once"] is True
+    assert reached[-1][2]["execute"] is False
+    assert recovery.main_session_exit(args + ["--execute", "--journal-sha256", digest]) == 0
+    assert reached[-1][2]["expected_digest"] == digest
+    assert reached[-1][2]["execute"] is True
+    assert len(reached) == 2
+    assert 'released' in capsys.readouterr().out
+    package.write_bytes(package.read_bytes() + b"tampered")
+    assert recovery.main_session_exit(args) == 2
+    assert len(reached) == 2

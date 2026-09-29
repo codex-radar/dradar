@@ -74,12 +74,17 @@ class Server(ReceiptServer):
 @pytest.fixture
 def case(tmp_path, monkeypatch):
     server = Server()
-    job = tmp_path / "work" / "jobs" / f"a{AID}-fixture"
+    job = tmp_path / "work" / "jobs" / f"a{AID}"
     job.mkdir(parents=True)
     (job / "result.json").write_text(json.dumps({
         "id": "diagnostic", "started_at": None, "updated_at": None,
         "finished_at": None, "n_total_trials": 0, "stats": {},
     }))
+    trial = job / "task__abc12345"
+    trial.mkdir()
+    for name in ("config.json", "docker-compose-egress-proxy.json",
+                 "docker-compose-mounts.json", "exception.txt", "trial.log"):
+        (trial / name).write_text("diagnostic only")
     local = journal.CapacityJournal(tmp_path, session_id=SID, server=server.server)
     local.bind(BID)
     local.bind_generation(3)
@@ -147,6 +152,17 @@ def test_formal_flow_keeps_job_and_records_unknown_execution(case):
     assert server.disposition["request_id"] == state["outcomes"][AID]["request_id"]
 
 
+def test_expired_server_assignment_is_not_restarted(case):
+    server, job, boundary, common = case
+    server.assignment_status = "expired"
+    pre = cleanup_recovery.inspect(**common)
+    assert pre["status"] == "ready"
+    result = cleanup_recovery.execute(**common,
+                                      inventory_sha256=pre["inventory_sha256"])
+    assert result["status"] == "terminated_unsubmitted"
+    assert job.is_dir() and boundary.is_file()
+
+
 def test_lost_server_ack_replays_original_request_without_losing_fence(case):
     server, job, boundary, common = case
     pre = cleanup_recovery.inspect(**common)
@@ -161,10 +177,29 @@ def test_lost_server_ack_replays_original_request_without_losing_fence(case):
                                     inventory_sha256=pre["inventory_sha256"])["status"] == "terminated_unsubmitted"
 
 
+def test_boundary_change_after_server_receipt_keeps_pending_fence(case, monkeypatch):
+    server, job, boundary, common = case
+    pre = cleanup_recovery.inspect(**common)
+    original = server.recover_unsubmitted_cleanup
+    def change_boundary(payload):
+        result = original(payload)
+        state = json.loads(boundary.read_text())
+        state["expected"][AID]["task_id"] = "other-task"
+        boundary.write_text(json.dumps(state))
+        return result
+    monkeypatch.setattr(server, "recover_unsubmitted_cleanup", change_boundary)
+    with pytest.raises(assignment_boundary.BoundaryError,
+                       match="boundary changed"):
+        cleanup_recovery.execute(**common,
+                                 inventory_sha256=pre["inventory_sha256"])
+    assert server.disposition is not None
+    assert pending_upload_count(common["home"]) == 1
+    assert job.is_dir()
+
+
 def test_possible_trial_result_blocks_before_server_mutation(case):
     server, job, boundary, common = case
     trial = job / "task__abc12345"
-    trial.mkdir()
     (trial / "result.json").write_text("{}")
     with pytest.raises(cleanup_recovery.CleanupRecoveryBlocked,
                        match="possible local result"):
@@ -172,6 +207,22 @@ def test_possible_trial_result_blocks_before_server_mutation(case):
     assert server.disposition is None
     assert pending.load(common["home"])[0]["record_kind"] == "cleanup_quarantine"
     assert boundary.is_file()
+
+
+def test_unreadable_trial_tree_preserves_quarantine(case):
+    server, job, _boundary, common = case
+    hidden = job / "trial" / "hidden"
+    hidden.mkdir(parents=True)
+    (hidden / "model.patch").write_text("preserved result")
+    hidden.chmod(0)
+    try:
+        with pytest.raises(cleanup_recovery.CleanupRecoveryBlocked,
+                           match="unreadable"):
+            cleanup_recovery.inspect(**common)
+    finally:
+        hidden.chmod(0o700)
+    assert server.disposition is None
+    assert pending_upload_count(common["home"]) == 1
 
 
 def test_changed_inventory_and_wrong_session_fail_closed(case):

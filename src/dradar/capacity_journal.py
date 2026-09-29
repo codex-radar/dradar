@@ -322,7 +322,7 @@ def _receipt(client, state: dict) -> dict:
     return receipt
 
 
-def reconcile_file(path: Path, client) -> bool:
+def reconcile_file(path: Path, client, *, explicit_replay_once: bool = False) -> bool:
     """Retry the same durable evidence; unknown receipts never create new work."""
     from .run_plans import _exclusive_lock
     with _exclusive_lock(path.with_suffix(".lock")):
@@ -343,7 +343,10 @@ def reconcile_file(path: Path, client) -> bool:
             return True
         if not receipt["closed"]:
             try:
-                client.runner_close(state["close_request"])
+                if explicit_replay_once:
+                    client.runner_close(state["close_request"], explicit_replay_once=True)
+                else:
+                    client.runner_close(state["close_request"])
             except ApiError:
                 pass  # The exact receipt distinguishes a lost ACK from no close.
             receipt = _receipt(client, state)
@@ -358,7 +361,10 @@ def reconcile_file(path: Path, client) -> bool:
             _write(path, state)  # Durable identical request before mutation.
         if not receipt["capacity_released"]:
             try:
-                client.release_runner_capacity(request)
+                if explicit_replay_once:
+                    client.release_runner_capacity(request, explicit_replay_once=True)
+                else:
+                    client.release_runner_capacity(request)
             except ApiError:
                 # The request may have committed. The same read-only receipt
                 # settles that ambiguity; a failed read preserves this file.

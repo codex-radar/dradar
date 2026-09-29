@@ -180,4 +180,47 @@ def main_cleanup(argv: list[str] | None = None) -> int:
         return 2
 
 
-__all__ = ["main", "main_cleanup"]
+def main_session_exit(argv: list[str] | None = None) -> int:
+    """One signed, explicit replay window for an exhausted original exit."""
+    parser = argparse.ArgumentParser(prog="dradar.pyz recover-session-exit")
+    parser.add_argument("--manifest", required=True, metavar="SIGNED_JSON")
+    parser.add_argument("--session-id", required=True, type=_assignment_id)
+    parser.add_argument("--batch-id", required=True, type=_batch_id)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--journal-sha256")
+    args = parser.parse_args(argv)
+    if args.execute and not re.fullmatch(r"[0-9a-f]{64}", args.journal_sha256 or ""):
+        parser.error("--execute requires the exact --journal-sha256 from preflight")
+    try:
+        root = ota_root(HOME)
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
+            raise ValueError("OTA root is unsafe")
+        with UpdateLock(root / "launch.lock", timeout_seconds=0):
+            if active_invocations(root):
+                raise ValueError("another DRadar invocation is active")
+            _verify_package(Path(args.manifest).expanduser(), Path(sys.argv[0]), HOME)
+            from ..legacy_capacity import _existing_client
+            from .. import capacity_journal, session_recovery
+            from types import SimpleNamespace
+
+            client, scope, _ = _existing_client(SimpleNamespace(plan=None, server=None))
+            if scope["kind"] != "account":
+                raise ValueError("original account identity is required")
+            journal = capacity_journal._read(
+                HOME / "runner-reservations" / f"{args.session_id}.json")
+            if journal["batch_id"] != args.batch_id:
+                raise ValueError("original session belongs to another batch")
+            result = session_recovery.recover(
+                HOME, args.session_id, client, execute=args.execute,
+                expected_digest=args.journal_sha256,
+                explicit_replay_once=True,
+            )
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0 if result["status"] in {"ready", "released"} else 1
+    except (InvalidTransition, ManifestError, OSError, ValueError, RuntimeError,
+            KeyError, zipfile.BadZipFile) as exc:
+        print(f"original session exit remains unresolved: {exc}", file=sys.stderr)
+        return 2
+
+
+__all__ = ["main", "main_cleanup", "main_session_exit"]

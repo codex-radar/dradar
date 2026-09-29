@@ -45,7 +45,10 @@ def _job_inventory(home: Path, row: dict, assignment_id: str) -> str:
             or local_jobs.assignment_id_for_job(job) != assignment_id):
         raise CleanupRecoveryBlocked("original job identity changed")
     entries: list[tuple[str, int, int, int, str | None]] = []
-    for current, dirs, files in os.walk(job, followlinks=False):
+    def walk_error(exc: OSError) -> None:
+        raise CleanupRecoveryBlocked("original job inventory is unreadable") from exc
+
+    for current, dirs, files in os.walk(job, followlinks=False, onerror=walk_error):
         base = Path(current)
         for name in dirs + files:
             path = base / name
@@ -208,7 +211,8 @@ def inspect(
                 ("model", expected["model"]), ("effort", expected["effort"]),
             ))
             or status.get("has_submission") is not False
-            or status.get("status") not in ({"leased", "released"} if saved_request else {"leased"})):
+            or status.get("status") not in ({"leased", "expired", "released"}
+                                          if saved_request else {"leased", "expired"})):
         raise CleanupRecoveryBlocked("exact server assignment is not unsubmitted and recoverable")
     inventory_sha256 = _job_inventory(home, row, assignment_id)
     journal_sha256 = hashlib.sha256(capacity_journal._canonical(journal)).hexdigest()
@@ -286,9 +290,9 @@ def execute(
             or status.get("has_submission") is not False):
         raise CleanupRecoveryBlocked("terminal server state is not confirmed")
     path = assignment_boundary.state_path(home, benchmark, batch_id)
-    state, _ = assignment_boundary.inspect_snapshot(path)
     assignment_boundary.confirm_cleanup_recovery(
-        path, assignment_id=assignment_id, expected=state["expected"][assignment_id],
+        path, assignment_id=assignment_id,
+        expected_digest=before["boundary_sha256"],
         request_id=saved["request_id"], session_id=session_id,
         journal_sha256=before["journal_sha256"],
         quarantine_sha256=before["quarantine_sha256"],
@@ -312,7 +316,20 @@ def cmd_recover(args) -> int:
     except (CleanupRecoveryBlocked, assignment_boundary.BoundaryError,
             capacity_journal.CapacityEvidenceError, pending.PendingLedgerError,
             ApiError, OSError, ValueError, KeyError, TypeError) as exc:
+        request_saved = False
+        if args.execute:
+            try:
+                request_saved = isinstance(
+                    _exact_row(HOME, args.assignment_id).get("cleanup_recovery"), dict
+                )
+            except (CleanupRecoveryBlocked, pending.PendingLedgerError,
+                    OSError, ValueError):
+                pass
         result = {"schema_version": 1, "status": "blocked",
-                  "reason": str(exc), "mutated": False}
+                  "reason": str(exc),
+                  "mutated": None if args.execute else False,
+                  "local_request_saved": request_saved,
+                  "server_outcome": "unknown" if args.execute else "not_requested",
+                  "retry": "reinspect_then_same_request_only" if request_saved else "reinspect"}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result["status"] in {"ready", "terminated_unsubmitted"} else 1
