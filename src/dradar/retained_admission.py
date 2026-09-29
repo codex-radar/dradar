@@ -107,6 +107,8 @@ def inspect(home, assignment_id, batch_id, session_ids, evidence_mapping_sha256,
         path = home / "runner-reservations" / (sid + ".json")
         before = path.read_bytes()
         state = capacity_journal._read(path)
+        if state.get("session_id") != sid:
+            raise AdmissionBlocked("original journal session identity differs from its path")
         if state.get("state") != "sealed" or state.get("released") is not True or state.get("batch_id") != batch_id:
             raise AdmissionBlocked("original journal is not sealed and released")
         q = state.get("release_request") or {}

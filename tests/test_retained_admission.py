@@ -70,3 +70,14 @@ def test_file_inventory_preserves_failed_results_and_refuses_completion(tmp_path
     p.write_text('{"agent_execution":{"finished_at":"now"},"exception_info":null}')
     with pytest.raises(r.AdmissionBlocked,match='completed'):
         r._files(tmp_path)
+
+
+def test_misnamed_journal_is_not_a_session_receipt(tmp_path,monkeypatch):
+    sid='c'*32
+    folder=tmp_path/'runner-reservations';folder.mkdir()
+    (folder/(sid+'.json')).write_text('{}')
+    monkeypatch.setattr(r,'_host',lambda:'a'*64)
+    monkeypatch.setattr(r.runtime_identity,'docker_identity',lambda:{'endpoint':'fixture','daemon_id':'fixture'})
+    monkeypatch.setattr(r.capacity_journal,'_read',lambda p:{'session_id':'d'*32})
+    with pytest.raises(r.AdmissionBlocked,match='session identity'):
+        r.inspect(tmp_path,A,OLD_BATCH,[sid],'f'*64)
