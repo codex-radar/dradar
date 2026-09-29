@@ -872,6 +872,7 @@ class ApiClient:
         refill_campaign_id: str | None = None,
         tier: str | None = None,
         retry_check=None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Returns {assignment: dict, resumed: False}. Raises ApiError (409) if
         the cell went stale or the volunteer is already at the concurrent cap."""
@@ -895,7 +896,8 @@ class ApiClient:
         if admission_ref is not None:
             data["historical_admission_ref"] = admission_ref
         from .acquisition_recovery import recover
-        result = recover(self, 'assignment_claim', data, check=retry_check)
+        result = recover(self, 'assignment_claim', data, check=retry_check,
+                         request_id=request_id)
         if getattr(self, "new_pick_batch", False):
             assignment = result.get("assignment", {})
             selected = assignment.get("batch_id")

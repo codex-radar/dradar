@@ -46,7 +46,7 @@ def test_fleet_help_teaches_public_commands_without_internal_serve(capsys):
 
     assert stopped.value.code == 0
     output = capsys.readouterr().out
-    assert "{add,status,watch,stop}" in output
+    assert "{add,claim,claim-recover,claim-stop,status,watch,stop}" in output
     assert "idempotently add one exact claimed batch" in output
     assert "serve" not in output
     assert "SUPPRESS" not in output

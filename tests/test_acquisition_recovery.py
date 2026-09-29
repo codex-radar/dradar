@@ -59,6 +59,64 @@ def test_unknown_identity_survives_a_new_api_client_and_a_changed_selection():
     assert methods == ['POST', 'GET'] and not saved[0].exists()
 
 
+def test_preallocated_fleet_claim_identity_cannot_be_changed_after_send():
+    original = 'a' * 32
+    replacement = 'b' * 32
+    methods = []
+    def lost(request):
+        methods.append(request.method)
+        if request.method == 'POST':
+            assert parse_qs(request.read().decode())['request_id'] == [original]
+        return receipt(request, 'unknown') if request.method == 'GET' else httpx.Response(503)
+    with pytest.raises(ApiError):
+        client(lost).claim_assignment('t1', 'm', 'e', request_id=original)
+    with pytest.raises(ApiError, match='saved allocation identity is unreadable'):
+        client(lost).claim_assignment('t1', 'm', 'e', request_id=replacement)
+    assert methods.count('POST') == 1
+
+
+def test_reconciled_fleet_claim_retires_only_original_allocation_journal():
+    first_id, second_id = 'a' * 32, 'b' * 32
+    writes = []
+    def handler(request):
+        if request.method == 'POST':
+            rid = parse_qs(request.read().decode())['request_id'][0]
+            writes.append(rid)
+            if rid == first_id:
+                raise httpx.ReadError('synthetic lost ACK')
+            return httpx.Response(200, json={'assignment': {'assignment_id': 'c' * 32}})
+        return receipt(request, 'unknown')
+    api = client(handler)
+    with pytest.raises(ApiError):
+        api.claim_assignment('t1', 'm', 'e', request_id=first_id)
+    saved = list((local_config.HOME / 'pending_acquisitions').glob('*.json'))
+    assert len(saved) == 1
+    with pytest.raises(ApiError, match='saved allocation identity is unreadable'):
+        acquisition_recovery.clear_reconciled_claim(api, {second_id:
+            {'task_id': 't1', 'model': 'm', 'effort': 'e'}})
+    assert saved[0].exists()
+    acquisition_recovery.clear_reconciled_claim(api, {first_id:
+        {'task_id': 't1', 'model': 'm', 'effort': 'e'}})
+    assert not saved[0].exists()
+    assert api.claim_assignment('t2', 'm', 'e', request_id=second_id)['assignment']['assignment_id'] == 'c' * 32
+    assert writes.count(first_id) == acquisition_recovery.MAX_ATTEMPTS
+    assert writes[-1] == second_id
+
+
+def test_first_server_rejection_proves_exact_request_was_not_claimed():
+    request_id = 'c' * 32
+    def reject(request):
+        assert request.method == 'POST'
+        return httpx.Response(409, json={'detail': 'cell exhausted', 'code': 'cell_exhausted'})
+    with pytest.raises(ApiError) as caught:
+        client(reject).claim_assignment('t1', 'm', 'e', request_id=request_id)
+    assert caught.value.allocation_no_claim == {
+        'operation': 'assignment_claim', 'request_id': request_id,
+        'status': 'definitive_rejection',
+    }
+    assert list((local_config.HOME/'pending_acquisitions').glob('*.json')) == []
+
+
 def test_repeated_clients_share_allocation_attempt_and_read_budgets():
     methods, identities = [], []
     def handler(request):

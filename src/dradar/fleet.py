@@ -63,7 +63,8 @@ SCHEMA_VERSION = 1
 # Version 9 preflights each new pool in its own validated runtime environment.
 # Version 10 pins the exact batch benchmark through preflight and every worker.
 # Version 11 binds conditional startup stops to the original pool instance.
-CONTROLLER_PROTOCOL_VERSION = 11
+# Version 12 grants finite personal claims without blocking controller heartbeats.
+CONTROLLER_PROTOCOL_VERSION = 12
 FLEET_DIR = "fleet"
 STATE_FILE = "state.json"
 START_LOCK_FILE = "start.lock"
@@ -195,6 +196,12 @@ def _atomic_json(path: Path, payload: dict) -> None:
                         or time.monotonic() >= deadline):
                     raise
                 time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        if os.name != "nt":
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -1043,6 +1050,18 @@ def _initial_state(controller_id: str, previous: dict | None) -> dict:
                 kept["detail"] = "previous Fleet coordinator stopped"
                 kept["updated_at"] = _now()
             batches[batch_id] = kept
+    claim_window = None
+    if isinstance(previous, dict) and isinstance(previous.get("claim_window"), dict):
+        # A dead foreground/controller does not forget an uncertain write.
+        claim_window = previous["claim_window"]
+        active = claim_window.get("operation")
+        if isinstance(active, dict):
+            for item in claim_window.get("operations", []):
+                if item.get("operation_id") == active.get("operation_id"):
+                    claim_window["operation"] = item
+                    item["status"] = "needs_reconciliation"
+                    item["owner_identity"] = None
+                    break
     return {
         "schema_version": SCHEMA_VERSION,
         "controller_protocol_version": CONTROLLER_PROTOCOL_VERSION,
@@ -1053,6 +1072,12 @@ def _initial_state(controller_id: str, previous: dict | None) -> dict:
         "started_at": _now(),
         "heartbeat_at": _now(),
         "batches": batches,
+        "claim_window": claim_window,
+        "claim_history": (
+            previous.get("claim_history", [])
+            if isinstance(previous, dict) and isinstance(previous.get("claim_history"), list)
+            else []
+        ),
     }
 
 
@@ -1283,6 +1308,10 @@ def _handle_request(
         })
         return
     command = request.get("command")
+    if isinstance(command, str) and command.startswith("claim_"):
+        from . import fleet_claim
+        fleet_claim.handle_request(home, state, processes, request)
+        return
     if command == "add":
         if (
             request.get("controller_protocol_version")
@@ -1494,6 +1523,7 @@ def _handle_request(
                         runtime_environment=runtime_environment,
                     )
                     try:
+                        from .runtime_identity import process_identity
                         item = {
                             "batch_id": batch_id,
                             "startup_id": uuid.uuid4().hex,
@@ -1501,6 +1531,7 @@ def _handle_request(
                             "status": "starting",
                             "startup_status": "pending",
                             "pid": process.pid,
+                            "process_identity": process_identity(process.pid),
                             "added_at": _now(),
                             "updated_at": _now(),
                             "log_path": str(
@@ -1817,7 +1848,13 @@ def _controller_loop(home: Path, state: dict) -> int:
                 last_heartbeat = now
             if stopping and not processes:
                 break
-            if not processes and now - last_activity >= IDLE_EXIT_SECONDS:
+            window = state.get("claim_window")
+            claim_active = bool(
+                isinstance(window, dict)
+                and isinstance(window.get("operation"), dict)
+                and window["operation"].get("status") == "active"
+            )
+            if not processes and not claim_active and now - last_activity >= IDLE_EXIT_SECONDS:
                 break
             time.sleep(0.1)
     finally:

@@ -260,7 +260,7 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
     assert '"GROK_HOME": remote_home' not in source
     assert 'f"models_output=$({shlex.quote(remote_cli)} models 2>&1); "' in source
     assert "EPIPE" in source
-    assert "grep -Fq" in source
+    assert "grep -Eq" in source
     assert "grok-4.6" in source
     assert "DRADAR_GROK_PREFLIGHT_FAILURE=%s" in source
     assert "preflight_kind=auth" in source
@@ -287,6 +287,7 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
         # The binaries' bundled fallback catalog lists 4.6 and 4.5 only, so a
         # slot that never fetched the live catalog must not pass for 4.7.
         ("grok-4.7", "* grok-4.6 (default)\n  grok-4.5\n", 0, "catalog"),
+        ("grok-4.7", "* grok-4.7-preview (default)\n", 0, "catalog"),
         ("grok-4.6", "Not authenticated; refresh=TOPSECRET\n", 1, "auth"),
         ("grok-4.6", "settings fetch failed for https://token.example\n", 1, "network"),
         ("grok-4.6", "opaque failure TOPSECRET\n", 1, "unknown"),
@@ -517,6 +518,43 @@ def test_grok_live_probe_uses_native_private_home(
     assert seen["cmd"] == ["/usr/bin/grok", "models"]
     assert "GROK_HOME" not in seen["env"]
     assert GROK_API_KEY_ENV not in seen["env"]
+
+
+@pytest.mark.parametrize(
+    "model,output,returncode,expected",
+    [
+        ("grok-4.7", "You are logged in.\n* grok-4.7 (default)\n", 0, None),
+        ("grok-4.6", "You are logged in.\n* grok-4.6 (default)\n", 0, None),
+        ("grok-4.7", "You are logged in.\n* grok-4.6 (default)\n", 0, "cannot access grok-4.7"),
+        ("grok-4.7", "You are logged in.\n* grok-4.7-preview\n", 0, "cannot access grok-4.7"),
+        ("grok-4.7", "Not authenticated.\n* grok-4.7\n", 0, "not authenticated"),
+        ("grok-4.7", "Settings fetch failed.\n* grok-4.7\n", 0, "network/proxy"),
+    ],
+)
+def test_grok_live_probe_checks_selected_model_and_preserves_failure_kind(
+    tmp_path, monkeypatch, model, output, returncode, expected,
+):
+    auth = _write_auth(tmp_path / "auth.json")
+    monkeypatch.setattr(providers.subprocess, "run", lambda cmd, **kwargs:
+        subprocess.CompletedProcess(cmd, returncode, output, ""))
+    issue = providers.grok_live_error("/inert/grok", auth, model=model)
+    assert (issue is None) if expected is None else expected in issue
+
+
+def test_runner_grok_preflight_uses_selected_assignment_model(monkeypatch):
+    selected = []
+    monkeypatch.setattr(runner, "grok_live_error", lambda _cli, *, model:
+                        selected.append(model) or None)
+    runner._preflight_subscription_before_build(
+        GROK_AGENT, grok_cli=Path("/inert/grok"), grok_model="grok-4.7")
+    assert selected == ["grok-4.7"]
+    with pytest.raises(RunnerError, match="selected model is missing"):
+        runner._preflight_subscription_before_build(
+            GROK_AGENT, grok_cli=Path("/inert/grok"))
+    with pytest.raises(RunnerError, match="selected model is missing"):
+        runner._preflight_subscription_before_build(
+            GROK_AGENT, grok_cli=Path("/inert/grok"), grok_model="grok-4.8")
+    assert selected == ["grok-4.7"]
 
 
 def test_grok_live_probe_native_rotation_persists_in_canonical_store(
