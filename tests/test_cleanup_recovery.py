@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,8 +11,12 @@ import pytest
 from dradar import (assignment_boundary, capacity_journal as journal,
                     cleanup_recovery, pending, session_recovery)
 from dradar.api_client import ApiError
-from dradar.ota.integration import pending_upload_count
+from dradar.flight_recorder import FlightRecorder
+from dradar.ota import PlatformTarget, RolloutContext, UpdateRuntime, UpdateState, recovery
+from dradar.ota.integration import pending_upload_count, runloop_safe_point
 from test_capacity_journal import AID, BID, SID, ReceiptServer
+from test_ota_runtime import Client, Response, TRUSTED_KEYS, compatibility
+from test_recover_upload import _signed_package
 
 
 OWNER = {"pid": 10001, "start_ticks": 123, "host_id": "host", "boot_id": "boot"}
@@ -45,10 +50,10 @@ class Server(ReceiptServer):
                 "status": self.assignment_status, "has_submission": False,
                 "start_evidence": "unknown_or_started", "exit_evidence": "unknown"}
 
-    def runner_reservations(self, *, limit=100, after=""):
-        assert limit == 100 and after == ""
+    def runner_reservations(self, *, limit=100, after="", batch_id=None):
+        assert limit == 200 and after == "" and batch_id == BID
         return {"schema_version": 1, "reservations": self.other_reservations,
-                "next_after": None}
+                "next_after": None, "batch_id": BID}
 
     def recover_unsubmitted_cleanup(self, payload):
         assert payload["assignment_id"] == AID and payload["batch_id"] == BID
@@ -152,6 +157,101 @@ def test_formal_flow_keeps_job_and_records_unknown_execution(case):
     assert server.disposition["request_id"] == state["outcomes"][AID]["request_id"]
 
 
+def test_original_cleanup_unconfirmed_is_preserved_as_provenance(case):
+    server, job, boundary, common = case
+    original = {"outcome": "cleanup-unconfirmed", "updated_at": "2026-09-29T09:30:28Z"}
+    assignment_boundary.record_outcome(boundary, {"assignment_id": AID,
+        "task_id": "task", "model": "gpt-6-sol", "effort": "ultra",
+        "batch_id": BID}, "cleanup-unconfirmed")
+    state, _ = assignment_boundary.inspect_snapshot(boundary)
+    original = state["outcomes"][AID]
+    pre = cleanup_recovery.inspect(**common)
+    assert pre["status"] == "ready"
+    result = cleanup_recovery.execute(**common,
+                                      inventory_sha256=pre["inventory_sha256"])
+    assert result["status"] == "terminated_unsubmitted"
+    state, digest = assignment_boundary.inspect_snapshot(boundary)
+    terminal = state["outcomes"][AID]
+    assert terminal["prior_outcome"] == original
+    assert terminal["source"] == "exact-cleanup-recovery-v1"
+    assert job.is_dir() and pending.load(common["home"]) == []
+    with pytest.raises(assignment_boundary.BoundaryError,
+                       match="another outcome"):
+        assignment_boundary.confirm_cleanup_recovery(
+            boundary, assignment_id=AID, expected_digest=digest,
+            request_id="f" * 32, session_id=SID, journal_sha256="a" * 64,
+            quarantine_sha256="b" * 64)
+
+
+def test_signed_entry_original_quarantine_to_staged_ota_activation(
+    case, monkeypatch, capsys,
+):
+    server, job, boundary, common = case
+    home = common["home"]
+    assignment_boundary.record_outcome(boundary, {"assignment_id": AID,
+        "task_id": "task", "model": "gpt-6-sol", "effort": "ultra",
+        "batch_id": BID}, "cleanup-unconfirmed")
+    prior_state, _ = assignment_boundary.inspect_snapshot(boundary)
+    prior_outcome = prior_state["outcomes"][AID]
+    _, manifest, package, document = _signed_package(home, monkeypatch, home=home)
+    monkeypatch.setattr(recovery, "HOME", home)
+    monkeypatch.setattr(cleanup_recovery, "HOME", home)
+    monkeypatch.setattr(sys, "argv", [str(package), "recover-cleanup"])
+    recorder = FlightRecorder(home)
+    runtime = UpdateRuntime(
+        home / "ota", recorder=recorder,
+        download_client=Client(Response([package.read_bytes()])),
+    )
+    decision = runtime.prepare(
+        document, trusted_keys=TRUSTED_KEYS, current_version="0.5.175",
+        committed_sequence=599, compatibility=compatibility(),
+        rollout=RolloutContext(subject=recorder.client_id),
+        target=PlatformTarget.current(),
+    )
+    assert decision.eligible is True
+    assert not runloop_safe_point(home=home).ready
+    before = (home / "pending_uploads.json").read_bytes()
+    args = ["--manifest", str(manifest), "--assignment-id", AID,
+            "--benchmark", "deep-swe", "--batch-id", BID,
+            "--runner-session-id", SID]
+    assert recovery.main_cleanup(args) == 0
+    pre = json.loads(capsys.readouterr().out)
+    assert pre["status"] == "ready" and pre["mutated"] is False
+    assert (home / "pending_uploads.json").read_bytes() == before
+    assert not runloop_safe_point(home=home).ready
+    assert recovery.main_cleanup(args + ["--execute", "--inventory-sha256",
+                                         pre["inventory_sha256"]]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "terminated_unsubmitted"
+    assert job.is_dir() and pending.load(home) == []
+    state, _ = assignment_boundary.inspect_snapshot(boundary)
+    assert state["outcomes"][AID]["prior_outcome"] == prior_outcome
+    assert recovery.main_cleanup(args) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "blocked"
+    snapshot = runloop_safe_point(home=home)
+    assert snapshot.ready
+    assert runtime.activate_and_self_test(
+        snapshot, lambda artifact: artifact.read_bytes() == package.read_bytes(),
+    ) is UpdateState.COMMITTED
+    assert runtime.controller.launch_pointer()["sequence"] == 600
+    assert recovery.main_cleanup(args) == 2
+    assert "anti_rollback_sequence" in capsys.readouterr().err
+    assert pending.load(home) == [] and job.is_dir()
+
+
+@pytest.mark.parametrize("outcome", ["submitted", "interrupted", "not_started_terminal", "failed"])
+def test_other_saved_outcomes_never_convert_to_cleanup(case, outcome):
+    server, _job, boundary, common = case
+    assignment_boundary.record_outcome(boundary, {"assignment_id": AID,
+        "task_id": "task", "model": "gpt-6-sol", "effort": "ultra",
+        "batch_id": BID}, outcome)
+    with pytest.raises(cleanup_recovery.CleanupRecoveryBlocked,
+                       match="another saved outcome"):
+        cleanup_recovery.inspect(**common)
+    assert server.disposition is None
+    assert pending.load(common["home"])[0]["record_kind"] == "cleanup_quarantine"
+
+
 def test_expired_server_assignment_is_not_restarted(case):
     server, job, boundary, common = case
     server.assignment_status = "expired"
@@ -165,6 +265,9 @@ def test_expired_server_assignment_is_not_restarted(case):
 
 def test_lost_server_ack_replays_original_request_without_losing_fence(case):
     server, job, boundary, common = case
+    assignment_boundary.record_outcome(boundary, {"assignment_id": AID,
+        "task_id": "task", "model": "gpt-6-sol", "effort": "ultra",
+        "batch_id": BID}, "cleanup-unconfirmed")
     pre = cleanup_recovery.inspect(**common)
     server.lose_disposition_ack = True
     with pytest.raises(ApiError):
@@ -175,6 +278,31 @@ def test_lost_server_ack_replays_original_request_without_losing_fence(case):
     assert job.is_dir() and boundary.is_file()
     assert cleanup_recovery.execute(**common,
                                     inventory_sha256=pre["inventory_sha256"])["status"] == "terminated_unsubmitted"
+    state, _ = assignment_boundary.inspect_snapshot(boundary)
+    assert state["outcomes"][AID]["prior_outcome"]["outcome"] == "cleanup-unconfirmed"
+
+
+def test_crash_after_boundary_save_replays_same_request(case, monkeypatch):
+    server, _job, boundary, common = case
+    assignment_boundary.record_outcome(boundary, {"assignment_id": AID,
+        "task_id": "task", "model": "gpt-6-sol", "effort": "ultra",
+        "batch_id": BID}, "cleanup-unconfirmed")
+    pre = cleanup_recovery.inspect(**common)
+    original_remove = pending.remove_exact
+    monkeypatch.setattr(pending, "remove_exact",
+                        lambda *_args: (_ for _ in ()).throw(OSError("simulated crash")))
+    with pytest.raises(OSError, match="simulated crash"):
+        cleanup_recovery.execute(**common,
+                                 inventory_sha256=pre["inventory_sha256"])
+    saved = pending.load(common["home"])[0]["cleanup_recovery"]["request_id"]
+    state, _ = assignment_boundary.inspect_snapshot(boundary)
+    assert state["outcomes"][AID]["request_id"] == saved
+    monkeypatch.setattr(pending, "remove_exact", original_remove)
+    retry = cleanup_recovery.inspect(**common)
+    assert retry["status"] == "ready"
+    assert cleanup_recovery.execute(**common,
+                                    inventory_sha256=retry["inventory_sha256"])["status"] == "terminated_unsubmitted"
+    assert pending.load(common["home"]) == []
 
 
 def test_boundary_change_after_server_receipt_keeps_pending_fence(case, monkeypatch):
@@ -247,4 +375,32 @@ def test_other_unreleased_pool_session_keeps_ota_blocked(case):
                        match="another original session"):
         cleanup_recovery.inspect(**common)
     assert pending_upload_count(common["home"]) == 1
+    assert server.disposition is None
+
+
+def test_server_must_echo_exact_batch_scope(case, monkeypatch):
+    server, _job, _boundary, common = case
+    original = server.runner_reservations
+    def old_server(**kwargs):
+        page = original(**kwargs)
+        page.pop("batch_id")
+        return page
+    monkeypatch.setattr(server, "runner_reservations", old_server)
+    with pytest.raises(cleanup_recovery.CleanupRecoveryBlocked,
+                       match="inventory is incomplete"):
+        cleanup_recovery.inspect(**common)
+    assert server.disposition is None
+
+
+def test_batch_inventory_rejects_foreign_row(case, monkeypatch):
+    server, _job, _boundary, common = case
+    original = server.runner_reservations
+    def escaped_scope(**kwargs):
+        page = original(**kwargs)
+        page["reservations"] = [{"batch_id": "e" * 32}]
+        return page
+    monkeypatch.setattr(server, "runner_reservations", escaped_scope)
+    with pytest.raises(cleanup_recovery.CleanupRecoveryBlocked,
+                       match="escaped batch scope"):
+        cleanup_recovery.inspect(**common)
     assert server.disposition is None

@@ -1100,15 +1100,21 @@ class ApiClient:
 
     def runner_reservations(
         self, *, limit: int = 100, after: str = "", quarantine_after: str = "",
+        batch_id: str | None = None,
     ) -> dict[str, Any]:
         """Read unknown reservations and migration scopes, each with its cursor."""
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("limit must be an integer between 1 and 200")
         _wire_string(after, "after", 0, 64)
         _wire_string(quarantine_after, "quarantine_after", 0, 64)
+        if batch_id is not None and normalize_batch_id(batch_id) != batch_id:
+            raise ValueError("batch_id must be a normalized claim-batch UUID")
+        params = {"limit": limit, "after": after, "quarantine_after": quarantine_after}
+        if batch_id is not None:
+            params["batch_id"] = batch_id
         return self._check(self._request(
             "GET", "/api/v1/runner/reservations",
-            params={"limit": limit, "after": after, "quarantine_after": quarantine_after},
+            params=params,
             timeout=3.0, retry_rate_limit=False, retry_transport=False,
         ))
 
