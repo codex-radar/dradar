@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dradar import assignment_boundary, boundary_recovery, runloop
+from dradar import assignment_boundary, boundary_recovery, cli, runloop
 
 
 A, B, C = (letter * 32 for letter in "abc")
@@ -59,6 +59,14 @@ class Client:
 
     def run_plan_capabilities(self):
         return {"capabilities": ["explicit-pick-batch-v1"]}
+
+    def table(self):
+        return {"benchmark_id": "deep-swe",
+                "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+                "cells": {
+                    f"task-{i}|gpt-6-sol|high": {}
+                    for i in range(20)
+                }}
 
     def assignment_recovery_status(self, aid):
         self.reads += 1
@@ -263,6 +271,119 @@ def test_historical_proof_cannot_start_continuous_refill(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="continuous refill"):
         runloop._prepare_batch(args, client)
     assert path.read_bytes() == before
+
+
+def test_cross_harness_historical_picks_stop_before_any_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:hy4-preview:high"]
+    client.table = lambda: {
+        "benchmark_id": "deep-swe",
+        "combos": [
+            {"model": "gpt-6-sol", "effort": "high"},
+            {"model": "hy4-preview", "effort": "high", "agent": "codebuddy"},
+        ],
+        "cells": {
+            "task-0|gpt-6-sol|high": {},
+            "task-1|hy4-preview|high": {"agent": "codebuddy"},
+        },
+    }
+    claims = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: claims.append(1))
+    with pytest.raises(SystemExit, match="different harnesses.*No new assignment was claimed") as stopped:
+        runloop._prepare_batch(args, client)
+    assert "dradar go --pick task-0:gpt-6-sol:high" in str(stopped.value)
+    assert claims == [] and path.read_bytes() == before
+
+
+def test_go_command_rejects_cross_harness_before_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    client.table = lambda: {
+        "benchmark_id": "deep-swe",
+        "combos": [
+            {"model": "gpt-6-sol", "effort": "high"},
+            {"model": "hy4-preview", "effort": "high", "agent": "codebuddy"},
+        ],
+        "cells": {
+            "task-0|gpt-6-sol|high": {},
+            "task-1|hy4-preview|high": {"agent": "codebuddy"},
+        },
+    }
+    client.require_runner_reservation_protocol = lambda: None
+    class QuietTelemetry:
+        def __init__(self, *_a, **_kw):
+            pass
+        def bind_batch(self, *_a):
+            pass
+        def start(self):
+            pass
+        def set_phase(self, *_a):
+            pass
+        def close(self, *_a):
+            pass
+    monkeypatch.setattr(runloop, "RunnerTelemetry", QuietTelemetry)
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {"benchmark": "deep-swe"})
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
+    monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
+    monkeypatch.setattr(runloop, "sweep_orphan_compose", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_maintain_image_cache", lambda *_a, **_kw: True)
+    monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
+    monkeypatch.setattr(runloop, "ensure_pier", lambda: None)
+    monkeypatch.setattr(runloop, "_ensure_egress_runtime", lambda **_kw: None)
+    monkeypatch.setattr(runloop, "_mark_pending_scope_required", lambda _client: None)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda _client: None)
+    monkeypatch.setattr(runloop, "_prepare_assignment_boundary", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: pytest.fail(
+        "dradar go reached a claim"))
+    with pytest.raises(SystemExit, match="different harnesses.*No new assignment was claimed"):
+        cli.main(["go", "--yes", "--pick", "task-0:gpt-6-sol:high",
+                  "--pick", "task-1:hy4-preview:high"])
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("table", (
+    {},
+    {"benchmark_id": "deep-swe", "combos": [], "cells": {}},
+    {"benchmark_id": "deep-swe", "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+     "cells": {"task-0|gpt-6-sol|high": {}}},
+    {"benchmark_id": "deep-swe", "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+     "cells": {"task-0|gpt-6-sol|high": {},
+               "task-1|gpt-6-sol|high": {"agent": "codebuddy"}}},
+))
+def test_unknown_historical_pick_harness_fails_before_claim(
+    tmp_path, monkeypatch, table,
+):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:gpt-6-sol:high"]
+    client.table = lambda: table
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: pytest.fail(
+        "unknown grouping reached the claim path"))
+    with pytest.raises(SystemExit, match="cannot identify.*No new assignment was claimed"):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+def test_multi_harness_without_historical_exception_keeps_claim_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = Client()
+    client.table = lambda: pytest.fail("ordinary multi-harness picks queried the table")
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:hy4-preview:high"]
+    claimed = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda _client, task, *_a, **_kw: (
+        claimed.append(task) or _assignment(A if len(claimed) == 1 else B,
+                                            OLD_BATCH if len(claimed) == 1 else NEW_BATCH)
+    ))
+    active, _ = runloop._prepare_batch(args, client)
+    assert claimed == ["task-0", "task-1"]
+    assert {item["batch_id"] for item in active} == {OLD_BATCH, NEW_BATCH}
 
 
 def _finite_cells(n=20):
