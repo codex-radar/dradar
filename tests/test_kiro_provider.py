@@ -197,7 +197,8 @@ def test_pending_native_return_preserves_private_snapshot(tmp_path, monkeypatch)
 
 @pytest.mark.parametrize("version, ready", [
     ("2.26.0", True), ("2.24.1", False), ("2.26.1", False),
-    ("2.26.0-preview", False),
+    ("2.26.0-preview", False), ("2.24.1 2.26.0", False),
+    ("12.26.0", False),
 ])
 def test_kiro_host_version_is_exact_before_auth(monkeypatch, version, ready):
     monkeypatch.setattr(kiro_provider, "kiro_cli_path", lambda: Path("/fake/kiro-cli"))

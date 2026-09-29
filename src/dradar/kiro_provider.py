@@ -100,7 +100,7 @@ def kiro_status() -> tuple[bool, str]:
                                  text=True, timeout=8, check=True).stdout
     except (OSError, subprocess.SubprocessError):
         return False, "Kiro CLI version is unavailable"
-    if KIRO_CLI_VERSION not in version.split():
+    if version.strip() != f"kiro-cli {KIRO_CLI_VERSION}":
         return False, f"Kiro CLI {KIRO_CLI_VERSION} is required"
     try:
         social_token()

@@ -55,6 +55,11 @@ ARCHIVE_SHA256 = {
 }
 
 
+def _version_check(cli: str) -> str:
+    expected = shlex.quote("kiro-cli " + VERSION)
+    return f'actual=$({shlex.quote(cli)} --version) && [ "$actual" = {expected} ]'
+
+
 def _install_command() -> str:
     return (
         "set -euo pipefail; "
@@ -81,7 +86,7 @@ def _install_command() -> str:
         'install -d -m 0755 /opt/dradar-kiro/bin; '
         'cp -a "${tmp}/unpacked/kirocli/bin/." /opt/dradar-kiro/bin/; '
         'chmod 0755 /opt/dradar-kiro/bin/*; '
-        f'/opt/dradar-kiro/bin/kiro-cli --version | grep -Fq {shlex.quote(VERSION)}'
+        + _version_check("/opt/dradar-kiro/bin/kiro-cli")
     )
 
 
@@ -292,7 +297,7 @@ class KiroOpus55(BaseInstalledAgent):
         return AgentInstallSpec(
             agent_name=self.name(), version=VERSION,
             steps=[InstallStep(user="root", run=_install_command())],
-            verification_command=f"{self._CLI} --version | grep -Fq {shlex.quote(VERSION)}",
+            verification_command=_version_check(self._CLI),
             cache_key=f"dradar-kiro-{VERSION}-official-zip-v1",
         )
 
