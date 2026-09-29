@@ -1197,6 +1197,86 @@ def _parse_pick(spec: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def _check_historical_pick_harness(client: ApiClient, specs: list[str]) -> None:
+    """Use the Server's public cell catalog to reject known mixed harnesses.
+
+    This is only a pre-claim planning check for the one-batch historical
+    exception. The Server still decides each claim's batch and the existing
+    per-claim proof and returned-batch checks remain authoritative.
+    """
+    cells = dict.fromkeys(_parse_pick(spec) for spec in specs)
+    if len(cells) < 2:
+        return
+    try:
+        table = client.table()
+    except ApiError as exc:
+        raise SystemExit(
+            "historical admission cannot identify the selected harnesses: "
+            f"Server table unavailable ({exc}). No new assignment was claimed; "
+            "retry when the table is available or select one --pick cell."
+        ) from exc
+    if not isinstance(table, dict) or not isinstance(table.get("cells"), dict) \
+            or not isinstance(table.get("combos"), list) \
+            or table.get("benchmark_id") != client.benchmark_id:
+        raise SystemExit(
+            "historical admission cannot identify the selected harnesses: "
+            "Server table lacks cells, combos, or the selected benchmark. "
+            "No new assignment was claimed; "
+            "select one --pick cell or retry with a complete table."
+        )
+    combos = {}
+    for combo in table["combos"]:
+        if not isinstance(combo, dict):
+            continue
+        key = (combo.get("model"), combo.get("effort"))
+        if all(isinstance(value, str) and value for value in key):
+            combos.setdefault(key, []).append(combo)
+    harnesses = set()
+    for task_id, model, effort in cells:
+        key = f"{task_id}|{model}|{effort}"
+        cell = table["cells"].get(key)
+        matching = combos.get((model, effort), [])
+        if not isinstance(cell, dict) or len(matching) != 1:
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "exact cell or unique combo is missing from the Server table. "
+                "No new assignment was claimed; select one --pick cell or "
+                "retry with a complete table."
+            )
+        combo = matching[0]
+        if any(
+            cell.get(field) != combo.get(field)
+            for field in ("agent", "provider")
+        ):
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "cell and combo metadata disagree. No new assignment was "
+                "claimed; select one --pick cell or retry after the table updates."
+            )
+        raw_agent = cell.get("agent")
+        provider = cell.get("provider")
+        agent = "codex" if raw_agent is None else raw_agent
+        if not isinstance(agent, str) or agent not in {
+            "codex", CLAUDE_AGENT, DSH_AGENT, KIMI_AGENT, GROK_AGENT,
+            ZCODE_AGENT, ANTIGRAVITY_AGENT, CODEBUDDY_AGENT,
+        } or (raw_agent is None and provider not in (None, "openai", DEEPSEEK_PROVIDER)):
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "unknown agent in the Server table. No new assignment was "
+                "claimed; select one --pick cell."
+            )
+        harnesses.add(agent)
+    if len(harnesses) > 1:
+        first = specs[0]
+        raise SystemExit(
+            "historical admission allows only one exact new batch, but these "
+            "--pick cells use different harnesses. No new assignment was "
+            "claimed. Select one harness for this run, for example "
+            f"`dradar go --pick {first}`; inspect `dradar leases` and finish "
+            "or resume its exact batch before another selection."
+        )
+
+
 class _ConcurrentCapHit(Exception):
     """Raised by _claim_cell when a 409 means the volunteer's own concurrent-
     hold cap, not a stale/taken cell -- every further claim in the same batch
@@ -8491,6 +8571,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                 "historical admission found multiple or unknown held batches. "
                 "No additional assignment was claimed."
             )
+
+        if free_pick and wants_pick and allow_new_claims:
+            _check_historical_pick_harness(client, wants_pick)
 
         def before_historical_claim():
             boundary_recovery.historical_unknown_allows_claim(
