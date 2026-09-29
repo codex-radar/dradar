@@ -296,6 +296,7 @@ class ApiClient:
                     "/api/v1/run-plans/stop": "run_plan_stop",
                     "/api/v1/runner/heartbeat": "runner_heartbeat",
                     "/api/v1/runner/flight-events": "flight_events",
+                    "/api/v1/assignments/cleanup-recovery": "cleanup_recovery",
                     "/api/v1/submissions": "submission_upload",
                     "/api/v1/submission-upload-intents": "upload_intent",
                 }
@@ -872,6 +873,7 @@ class ApiClient:
         refill_campaign_id: str | None = None,
         tier: str | None = None,
         retry_check=None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Returns {assignment: dict, resumed: False}. Raises ApiError (409) if
         the cell went stale or the volunteer is already at the concurrent cap."""
@@ -883,6 +885,10 @@ class ApiClient:
             data["benchmark_id"] = self.benchmark_id
         if self.batch_id:
             data["batch_id"] = self.batch_id
+        if getattr(self, "new_pick_batch", False):
+            data["new_batch"] = "true"
+            data["selection_id"] = self.pick_selection_id
+            data.pop("batch_id", None)
         if refill_campaign_id:
             data["refill_campaign_id"] = refill_campaign_id
         if tier is not None:
@@ -891,7 +897,15 @@ class ApiClient:
         if admission_ref is not None:
             data["historical_admission_ref"] = admission_ref
         from .acquisition_recovery import recover
-        result = recover(self, 'assignment_claim', data, check=retry_check)
+        result = recover(self, 'assignment_claim', data, check=retry_check,
+                         request_id=request_id)
+        if getattr(self, "new_pick_batch", False):
+            assignment = result.get("assignment", {})
+            selected = assignment.get("batch_id")
+            if (not selected or result.get("selection_batch_created") is not True
+                    or result.get("selection_id") != self.pick_selection_id):
+                raise ApiError("Server did not confirm the new batch; inspect held leases before retrying.",
+                               code="batch_scope_unconfirmed")
         if profile is not None:
             assignment=result.get('assignment') if isinstance(result,dict) else None
             if (not isinstance(assignment,dict) or assignment.get('auth_runtime')!=profile
@@ -1050,11 +1064,12 @@ class ApiClient:
         from .telemetry_recovery import replay
         return asyncio.run(replay(self, "/api/v1/runner/heartbeat", payload))
 
-    def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def runner_close(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/close", payload))
+        return asyncio.run(recover(self, "/api/v1/runner/close", payload,
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_session_receipt(
         self, session_id: str, *, batch_id: str,
@@ -1068,23 +1083,53 @@ class ApiClient:
             retry_rate_limit=False, retry_transport=False,
         ))
 
-    def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def recover_unsubmitted_cleanup(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Retire one exited, unsubmitted assignment with a durable request ID."""
+        return self._check(self._request(
+            "POST", "/api/v1/assignments/cleanup-recovery", json=payload,
+            timeout=10.0, retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def register_completed_cleanup_result_intent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Register the exited original owner's exact completed upload only."""
+        return self._check(self._request(
+            "POST", "/api/v1/submission-cleanup-result-recovery/intent",
+            json=payload, timeout=10.0, retry_rate_limit=False,
+            retry_transport=False,
+        ))
+
+    def register_completed_cleanup_result_salvage(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Bind one released original to a current idle upload-only owner."""
+        return self._post(
+            "/api/v1/submission-upload-salvage/rebind", data=payload,
+            timeout=10.0, retry_rate_limit=False, retry_transport=False,
+        )
+
+    def release_runner_capacity(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/release-capacity", _cleanup_payload(payload)))
+        return asyncio.run(recover(self, "/api/v1/runner/release-capacity",
+                                   _cleanup_payload(payload),
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_reservations(
         self, *, limit: int = 100, after: str = "", quarantine_after: str = "",
+        batch_id: str | None = None,
     ) -> dict[str, Any]:
         """Read unknown reservations and migration scopes, each with its cursor."""
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("limit must be an integer between 1 and 200")
         _wire_string(after, "after", 0, 64)
         _wire_string(quarantine_after, "quarantine_after", 0, 64)
+        if batch_id is not None and normalize_batch_id(batch_id) != batch_id:
+            raise ValueError("batch_id must be a normalized claim-batch UUID")
+        params = {"limit": limit, "after": after, "quarantine_after": quarantine_after}
+        if batch_id is not None:
+            params["batch_id"] = batch_id
         return self._check(self._request(
             "GET", "/api/v1/runner/reservations",
-            params={"limit": limit, "after": after, "quarantine_after": quarantine_after},
+            params=params,
             timeout=3.0, retry_rate_limit=False, retry_transport=False,
         ))
 

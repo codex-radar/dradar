@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,7 +83,11 @@ def _usage_function():
         ],
         type_ignores=[],
     )
-    namespace = {"SUPPORTED_MODEL": CODEBUDDY_MODEL}
+    namespace = {
+        "SUPPORTED_MODEL": CODEBUDDY_MODEL,
+        "hashlib": hashlib,
+        "os": os,
+    }
     exec(compile(module, str(source), "exec"), namespace)  # noqa: S102
     return namespace["_codebuddy_usage_facts"]
 
@@ -514,46 +519,348 @@ def test_usage_accepts_real_stream_fragments_and_ignores_num_turns() -> None:
     assert facts["n_input_tokens"] == 8152
     assert facts["n_cache_tokens"] == 768
     assert facts["n_output_tokens"] == 70
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["terminal_usage"] == request
+    assert diagnostic["retained_event_sum"] == request
+    assert set(diagnostic["terminal_minus_retained_event_sum"].values()) == {0}
 
 
-def test_usage_fails_closed_on_conflicting_positive_duplicate() -> None:
-    request = {
+def test_usage_quarantines_conflicting_duplicate_and_preserves_other_requests(
+) -> None:
+    conflicted = {
         "input_tokens": 10, "cache_read_input_tokens": 2,
         "cache_creation_input_tokens": 3, "output_tokens": 1,
+    }
+    trusted = {
+        "input_tokens": 40, "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 7, "output_tokens": 4,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": conflicted,
+        }},
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL,
+            "usage": {**conflicted, "output_tokens": 2},
+        }},
+        {"type": "assistant", "message": {
+            "id": "m2", "model": CODEBUDDY_MODEL, "usage": trusted,
+        }},
+        {"type": "result", "subtype": "success", "usage": {
+            name: conflicted[name] + trusted[name]
+            for name in conflicted
+        }},
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_complete"] is False
+    assert facts["request_usage_observed"] is True
+    assert facts["usage_evidence_tier"] == "observed_unreconciled"
+    assert facts["usage_incomplete_reason"] == "request_id_conflict"
+    assert "terminal_aggregate_mismatch" in facts["usage_incomplete_reasons"]
+    assert facts["request_count"] == 1
+    assert facts["n_input_tokens"] == 40
+    assert facts["n_cache_tokens"] == 5
+    assert facts["n_output_tokens"] == 4
+    assert facts["token_usage_events"] == [{
+        "n_input_tokens": 40,
+        "n_cache_tokens": 5,
+        "n_output_tokens": 4,
+        "cache_creation_tokens": 7,
+    }]
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["message_id_conflict_count"] == 1
+    assert {item["status"] for item in diagnostic["message_id_digests"]} == {
+        "retained", "conflicted",
+    }
+    assert [item["retained_event_index"] for item in diagnostic["message_id_digests"]] == [0, None]
+
+
+@pytest.mark.parametrize("model", ["not-hy4", None, ""])
+def test_usage_rejects_wrong_or_missing_model_without_erasing_the_reason(
+    model: str | None,
+) -> None:
+    usage = {
+        "input_tokens": 1, "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0, "output_tokens": 1,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": model, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "num_turns": 1,
+         "usage": usage},
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is False
+    assert facts["usage_evidence_tier"] == "unavailable"
+    assert facts["usage_incomplete_reason"] == "request_model_mismatch"
+    assert facts["n_input_tokens"] == 0
+    assert facts["token_usage_events"] == []
+
+
+@pytest.mark.parametrize("cache_read,cache_creation", [(21, 0), (10, 11)])
+def test_usage_rejects_cache_subsets_larger_than_input(
+    cache_read: int, cache_creation: int,
+) -> None:
+    usage = {
+        "input_tokens": 20,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+        "output_tokens": 4,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "usage": usage},
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is False
+    assert facts["usage_evidence_tier"] == "unavailable"
+    assert "request_usage_invalid" in facts["usage_incomplete_reasons"]
+    assert facts["n_input_tokens"] == 0
+    assert facts["token_usage_events"] == []
+
+
+@pytest.mark.parametrize(
+    ("terminals", "reason"),
+    [
+        ([], "terminal_aggregate_missing"),
+        ([
+            {"type": "result", "subtype": "success"},
+            {"type": "result", "subtype": "success"},
+        ], "terminal_aggregate_multiple"),
+    ],
+)
+def test_usage_preserves_observed_requests_when_terminal_is_not_singular(
+    terminals: list[dict], reason: str,
+) -> None:
+    usage = {
+        "input_tokens": 100, "cache_read_input_tokens": 20,
+        "cache_creation_input_tokens": 10, "output_tokens": 8,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        *[{**terminal, "usage": usage} for terminal in terminals],
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is True
+    assert facts["usage_evidence_tier"] == "observed_unreconciled"
+    assert facts["usage_incomplete_reason"] == reason
+    assert facts["request_count"] == 1
+    assert facts["n_input_tokens"] == 100
+    assert facts["n_cache_tokens"] == 20
+    assert facts["n_output_tokens"] == 8
+    assert len(facts["token_usage_events"]) == 1
+
+
+def test_usage_preserves_observed_requests_on_terminal_aggregate_mismatch(
+) -> None:
+    request = {
+        "input_tokens": 80, "cache_read_input_tokens": 10,
+        "cache_creation_input_tokens": 5, "output_tokens": 6,
     }
     facts = _usage_function()([
         {"type": "assistant", "message": {
             "id": "m1", "model": CODEBUDDY_MODEL, "usage": request,
         }},
-        {"type": "assistant", "message": {
-            "id": "m1", "model": CODEBUDDY_MODEL,
-            "usage": {**request, "output_tokens": 2},
+        {"type": "result", "subtype": "success", "usage": {
+            **request, "output_tokens": 9,
         }},
-        {"type": "result", "subtype": "success", "usage": request},
     ])
     assert facts["complete"] is False
-    assert facts["n_input_tokens"] == 0
-
-
-def test_usage_fails_closed_on_mismatch_or_wrong_model() -> None:
-    usage = {
-        "input_tokens": 1, "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0, "output_tokens": 1,
+    assert facts["request_usage_observed"] is True
+    assert facts["usage_incomplete_reason"] == "terminal_aggregate_mismatch"
+    assert facts["request_count"] == 1
+    assert facts["n_input_tokens"] == 80
+    assert facts["n_output_tokens"] == 6
+    assert len(facts["token_usage_events"]) == 1
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["schema"] == "dradar-codebuddy-local-reconciliation-v1"
+    assert diagnostic["counter_semantics"] == "input_includes_cache_read_and_creation"
+    assert diagnostic["event_counter_mode"] == "unknown"
+    assert diagnostic["terminal_usage"] == {
+        **request, "output_tokens": 9,
     }
-    for model, terminal_usage in [
-        ("not-hy4", usage),
-        (CODEBUDDY_MODEL, {**usage, "output_tokens": 2}),
-    ]:
-        facts = _usage_function()([
-            {"type": "assistant", "message": {
-                "id": "m1", "model": model, "usage": usage,
-            }},
-            {"type": "result", "subtype": "success", "num_turns": 1,
-             "usage": terminal_usage},
-        ])
-        assert facts["complete"] is False
-        assert facts["n_input_tokens"] == 0
-        assert facts["token_usage_events"] == []
+    assert diagnostic["retained_event_sum"] == request
+    assert diagnostic["terminal_minus_retained_event_sum"] == {
+        "input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 3,
+    }
+    assert diagnostic["provider_request_id_status"] == "unknown"
+    assert diagnostic["identity_source"] == "assistant.message.id"
+    assert len(diagnostic["message_id_digests"]) == 1
+    assert "m1" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("tail", "expected_reason"),
+    [
+        ([], "terminal_aggregate_missing"),
+        ([{"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 150, "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5, "output_tokens": 13,
+        }}], "terminal_aggregate_mismatch"),
+        ([{"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": {
+                "input_tokens": 125, "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 5, "output_tokens": 10,
+            },
+        }}, {"type": "assistant", "message": {
+            "id": "m2", "model": CODEBUDDY_MODEL, "usage": {
+                "input_tokens": 40, "cache_read_input_tokens": 8,
+                "cache_creation_input_tokens": 2, "output_tokens": 3,
+            },
+        }}, {"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 250, "cache_read_input_tokens": 40,
+            "cache_creation_input_tokens": 10, "output_tokens": 18,
+        }}], "request_id_conflict"),
+        ([{"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 100, "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5, "output_tokens": 7,
+        }}], "terminal_aggregate_mismatch"),
+        ([{"type": "result", "subtype": "error", "is_error": True,
+           "usage": {
+               "input_tokens": 150, "cache_read_input_tokens": 20,
+               "cache_creation_input_tokens": 5, "output_tokens": 13,
+           }}], "terminal_error"),
+    ],
+)
+def test_compaction_status_keeps_ambiguous_ledger_observed_only(
+    tail: list[dict], expected_reason: str, tmp_path: Path,
+) -> None:
+    request = {
+        "input_tokens": 125, "cache_read_input_tokens": 20,
+        "cache_creation_input_tokens": 5, "output_tokens": 9,
+    }
+    facts = _usage_function()([
+        {"type": "system", "status": "compacting"},
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": request,
+        }},
+        *tail,
+    ])
+    assert facts["compaction_detected"] is True
+    assert facts["complete"] is False
+    assert facts["request_usage_complete"] is False
+    assert facts["usage_evidence_tier"] == "observed_unreconciled"
+    assert expected_reason in facts["usage_incomplete_reasons"]
+    assert facts["n_input_tokens"] == (40 if expected_reason == "request_id_conflict" else 125)
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "provider-usage.json").write_text(
+        json.dumps(facts), encoding="utf-8",
+    )
+    normalized = _subscription_trial_usage(
+        tmp_path, {"codebuddy_cli_version": CODEBUDDY_CLI_VERSION},
+    )
+    assert normalized is not None
+    assert normalized["complete"] is False
+    assert normalized["compaction_detected"] is True
+
+
+def test_local_reconciliation_records_message_dedup_without_claiming_request_ids(
+) -> None:
+    first = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    later = {
+        "input_tokens": 30, "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 7, "output_tokens": 3,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "message-one", "model": CODEBUDDY_MODEL, "usage": first,
+        }},
+        {"type": "assistant", "message": {
+            "id": "message-one", "model": CODEBUDDY_MODEL, "usage": first,
+        }},
+        {"type": "assistant", "message": {
+            "id": "message-two", "model": CODEBUDDY_MODEL, "usage": later,
+        }},
+        {"type": "result", "subtype": "success", "usage": later},
+    ])
+    diagnostic = facts["local_reconciliation"]
+    assert facts["complete"] is False
+    assert facts["usage_incomplete_reason"] == "terminal_aggregate_mismatch"
+    assert diagnostic["message_id_duplicate_count"] == 1
+    assert diagnostic["message_id_conflict_count"] == 0
+    assert [item["duplicate_count"] for item in diagnostic["message_id_digests"]] == [1, 0]
+    assert diagnostic["message_id_digest_scope"] == "single_adapter_run"
+    assert diagnostic["retained_event_sum"]["input_tokens"] == 50
+    assert diagnostic["terminal_usage"]["input_tokens"] == 30
+    assert diagnostic["terminal_minus_retained_event_sum"]["input_tokens"] == -20
+    assert diagnostic["event_counter_mode"] == "unknown"
+    assert diagnostic["reconciliation_assumption"] == "per_message_incremental"
+    assert "message-one" not in json.dumps(diagnostic)
+
+
+def test_local_reconciliation_keeps_unknown_terminal_and_missing_id_unknown(
+) -> None:
+    usage = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    facts = _usage_function()([{"type": "assistant", "message": {
+        "model": CODEBUDDY_MODEL, "usage": usage,
+    }}])
+    diagnostic = facts["local_reconciliation"]
+    assert facts["complete"] is False
+    assert facts["request_count"] == 0
+    assert diagnostic["terminal_usage"] is None
+    assert diagnostic["terminal_minus_retained_event_sum"] is None
+    assert diagnostic["message_id_missing_count"] == 1
+    assert diagnostic["message_id_digests"] == []
+    assert diagnostic["provider_request_id_status"] == "unknown"
+
+
+def test_message_digest_handles_json_surrogate_and_is_stable_within_run(
+) -> None:
+    usage = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    events = [
+        {"type": "assistant", "message": {
+            "id": "\ud800", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "usage": usage},
+    ]
+    parse = _usage_function()
+    first = parse(events, identity_key=b"same-local-run")
+    second = parse(events, identity_key=b"same-local-run")
+    assert first["complete"] is True
+    assert (
+        first["local_reconciliation"]["message_id_digests"]
+        == second["local_reconciliation"]["message_id_digests"]
+    )
+    assert "\\ud800" not in json.dumps(first["local_reconciliation"])
+
+
+def test_usage_separates_terminal_model_and_total_mismatch_reasons() -> None:
+    usage = {
+        "input_tokens": 50, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 3, "output_tokens": 5,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "model": "not-hy4",
+         "total_tokens": 999, "usage": usage},
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is True
+    assert facts["usage_incomplete_reason"] == "terminal_model_mismatch"
+    assert facts["usage_incomplete_reasons"] == [
+        "terminal_model_mismatch", "terminal_total_tokens_mismatch",
+    ]
 
 
 def test_normalized_usage_preserves_codebuddy_attestation_fields(
@@ -596,6 +903,108 @@ def test_normalized_usage_preserves_codebuddy_attestation_fields(
     assert normalized["request_usage_observed"] is True
     assert normalized["provider_actual_cost_observed"] is False
     assert normalized["cost_semantics"] == "server-priced-api-equivalent"
+    assert "local_reconciliation" not in normalized
+
+
+def test_normalized_usage_preserves_unreconciled_codebuddy_observations(
+    tmp_path: Path,
+) -> None:
+    usage = {
+        "input_tokens": 125,
+        "cache_read_input_tokens": 20,
+        "cache_creation_input_tokens": 5,
+        "output_tokens": 30,
+    }
+    facts = _usage_function()([{
+        "type": "assistant",
+        "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": usage,
+        },
+    }])
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "provider-usage.json").write_text(
+        json.dumps(facts), encoding="utf-8",
+    )
+
+    normalized = _subscription_trial_usage(
+        tmp_path, {"codebuddy_cli_version": CODEBUDDY_CLI_VERSION},
+    )
+
+    assert normalized is not None
+    assert normalized["complete"] is False
+    assert normalized["request_usage_complete"] is False
+    assert normalized["request_usage_observed"] is True
+    assert normalized["usage_evidence_tier"] == "observed_unreconciled"
+    assert normalized["usage_incomplete_reason"] == "terminal_aggregate_missing"
+    assert normalized["usage_incomplete_reasons"] == [
+        "terminal_aggregate_missing",
+    ]
+    assert normalized["request_count"] == 1
+    assert normalized["n_input_tokens"] == 125
+    assert normalized["n_cache_tokens"] == 20
+    assert normalized["n_output_tokens"] == 30
+
+
+def test_normalized_usage_rejects_unbounded_codebuddy_reason_text(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "provider-usage.json").write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy",
+        "model": CODEBUDDY_MODEL,
+        "complete": False,
+        "request_count": 0,
+        "n_input_tokens": 0,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 0,
+        "request_usage_complete": False,
+        "request_usage_observed": False,
+        "usage_evidence_tier": "unavailable",
+        "usage_incomplete_reason": "request_ledger_unavailable",
+        "usage_incomplete_reasons": ["contains user supplied text"],
+        "timed_usage_complete": False,
+        "token_usage_events": [],
+    }), encoding="utf-8")
+
+    assert _subscription_trial_usage(
+        tmp_path, {"codebuddy_cli_version": CODEBUDDY_CLI_VERSION},
+    ) is None
+
+
+def test_normalized_usage_accepts_legacy_codebuddy_reason(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "provider-usage.json").write_text(json.dumps({
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "codebuddy",
+        "model": CODEBUDDY_MODEL,
+        "complete": False,
+        "request_count": 0,
+        "n_input_tokens": 0,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 0,
+        "request_usage_complete": False,
+        "request_usage_observed": False,
+        "usage_evidence_tier": "unavailable",
+        "usage_incomplete_reason": (
+            "terminal_aggregate_missing_or_inconsistent"
+        ),
+        "timed_usage_complete": False,
+        "token_usage_events": [],
+    }), encoding="utf-8")
+
+    normalized = _subscription_trial_usage(
+        tmp_path, {"codebuddy_cli_version": CODEBUDDY_CLI_VERSION},
+    )
+    assert normalized is not None
+    assert normalized["usage_incomplete_reasons"] == [
+        "terminal_aggregate_missing_or_inconsistent",
+    ]
 
 
 def test_pier_dockerfile_rewrite_uses_only_reviewed_local_image(

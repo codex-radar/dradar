@@ -963,6 +963,10 @@ def _fake_pier(monkeypatch, work_dir, *, patch=True, trajectory=True,
     """Stub build_pier_command + subprocess.run; the fake 'pier' lays down the
     trial-dir layout the real one would. Returns a dict capturing job_name."""
     captured = {}
+    # Docker identity is a separate adapter: the fake Pier Popen below must
+    # not construct a second trial when that read-only probe runs.
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
 
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home,
                    dev_agent=None, **provider_kwargs):
@@ -1564,6 +1568,8 @@ def test_antigravity_keeps_lease_running_when_runtime_audit_fails(
 
 
 def test_run_trial_stops_live_codex_quota_error_loop(tmp_path, monkeypatch):
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
     captured = {}
     terminated = []
     cleaned = []
@@ -1692,6 +1698,8 @@ def test_live_error_watchdog_keeps_explicit_websocket_auth_terminal(tmp_path):
 
 
 def test_run_trial_timeout_salvages_patch_as_interrupted(tmp_path, monkeypatch):
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
     monkeypatch.setattr(runner_mod, "_confirm_pier_process_tree_stopped", lambda _proc: None)
     """A paid run that reached artifacts must report cost, never vanish."""
     captured = {}
@@ -2403,6 +2411,8 @@ def test_registry_io_timeout_is_a_build_failure_with_bounded_diagnostic():
 
 
 def test_run_trial_missing_patch_message_includes_log_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
     captured = {}
     _fake_runtime_exit_observations(monkeypatch, captured)
     def fake_build(assignment, tasks_root, jobs_dir, job_name, home, dev_agent=None, provider_auth_path=None):
@@ -2902,6 +2912,8 @@ def test_checkout_cooldown_distinguishes_waiting_from_checked_out():
 
 def test_run_trial_overrides_stale_server_pin_before_start(
         tmp_path, monkeypatch):
+    monkeypatch.setattr("dradar.runtime_identity.docker_identity",
+                        lambda: {"endpoint": "fixture", "daemon_id": "fixture"})
     captured = {}
     _fake_runtime_exit_observations(monkeypatch, captured)
 

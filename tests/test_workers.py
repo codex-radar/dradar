@@ -175,6 +175,10 @@ def test_cli_claim_response_lost_does_not_retry_or_change_server_state(
             self.calls = []
             self.held = []
 
+        def run_plan_capabilities(self):
+            self.calls.append("run_plan_capabilities")
+            return {"capabilities": ["explicit-pick-batch-v1"]}
+
         def get_assignment(self):
             self.calls.append("get_assignment")
             return {"active": [], "free_pick": True}
@@ -225,7 +229,7 @@ def test_cli_claim_response_lost_does_not_retry_or_change_server_state(
     assert "server may have processed it" in str(excinfo.value)
     assert "dradar leases" in str(excinfo.value)
     assert client.held == [assignment]
-    assert client.calls == ["get_assignment", "claim_assignment"]
+    assert client.calls == ["run_plan_capabilities", "claim_assignment"]
     captured = capsys.readouterr()
     assert captured.err == ""
     public = str(excinfo.value) + captured.out

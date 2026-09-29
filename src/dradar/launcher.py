@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import signal
+from . import cancellation
 from .local_config import HOME
 from .ota.integration import (_run_windows_candidate, load_trusted_keys, ota_root,
                               activate_prepared_update, runloop_safe_point)
@@ -25,12 +27,46 @@ def _activate_if_idle(root):
         activate_prepared_update(runloop_safe_point(home=HOME), home=HOME)
 
 
+@cancellation.scoped
+def _run_posix_candidate(argv, *, pass_fds, env):
+    # subprocess.run kills its child on KeyboardInterrupt, bypassing the
+    # worker's container cleanup and durable session close. Keep the child
+    # handle alive while it performs its own bounded finalization instead.
+    cancellation.protect_finalization()
+    child = subprocess.Popen(argv, pass_fds=pass_fds, env=env)
+    try:
+        cancellation.begin_execution()
+        return child.wait()
+    except KeyboardInterrupt:
+        cancellation.protect_finalization(cancelled=True)
+        if child.poll() is None:
+            try:
+                child.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        try:
+            child.wait(timeout=cancellation.WORKER_STOP_SECONDS)
+        except subprocess.TimeoutExpired:
+            print("Worker cleanup is still unconfirmed; preserve its session and artifacts.",
+                  file=sys.stderr)
+        return 130
+
+
 def main() -> int:
     # A signed zipapp can perform one explicit upload recovery while an older
     # committed bundle is held behind a durable pending-upload safe point.
     # This path never activates the zipapp or changes the OTA pointers.
     if sys.argv[1:2] == ["recover-upload"]:
         from .ota.recovery import main as recovery_main
+        return recovery_main(sys.argv[2:])
+    if sys.argv[1:2] == ["recover-cleanup"]:
+        from .ota.recovery import main_cleanup as recovery_main
+        return recovery_main(sys.argv[2:])
+    if sys.argv[1:2] == ["recover-result"]:
+        from .ota.recovery import main_result as recovery_main
+        return recovery_main(sys.argv[2:])
+    if sys.argv[1:2] == ["recover-session-exit"]:
+        from .ota.recovery import main_session_exit as recovery_main
         return recovery_main(sys.argv[2:])
     from .ota import discovery
     from .child_entrypoint import retain_inherited_windows_payload
@@ -108,11 +144,11 @@ def main() -> int:
             fd = artifact.duplicate_fd()
             try:
                 with launcher_handoff.handoff() as (handoff_fd, child_env):
-                    return subprocess.run(
+                    return _run_posix_candidate(
                         [sys.executable, f"/dev/fd/{fd}", *sys.argv[1:]],
-                        pass_fds=(fd, handoff_fd), check=False,
+                        pass_fds=(fd, handoff_fd),
                         env={**child_env, "DRADAR_OTA_DISPATCH": "1"},
-                    ).returncode
+                    )
             finally:
                 os.close(fd)
         from .cli import main as bundled_main

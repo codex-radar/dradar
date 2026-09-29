@@ -23,6 +23,16 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def _recovery_seal_digest(state: dict) -> str:
+    fixed = {key: state[key] for key in (
+        "schema_version", "session_id", "server", "batch_id", "owner_identity",
+        "state", "attempts", "close_request", "execution_manifest", "recovery_source_sha256",
+    )}
+    fixed["release_request"] = {key: value for key, value in state["release_request"].items()
+                                if key not in {"device_generation", "device_id"}}
+    return hashlib.sha256(_canonical(fixed)).hexdigest()
+
+
 def _exit_facts_confirmed(event: dict, spawn: dict | None) -> bool:
     if event.get("process_group") != "absent" or event.get("exact_job_containers") != "absent":
         return False
@@ -76,11 +86,25 @@ def _read(path: Path) -> dict:
                     raise ValueError("invalid attempt identity")
                 allowed = {"entered": {"registered"}, "launch_pending": {"entered"},
                            "spawned": {"launch_pending"}, "confirmed_absent": {"spawned"},
-                           "never_started": {"entered", "launch_pending"}}
+                           "never_started": {"entered", "launch_pending"},
+                           "recovered_absent": {"spawned", "unknown"}}
                 if kind != "unknown" and previous not in allowed.get(kind, set()):
                     raise ValueError("invalid execution order")
                 if kind == "confirmed_absent" and not _exit_facts_confirmed(event, spawn):
                     raise ValueError("missing exit facts")
+                if kind == "recovered_absent":
+                    recovery = event.get("recovery", {})
+                    if (spawn is None or event.get("evidence_kind") != "linux_crash_recheck_v1"
+                            or recovery.get("prior_events_sha256") != hashlib.sha256(_canonical(attempt["events"][:attempt["events"].index(event)])).hexdigest()
+                            or recovery.get("process_group") != "absent"
+                            or recovery.get("linux_identity") != spawn.get("linux_identity")
+                            or not recovery.get("linux_identity")
+                            or recovery.get("owner_identity") != state.get("owner_identity")
+                            or not recovery.get("owner_identity")
+                            or recovery.get("docker", {}).get("daemon") != spawn.get("docker_identity")
+                            or not spawn.get("docker_identity")
+                            or recovery.get("docker", {}).get("running") is not False):
+                        raise ValueError("invalid crash recovery evidence")
                 if kind == "spawned":
                     spawn = event
                 if kind == "never_started" and (event.get("execution_started") is not False or (previous == "launch_pending" and event.get("reason") != "popen_failed")):
@@ -95,9 +119,20 @@ def _read(path: Path) -> dict:
             )}
             if (state["state"] != "sealed" or state.get("execution_manifest") != manifest
                     or request["session_id"] != state["session_id"] or request["batch_id"] != state["batch_id"]
-                    or any(attempt["status"] not in {"confirmed_absent", "never_started"} for attempt in state["attempts"].values())
+                    or any(attempt["status"] not in {"confirmed_absent", "never_started", "recovered_absent"} for attempt in state["attempts"].values())
                     or request["execution_manifest_sha256"] != hashlib.sha256(_canonical(manifest)).hexdigest()):
                 raise ValueError("sealed evidence changed")
+        if state.get("recovery_source_sha256") is not None:
+            if state.get("recovery_seal_sha256") != _recovery_seal_digest(state):
+                raise ValueError("recovery seal changed")
+            request = state["release_request"]
+            if state.get("recovery_request_sha256") is not None:
+                if ("device_generation" not in request or "device_id" not in request
+                        or state["recovery_request_sha256"] != hashlib.sha256(
+                            _canonical(request)).hexdigest()):
+                    raise ValueError("recovery request changed")
+            elif "device_generation" in request or "device_id" in request:
+                raise ValueError("recovery request binding is missing")
         return state
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CapacityEvidenceError("Execution evidence cannot be verified; preserve the journal and reservation.") from exc
@@ -121,12 +156,24 @@ class CapacityJournal:
         with _exclusive_lock(self.lock):
             if self.path.exists() or self.path.is_symlink():
                 raise CapacityEvidenceError("An execution journal already exists for this session.")
+            from .runtime_identity import process_identity
+            import os
             _write(self.path, {
                 "schema_version": 1, "session_id": session_id,
                 "server": server.rstrip("/"), "batch_id": None,
                 "device_generation": None, "state": "open", "attempts": {},
+                "owner_identity": process_identity(os.getpid()),
                 "release_request": None, "released": False,
             })
+
+    def record_registration_request(self, payload: dict) -> None:
+        def save(state):
+            if state["state"] != "open" or state["attempts"]:
+                return
+            digests = state.setdefault("registration_request_sha256", [])
+            digests.append(hashlib.sha256(_canonical(payload)).hexdigest())
+            del digests[:-8]
+        self._update(save)
 
     def _update(self, operation):
         from .run_plans import _exclusive_lock
@@ -163,7 +210,7 @@ class CapacityJournal:
         def begin(state):
             if state["state"] != "open" or state["batch_id"] != binding["batch_id"]:
                 raise CapacityEvidenceError("This session is sealed or its execution scope changed.")
-            if any(item.get("status") not in {"confirmed_absent", "never_started"}
+            if any(item.get("status") not in {"confirmed_absent", "never_started", "recovered_absent"}
                    for item in state["attempts"].values()):
                 raise CapacityEvidenceError("An earlier execution exit is unknown; this slot cannot start another attempt.")
             if not isinstance(binding["assignment_id"], str) or not binding["assignment_id"]:
@@ -214,7 +261,7 @@ class CapacityJournal:
                         and saved.get("reason") != "popen_failed")
                 ):
                     raise CapacityEvidenceError("A pending launch cannot be declared never started.")
-                if attempt["status"] in {"confirmed_absent", "never_started"} and saved["event"] != "unknown":
+                if attempt["status"] in {"confirmed_absent", "never_started", "recovered_absent"} and saved["event"] != "unknown":
                     raise CapacityEvidenceError("An audited attempt cannot launch again.")
                 attempt["events"].append(saved)
                 attempt["status"] = saved["event"]
@@ -230,7 +277,7 @@ class CapacityJournal:
             state["close_request"] = {"session_id": state["session_id"], "batch_id": state["batch_id"],
                                       "seq": close_seq, "reason": reason}
             if not state["batch_id"] or any(
-                item.get("status") not in {"confirmed_absent", "never_started"}
+                item.get("status") not in {"confirmed_absent", "never_started", "recovered_absent"}
                 for item in state["attempts"].values()
             ):
                 return False
@@ -252,6 +299,14 @@ class CapacityJournal:
 
 def _receipt(client, state: dict) -> dict:
     receipt = client.runner_session_receipt(state["session_id"], batch_id=state["batch_id"])
+    if isinstance(receipt, dict) and receipt.get("registration_state") == "not_created":
+        if (receipt.get("session_id") != state["session_id"]
+                or receipt.get("batch_id") != state["batch_id"]
+                or receipt.get("schema_version") != 1 or receipt.get("fenced") is not True
+                or state["attempts"] or state["device_generation"] is not None
+                or receipt.get("request_sha256") not in state.get("registration_request_sha256", [])):
+            raise CapacityEvidenceError("Uncreated-session proof does not match this empty session's request.")
+        return receipt
     if (not isinstance(receipt, dict)
             or receipt.get("session_id") != state["session_id"]
             or receipt.get("batch_id") != state["batch_id"]
@@ -267,7 +322,7 @@ def _receipt(client, state: dict) -> dict:
     return receipt
 
 
-def reconcile_file(path: Path, client) -> bool:
+def reconcile_file(path: Path, client, *, explicit_replay_once: bool = False) -> bool:
     """Retry the same durable evidence; unknown receipts never create new work."""
     from .run_plans import _exclusive_lock
     with _exclusive_lock(path.with_suffix(".lock")):
@@ -281,9 +336,17 @@ def reconcile_file(path: Path, client) -> bool:
         if request.get("execution_manifest_sha256") != digest:
             raise CapacityEvidenceError("Saved exit evidence changed; preserve it for review.")
         receipt = _receipt(client, state)
+        if receipt.get("registration_state") == "not_created":
+            state["registration_not_created"] = receipt
+            _write(path, state)
+            # This is settled without claiming any process exit or release.
+            return True
         if not receipt["closed"]:
             try:
-                client.runner_close(state["close_request"])
+                if explicit_replay_once:
+                    client.runner_close(state["close_request"], explicit_replay_once=True)
+                else:
+                    client.runner_close(state["close_request"])
             except ApiError:
                 pass  # The exact receipt distinguishes a lost ACK from no close.
             receipt = _receipt(client, state)
@@ -293,10 +356,15 @@ def reconcile_file(path: Path, client) -> bool:
             request["device_generation"] = receipt["device_generation"]
             request["device_id"] = None
             state["device_generation"] = receipt["device_generation"]
+            if state.get("recovery_source_sha256") is not None:
+                state["recovery_request_sha256"] = hashlib.sha256(_canonical(request)).hexdigest()
             _write(path, state)  # Durable identical request before mutation.
         if not receipt["capacity_released"]:
             try:
-                client.release_runner_capacity(request)
+                if explicit_replay_once:
+                    client.release_runner_capacity(request, explicit_replay_once=True)
+                else:
+                    client.release_runner_capacity(request)
             except ApiError:
                 # The request may have committed. The same read-only receipt
                 # settles that ambiguity; a failed read preserves this file.
@@ -321,7 +389,7 @@ def reconcile_saved(home: Path, client, *, batch_id: str) -> dict[str, int]:
         state = _read(path)
         if state["server"] != str(client.server).rstrip("/") or state.get("batch_id") != batch_id:
             continue
-        if state.get("released") is True:
+        if state.get("released") is True or state.get("registration_not_created"):
             continue
         if state["state"] != "sealed" or not state.get("release_request"):
             counts["unknown"] += 1
@@ -330,5 +398,8 @@ def reconcile_saved(home: Path, client, *, batch_id: str) -> dict[str, int]:
             released = reconcile_file(path, client)
         except ApiError:
             released = False
-        counts["released" if released else "pending"] += 1
+        if released and _read(path).get("registration_not_created"):
+            counts["not_created"] = counts.get("not_created", 0) + 1
+        else:
+            counts["released" if released else "pending"] += 1
     return counts

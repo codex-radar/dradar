@@ -386,17 +386,19 @@ def test_private_post_run_creates_valid_empty_agent_snapshot(isolated):
 
 
 @pytest.mark.parametrize('stop_confirmed', [True, False])
-def test_missing_trajectory_follows_formal_stop_without_upload(isolated, monkeypatch, stop_confirmed):
+@pytest.mark.parametrize('agent', [None, 'kiro'])
+def test_missing_trajectory_follows_formal_stop_without_upload(isolated, monkeypatch, stop_confirmed, agent):
     from dradar import runner
     trial = isolated / 'broken-trial'
     private_trial(trial)
     output = trial / '.dradar/host-output'
     output.mkdir(parents=True)
     (output / 'state.json').write_text('{"complete":false,"outputs":[],"reason":"required_trajectory_missing"}')
-    (trial / 'agent').mkdir()
-    (trial / 'agent/kiro-stderr.log').write_text('DRADAR_KIRO_ACP=rpc_session_prompt\n')
+    if agent == 'kiro':
+        (trial / 'agent').mkdir()
+        (trial / 'agent/kiro-stderr.log').write_text('DRADAR_KIRO_ACP=rpc_session_prompt\n')
     monkeypatch.setattr(runloop, 'run_trial', lambda *a, **k:
-        runner._completed_trial_artifact_paths(trial, agent='kiro'))
+        runner._completed_trial_artifact_paths(trial, agent=agent))
     stopped = []
     def stop(client, assignment, **kwargs):
         stopped.append(assignment['assignment_id'])

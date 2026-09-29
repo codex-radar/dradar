@@ -24,14 +24,16 @@ from . import __version__, local_jobs, pending, capacity_journal
 from .agent_schema import cmd_schema
 from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
-from .boundary_recovery import cmd_boundary_recover
+from .boundary_recovery import cmd_boundary_inspect, cmd_boundary_recover
 from .cells import cmd_cells
 from .claim_receipts import cmd_claim_receipt
+from .cleanup_recovery import cmd_recover as cmd_cleanup_recover
 from .doctor import cmd_doctor
 from .fleet import (
     cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
     cmd_fleet_stop, cmd_fleet_watch,
 )
+from .fleet_claim import cmd_fleet_claim, cmd_fleet_claim_recover, cmd_fleet_claim_stop
 from .flight_recorder import cmd_diagnostics
 from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
 from .image_cache import cmd_config_set, cmd_config_show
@@ -153,6 +155,11 @@ def main(argv: list[str] | None = None) -> int:
     p_boundary = sub.add_parser(
         "boundary", help="inspect or recover a saved assignment boundary")
     boundary_sub = p_boundary.add_subparsers(dest="boundary_command", required=True)
+    p_boundary_inspect = boundary_sub.add_parser(
+        "inspect", help="read the exact locally saved personal assignment IDs")
+    p_boundary_inspect.add_argument(
+        "--benchmark", help="saved benchmark channel (default: current channel)")
+    p_boundary_inspect.set_defaults(func=cmd_boundary_inspect)
     p_boundary_recover = boundary_sub.add_parser(
         "recover", help="reconcile exact terminal assignments with durable server evidence")
     p_boundary_recover.add_argument(
@@ -164,10 +171,26 @@ def main(argv: list[str] | None = None) -> int:
         help="exact saved assignment ID to review (repeat for every saved ID)")
     p_boundary_recover.set_defaults(func=cmd_boundary_recover)
 
+    p_cleanup_recovery = sub.add_parser(
+        "cleanup-recover", help="inspect or retire one exited, unsubmitted cleanup fence")
+    p_cleanup_recovery.add_argument("--assignment-id", required=True,
+                                    type=_assignment_id_value)
+    p_cleanup_recovery.add_argument("--batch-id", required=True,
+                                    type=_batch_id_value)
+    p_cleanup_recovery.add_argument("--runner-session-id", required=True,
+                                    type=_assignment_id_value)
+    p_cleanup_recovery.add_argument("--benchmark")
+    p_cleanup_recovery.add_argument("--execute", action="store_true")
+    p_cleanup_recovery.add_argument("--inventory-sha256")
+    p_cleanup_recovery.set_defaults(func=cmd_cleanup_recover)
+
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")
     p_capacity.add_argument("--reservations", action="store_true", help="read one page of existing reservation inventory")
     p_capacity.add_argument("--reconcile", metavar="EVIDENCE_JSON", help="reconcile one exact historical reservation from a durable evidence file")
+    p_capacity.add_argument("--recover-session", metavar="SESSION_ID", help="read-only crash exit preflight for one original Linux session")
+    p_capacity.add_argument("--execute", action="store_true", help="explicitly recover the preflighted session")
+    p_capacity.add_argument("--journal-sha256", help="exact journal digest returned by recovery preflight")
     p_capacity.add_argument("--plan", metavar="RUN_CODE", help="use the original saved plan identity without exchange")
     p_capacity.add_argument("--server", help="must match the server saved with the original identity")
     p_capacity.add_argument("--after", default="", help="reservation cursor returned by the previous page")
@@ -261,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fleet_sub = p_fleet.add_subparsers(
         dest="fleet_command", required=True,
-        metavar="{add,status,watch,stop}",
+        metavar="{add,claim,claim-recover,claim-stop,status,watch,stop}",
     )
     p_fleet_add = fleet_sub.add_parser(
         "add", help="idempotently add one exact claimed batch to this machine")
@@ -297,6 +320,31 @@ def main(argv: list[str] | None = None) -> int:
     p_fleet_add.add_argument("--refill-model", metavar="MODEL")
     p_fleet_add.add_argument("--refill-effort", metavar="EFFORT")
     p_fleet_add.set_defaults(func=cmd_fleet_add, lease_hint=True)
+    p_fleet_claim = fleet_sub.add_parser(
+        "claim", help="claim a finite one-Harness selection through this Fleet",
+        epilog=("Old exit-unknown evidence stays saved and counts toward Server capacity "
+                "when the Server says it does. A stop can leave an already registered "
+                "request in flight; reconcile its original receipt before another claim. "
+                "A late held assignment never starts a model automatically."))
+    p_fleet_claim.add_argument("--pick", action="append", required=True,
+                               metavar="TASK:MODEL:EFFORT")
+    p_fleet_claim.add_argument("--benchmark", metavar="BENCHMARK")
+    p_fleet_claim.add_argument("--window-id", required=True, metavar="ID",
+                               help="stable identifier for this finite claim budget")
+    p_fleet_claim.add_argument("--workers", type=int, required=True, metavar="N")
+    p_fleet_claim.add_argument("--max-new", type=int, required=True, metavar="N",
+                               help="maximum additional assignments in this local claim window")
+    p_fleet_claim.add_argument("--max-concurrent", type=int, required=True, metavar="N",
+                               help="ceiling for Fleet worker targets in this local claim window")
+    p_fleet_claim.add_argument("--deadline", required=True, metavar="ISO_TIME",
+                               help="absolute deadline for new claims, including timezone")
+    p_fleet_claim.set_defaults(func=cmd_fleet_claim)
+    p_fleet_claim_recover = fleet_sub.add_parser(
+        "claim-recover", help="read original receipts after an interrupted Fleet claim")
+    p_fleet_claim_recover.set_defaults(func=cmd_fleet_claim_recover)
+    p_fleet_claim_stop = fleet_sub.add_parser(
+        "claim-stop", help="stop future Fleet claims while preserving in-flight receipts")
+    p_fleet_claim_stop.set_defaults(func=cmd_fleet_claim_stop)
     p_fleet_status = fleet_sub.add_parser(
         "status", help="show local Fleet batches and aggregate worker reservations")
     p_fleet_status.add_argument(

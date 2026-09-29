@@ -31,6 +31,7 @@ class ExecutionAudit:
         self.pid = None
         self.pgid = None
         self.windows_job_id = None
+        self.docker_identity = None
 
     def emit(self, event: str, **facts) -> None:
         payload = dict(schema="dradar.execution_audit.v1", event=event,
@@ -46,10 +47,17 @@ class ExecutionAudit:
 
     def pending(self, job_name: str, job_dir: Path) -> None:
         self.job_name, self.job_dir = job_name, str(job_dir.resolve())
+        from .runtime_identity import docker_identity
+        try:
+            self.docker_identity = docker_identity()
+        except Exception:
+            # Normal cleanup still audits its live child. Crash recovery will
+            # fail closed when the original daemon binding is unavailable.
+            self.docker_identity = None
         self.launch_pending = True
         self.emit("launch_pending", execution_started=False)
 
-    def record_spawn(self, pid, *, windows_job_id=None) -> None:
+    def record_spawn(self, pid, *, windows_job_id=None, crash_recovery_supported=False) -> None:
         self.spawned = True
         self.pid = pid if type(pid) is int and pid > 0 else None
         if windows_job_id is not None and self.pid is None:
@@ -60,7 +68,9 @@ class ExecutionAudit:
             raise ExecutionObserverError("Windows Job identity is invalid")
         self.windows_job_id = windows_job_id
         self.pgid = self.pid if os.name == "posix" and windows_job_id is None else None
-        self.emit("spawned", pid=self.pid, pgid=self.pgid, execution_started=True,
+        from .runtime_identity import process_identity
+        self.emit("spawned", crash_recovery_supported=crash_recovery_supported, linux_identity=process_identity(self.pid),
+                  docker_identity=self.docker_identity, pid=self.pid, pgid=self.pgid, execution_started=True,
                   windows_job_id=windows_job_id,
                   process_identity_kind=("exact_windows_job" if windows_job_id else
                                          "live_child_handle_and_private_pgid"))

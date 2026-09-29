@@ -144,16 +144,20 @@ class UpdateRuntime:
             self.audit.policy_rejected("update_manifest_invalid")
             raise
         self.controller.set_trusted_keys(trusted_keys)
+        retrying_legacy_download = False
         try:
             baseline = self.controller.committed_pointer()
         except InvalidTransition:
             # One-time bridge for clients installed before the stable launcher
             # existed. Sequence zero is never accepted after a signed commit.
-            if (
-                committed_sequence != 0
-                or not self.controller.pristine_for_legacy_bootstrap()
-            ):
+            if committed_sequence != 0:
                 raise
+            if not self.controller.pristine_for_legacy_bootstrap():
+                retrying_legacy_download = (
+                    self.controller.retryable_legacy_download_failure()
+                )
+                if not retrying_legacy_download:
+                    raise
             baseline = ReleasePointer(
                 release_id="legacy-installed-client",
                 version=current_version,
@@ -175,6 +179,7 @@ class UpdateRuntime:
             compatibility=compatibility,
             rollout=rollout,
             target=target,
+            allow_same_version=retrying_legacy_download,
         )
         if not decision.eligible or decision.artifact is None:
             self.audit.policy_rejected()

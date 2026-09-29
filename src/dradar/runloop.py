@@ -20,6 +20,7 @@ from .artifact_boundary import (
 )
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -1199,6 +1200,86 @@ def _parse_pick(spec: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def _check_historical_pick_harness(client: ApiClient, specs: list[str]) -> None:
+    """Use the Server's public cell catalog to reject known mixed harnesses.
+
+    This is only a pre-claim planning check for the one-batch historical
+    exception. The Server still decides each claim's batch and the existing
+    per-claim proof and returned-batch checks remain authoritative.
+    """
+    cells = dict.fromkeys(_parse_pick(spec) for spec in specs)
+    if len(cells) < 2:
+        return
+    try:
+        table = client.table()
+    except ApiError as exc:
+        raise SystemExit(
+            "historical admission cannot identify the selected harnesses: "
+            f"Server table unavailable ({exc}). No new assignment was claimed; "
+            "retry when the table is available or select one --pick cell."
+        ) from exc
+    if not isinstance(table, dict) or not isinstance(table.get("cells"), dict) \
+            or not isinstance(table.get("combos"), list) \
+            or table.get("benchmark_id") != client.benchmark_id:
+        raise SystemExit(
+            "historical admission cannot identify the selected harnesses: "
+            "Server table lacks cells, combos, or the selected benchmark. "
+            "No new assignment was claimed; "
+            "select one --pick cell or retry with a complete table."
+        )
+    combos = {}
+    for combo in table["combos"]:
+        if not isinstance(combo, dict):
+            continue
+        key = (combo.get("model"), combo.get("effort"))
+        if all(isinstance(value, str) and value for value in key):
+            combos.setdefault(key, []).append(combo)
+    harnesses = set()
+    for task_id, model, effort in cells:
+        key = f"{task_id}|{model}|{effort}"
+        cell = table["cells"].get(key)
+        matching = combos.get((model, effort), [])
+        if not isinstance(cell, dict) or len(matching) != 1:
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "exact cell or unique combo is missing from the Server table. "
+                "No new assignment was claimed; select one --pick cell or "
+                "retry with a complete table."
+            )
+        combo = matching[0]
+        if any(
+            cell.get(field) != combo.get(field)
+            for field in ("agent", "provider")
+        ):
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "cell and combo metadata disagree. No new assignment was "
+                "claimed; select one --pick cell or retry after the table updates."
+            )
+        raw_agent = cell.get("agent")
+        provider = cell.get("provider")
+        agent = "codex" if raw_agent is None else raw_agent
+        if not isinstance(agent, str) or agent not in {
+            "codex", CLAUDE_AGENT, DSH_AGENT, KIMI_AGENT, GROK_AGENT,
+            ZCODE_AGENT, ANTIGRAVITY_AGENT, CODEBUDDY_AGENT,
+        } or (raw_agent is None and provider not in (None, "openai", DEEPSEEK_PROVIDER)):
+            raise SystemExit(
+                f"historical admission cannot identify the harness for {key}: "
+                "unknown agent in the Server table. No new assignment was "
+                "claimed; select one --pick cell."
+            )
+        harnesses.add(agent)
+    if len(harnesses) > 1:
+        first = specs[0]
+        raise SystemExit(
+            "historical admission allows only one exact new batch, but these "
+            "--pick cells use different harnesses. No new assignment was "
+            "claimed. Select one harness for this run, for example "
+            f"`dradar go --pick {first}`; inspect `dradar leases` and finish "
+            "or resume its exact batch before another selection."
+        )
+
+
 class _ConcurrentCapHit(Exception):
     """Raised by _claim_cell when a 409 means the volunteer's own concurrent-
     hold cap, not a stale/taken cell -- every further claim in the same batch
@@ -1704,14 +1785,66 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             "request_ledger_unavailable_or_invalid",
         },
         "codebuddy": {
+            # Legacy 0.5.189 sidecars may still be waiting for upload when a
+            # newer launcher resumes them. Accept their coarse codes without
+            # emitting those codes for newly observed runs.
             "terminal_aggregate_missing_or_inconsistent",
             "request_ledger_unavailable_or_invalid",
+            "terminal_aggregate_missing",
+            "terminal_aggregate_multiple",
+            "terminal_usage_missing_or_invalid",
+            "terminal_model_mismatch",
+            "terminal_error",
+            "terminal_usage_incomplete",
+            "terminal_status_not_success",
+            "terminal_total_tokens_mismatch",
+            "request_model_mismatch",
+            "request_message_invalid",
+            "request_usage_invalid",
+            "request_id_missing",
+            "request_id_conflict",
+            "request_ledger_unavailable",
+            "terminal_aggregate_mismatch",
         },
     }
     if (not complete and (
             value.get("complete") is not False
             or incomplete_reason not in allowed_incomplete_reasons[expected_provider])):
         return None
+    raw_incomplete_reasons = value.get("usage_incomplete_reasons")
+    if expected_provider != "codebuddy":
+        if raw_incomplete_reasons is not None:
+            return None
+        incomplete_reasons = None
+    else:
+        if raw_incomplete_reasons is None:
+            incomplete_reasons = [] if complete else [incomplete_reason]
+        elif (
+            not isinstance(raw_incomplete_reasons, list)
+            or len(raw_incomplete_reasons) > len(
+                allowed_incomplete_reasons[expected_provider]
+            )
+            or any(
+                not isinstance(reason, str)
+                or reason not in allowed_incomplete_reasons[expected_provider]
+                for reason in raw_incomplete_reasons
+            )
+            or len(set(raw_incomplete_reasons)) != len(raw_incomplete_reasons)
+        ):
+            return None
+        else:
+            incomplete_reasons = list(raw_incomplete_reasons)
+        if (
+            (complete and incomplete_reasons)
+            or (
+                not complete
+                and (
+                    not incomplete_reasons
+                    or incomplete_reasons[0] != incomplete_reason
+                )
+            )
+        ):
+            return None
     names = ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
     if any(
         not isinstance(value.get(name), int)
@@ -1771,13 +1904,22 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             return None
     else:
         events = []
-    return {
-        **value,
+    # The CodeBuddy sidecar retains local reconciliation details, including
+    # per-run message-ID digests. Never copy them into uploaded result.json.
+    upload_value = (
+        {key: item for key, item in value.items() if key != "local_reconciliation"}
+        if expected_provider == "codebuddy" else value
+    )
+    normalized = {
+        **upload_value,
         "token_usage_events": events,
         "request_usage_complete": request_complete,
         "request_usage_observed": observed,
         "timed_usage_complete": timed,
     }
+    if incomplete_reasons is not None:
+        normalized["usage_incomplete_reasons"] = incomplete_reasons
+    return normalized
 
 
 def _claude_trial_usage_from_trajectory(
@@ -2091,22 +2233,109 @@ def _bundled_completed_outcome(
     }
 
 
+def _register_cleanup_result_intent(client, entry: dict, intent_id: str) -> str:
+    """The signed explicit recovery path alone can cross a cleanup quarantine."""
+    recovery = entry.get("completed_result_recovery")
+    if (not pending.is_cleanup_quarantine(entry)
+            or entry.get("upload_blocked") != "cleanup_unconfirmed"
+            or not isinstance(recovery, dict)
+            or not isinstance(entry.get("upload_intent"), dict)
+            or entry["upload_intent"].get("id") != intent_id):
+        raise ValueError("original quarantine recovery binding is unavailable")
+    if recovery.get("mode") == "salvage":
+        payload = {
+            "assignment_id": entry["assignment_id"],
+            "nonce": entry["nonce"],
+            "source_session_id": entry["runner_session_id"],
+            "source_owner_epoch": entry["owner_epoch"],
+            "expected_owner_epoch": recovery["expected_owner_epoch"],
+            "salvage_session_id": recovery["upload_session_id"],
+            "release_evidence_id": recovery["release_evidence_id"],
+            "release_evidence_sha256": recovery["release_evidence_sha256"],
+            "upload_intent_id": intent_id,
+        }
+        response = client.register_completed_cleanup_result_salvage(payload)
+        if (not isinstance(response, dict) or response.get("ok") is not True
+                or type(response.get("replayed")) is not bool
+                or any(response.get(key) != value for key, value in (
+                    ("assignment_id", payload["assignment_id"]),
+                    ("session_id", payload["salvage_session_id"]),
+                    ("owner_epoch", recovery["upload_owner_epoch"]),
+                    ("upload_intent_id", intent_id),
+                    ("source_client_version", recovery["source_client_version"]),
+                ))
+                or (response.get("source_agent_version") is not None
+                    and response["source_agent_version"] != recovery["source_agent_version"])):
+            raise ValueError("server salvage receipt does not match the exact upload")
+        return intent_id
+    if recovery.get("mode") != "source":
+        raise ValueError("unknown cleanup result recovery mode")
+    payload = {
+        "schema_version": 1,
+        "assignment_id": entry["assignment_id"],
+        "batch_id": entry["batch_id"],
+        "nonce": entry["nonce"],
+        "source_session_id": entry["runner_session_id"],
+        "source_owner_epoch": entry["owner_epoch"],
+        "release_evidence_id": recovery["release_evidence_id"],
+        "release_evidence_sha256": recovery["release_evidence_sha256"],
+        "upload_intent_id": intent_id,
+        "request_id": recovery["request_id"],
+    }
+    response = client.register_completed_cleanup_result_intent(payload)
+    if (not isinstance(response, dict) or response.get("schema_version") != 1
+            or response.get("ok") is not True
+            or type(response.get("replayed")) is not bool
+            or any(response.get(key) != value for key, value in (
+                ("request_id", payload["request_id"]),
+                ("assignment_id", payload["assignment_id"]),
+                ("batch_id", payload["batch_id"]),
+                ("session_id", payload["source_session_id"]),
+                ("owner_epoch", payload["source_owner_epoch"]),
+                ("upload_intent_id", intent_id),
+                ("source_client_version", recovery["source_client_version"]),
+            ))
+            or (response.get("source_agent_version") is not None
+                and response["source_agent_version"] != recovery["source_agent_version"])):
+        raise ValueError("server recovery receipt does not match the original owner")
+    return intent_id
+
+
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
-                  upload_only_recovery=False):
+                  upload_only_recovery=False, cleanup_result_recovery=False):
     pending.require_uploadable(entry, request_salvage=request_salvage)
     pending.record(HOME, entry)
     try:
+        if cleanup_result_recovery:
+            if (not pending.is_cleanup_quarantine(entry)
+                    or entry.get("upload_blocked") != "cleanup_unconfirmed"
+                    or not isinstance(entry.get("completed_result_recovery"), dict)
+                    or not isinstance(entry.get("trial_dir"), str)):
+                print("  exact cleanup-result recovery binding is missing")
+                return "upload-blocked"
+            # The original process exit was already proven. Snapshot its
+            # logs/result now, then compare those bytes and the staged patch
+            # with the signed-command preflight hashes before any server write.
+            with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
+                return _upload_trial_checked(
+                    client, entry, ask_cleanup=ask_cleanup,
+                    log_snapshot=snapshot,
+                    upload_only_recovery=upload_only_recovery,
+                    cleanup_result_recovery=True,
+                )
         if (pending.is_cleanup_quarantine(entry)
                 or (entry.get("upload_blocked") and not request_salvage)
                 or not Path(entry["trial_dir"]).exists()):
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 upload_only_recovery=upload_only_recovery,
+                cleanup_result_recovery=cleanup_result_recovery,
             )
         with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 log_snapshot=snapshot, upload_only_recovery=upload_only_recovery,
+                cleanup_result_recovery=cleanup_result_recovery,
             )
     except UnsafeArtifact as exc:
         blocked = dict(entry)
@@ -2123,6 +2352,7 @@ def _upload_trial_checked(
     client: ApiClient, entry: dict, *, ask_cleanup: bool = False,
     request_salvage: bool = False, log_snapshot: Path | None = None,
     upload_only_recovery: bool = False,
+    cleanup_result_recovery: bool = False,
 ) -> str:
     """Scrub + upload one trial's artifacts, described by a pending-ledger
     entry dict (assignment_id/nonce/task_id/trial_dir/meta/outcome/job_dir/
@@ -2146,7 +2376,16 @@ def _upload_trial_checked(
     task_id = entry.get("task_id", "?")
     blocked_reason = entry.get("upload_blocked")
     quarantine = pending.is_cleanup_quarantine(entry)
-    if quarantine:
+    if cleanup_result_recovery and (
+        not quarantine or blocked_reason != "cleanup_unconfirmed"
+        or not isinstance(entry.get("completed_result_recovery"), dict)
+        or not entry["completed_result_recovery"].get("upload_session_id")
+        or type(entry["completed_result_recovery"].get("upload_owner_epoch")) is not int
+    ):
+        pending.record(HOME, entry)
+        print(f"  {task_id}: exact cleanup-result recovery binding is missing")
+        return "upload-blocked"
+    if quarantine and not cleanup_result_recovery:
         pending.record(HOME, entry)
         print(
             f"  {task_id}: process exit/cleanup is unconfirmed; result is "
@@ -2164,7 +2403,9 @@ def _upload_trial_checked(
             "owner_superseded completed upload; no state was changed"
         )
         return "upload-blocked"
-    if blocked_reason and not salvage_requested:
+    if blocked_reason and not salvage_requested and not (
+        cleanup_result_recovery and blocked_reason == "cleanup_unconfirmed"
+    ):
         # A persisted block is a terminal *automatic* recovery decision, not
         # a transient upload error.  Keep both the ledger row and artifacts so
         # the paid result can be inspected explicitly, but never restage it or
@@ -2278,6 +2519,23 @@ def _upload_trial_checked(
     if log_snapshot is not None:
         _, trajectory, result = trial_artifact_paths(log_snapshot)
 
+    if cleanup_result_recovery:
+        saved_hashes = entry["completed_result_recovery"].get("artifact_sha256")
+        if not isinstance(saved_hashes, dict):
+            print(f"  {task_id}: saved result hashes are unavailable; upload blocked")
+            return "upload-blocked"
+        observed = {"patch": hashlib.sha256(staged.data).hexdigest()}
+        if trajectory is None or result is None:
+            print(f"  {task_id}: original trajectory/result is missing; upload blocked")
+            return "upload-blocked"
+        for name, path in (("trajectory", trajectory), ("result", result)):
+            observed[name] = hashlib.sha256(
+                read_trial_file(log_snapshot, path.relative_to(log_snapshot))
+            ).hexdigest()
+        if observed != saved_hashes:
+            print(f"  {task_id}: original result bytes changed after preflight; upload blocked")
+            return "upload-blocked"
+
     # Use the byte snapshot verified while the staging lock was held. The
     # multipart request below gets its own temporary file, so a concurrent
     # pause/cleanup cannot change or remove the bytes mid-upload.
@@ -2388,6 +2646,7 @@ def _upload_trial_checked(
             "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens",
             "token_usage_events", "timed_usage_complete",
             "request_usage_complete", "request_usage_observed",
+            "usage_incomplete_reasons",
             "timed_usage_incomplete_reason", "usage_aggregate_source",
             "usage_incomplete_reason", "usage_evidence_tier",
             "session_usage_model_request_count", "request_ledger_duplicate_count",
@@ -2421,7 +2680,7 @@ def _upload_trial_checked(
                 if (
                     usage["complete"]
                     or (
-                        usage.get("provider") != "kimi-code"
+                        usage.get("provider") not in {"kimi-code", "codebuddy"}
                         and usage.get("request_usage_observed") is True
                     )
                 )
@@ -2668,7 +2927,13 @@ def _upload_trial_checked(
             }
             if submit_bundle is not None:
                 submit_kwargs["trajectory_bundle"] = submit_bundle
-            runner_session_id = entry.get("runner_session_id")
+            recovery_owner = (entry.get("completed_result_recovery")
+                              if cleanup_result_recovery else None)
+            runner_session_id = (
+                recovery_owner.get("upload_session_id")
+                if isinstance(recovery_owner, dict)
+                else entry.get("runner_session_id")
+            )
             if runner_session_id:
                 manifest_kwargs = {
                     "assignment_id": assignment_id,
@@ -2764,7 +3029,11 @@ def _upload_trial_checked(
                         owner_epoch = None
                         intent_already_registered = True
                 if not legacy_entry:
-                    owner_epoch = int(entry["owner_epoch"])
+                    owner_epoch = int(
+                        recovery_owner["upload_owner_epoch"]
+                        if isinstance(recovery_owner, dict)
+                        else entry["owner_epoch"]
+                    )
                     manifest = submission_payload_manifest(
                         **manifest_kwargs,
                         owner_epoch=owner_epoch,
@@ -2790,6 +3059,9 @@ def _upload_trial_checked(
                     registered_intent_id = (
                         calculated_intent_id
                         if intent_already_registered
+                        else _register_cleanup_result_intent(
+                            client, entry, calculated_intent_id)
+                        if cleanup_result_recovery
                         else client.register_submission_upload_intent(
                             assignment_id,
                             entry["nonce"],
@@ -2801,6 +3073,15 @@ def _upload_trial_checked(
                 except ApiError as exc:
                     if retained_outcome := retain_unresolved_upload(exc):
                         return retained_outcome
+                    if cleanup_result_recovery:
+                        # This explicit quarantine path never falls back to
+                        # the legacy submit shape, even when an older server
+                        # does not expose its required intent endpoint.
+                        print(
+                            f"  {task_id}: server did not grant the exact "
+                            "cleanup-result upload intent; original result kept"
+                        )
+                        return "upload-failed"
                     if exc.status_code == 410:
                         # The assignment (or its claim batch) expired before
                         # the content-bound recovery fence could be registered.
@@ -2865,6 +3146,9 @@ def _upload_trial_checked(
                     return retained_outcome
                 if (submit_bundle is not None
                         and _is_trajectory_bundle_rejection(exc)):
+                    if cleanup_result_recovery:
+                        print(f"  {task_id}: recovered payload was rejected; exact intent kept")
+                        return "upload-failed"
                     # The bundle is optional. Persist the downgrade before the
                     # second request so a crash/transport failure cannot make
                     # the next retry rebuild and resend the rejected artifact.
@@ -4828,7 +5112,8 @@ def _prepare_assignment_boundary(
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was "
                 "started. A missing local outcome does not prove the work "
-                "finished. Run `dradar boundary recover` with every exact "
+                "finished. Run `dradar boundary inspect`, then "
+                "`dradar boundary recover` with every exact "
                 "--accept-assignment ID. It records only assignments "
                 "with exact server and local recovery evidence; unknown IDs "
                 "remain blocked. Inspect `dradar leases` or seek private review "
@@ -4836,11 +5121,16 @@ def _prepare_assignment_boundary(
             )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
-            "Inspect `dradar leases`; `dradar boundary recover` preserves "
+            "Run `dradar boundary inspect` and `dradar leases`; "
+            "`dradar boundary recover` preserves "
             "unknown original outcomes."
         )
     if path is not None:
         args._assignment_boundary_path = str(path)
+    if historical_digest is not None and getattr(client, "pick_selection_id", None):
+        # Recheck the old personal proof before changing this client's scope.
+        # Only the new exact boundary above may supply the execution batch.
+        _scope_client_to_batch(client, scoped_batch_id)
     return path
 
 
@@ -5377,7 +5667,8 @@ def cmd_go(args) -> int:
         sys.exit(
             "--forget-assignment-boundary is no longer an unchecked recovery "
             "shortcut. For exact terminal work with server recovery evidence, use "
-            "`dradar boundary recover` with every exact assignment ID."
+            "`dradar boundary inspect` first, then `dradar boundary recover` "
+            "with every exact saved assignment ID."
         )
     try:
         args.batch_id = normalize_batch_id(getattr(args, "batch_id", None))
@@ -5557,6 +5848,9 @@ def cmd_go(args) -> int:
         target_workers = 1
     telemetry = RunnerTelemetry(client, target_workers=target_workers, home=HOME)
     telemetry.bind_batch(args.batch_id)
+    # Explicit selection must not register this new session in another held
+    # batch while task preparation is still in progress.
+    telemetry.require_explicit_batch = bool(getattr(args, "pick", None))
     telemetry.start()
     close_reason = "error"
     transport_interrupted = False
@@ -8395,7 +8689,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                     try:
                         if wants_refill:
                             raise boundary_recovery.RecoveryBlocked(
-                                "continuous refill cannot reuse a one-time historical proof"
+                                "continuous refill cannot reuse a one-time historical proof. "
+                                "Run `dradar boundary inspect`, then recover only outcomes "
+                                "with exact server and local evidence. If any outcome stays "
+                                "unknown, use a bounded `go --auto N` or `go --pick ...` "
+                                "with fresh admission proof; refill remains unavailable"
                             )
                         count = boundary_recovery.historical_unknown_allows_claim(
                             client, state, digest, path, HOME,
@@ -8406,8 +8704,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                                 getattr(args, "auto", None) is not None or wants_refill):
                             raise SystemExit(
                                 "unfinished personal assignment boundary blocks new claims. "
-                                "No new assignment was claimed. Inspect the saved IDs and "
-                                "use `dradar boundary recover` only with exact evidence. "
+                                "No new assignment was claimed. Inspect the saved IDs with "
+                                "`dradar boundary inspect`; use `dradar boundary recover` "
+                                "only with exact evidence. "
                                 f"Current admission check: {exc}"
                             ) from exc
                         allow_new_claims = False
@@ -8428,21 +8727,36 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                                 "Their result and exit status stay unknown, and all original "
                                 "files are retained. The Server still decides actual admission."
                             )
-    active, free_pick = _acquire_batch(
-        client, args.yes,
-        # With explicit selection, do not let a menu claim one cell first.
-        allow_new_claims=(allow_new_claims and not (
-            getattr(args, "_historical_admission_digest", None) is not None
-            and (getattr(args, "pick", None)
-                 or getattr(args, "auto", None) is not None)
-        )),
-        allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
-        allow_empty_exact_campaign=(
-            bool(getattr(args, "fleet_pool", False))
-            and bool(wants_refill)
-            and bool(getattr(args, "batch_id", None))
-        ),
+    fresh_pick = bool(getattr(args, "pick", None)) and not (
+        getattr(args, "resume", False) or getattr(args, "batch_id", None)
+        or getattr(client, "plan_scoped", False)
     )
+    if fresh_pick:
+        if allow_new_claims:
+            capabilities = client.run_plan_capabilities()
+            if "explicit-pick-batch-v1" not in capabilities.get("capabilities", []):
+                raise SystemExit("Server upgrade required for safe explicit selection; no task was claimed.")
+            client.new_pick_batch = True
+            client.pick_selection_id = uuid.uuid4().hex
+        # New selection owns only its new claims. Existing held work stays
+        # untouched and remains available through explicit resume.
+        active, free_pick = [], True
+    else:
+        active, free_pick = _acquire_batch(
+            client, args.yes,
+            # With explicit selection, do not let a menu claim one cell first.
+            allow_new_claims=(allow_new_claims and not (
+                getattr(args, "_historical_admission_digest", None) is not None
+                and (getattr(args, "pick", None)
+                     or getattr(args, "auto", None) is not None)
+            )),
+            allow_empty_supervised_batch=_has_inherited_batch_admission(args, client),
+            allow_empty_exact_campaign=(
+                bool(getattr(args, "fleet_pool", False))
+                and bool(wants_refill)
+                and bool(getattr(args, "batch_id", None))
+            ),
+        )
     wants_pick = getattr(args, "pick", None)
     auto_target = getattr(args, "auto", None)
     wants = wants_pick or auto_target is not None
@@ -8455,6 +8769,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                 "No additional assignment was claimed."
             )
 
+        if free_pick and wants_pick and allow_new_claims:
+            _check_historical_pick_harness(client, wants_pick)
+
         def before_historical_claim():
             boundary_recovery.historical_unknown_allows_claim(
                 client, state, digest, path, HOME,
@@ -8462,7 +8779,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     if blocked_by_boundary:
         print("unfinished personal assignment boundary: no new task was claimed; "
               "existing held work may still run. Inspect exact saved IDs with "
-              "`dradar boundary recover`.")
+              "`dradar boundary inspect`.")
     elif not allow_new_claims and wants:
         print("disk safety floor reached — not claiming new tasks; already held work "
               "can still run. Use `dradar cleanup --docker --dry-run` to inspect cleanup.")
@@ -8551,6 +8868,14 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
         else:
             print("no work available right now — thank you, check back later")
         return [], free_pick
+    if fresh_pick:
+        client.new_pick_batch = False
+        batch_ids = {a.get("batch_id") for a in active}
+        if (len(batch_ids) == 1 and next(iter(batch_ids))
+                and getattr(args, "_historical_admission_digest", None) is None):
+            _scope_client_to_batch(client, next(iter(batch_ids)))
+        # Historical personal admission must be freshly rechecked while the
+        # client remains personal. Boundary preparation binds it afterwards.
     return active, free_pick
 
 

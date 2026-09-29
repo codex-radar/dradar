@@ -464,3 +464,16 @@ def test_kiro_missing_trajectory_preserves_prompt_error_and_does_not_forge_outpu
     with pytest.raises(runner.RunnerError) as caught:
         runner._completed_trial_artifact_paths(trial, agent='kiro')
     assert 'PRIVATE_SECRET' not in str(caught.value)
+
+
+def test_artifact_rejection_does_not_replace_original_execution_failure(tmp_path):
+    trial = tmp_path / 'trial'
+    private_trial(trial)
+    (trial / '.dradar/host-output').mkdir(parents=True)
+    (trial / '.dradar/host-output/state.json').write_text('{"complete":false,"outputs":[],"reason":"invalid_post_run_output"}')
+    primary = runner.RunnerError('first execution failure')
+    with pytest.raises(runner.RunnerError) as caught:
+        runner._completed_trial_artifact_paths(trial, terminal_error=primary)
+    assert caught.value is primary
+    assert isinstance(caught.value.__cause__, runner.UnsafeArtifact)
+    assert not (trial / '.dradar/host-output/trajectory.json').exists()

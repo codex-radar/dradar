@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -23,7 +24,7 @@ from typing import Iterator
 
 SCHEMA_VERSION = 1
 STATE_DIR = "assignment-boundaries"
-SETTLED_OUTCOMES = frozenset({"submitted", "interrupted", "not_started_terminal"})
+SETTLED_OUTCOMES = frozenset({"submitted", "interrupted", "not_started_terminal", "terminated_unsubmitted"})
 _PROCESS_LOCK = threading.Lock()
 
 
@@ -111,10 +112,10 @@ def _locked(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def _load(path: Path) -> dict | None:
+def _parse(raw: bytes) -> dict | None:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
         return None
@@ -137,6 +138,32 @@ def _load(path: Path) -> dict | None:
     ):
         return None
     return value
+
+
+def _load(path: Path) -> dict | None:
+    try:
+        return _parse(path.read_bytes())
+    except OSError:
+        return None
+
+
+def inspect_snapshot(path: Path) -> tuple[dict, str]:
+    """Read one validated local snapshot without creating a lock or directory."""
+    if path.is_symlink():
+        raise BoundaryError("saved assignment boundary is a symlink")
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise BoundaryError("saved assignment boundary is not a regular file")
+            raw = handle.read()
+    except OSError as exc:
+        raise BoundaryError("saved assignment boundary is unreadable") from exc
+    state = _parse(raw)
+    if state is None:
+        raise BoundaryError("saved assignment boundary is invalid")
+    return state, hashlib.sha256(raw).hexdigest()
 
 
 def _save(path: Path, state: dict) -> None:
@@ -261,6 +288,47 @@ def confirm_server_submissions(
             _save(path, state)
 
 
+def confirm_cleanup_recovery(
+    path: Path, *, assignment_id: str, expected_digest: str,
+    request_id: str, session_id: str, journal_sha256: str,
+    quarantine_sha256: str,
+) -> None:
+    """Record an explicit no-submission termination in the original boundary.
+
+    This outcome means the original run is over without a submitted result;
+    model execution remains unknown. It never authorizes a second solve.
+    The original pending fence may be retired only after this save succeeds.
+    """
+    with _PROCESS_LOCK:
+        with _locked(path):
+            state = _load(path)
+            if (state is None
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected_digest
+                    or assignment_id not in state["expected"]):
+                raise BoundaryError("saved cleanup assignment boundary changed")
+            existing = state["outcomes"].get(assignment_id)
+            outcome = {
+                "outcome": "terminated_unsubmitted",
+                "source": "exact-cleanup-recovery-v1",
+                "request_id": request_id,
+                "session_id": session_id,
+                "journal_sha256": journal_sha256,
+                "quarantine_sha256": quarantine_sha256,
+                "execution_started": "unknown",
+            }
+            if existing is not None and existing.get("outcome") == "terminated_unsubmitted":
+                if any(existing.get(key) != value for key, value in outcome.items()):
+                    raise BoundaryError("saved assignment already has another outcome")
+                return
+            if existing is not None:
+                if (set(existing) != {"outcome", "updated_at"}
+                        or existing.get("outcome") != "cleanup-unconfirmed"):
+                    raise BoundaryError("saved assignment already has another outcome")
+                outcome["prior_outcome"] = existing
+            state["outcomes"][assignment_id] = {**outcome, "updated_at": _now()}
+            _save(path, state)
+
+
 def archive_if_unchanged(path: Path, digest: str) -> Path:
     """Retire a verified boundary without destroying its diagnostic record."""
     with _PROCESS_LOCK:
@@ -365,7 +433,8 @@ def prepare(
                             )
                 report = _report(state, set(active))
                 if report.complete:
-                    path.unlink(missing_ok=True)
+                    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                    os.replace(path, path.with_name(f"{path.stem}.recovered-{stamp}.json"))
                     state = None
                 else:
                     if explicit is not None and set(explicit) != set(report.expected_ids):

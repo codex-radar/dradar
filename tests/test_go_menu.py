@@ -56,14 +56,23 @@ class FakeClient:
         self.claim_calls = []
         self.suggest_calls = []
 
+    def run_plan_capabilities(self):
+        return {"capabilities": ["explicit-pick-batch-v1"]}
+
     def get_assignment(self):
-        return self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        if getattr(self, "batch_id", None) and "active" in payload:
+            return {**payload, "active": [a for a in payload["active"] if a.get("batch_id") == self.batch_id]}
+        return payload
 
     def claim_assignment(self, task_id, model, effort):
         self.claim_calls.append((task_id, model, effort))
         result = self._claims.pop(0)
         if isinstance(result, Exception):
             raise result
+        if getattr(self, "new_pick_batch", False) and result.get("assignment"):
+            result = {**result, "assignment": {**result["assignment"], "batch_id": "c" * 32}}
+            self.batch_id = "c" * 32
         return result
 
     def suggest(self, n):
@@ -76,9 +85,9 @@ class FakeClient:
         raise ApiError("not found", status_code=404)
 
 
-def _args(yes=True, dev_agent=None, auto=None, pick=None):
+def _args(yes=True, dev_agent=None, auto=None, pick=None, batch_id=None):
     return argparse.Namespace(yes=yes, dev_agent=dev_agent, resume=False,
-                              allow_task_drift=False, keep=False, auto=auto, pick=pick)
+                              allow_task_drift=False, keep=False, auto=auto, pick=pick, batch_id=batch_id)
 
 
 # runloop._run_and_submit and runloop._check_version_pin are the sanctioned
@@ -300,7 +309,7 @@ def test_pick_tops_up_an_existing_batch(monkeypatch, tmp_path: Path):
     )
 
     rc = runloop._go_menu(
-        _args(yes=True, pick=["t2:m:e"]), {}, client, tmp_path,
+        _args(yes=True, pick=["t2:m:e"], batch_id="b" * 32), {}, client, tmp_path,
     )
 
     assert client.claim_calls == [("t2", "m", "e")]
@@ -320,7 +329,7 @@ def test_pick_skips_held_and_duplicate_cells(monkeypatch, capsys, tmp_path: Path
     )
 
     rc = runloop._go_menu(
-        _args(yes=True, pick=["t1:m:e", "t2:m:e", "t2:m:e"]),
+        _args(yes=True, pick=["t1:m:e", "t2:m:e", "t2:m:e"], batch_id="b" * 32),
         {}, client, tmp_path,
     )
 
@@ -1693,3 +1702,21 @@ def test_serial_batch_stops_before_second_cell_on_task_content_mismatch(
     assert rc == 1
     assert attempts == ["a1"]
     assert "same mismatched task checkout" in capsys.readouterr().out
+
+
+def test_new_pick_does_not_run_other_held_work(monkeypatch, tmp_path):
+    ran = []
+    _patch_run(monkeypatch, ran=ran)
+    held = {**ASSIGNMENT, "assignment_id": "old", "task_id": "old"}
+    client = FakeClient({"active": [held], "free_pick": True},
+                        claims=[{"assignment": ASSIGNMENT}])
+    assert runloop._go_menu(_args(pick=["t1:m:e"]), {}, client, tmp_path) == 0
+    assert ran == ["a1"] and client.batch_id == "c" * 32
+
+
+def test_new_pick_requires_server_support_before_claim(tmp_path):
+    client = FakeClient({"active": [], "free_pick": True})
+    client.run_plan_capabilities = lambda: {"capabilities": []}
+    with pytest.raises(SystemExit, match="Server upgrade required"):
+        runloop._prepare_batch(_args(pick=["t1:m:e"]), client)
+    assert client.claim_calls == []

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dradar import assignment_boundary, boundary_recovery, runloop
+from dradar import assignment_boundary, boundary_recovery, cli, runloop
 
 
 A, B, C = (letter * 32 for letter in "abc")
@@ -57,6 +57,17 @@ class Client:
         self.rows = {A: _response(A, OLD_BATCH, 1), B: _response(B, OLD_BATCH, 2)}
         self.reads = 0
 
+    def run_plan_capabilities(self):
+        return {"capabilities": ["explicit-pick-batch-v1"]}
+
+    def table(self):
+        return {"benchmark_id": "deep-swe",
+                "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+                "cells": {
+                    f"task-{i}|gpt-6-sol|high": {}
+                    for i in range(20)
+                }}
+
     def assignment_recovery_status(self, aid):
         self.reads += 1
         value = self.rows[aid]
@@ -102,7 +113,7 @@ def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
     assert old_path.read_bytes() == before
     active, _ = runloop._prepare_batch(args, client)
     assert claimed == [C] and active == [fresh]
-    assert acquisition_options[0]["allow_new_claims"] is False
+    assert acquisition_options == []  # Fresh pick never reads/reuses other held work.
     new_path = runloop._prepare_assignment_boundary(args, client, "deep-swe", active)
     assert new_path == assignment_boundary.state_path(tmp_path, "deep-swe", NEW_BATCH)
     assert old_path.read_bytes() == before
@@ -113,6 +124,7 @@ def test_historical_unknown_claim_uses_existing_exact_batch_boundary_on_restart(
     # new lease resumes from its exact batch; no second claim or old upload is
     # inferred from the historical evidence.
     monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([fresh], True))
+    client.batch_id = None  # A restarted personal invocation has a fresh client.
     restart = _args(pick=False)
     active, _ = runloop._prepare_batch(restart, client)
     assert runloop._prepare_assignment_boundary(restart, client, "deep-swe", active) == new_path
@@ -261,6 +273,119 @@ def test_historical_proof_cannot_start_continuous_refill(tmp_path, monkeypatch):
     assert path.read_bytes() == before
 
 
+def test_cross_harness_historical_picks_stop_before_any_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:hy4-preview:high"]
+    client.table = lambda: {
+        "benchmark_id": "deep-swe",
+        "combos": [
+            {"model": "gpt-6-sol", "effort": "high"},
+            {"model": "hy4-preview", "effort": "high", "agent": "codebuddy"},
+        ],
+        "cells": {
+            "task-0|gpt-6-sol|high": {},
+            "task-1|hy4-preview|high": {"agent": "codebuddy"},
+        },
+    }
+    claims = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: claims.append(1))
+    with pytest.raises(SystemExit, match="different harnesses.*No new assignment was claimed") as stopped:
+        runloop._prepare_batch(args, client)
+    assert "dradar go --pick task-0:gpt-6-sol:high" in str(stopped.value)
+    assert claims == [] and path.read_bytes() == before
+
+
+def test_go_command_rejects_cross_harness_before_claim(tmp_path, monkeypatch):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    client.table = lambda: {
+        "benchmark_id": "deep-swe",
+        "combos": [
+            {"model": "gpt-6-sol", "effort": "high"},
+            {"model": "hy4-preview", "effort": "high", "agent": "codebuddy"},
+        ],
+        "cells": {
+            "task-0|gpt-6-sol|high": {},
+            "task-1|hy4-preview|high": {"agent": "codebuddy"},
+        },
+    }
+    client.require_runner_reservation_protocol = lambda: None
+    class QuietTelemetry:
+        def __init__(self, *_a, **_kw):
+            pass
+        def bind_batch(self, *_a):
+            pass
+        def start(self):
+            pass
+        def set_phase(self, *_a):
+            pass
+        def close(self, *_a):
+            pass
+    monkeypatch.setattr(runloop, "RunnerTelemetry", QuietTelemetry)
+    monkeypatch.setattr(runloop, "preflight_artifact_platform", lambda: None)
+    monkeypatch.setattr(runloop, "_run_config", lambda _args: {"benchmark": "deep-swe"})
+    monkeypatch.setattr(runloop, "_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(runloop, "_preflight_scoped_provider", lambda _args: None)
+    monkeypatch.setattr(runloop, "_selected_tasks_root", lambda _cfg: tmp_path)
+    monkeypatch.setattr(runloop, "acquire_run_lock", lambda _home: None)
+    monkeypatch.setattr(runloop, "sweep_orphan_compose", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_maintain_image_cache", lambda *_a, **_kw: True)
+    monkeypatch.setattr(runloop, "_ensure_selected_tasks_root", lambda *_a: None)
+    monkeypatch.setattr(runloop, "ensure_pier", lambda: None)
+    monkeypatch.setattr(runloop, "_ensure_egress_runtime", lambda **_kw: None)
+    monkeypatch.setattr(runloop, "_mark_pending_scope_required", lambda _client: None)
+    monkeypatch.setattr(runloop, "_retry_pending_uploads", lambda _client: None)
+    monkeypatch.setattr(runloop, "_prepare_assignment_boundary", lambda *_a: None)
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: pytest.fail(
+        "dradar go reached a claim"))
+    with pytest.raises(SystemExit, match="different harnesses.*No new assignment was claimed"):
+        cli.main(["go", "--yes", "--pick", "task-0:gpt-6-sol:high",
+                  "--pick", "task-1:hy4-preview:high"])
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("table", (
+    {},
+    {"benchmark_id": "deep-swe", "combos": [], "cells": {}},
+    {"benchmark_id": "deep-swe", "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+     "cells": {"task-0|gpt-6-sol|high": {}}},
+    {"benchmark_id": "deep-swe", "combos": [{"model": "gpt-6-sol", "effort": "high"}],
+     "cells": {"task-0|gpt-6-sol|high": {},
+               "task-1|gpt-6-sol|high": {"agent": "codebuddy"}}},
+))
+def test_unknown_historical_pick_harness_fails_before_claim(
+    tmp_path, monkeypatch, table,
+):
+    path, client = _fixture(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:gpt-6-sol:high"]
+    client.table = lambda: table
+    monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: pytest.fail(
+        "unknown grouping reached the claim path"))
+    with pytest.raises(SystemExit, match="cannot identify.*No new assignment was claimed"):
+        runloop._prepare_batch(args, client)
+    assert path.read_bytes() == before
+
+
+def test_multi_harness_without_historical_exception_keeps_claim_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    client = Client()
+    client.table = lambda: pytest.fail("ordinary multi-harness picks queried the table")
+    args = _args()
+    args.pick = ["task-0:gpt-6-sol:high", "task-1:hy4-preview:high"]
+    claimed = []
+    monkeypatch.setattr(runloop, "_claim_cell", lambda _client, task, *_a, **_kw: (
+        claimed.append(task) or _assignment(A if len(claimed) == 1 else B,
+                                            OLD_BATCH if len(claimed) == 1 else NEW_BATCH)
+    ))
+    active, _ = runloop._prepare_batch(args, client)
+    assert claimed == ["task-0", "task-1"]
+    assert {item["batch_id"] for item in active} == {OLD_BATCH, NEW_BATCH}
+
+
 def _finite_cells(n=20):
     return [
         {**_assignment(f"{i + 100:032x}", NEW_BATCH), "task_id": f"task-{i}"}
@@ -315,7 +440,7 @@ def test_historical_proof_admits_finite_twenty_in_one_batch(
     assert command[command.index("--workers") + 1] == "1"
 
 
-def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, monkeypatch):
+def test_historical_fresh_pick_excludes_held_batch_with_fresh_reads(tmp_path, monkeypatch):
     path, client = _fixture(tmp_path, monkeypatch)
     before = path.read_bytes()
     cells = _finite_cells(3)
@@ -328,7 +453,7 @@ def test_historical_proof_tops_up_same_held_batch_with_fresh_reads(tmp_path, mon
     monkeypatch.setattr(runloop, "_claim_cell", lambda *_a, **_kw: (
         claimed.append(cells[len(claimed) + 1]) or claimed[-1]))
     active, _ = runloop._prepare_batch(args, client)
-    assert active == cells and len(claimed) == 2
+    assert active == cells[1:] and len(claimed) == 2
     assert client.reads == 6
     assert path.read_bytes() == before
 
@@ -475,4 +600,45 @@ def test_retained_history_never_hides_unreviewed_unknown(tmp_path, monkeypatch, 
     with pytest.raises(boundary_recovery.RecoveryBlocked):
         boundary_recovery.historical_unknown_allows_claim(client, state, digest, path, tmp_path)
     assert client.historical_admission_reference is None
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('failure', [None, 'revoked', 'changed_proof', 'ledger_changed', 'wrong_benchmark', 'plan_scope'])
+def test_fresh_pick_rechecks_retained_history_before_binding(tmp_path, monkeypatch, failure):
+    path, client = _retained_eighteen(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    fresh = _assignment(C, NEW_BATCH)
+    args = _args()
+    claimed = []
+
+    def claim(*_a, **_kw):
+        assert client.batch_id is None
+        claimed.append(C)
+        return fresh
+
+    monkeypatch.setattr(runloop, '_claim_cell', claim)
+    assert runloop._prepare_assignment_boundary(args, client, 'deep-swe') is None
+    active, _ = runloop._prepare_batch(args, client)
+    assert claimed == [C] and client.batch_id is None
+    assert client.reads == 4  # Initial proof, then fresh proof immediately before claim.
+    if failure == 'revoked':
+        client.rows[A]['admission_evidence']['state'] = 'blocked'
+    elif failure == 'changed_proof':
+        client.rows[B]['admission_evidence']['manifest_sha256'] = '0' * 64
+    elif failure == 'ledger_changed':
+        path.write_bytes(original + b'\n')
+    elif failure == 'wrong_benchmark':
+        client.benchmark_id = 'pompeii'
+    elif failure == 'plan_scope':
+        client.plan_scoped = True
+    before = path.read_bytes()
+    new_path = assignment_boundary.state_path(tmp_path, 'deep-swe', NEW_BATCH)
+    if failure:
+        with pytest.raises(SystemExit, match='assignment boundary check failed'):
+            runloop._prepare_assignment_boundary(args, client, 'deep-swe', active)
+        assert client.batch_id is None and not new_path.exists()
+    else:
+        assert runloop._prepare_assignment_boundary(args, client, 'deep-swe', active) == new_path
+        assert client.batch_id == NEW_BATCH and client.reads == 6
+        assert set(json.loads(new_path.read_text())['expected']) == {C}
     assert path.read_bytes() == before

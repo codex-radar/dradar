@@ -173,3 +173,34 @@ def test_telemetry_persists_credential_generation_before_admission(tmp_path):
     saved = journal._read(telemetry.capacity_journal.path)
     assert saved["device_generation"] == 3
     assert server.calls == []
+
+
+def test_registration_rejected_requires_exact_request_and_no_attempt(tmp_path):
+    local = prepare(tmp_path)
+    payload = {"session_id": SID, "batch_id": BID, "seq": 1}
+    local.record_registration_request(payload)
+    assert local.seal(close_seq=2, reason="error")
+    server = ReceiptServer()
+    proof = {"schema_version": 1, "session_id": SID, "batch_id": BID,
+             "registration_state": "not_created", "fenced": True,
+             "request_sha256": hashlib.sha256(journal._canonical(payload)).hexdigest()}
+    server.runner_session_receipt = lambda *a, **kw: proof
+    assert journal.reconcile_file(local.path, server)
+    saved = json.loads(local.path.read_text())
+    assert saved["released"] is False and saved["registration_not_created"] == proof
+    assert server.calls == []
+    proof["request_sha256"] = "f" * 64
+    with pytest.raises(journal.CapacityEvidenceError):
+        journal.reconcile_file(local.path, server)
+
+
+def test_old_empty_journal_404_remains_unknown(tmp_path):
+    local = prepare(tmp_path)
+    local.seal(close_seq=2, reason="error")
+    server = ReceiptServer()
+    def unknown(*a, **kw):
+        raise ApiError("session not found", status_code=404)
+    server.runner_session_receipt = unknown
+    with pytest.raises(ApiError):
+        journal.reconcile_file(local.path, server)
+    assert not json.loads(local.path.read_text())["released"]

@@ -68,6 +68,28 @@ def test_expired_failed_recovery_archives_boundary_and_keeps_jobs(tmp_path, monk
     assert fresh == path
 
 
+def test_expired_multi_id_recovery_unblocks_bounded_auto_claim(
+    tmp_path, monkeypatch,
+):
+    path, recover_args = fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr("builtins.input", lambda _prompt: f"ACCEPT {A},{B}")
+    assert boundary_recovery.cmd_boundary_recover(recover_args) == 0
+    assert not path.exists()
+    monkeypatch.setattr(runloop, "HOME", tmp_path)
+    monkeypatch.setattr(runloop, "_acquire_batch", lambda *_a, **_kw: ([], True))
+    claimed = []
+    monkeypatch.setattr(runloop, "_claim_auto", lambda *_a, **_kw: (
+        claimed.append(C) or [{**assignment(C), "batch_id": C}]))
+    args = SimpleNamespace(
+        yes=True, allow_new_claims=True, resume=False, batch_id=None,
+        pick=None, auto=1, refill=False, fleet_pool=False,
+    )
+    client = SimpleNamespace(benchmark_id="deep-swe", plan_scoped=False)
+    active, free_pick = runloop._prepare_batch(args, client)
+    assert free_pick and [item["assignment_id"] for item in active] == [C]
+    assert claimed == [C]
+
+
 def test_task_repository_files_are_not_mistaken_for_pier_artifacts(tmp_path, monkeypatch):
     path, args = fixture(tmp_path, monkeypatch)
     trial = next((tmp_path / "work" / "jobs").rglob("trial"))
@@ -87,6 +109,36 @@ def test_cli_boundary_recover_requires_exact_ids(monkeypatch):
     monkeypatch.setattr(cli, "cmd_boundary_recover", lambda args: captured.append(args) or 0)
     assert cli.main(["boundary", "recover", "--accept-expired-assignment", A]) == 0
     assert captured[0].accept_expired_assignment == [A]
+
+
+def test_cli_boundary_inspect_reads_exact_saved_set_without_lock_or_server(
+    tmp_path, monkeypatch, capsys,
+):
+    path, _args = fixture(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    path.with_name(path.name + ".lock").unlink()
+    monkeypatch.setattr(boundary_recovery, "_client", lambda _cfg: pytest.fail(
+        "inspection must not contact the server"))
+    assert cli.main(["boundary", "inspect"]) == 0
+    shown = capsys.readouterr().out
+    assert A in shown and B in shown
+    assert "local outcome: failed" in shown
+    assert "not server recovery proof" in shown
+    assert path.read_bytes() == original
+    assert not path.with_name(path.name + ".lock").exists()
+
+
+def test_cli_boundary_inspect_rejects_symlink_without_reading_target(
+    tmp_path, monkeypatch, capsys,
+):
+    path, _args = fixture(tmp_path, monkeypatch)
+    target = path.with_name("private-target")
+    target.write_text("private data")
+    path.unlink()
+    path.symlink_to(target)
+    assert cli.main(["boundary", "inspect"]) == 1
+    assert "symlink" in capsys.readouterr().out
+    assert target.read_text() == "private data"
 
 
 def test_legacy_forget_option_is_rejected_before_any_run():

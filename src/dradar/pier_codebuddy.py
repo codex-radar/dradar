@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -57,10 +58,18 @@ def _usage_values(value: object) -> dict[str, int] | None:
     parsed = {name: _nonnegative_int(value.get(name)) for name in names}
     if any(item is None for item in parsed.values()):
         return None
+    if (
+        parsed["cache_read_input_tokens"]
+        + parsed["cache_creation_input_tokens"]
+        > parsed["input_tokens"]
+    ):
+        return None
     return {name: int(item) for name, item in parsed.items() if item is not None}
 
 
-def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
+def _codebuddy_usage_facts(
+    events: list[dict], *, identity_key: bytes | None = None,
+) -> dict[str, object]:
     """Reconcile CodeBuddy's per-response ledger with its terminal aggregate.
 
     CodeBuddy emits zero-usage stream fragments before the token-bearing
@@ -73,38 +82,53 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     subset.  Missing or inconsistent evidence stays explicitly incomplete.
     """
 
-    terminals = [
+    terminal_events = [
         event for event in events
         if isinstance(event, dict)
         and event.get("type") == "result"
-        and isinstance(event.get("usage"), dict)
     ]
-    terminal = terminals[0] if len(terminals) == 1 else None
+    terminal = terminal_events[0] if len(terminal_events) == 1 else None
     terminal_usage = _usage_values(
         terminal.get("usage") if terminal is not None else None
     )
+    # A compaction status is useful diagnostic context for an aggregate
+    # mismatch. It does not establish the missing amount or prove that every
+    # request event survived the stream, so it cannot settle usage by itself.
+    compaction_detected = any(
+        isinstance(event, dict)
+        and event.get("type") == "system"
+        and (
+            event.get("status") == "compacting"
+            or event.get("subtype") == "compaction"
+        )
+        for event in events
+    )
+    reasons: set[str] = set()
+    if not terminal_events:
+        reasons.add("terminal_aggregate_missing")
+    elif len(terminal_events) > 1:
+        reasons.add("terminal_aggregate_multiple")
+    elif terminal_usage is None:
+        reasons.add("terminal_usage_missing_or_invalid")
     names = (
         "input_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens", "output_tokens",
     )
     totals = {name: 0 for name in names}
     usage_by_message_id: dict[str, dict[str, int]] = {}
-    ledger_valid = True
+    conflicted_message_ids: set[str] = set()
+    duplicate_counts_by_message_id: dict[str, int] = {}
+    duplicate_message_count = 0
+    missing_message_id_count = 0
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant":
             continue
         message = event.get("message")
         if not isinstance(message, dict):
-            ledger_valid = False
+            reasons.add("request_message_invalid")
             continue
         message_id = message.get("id")
         runtime_model = message.get("model")
-        if (
-            isinstance(runtime_model, str)
-            and runtime_model
-            and runtime_model != SUPPORTED_MODEL
-        ):
-            ledger_valid = False
         raw_usage = message.get("usage")
         usage = _usage_values(raw_usage)
         if usage is None:
@@ -117,17 +141,34 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 (_nonnegative_int(raw_usage.get(name)) or 0) > 0
                 for name in names
             ):
-                ledger_valid = False
+                reasons.add("request_usage_invalid")
             continue
         if sum(usage.values()) == 0:
             continue
+        if runtime_model != SUPPORTED_MODEL:
+            # A positive request must prove its model identity. Zero stream
+            # fragments may omit it, but unknown-model tokens cannot settle.
+            reasons.add("request_model_mismatch")
+            continue
         if not isinstance(message_id, str) or not message_id:
-            ledger_valid = False
+            reasons.add("request_id_missing")
+            missing_message_id_count += 1
+            continue
+        if message_id in conflicted_message_ids:
             continue
         previous = usage_by_message_id.get(message_id)
         if previous is not None:
             if previous != usage:
-                ledger_valid = False
+                # Neither side of a conflicting identity is authoritative.
+                # Remove only that request and preserve unrelated records.
+                reasons.add("request_id_conflict")
+                conflicted_message_ids.add(message_id)
+                del usage_by_message_id[message_id]
+            else:
+                duplicate_message_count += 1
+                duplicate_counts_by_message_id[message_id] = (
+                    duplicate_counts_by_message_id.get(message_id, 0) + 1
+                )
             continue
         usage_by_message_id[message_id] = usage
 
@@ -142,12 +183,20 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
             "cache_creation_tokens": usage["cache_creation_input_tokens"],
         })
 
-    terminal_success = bool(
-        terminal is not None
-        and terminal.get("is_error") is not True
-        and terminal.get("usage_is_incomplete") is not True
-        and terminal.get("subtype") in {"success", None}
-    )
+    if terminal is not None:
+        terminal_model = terminal.get("model")
+        if (
+            isinstance(terminal_model, str)
+            and terminal_model
+            and terminal_model != SUPPORTED_MODEL
+        ):
+            reasons.add("terminal_model_mismatch")
+        if terminal.get("is_error") is True:
+            reasons.add("terminal_error")
+        if terminal.get("usage_is_incomplete") is True:
+            reasons.add("terminal_usage_incomplete")
+        if terminal.get("subtype") not in {"success", None}:
+            reasons.add("terminal_status_not_success")
     if terminal_usage is not None:
         reported_total = terminal.get("total_tokens")
         if reported_total is not None:
@@ -156,42 +205,115 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 + terminal_usage["output_tokens"]
             )
             if _nonnegative_int(reported_total) != expected_total:
-                terminal_success = False
+                reasons.add("terminal_total_tokens_mismatch")
+    observed = bool(token_usage_events)
+    if not observed:
+        reasons.add("request_ledger_unavailable")
+    if terminal_usage is not None and terminal_usage != totals:
+        reasons.add("terminal_aggregate_mismatch")
     complete = bool(
-        terminal_success
-        and ledger_valid
+        not reasons
         and terminal_usage is not None
-        and token_usage_events
+        and observed
         and terminal_usage == totals
-        and sum(totals.values()) > 0
+        and totals["input_tokens"] + totals["output_tokens"] > 0
     )
-    selected = totals if complete else {name: 0 for name in names}
+    selected = totals if observed else {name: 0 for name in names}
     prompt = selected["input_tokens"]
+    reason_order = (
+        "terminal_aggregate_missing",
+        "terminal_aggregate_multiple",
+        "terminal_usage_missing_or_invalid",
+        "terminal_model_mismatch",
+        "terminal_error",
+        "terminal_usage_incomplete",
+        "terminal_status_not_success",
+        "terminal_total_tokens_mismatch",
+        "request_model_mismatch",
+        "request_message_invalid",
+        "request_usage_invalid",
+        "request_id_missing",
+        "request_id_conflict",
+        "request_ledger_unavailable",
+        "terminal_aggregate_mismatch",
+    )
+    incomplete_reasons = [reason for reason in reason_order if reason in reasons]
+    # These are CodeBuddy assistant.message.id values, not verified provider
+    # request IDs. Keyed digests are comparable only within this sidecar: the
+    # key is never written, so runs cannot be linked by identifier. The adapter
+    # keeps one random key in memory for its current run only.
+    digest_key = identity_key if identity_key is not None else os.urandom(16)
+    retained_message_digests = [
+        {
+            "digest": hashlib.blake2b(
+                message_id.encode("utf-8", errors="surrogatepass"),
+                key=digest_key, digest_size=16,
+            ).hexdigest(),
+            "status": "retained",
+            "retained_event_index": index,
+            "duplicate_count": duplicate_counts_by_message_id.get(message_id, 0),
+        }
+        for index, message_id in enumerate(usage_by_message_id)
+    ]
+    conflicted_message_digests = [
+        {
+            "digest": hashlib.blake2b(
+                message_id.encode("utf-8", errors="surrogatepass"),
+                key=digest_key, digest_size=16,
+            ).hexdigest(),
+            "status": "conflicted",
+            "retained_event_index": None,
+        }
+        for message_id in sorted(conflicted_message_ids)
+    ]
+    local_reconciliation = {
+        "schema": "dradar-codebuddy-local-reconciliation-v1",
+        "counter_semantics": "input_includes_cache_read_and_creation",
+        "event_counter_mode": "unknown",
+        "reconciliation_assumption": "per_message_incremental",
+        "terminal_usage": terminal_usage,
+        "retained_event_sum": totals,
+        "terminal_minus_retained_event_sum": (
+            {name: terminal_usage[name] - totals[name] for name in names}
+            if terminal_usage is not None else None
+        ),
+        "identity_source": "assistant.message.id",
+        "provider_request_id_status": "unknown",
+        "message_id_digest_scope": "single_adapter_run",
+        "message_id_duplicate_count": duplicate_message_count,
+        "message_id_conflict_count": len(conflicted_message_ids),
+        "message_id_missing_count": missing_message_id_count,
+        "message_id_digests": (
+            retained_message_digests + conflicted_message_digests
+        ),
+    }
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "codebuddy",
         "model": SUPPORTED_MODEL,
         "complete": complete,
-        "request_count": len(token_usage_events) if complete else 0,
+        "compaction_detected": compaction_detected,
+        "request_count": len(token_usage_events) if observed else 0,
         "n_input_tokens": prompt,
         "n_cache_tokens": selected["cache_read_input_tokens"],
         "n_output_tokens": selected["output_tokens"],
         "cache_creation_tokens": selected["cache_creation_input_tokens"],
-        "token_usage_events": token_usage_events if complete else [],
+        "token_usage_events": token_usage_events if observed else [],
         "request_usage_complete": complete,
-        "request_usage_observed": complete,
+        "request_usage_observed": observed,
         "timed_usage_complete": False,
         "usage_incomplete_reason": (
-            None if complete else
-            "terminal_aggregate_missing_or_inconsistent"
-            if token_usage_events else
-            "request_ledger_unavailable_or_invalid"
+            None if complete else incomplete_reasons[0]
         ),
+        "usage_incomplete_reasons": incomplete_reasons,
         "usage_evidence_tier": (
-            "complete_reconciled" if complete else "unavailable"
+            "complete_reconciled" if complete
+            else "observed_unreconciled" if observed
+            else "unavailable"
         ),
         "provider_actual_cost_observed": False,
         "cost_semantics": "server-priced-api-equivalent",
+        "local_reconciliation": local_reconciliation,
     }
 
 
@@ -447,7 +569,11 @@ class CodeBuddySubscription(ClaudeCode):
                 continue
             if isinstance(event, dict):
                 events.append(event)
-        usage = _codebuddy_usage_facts(events)
+        digest_key = getattr(self, "_codebuddy_digest_key", None)
+        if digest_key is None:
+            digest_key = os.urandom(32)
+            self._codebuddy_digest_key = digest_key
+        usage = _codebuddy_usage_facts(events, identity_key=digest_key)
         try:
             (self.logs_dir / self._USAGE_FILE).write_text(
                 json.dumps(usage, ensure_ascii=False, separators=(",", ":")),
@@ -459,6 +585,8 @@ class CodeBuddySubscription(ClaudeCode):
         super().populate_context_post_run(context)
         complete = usage["complete"] is True
         context.cost_usd = None
+        # Preserve incomplete observations in provider-usage.json; the
+        # ordinary run totals represent only a reconciled complete ledger.
         context.n_input_tokens = int(usage["n_input_tokens"]) if complete else 0
         context.n_cache_tokens = int(usage["n_cache_tokens"]) if complete else 0
         context.n_output_tokens = int(usage["n_output_tokens"]) if complete else 0
@@ -501,6 +629,9 @@ class CodeBuddySubscription(ClaudeCode):
             "billing_basis": "subscription",
             "cost_not_reported": True,
             "usage_complete": complete,
+            "usage_compaction_detected": usage.get("compaction_detected") is True,
+            "usage_evidence_tier": usage["usage_evidence_tier"],
+            "usage_incomplete_reason": usage["usage_incomplete_reason"],
         })
         metrics["extra"] = extra
         try:

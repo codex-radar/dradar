@@ -2284,6 +2284,7 @@ def _preflight_subscription_before_build(
     agent: str,
     *,
     grok_cli: Path | None = None,
+    grok_model: str | None = None,
     kimi_cli: Path | None = None,
 ) -> None:
     """Run a bounded, no-prompt provider check before any Docker build.
@@ -2300,7 +2301,9 @@ def _preflight_subscription_before_build(
     if agent == GROK_AGENT:
         if grok_cli is None:
             raise RunnerError("Grok CLI was not prepared for provider preflight")
-        issue = grok_live_error(grok_cli)
+        if grok_model not in GROK_MODELS:
+            raise RunnerError("Grok selected model is missing or unsupported before preflight")
+        issue = grok_live_error(grok_cli, model=grok_model)
     elif agent == KIMI_AGENT:
         if kimi_cli is None:
             raise RunnerError("Kimi CLI was not prepared for provider preflight")
@@ -2336,7 +2339,7 @@ def trial_artifact_paths(trial_dir: Path) -> tuple[Path, Path | None, Path | Non
     return patch, trajectory, (result if result.exists() or result.is_symlink() else None)
 
 
-def _completed_trial_artifact_paths(trial_dir: Path, *, agent: str,
+def _completed_trial_artifact_paths(trial_dir: Path, *, agent: str | None = None,
                                     terminal_error: BaseException | None = None) -> tuple[Path, Path | None, Path | None]:
     """Reject unsafe results through the runner's normal failure/stop path.
 
@@ -4650,6 +4653,53 @@ def _cleanup_exited_pier_runtime(
     return process_residue, cleanup
 
 
+_REGISTRATION_LOCAL_EXCEPTION_TYPES = frozenset({
+    "AgentSetupTimeoutError", "EnvironmentStartTimeoutError", "HealthcheckError",
+    "NonZeroAgentExitCodeError", "CancelledError", "TimeoutError",
+    "FileNotFoundError", "PermissionError", "OSError", "ValueError", "RuntimeError",
+    "DockerException", "APIError", "BuildError", "ContainerError", "ImageNotFound",
+})
+
+
+def _fresh_registration_trial_hint(job_dir: Path | None, launch_started_ns: int | None) -> str:
+    """Return a local-only hint from this launch's Pier trial result.
+
+    Pier can record a trial exception and still exit 0.  The failure report
+    deliberately keeps exception text and paths off the wire; this hint is
+    printed only in the volunteer's own CLI after the exact child exits.
+    A reused assignment/job directory must not lend an old result to a new
+    attempt, so uncertain or ambiguous files yield no exception attribution.
+    """
+    if job_dir is None or launch_started_ns is None:
+        return ""
+    try:
+        trials = [p for p in job_dir.glob("*__*") if p.is_dir()]
+        if len(trials) != 1:
+            return ""
+        result_path = trials[0] / "result.json"
+        if result_path.stat().st_mtime_ns < launch_started_ns:
+            return ""
+        raw = read_trial_file(
+            job_dir, result_path.relative_to(job_dir), max_bytes=2 * 1024 * 1024,
+        )
+        result = json.loads(raw)
+    except (OSError, UnsafeArtifact, ValueError, json.JSONDecodeError):
+        return ""
+    if not isinstance(result, dict):
+        return ""
+    info = result.get("exception_info")
+    if not isinstance(info, dict):
+        return ""
+    exception_type = info.get("exception_type")
+    if not isinstance(exception_type, str) or exception_type not in _REGISTRATION_LOCAL_EXCEPTION_TYPES:
+        return ""
+    return (
+        f"Pier trial recorded exception type: {exception_type}. "
+        f"Inspect local {result_path} or the adjacent exception.txt for the first error; "
+        "redact credentials, paths, and task content before sharing."
+    )
+
+
 def _wait_for_worker_registration(
     proc: subprocess.Popen,
     event_path: Path,
@@ -4660,6 +4710,7 @@ def _wait_for_worker_registration(
     log_path: Path | None = None,
     job_dir: Path | None = None,
     codex_version: str | None = None,
+    launch_started_ns: int | None = None,
 ) -> dict:
     """Wait for a bounded, structured Pier lifecycle record.
 
@@ -4753,6 +4804,12 @@ def _wait_for_worker_registration(
         # exception/cleanup path and is never misreported as an exit.
         exit_status = proc.poll()
         if exit_status is not None:
+            local_hint = (
+                _fresh_registration_trial_hint(job_dir, launch_started_ns)
+                if exit_status == 0 else ""
+            )
+            if local_hint:
+                print(f"  {local_hint}")
             report_detail: dict[str, object] = {
                 "registration_result": "process_exited",
                 "registration_elapsed_sec": min(3600, max(0, int(time.monotonic() - started))),
@@ -5201,6 +5258,7 @@ def _run_trial(
         provider_cli_path = _validated_grok_cli_path()
         _preflight_subscription_before_build(
             effective_agent, grok_cli=provider_cli_path,
+            grok_model=effective_assignment["model"],
         )
         print("Grok provider preflight passed before Docker build")
     elif effective_agent == KIMI_AGENT:
@@ -5473,6 +5531,8 @@ def _run_trial(
                 if execution_audit is not None:
                     execution_audit.pending(job_name, jobs_dir / job_name)
                 try:
+                    fresh_pier_job_dir = not (jobs_dir / job_name).exists()
+                    pier_launch_started_ns = time.time_ns()
                     proc = _spawn_pier_process(cmd, log, work_dir, env,
                                                job_dir=jobs_dir / job_name)
                     provider_stack.callback(_finalize_pier_process, proc, jobs_dir / job_name)
@@ -5486,7 +5546,8 @@ def _run_trial(
                     if isinstance(proc, WindowsJobProcess):
                         execution_audit.record_spawn(proc.pid, windows_job_id=proc.job_id)
                     else:
-                        execution_audit.record_spawn(getattr(proc, "pid", None))
+                        execution_audit.record_spawn(getattr(proc, "pid", None),
+                                                     crash_recovery_supported=managed_auth_config is None)
                 if on_worker_registered is None and worker_event_source is None:
                     # Legacy unit callers that do not request ownership binding
                     # keep the old local-only behavior. Production always passes
@@ -5506,6 +5567,9 @@ def _run_trial(
                         job_dir=jobs_dir / job_name,
                         codex_version=(
                             codex_cli_version if effective_agent == "codex" else None
+                        ),
+                        launch_started_ns=(
+                            pier_launch_started_ns if fresh_pier_job_dir else None
                         ),
                     )
                     if getattr(on_worker_registered, "_uses_registration_window", False):
