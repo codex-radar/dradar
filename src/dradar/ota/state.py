@@ -428,15 +428,11 @@ class UpdateController:
             if self.releases.is_symlink() or not self.releases.is_dir():
                 return False
             entries = list(self.releases.iterdir())
-            if not entries:
-                return True
-            if len(entries) != 1 or entries[0].name != pointer.release_id:
-                return False
-            release_dir = entries[0]
-            return (
-                not release_dir.is_symlink()
-                and release_dir.is_dir()
-                and not any(release_dir.iterdir())
+            return all(
+                not entry.is_symlink()
+                and entry.is_dir()
+                and not any(entry.iterdir())
+                for entry in entries
             )
         except (InvalidTransition, OSError, ValueError):
             return False

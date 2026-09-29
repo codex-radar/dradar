@@ -471,6 +471,7 @@ def evaluate_manifest(
     rollout: RolloutContext,
     target: PlatformTarget | None = None,
     now: datetime | None = None,
+    allow_same_version: bool = False,
 ) -> PolicyDecision:
     """Return a stable, explainable decision without downloading anything."""
 
@@ -504,7 +505,11 @@ def evaluate_manifest(
         return PolicyDecision(False, "outside_rollout_cohort")
     if manifest.sequence <= committed_sequence:
         return PolicyDecision(False, "anti_rollback_sequence")
-    if _version_tuple(manifest.version) <= _version_tuple(current_version):
+    manifest_version = _version_tuple(manifest.version)
+    installed_version = _version_tuple(current_version)
+    if manifest_version < installed_version or (
+        manifest_version == installed_version and not allow_same_version
+    ):
         return PolicyDecision(False, "version_not_newer")
     if _version_tuple(compatibility.launcher_version) < _version_tuple(
         manifest.launcher_min_version,

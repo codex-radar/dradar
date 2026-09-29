@@ -415,6 +415,62 @@ def test_first_download_failure_can_retry_signed_legacy_bootstrap(
             runtime.controller.committed_pointer()
 
 
+def test_failed_legacy_home_can_commit_matching_signed_installed_version(tmp_path):
+    class Offline(Response):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            yield b"partial"
+            raise ConnectionError("controlled interruption")
+
+    document, keys = signed_release()
+    root = tmp_path / "failed" / "ota"
+    runtime = UpdateRuntime(
+        root,
+        recorder=FlightRecorder(tmp_path / "audit"),
+        download_client=Client(Offline([])),
+    )
+
+    def attempt(version):
+        return runtime.prepare(
+            document,
+            trusted_keys=keys,
+            current_version=version,
+            committed_sequence=0,
+            compatibility=compatibility(),
+            rollout=RolloutContext(subject=runtime.audit.recorder.client_id),
+            target=PlatformTarget("linux", "x86_64"),
+        )
+
+    with pytest.raises(ConnectionError, match="controlled interruption"):
+        attempt("0.5.175")
+    assert runtime.controller.state()["state"] == "failed"
+
+    runtime.download_client = Client(Response([BODY]))
+    assert attempt("0.6.0").eligible is True
+    assert runtime.activate_and_self_test(
+        SafePointSnapshot(), lambda artifact: artifact.read_bytes() == BODY
+    ) is UpdateState.COMMITTED
+    assert runtime.controller.committed_pointer().version == "0.6.0"
+
+    pristine = UpdateRuntime(
+        tmp_path / "pristine" / "ota",
+        recorder=FlightRecorder(tmp_path / "pristine-audit"),
+        download_client=Client(Response([BODY])),
+    )
+    decision = pristine.prepare(
+        document,
+        trusted_keys=keys,
+        current_version="0.6.0",
+        committed_sequence=0,
+        compatibility=compatibility(),
+        rollout=RolloutContext(subject=pristine.audit.recorder.client_id),
+        target=PlatformTarget("linux", "x86_64"),
+    )
+    assert decision.eligible is False
+    assert decision.reason == "version_not_newer"
+    assert pristine.controller.state() is None
+
+
 def test_legacy_download_retry_rejects_untrusted_or_dirty_state(tmp_path):
     root = tmp_path / "ota"
     runtime = UpdateRuntime(
@@ -461,6 +517,8 @@ def test_legacy_download_retry_rejects_untrusted_or_dirty_state(tmp_path):
 
     _atomic_json(root / "update-state.json", failed)
     (root / "releases" / release).mkdir(parents=True)
+    (root / "releases" / "older-failed-download").mkdir()
+    assert runtime.controller.retryable_legacy_download_failure() is True
     (root / "releases" / release / "partial.pyz").write_bytes(b"partial")
     rejected()
     (root / "releases" / release / "partial.pyz").unlink()
