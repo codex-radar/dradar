@@ -67,7 +67,9 @@ def _usage_values(value: object) -> dict[str, int] | None:
     return {name: int(item) for name, item in parsed.items() if item is not None}
 
 
-def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
+def _codebuddy_usage_facts(
+    events: list[dict], *, identity_key: bytes | None = None,
+) -> dict[str, object]:
     """Reconcile CodeBuddy's per-response ledger with its terminal aggregate.
 
     CodeBuddy emits zero-usage stream fragments before the token-bearing
@@ -103,6 +105,7 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     totals = {name: 0 for name in names}
     usage_by_message_id: dict[str, dict[str, int]] = {}
     conflicted_message_ids: set[str] = set()
+    duplicate_counts_by_message_id: dict[str, int] = {}
     duplicate_message_count = 0
     missing_message_id_count = 0
     for event in events:
@@ -151,6 +154,9 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 del usage_by_message_id[message_id]
             else:
                 duplicate_message_count += 1
+                duplicate_counts_by_message_id[message_id] = (
+                    duplicate_counts_by_message_id.get(message_id, 0) + 1
+                )
             continue
         usage_by_message_id[message_id] = usage
 
@@ -222,25 +228,29 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     incomplete_reasons = [reason for reason in reason_order if reason in reasons]
     # These are CodeBuddy assistant.message.id values, not verified provider
     # request IDs. Keyed digests are comparable only within this sidecar: the
-    # ephemeral key is never written, so runs cannot be linked by identifier.
-    digest_key = os.urandom(16)
+    # key is never written, so runs cannot be linked by identifier. The adapter
+    # keeps one random key in memory for its current run only.
+    digest_key = identity_key if identity_key is not None else os.urandom(16)
     retained_message_digests = [
         {
             "digest": hashlib.blake2b(
-                message_id.encode("utf-8"), key=digest_key, digest_size=16,
+                message_id.encode("utf-8", errors="surrogatepass"),
+                key=digest_key, digest_size=16,
             ).hexdigest(),
             "status": "retained",
-            "event_index": index,
+            "retained_event_index": index,
+            "duplicate_count": duplicate_counts_by_message_id.get(message_id, 0),
         }
         for index, message_id in enumerate(usage_by_message_id)
     ]
     conflicted_message_digests = [
         {
             "digest": hashlib.blake2b(
-                message_id.encode("utf-8"), key=digest_key, digest_size=16,
+                message_id.encode("utf-8", errors="surrogatepass"),
+                key=digest_key, digest_size=16,
             ).hexdigest(),
             "status": "conflicted",
-            "event_index": None,
+            "retained_event_index": None,
         }
         for message_id in sorted(conflicted_message_ids)
     ]
@@ -257,6 +267,7 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
         ),
         "identity_source": "assistant.message.id",
         "provider_request_id_status": "unknown",
+        "message_id_digest_scope": "single_adapter_run",
         "message_id_duplicate_count": duplicate_message_count,
         "message_id_conflict_count": len(conflicted_message_ids),
         "message_id_missing_count": missing_message_id_count,
@@ -545,7 +556,11 @@ class CodeBuddySubscription(ClaudeCode):
                 continue
             if isinstance(event, dict):
                 events.append(event)
-        usage = _codebuddy_usage_facts(events)
+        digest_key = getattr(self, "_codebuddy_digest_key", None)
+        if digest_key is None:
+            digest_key = os.urandom(32)
+            self._codebuddy_digest_key = digest_key
+        usage = _codebuddy_usage_facts(events, identity_key=digest_key)
         try:
             (self.logs_dir / self._USAGE_FILE).write_text(
                 json.dumps(usage, ensure_ascii=False, separators=(",", ":")),

@@ -572,7 +572,7 @@ def test_usage_quarantines_conflicting_duplicate_and_preserves_other_requests(
     assert {item["status"] for item in diagnostic["message_id_digests"]} == {
         "retained", "conflicted",
     }
-    assert [item["event_index"] for item in diagnostic["message_id_digests"]] == [0, None]
+    assert [item["retained_event_index"] for item in diagnostic["message_id_digests"]] == [0, None]
 
 
 @pytest.mark.parametrize("model", ["not-hy4", None, ""])
@@ -724,6 +724,8 @@ def test_local_reconciliation_records_message_dedup_without_claiming_request_ids
     assert facts["usage_incomplete_reason"] == "terminal_aggregate_mismatch"
     assert diagnostic["message_id_duplicate_count"] == 1
     assert diagnostic["message_id_conflict_count"] == 0
+    assert [item["duplicate_count"] for item in diagnostic["message_id_digests"]] == [1, 0]
+    assert diagnostic["message_id_digest_scope"] == "single_adapter_run"
     assert diagnostic["retained_event_sum"]["input_tokens"] == 50
     assert diagnostic["terminal_usage"]["input_tokens"] == 30
     assert diagnostic["terminal_minus_retained_event_sum"]["input_tokens"] == -20
@@ -749,6 +751,29 @@ def test_local_reconciliation_keeps_unknown_terminal_and_missing_id_unknown(
     assert diagnostic["message_id_missing_count"] == 1
     assert diagnostic["message_id_digests"] == []
     assert diagnostic["provider_request_id_status"] == "unknown"
+
+
+def test_message_digest_handles_json_surrogate_and_is_stable_within_run(
+) -> None:
+    usage = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    events = [
+        {"type": "assistant", "message": {
+            "id": "\ud800", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "usage": usage},
+    ]
+    parse = _usage_function()
+    first = parse(events, identity_key=b"same-local-run")
+    second = parse(events, identity_key=b"same-local-run")
+    assert first["complete"] is True
+    assert (
+        first["local_reconciliation"]["message_id_digests"]
+        == second["local_reconciliation"]["message_id_digests"]
+    )
+    assert "\\ud800" not in json.dumps(first["local_reconciliation"])
 
 
 def test_usage_separates_terminal_model_and_total_mismatch_reasons() -> None:
