@@ -697,6 +697,73 @@ def test_usage_preserves_observed_requests_on_terminal_aggregate_mismatch(
     assert "m1" not in json.dumps(diagnostic)
 
 
+@pytest.mark.parametrize(
+    ("tail", "expected_reason"),
+    [
+        ([], "terminal_aggregate_missing"),
+        ([{"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 150, "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5, "output_tokens": 13,
+        }}], "terminal_aggregate_mismatch"),
+        ([{"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": {
+                "input_tokens": 125, "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 5, "output_tokens": 10,
+            },
+        }}, {"type": "assistant", "message": {
+            "id": "m2", "model": CODEBUDDY_MODEL, "usage": {
+                "input_tokens": 40, "cache_read_input_tokens": 8,
+                "cache_creation_input_tokens": 2, "output_tokens": 3,
+            },
+        }}, {"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 250, "cache_read_input_tokens": 40,
+            "cache_creation_input_tokens": 10, "output_tokens": 18,
+        }}], "request_id_conflict"),
+        ([{"type": "result", "subtype": "success", "usage": {
+            "input_tokens": 100, "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5, "output_tokens": 7,
+        }}], "terminal_aggregate_mismatch"),
+        ([{"type": "result", "subtype": "error", "is_error": True,
+           "usage": {
+               "input_tokens": 150, "cache_read_input_tokens": 20,
+               "cache_creation_input_tokens": 5, "output_tokens": 13,
+           }}], "terminal_error"),
+    ],
+)
+def test_compaction_status_keeps_ambiguous_ledger_observed_only(
+    tail: list[dict], expected_reason: str, tmp_path: Path,
+) -> None:
+    request = {
+        "input_tokens": 125, "cache_read_input_tokens": 20,
+        "cache_creation_input_tokens": 5, "output_tokens": 9,
+    }
+    facts = _usage_function()([
+        {"type": "system", "status": "compacting"},
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": request,
+        }},
+        *tail,
+    ])
+    assert facts["compaction_detected"] is True
+    assert facts["complete"] is False
+    assert facts["request_usage_complete"] is False
+    assert facts["usage_evidence_tier"] == "observed_unreconciled"
+    assert expected_reason in facts["usage_incomplete_reasons"]
+    assert facts["n_input_tokens"] == (40 if expected_reason == "request_id_conflict" else 125)
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "provider-usage.json").write_text(
+        json.dumps(facts), encoding="utf-8",
+    )
+    normalized = _subscription_trial_usage(
+        tmp_path, {"codebuddy_cli_version": CODEBUDDY_CLI_VERSION},
+    )
+    assert normalized is not None
+    assert normalized["complete"] is False
+    assert normalized["compaction_detected"] is True
+
+
 def test_local_reconciliation_records_message_dedup_without_claiming_request_ids(
 ) -> None:
     first = {

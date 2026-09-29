@@ -91,6 +91,18 @@ def _codebuddy_usage_facts(
     terminal_usage = _usage_values(
         terminal.get("usage") if terminal is not None else None
     )
+    # A compaction status is useful diagnostic context for an aggregate
+    # mismatch. It does not establish the missing amount or prove that every
+    # request event survived the stream, so it cannot settle usage by itself.
+    compaction_detected = any(
+        isinstance(event, dict)
+        and event.get("type") == "system"
+        and (
+            event.get("status") == "compacting"
+            or event.get("subtype") == "compaction"
+        )
+        for event in events
+    )
     reasons: set[str] = set()
     if not terminal_events:
         reasons.add("terminal_aggregate_missing")
@@ -280,6 +292,7 @@ def _codebuddy_usage_facts(
         "provider": "codebuddy",
         "model": SUPPORTED_MODEL,
         "complete": complete,
+        "compaction_detected": compaction_detected,
         "request_count": len(token_usage_events) if observed else 0,
         "n_input_tokens": prompt,
         "n_cache_tokens": selected["cache_read_input_tokens"],
@@ -572,8 +585,8 @@ class CodeBuddySubscription(ClaudeCode):
         super().populate_context_post_run(context)
         complete = usage["complete"] is True
         context.cost_usd = None
-        # Context counters are presented as run totals. Keep partial request
-        # observations in provider-usage.json until the terminal reconciles.
+        # Preserve incomplete observations in provider-usage.json; the
+        # ordinary run totals represent only a reconciled complete ledger.
         context.n_input_tokens = int(usage["n_input_tokens"]) if complete else 0
         context.n_cache_tokens = int(usage["n_cache_tokens"]) if complete else 0
         context.n_output_tokens = int(usage["n_output_tokens"]) if complete else 0
@@ -616,6 +629,7 @@ class CodeBuddySubscription(ClaudeCode):
             "billing_basis": "subscription",
             "cost_not_reported": True,
             "usage_complete": complete,
+            "usage_compaction_detected": usage.get("compaction_detected") is True,
             "usage_evidence_tier": usage["usage_evidence_tier"],
             "usage_incomplete_reason": usage["usage_incomplete_reason"],
         })
