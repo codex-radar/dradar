@@ -119,6 +119,13 @@ def test_run_trial_log_boundary_with_legacy_parent(tmp_path, monkeypatch):
     # conftest's Pier-specific sitecustomize into that child interpreter.
     monkeypatch.setattr(runner.egress, "prepare_egress_proxy_runtime",
                         lambda *a, **k: {})
+    # This child is plain Python and creates no Pier containers. Keep the
+    # encoding fixture independent of the CI host's Docker installation;
+    # exact-job cleanup has its own focused tests.
+    monkeypatch.setattr(runner, "_cleanup_terminated_pier_containers",
+                        lambda _job: runner.PierContainerCleanup())
+    monkeypatch.setattr(runner, "_confirm_terminated_pier_containers_absent",
+                        lambda _job: None)
     artifact = runner.run_trial(
         {"assignment_id": "encoding", "task_id": "fixture", "agent": "codex",
          "model": "gpt-5.5", "effort": "medium", "agent_version": "0.145.0"},
