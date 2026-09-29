@@ -59,6 +59,9 @@ def main() -> int:
     if sys.argv[1:2] == ["recover-upload"]:
         from .ota.recovery import main as recovery_main
         return recovery_main(sys.argv[2:])
+    if sys.argv[1:2] == ["recover-cleanup"]:
+        from .ota.recovery import main_cleanup as recovery_main
+        return recovery_main(sys.argv[2:])
     from .ota import discovery
     from .child_entrypoint import retain_inherited_windows_payload
     retain_inherited_windows_payload()

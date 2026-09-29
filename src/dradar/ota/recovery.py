@@ -1,4 +1,4 @@
-"""Public, signed zipapp entry for one upload while normal OTA is blocked.
+"""Public, signed zipapp entries while normal OTA is blocked.
 
 This is only the second half of the trust chain. The operator first uses an
 already trusted CLI's public OTA path in a disposable home to verify and
@@ -144,4 +144,40 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
-__all__ = ["main"]
+def main_cleanup(argv: list[str] | None = None) -> int:
+    """Use a newer signed bundle to retire one verified cleanup quarantine.
+
+    This entry bypasses only the old CLI's pending-upload activation deadlock.
+    It does not install or activate the bundle, and it takes the ordinary
+    invocation lock so an in-flight runner cannot race the disposition.
+    """
+    parser = argparse.ArgumentParser(prog="dradar.pyz recover-cleanup")
+    parser.add_argument("--manifest", required=True, metavar="SIGNED_JSON")
+    parser.add_argument("--assignment-id", required=True, type=_assignment_id)
+    parser.add_argument("--benchmark", required=True)
+    parser.add_argument("--batch-id", required=True, type=_batch_id)
+    parser.add_argument("--runner-session-id", required=True, type=_assignment_id)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--inventory-sha256")
+    args = parser.parse_args(argv)
+    if not args.benchmark.strip():
+        parser.error("--benchmark must not be empty")
+    if args.execute and not re.fullmatch(r"[0-9a-f]{64}", args.inventory_sha256 or ""):
+        parser.error("--execute requires the exact --inventory-sha256 from preflight")
+    try:
+        root = ota_root(HOME)
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
+            raise ValueError("OTA root is unsafe")
+        with UpdateLock(root / "launch.lock", timeout_seconds=0):
+            if active_invocations(root):
+                raise ValueError("another DRadar invocation is active")
+            _verify_package(Path(args.manifest).expanduser(), Path(sys.argv[0]), HOME)
+            from ..cleanup_recovery import cmd_recover
+            return cmd_recover(args)
+    except (InvalidTransition, ManifestError, OSError, ValueError, RuntimeError,
+            KeyError, zipfile.BadZipFile) as exc:
+        print(f"cleanup recovery rejected before state change: {exc}", file=sys.stderr)
+        return 2
+
+
+__all__ = ["main", "main_cleanup"]

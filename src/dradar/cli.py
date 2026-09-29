@@ -27,6 +27,7 @@ from .capacity import cmd_capacity
 from .boundary_recovery import cmd_boundary_inspect, cmd_boundary_recover
 from .cells import cmd_cells
 from .claim_receipts import cmd_claim_receipt
+from .cleanup_recovery import cmd_recover as cmd_cleanup_recover
 from .doctor import cmd_doctor
 from .fleet import (
     cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
@@ -169,6 +170,19 @@ def main(argv: list[str] | None = None) -> int:
         type=_assignment_id_value, metavar="ID",
         help="exact saved assignment ID to review (repeat for every saved ID)")
     p_boundary_recover.set_defaults(func=cmd_boundary_recover)
+
+    p_cleanup_recovery = sub.add_parser(
+        "cleanup-recover", help="inspect or retire one exited, unsubmitted cleanup fence")
+    p_cleanup_recovery.add_argument("--assignment-id", required=True,
+                                    type=_assignment_id_value)
+    p_cleanup_recovery.add_argument("--batch-id", required=True,
+                                    type=_batch_id_value)
+    p_cleanup_recovery.add_argument("--runner-session-id", required=True,
+                                    type=_assignment_id_value)
+    p_cleanup_recovery.add_argument("--benchmark")
+    p_cleanup_recovery.add_argument("--execute", action="store_true")
+    p_cleanup_recovery.add_argument("--inventory-sha256")
+    p_cleanup_recovery.set_defaults(func=cmd_cleanup_recover)
 
     p_capacity = sub.add_parser(
         "capacity", help="recommend a safe local worker count from Docker resources")

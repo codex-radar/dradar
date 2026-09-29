@@ -296,6 +296,7 @@ class ApiClient:
                     "/api/v1/run-plans/stop": "run_plan_stop",
                     "/api/v1/runner/heartbeat": "runner_heartbeat",
                     "/api/v1/runner/flight-events": "flight_events",
+                    "/api/v1/assignments/cleanup-recovery": "cleanup_recovery",
                     "/api/v1/submissions": "submission_upload",
                     "/api/v1/submission-upload-intents": "upload_intent",
                 }
@@ -1079,6 +1080,13 @@ class ApiClient:
             "GET", "/api/v1/runner/sessions/" + urllib.parse.quote(session_id, safe="") + "/receipt",
             params={"batch_id": batch_id}, timeout=3.0,
             retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def recover_unsubmitted_cleanup(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Retire one exited, unsubmitted assignment with a durable request ID."""
+        return self._check(self._request(
+            "POST", "/api/v1/assignments/cleanup-recovery", json=payload,
+            timeout=10.0, retry_rate_limit=False, retry_transport=False,
         ))
 
     def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:

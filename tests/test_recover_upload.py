@@ -311,3 +311,32 @@ def test_recovery_excludes_active_runner_before_verification(tmp_path, monkeypat
         ]) == 2
     finally:
         active.__exit__(None, None, None)
+
+
+def test_signed_cleanup_entry_verifies_source_and_excludes_active_runner(
+    tmp_path, monkeypatch,
+):
+    from dradar import cleanup_recovery
+
+    home, manifest, package, _ = _signed_package(tmp_path, monkeypatch)
+    monkeypatch.setattr(recovery, "HOME", home)
+    monkeypatch.setattr(sys, "argv", [str(package), "recover-cleanup"])
+    reached = []
+    monkeypatch.setattr(cleanup_recovery, "cmd_recover",
+                        lambda args: reached.append(args.assignment_id) or 0)
+    args = ["--manifest", str(manifest), "--assignment-id", ASSIGNMENT,
+            "--benchmark", "deep-swe", "--batch-id", BATCH,
+            "--runner-session-id", "b" * 32]
+    assert recovery.main_cleanup(args) == 0
+    assert reached == [ASSIGNMENT]
+    package.write_bytes(package.read_bytes() + b"tampered")
+    assert recovery.main_cleanup(args) == 2
+    assert reached == [ASSIGNMENT]
+    with UpdateLock(home / "ota" / "launch.lock"):
+        active = register_invocation(home / "ota")
+        active.__enter__()
+    try:
+        assert recovery.main_cleanup(args) == 2
+    finally:
+        active.__exit__(None, None, None)
+    assert reached == [ASSIGNMENT]
