@@ -114,9 +114,12 @@ def _saved_deadline(value, current):
     return min(current, value['deadline'], time.monotonic() + max(0.0, wall - time.time()))
 
 
-def recover(api, operation, body, *, check=None):
+def recover(api, operation, body, *, check=None, request_id=None):
     if operation not in {'assignment_claim', 'assignment_checkout'}:
         raise ValueError('unsupported allocation operation')
+    if request_id is not None and (not isinstance(request_id, str)
+            or not re.fullmatch(r'[0-9a-f]{32}', request_id)):
+        raise ValueError('invalid preallocated allocation request identity')
     body = copy.deepcopy(body)
     deadline = time.monotonic() + TOTAL_SECONDS
     session_id = body.get('session_id')
@@ -151,6 +154,7 @@ def recover(api, operation, body, *, check=None):
                         or not isinstance(entry.get('body'), dict)
                         or not isinstance(entry.get('request_id'), str)
                         or not re.fullmatch(r'[0-9a-f]{32}', entry['request_id'])
+                        or (request_id is not None and entry['request_id'] != request_id)
                         or type(entry.get('sent')) is not bool):
                     raise ValueError()
             except (ValueError, TypeError, AttributeError):
@@ -158,11 +162,14 @@ def recover(api, operation, body, *, check=None):
         else:
             permitted()
             entry = {'schema_version': 1, 'scope': scope, 'operation': operation,
-                     'request_id': uuid.uuid4().hex, 'body': body, 'sent': False,
+                     'request_id': request_id or uuid.uuid4().hex, 'body': body, 'sent': False,
                      'attempts': 0, 'receipt_reads': 0, 'deadline': deadline,
                      'server': api.server, 'batch_id': api.batch_id}
             _save(path, entry)
         if not entry['sent'] and entry['body'] != body:
+            if request_id is not None:
+                raise ApiError('preallocated allocation scope changed; kept unchanged',
+                               code='acquisition_journal_invalid')
             permitted()
             entry.update(body=body, request_id=uuid.uuid4().hex)
             _save(path, entry)
@@ -281,6 +288,10 @@ async def _recover(api, operation, requested, entry, path, deadline, permitted):
                     raise unresolved()
                 # A first definitive rejection did not allocate anything.
                 path.unlink(missing_ok=True)
+                exc.allocation_no_claim = {
+                    'operation': operation, 'request_id': rid,
+                    'status': 'definitive_rejection',
+                }
                 raise
             except (httpx.HTTPError, TimeoutError, ValueError):
                 pass

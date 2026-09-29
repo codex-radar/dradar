@@ -32,6 +32,7 @@ from .fleet import (
     cmd_fleet_add, cmd_fleet_inspect_runtime, cmd_fleet_serve, cmd_fleet_status,
     cmd_fleet_stop, cmd_fleet_watch,
 )
+from .fleet_claim import cmd_fleet_claim, cmd_fleet_claim_recover, cmd_fleet_claim_stop
 from .flight_recorder import cmd_diagnostics
 from .identity import cmd_link_github, cmd_login, cmd_rename, cmd_status
 from .image_cache import cmd_config_set, cmd_config_show
@@ -269,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fleet_sub = p_fleet.add_subparsers(
         dest="fleet_command", required=True,
-        metavar="{add,status,watch,stop}",
+        metavar="{add,claim,claim-recover,claim-stop,status,watch,stop}",
     )
     p_fleet_add = fleet_sub.add_parser(
         "add", help="idempotently add one exact claimed batch to this machine")
@@ -305,6 +306,31 @@ def main(argv: list[str] | None = None) -> int:
     p_fleet_add.add_argument("--refill-model", metavar="MODEL")
     p_fleet_add.add_argument("--refill-effort", metavar="EFFORT")
     p_fleet_add.set_defaults(func=cmd_fleet_add, lease_hint=True)
+    p_fleet_claim = fleet_sub.add_parser(
+        "claim", help="claim a finite one-Harness selection through this Fleet",
+        epilog=("Old exit-unknown evidence stays saved and counts toward Server capacity "
+                "when the Server says it does. A stop can leave an already registered "
+                "request in flight; reconcile its original receipt before another claim. "
+                "A late held assignment never starts a model automatically."))
+    p_fleet_claim.add_argument("--pick", action="append", required=True,
+                               metavar="TASK:MODEL:EFFORT")
+    p_fleet_claim.add_argument("--benchmark", metavar="BENCHMARK")
+    p_fleet_claim.add_argument("--window-id", required=True, metavar="ID",
+                               help="stable identifier for this finite claim budget")
+    p_fleet_claim.add_argument("--workers", type=int, required=True, metavar="N")
+    p_fleet_claim.add_argument("--max-new", type=int, required=True, metavar="N",
+                               help="maximum additional assignments in this local claim window")
+    p_fleet_claim.add_argument("--max-concurrent", type=int, required=True, metavar="N",
+                               help="ceiling for Fleet worker targets in this local claim window")
+    p_fleet_claim.add_argument("--deadline", required=True, metavar="ISO_TIME",
+                               help="absolute deadline for new claims, including timezone")
+    p_fleet_claim.set_defaults(func=cmd_fleet_claim)
+    p_fleet_claim_recover = fleet_sub.add_parser(
+        "claim-recover", help="read original receipts after an interrupted Fleet claim")
+    p_fleet_claim_recover.set_defaults(func=cmd_fleet_claim_recover)
+    p_fleet_claim_stop = fleet_sub.add_parser(
+        "claim-stop", help="stop future Fleet claims while preserving in-flight receipts")
+    p_fleet_claim_stop.set_defaults(func=cmd_fleet_claim_stop)
     p_fleet_status = fleet_sub.add_parser(
         "status", help="show local Fleet batches and aggregate worker reservations")
     p_fleet_status.add_argument(
