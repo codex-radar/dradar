@@ -296,6 +296,7 @@ class ApiClient:
                     "/api/v1/run-plans/stop": "run_plan_stop",
                     "/api/v1/runner/heartbeat": "runner_heartbeat",
                     "/api/v1/runner/flight-events": "flight_events",
+                    "/api/v1/assignments/cleanup-recovery": "cleanup_recovery",
                     "/api/v1/submissions": "submission_upload",
                     "/api/v1/submission-upload-intents": "upload_intent",
                 }
@@ -1063,11 +1064,12 @@ class ApiClient:
         from .telemetry_recovery import replay
         return asyncio.run(replay(self, "/api/v1/runner/heartbeat", payload))
 
-    def runner_close(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def runner_close(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Close a runner session without releasing any held lease."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/close", payload))
+        return asyncio.run(recover(self, "/api/v1/runner/close", payload,
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_session_receipt(
         self, session_id: str, *, batch_id: str,
@@ -1081,11 +1083,20 @@ class ApiClient:
             retry_rate_limit=False, retry_transport=False,
         ))
 
-    def release_runner_capacity(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def recover_unsubmitted_cleanup(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Retire one exited, unsubmitted assignment with a durable request ID."""
+        return self._check(self._request(
+            "POST", "/api/v1/assignments/cleanup-recovery", json=payload,
+            timeout=10.0, retry_rate_limit=False, retry_transport=False,
+        ))
+
+    def release_runner_capacity(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
         import asyncio
         from .session_exit_recovery import recover
-        return asyncio.run(recover(self, "/api/v1/runner/release-capacity", _cleanup_payload(payload)))
+        return asyncio.run(recover(self, "/api/v1/runner/release-capacity",
+                                   _cleanup_payload(payload),
+                                   explicit_replay_once=explicit_replay_once))
 
     def runner_reservations(
         self, *, limit: int = 100, after: str = "", quarantine_after: str = "",

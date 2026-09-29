@@ -22,7 +22,33 @@ MAX_ATTEMPTS = 2
 MAX_RECEIPT_READS = 3
 
 
-async def recover(api, path, payload):
+def _valid_explicit_replay_state(state):
+    rounds = state.get('explicit_replay_rounds', 0)
+    if type(rounds) is not int or rounds not in (0, 1):
+        return False
+    if rounds == 0:
+        return 'explicit_replay_prior' not in state
+    prior = state.get('explicit_replay_prior')
+    if not isinstance(prior, dict) or not isinstance(state.get('body'), dict):
+        return False
+    digest = hashlib.sha256(json.dumps(state['body'], sort_keys=True,
+                                separators=(',', ':')).encode()).hexdigest()
+    attempts = prior.get('attempts')
+    reads = prior.get('receipt_reads')
+    reason = prior.get('exhaustion_reason')
+    if (type(attempts) is not int or not 0 <= attempts <= MAX_ATTEMPTS
+            or type(reads) is not int or not 0 <= reads <= MAX_RECEIPT_READS
+            or prior.get('body_sha256') != digest):
+        return False
+    return (reason == 'attempts' and attempts == MAX_ATTEMPTS
+            or reason == 'receipts' and reads == MAX_RECEIPT_READS
+            or reason == 'deadline' and
+            type(prior.get('saved_deadline')) in (int, float) and
+            type(prior.get('reserved_monotonic')) in (int, float) and
+            prior['saved_deadline'] <= prior['reserved_monotonic'])
+
+
+async def recover(api, path, payload, *, explicit_replay_once=False):
     if path not in {'/api/v1/runner/close', '/api/v1/runner/release-capacity'}:
         raise ValueError('unsupported session exit')
     payload = copy.deepcopy(payload)
@@ -45,7 +71,8 @@ async def recover(api, path, payload):
                         or type(state.get('receipt_reads')) is not int or not 0 <= state['receipt_reads'] <= MAX_RECEIPT_READS
                         or type(state.get('uncertain')) is not bool
                         or type(state.get('deadline')) not in (float, int) or not math.isfinite(state['deadline'])
-                        or (state.get('result') is not None and not isinstance(state['result'], dict))):
+                        or (state.get('result') is not None and not isinstance(state['result'], dict))
+                        or not _valid_explicit_replay_state(state)):
                     raise ValueError()
             except (ValueError, TypeError, AttributeError):
                 raise ApiError('saved exit evidence is unreadable; retained unchanged', code='session_exit_journal_invalid')
@@ -57,11 +84,50 @@ async def recover(api, path, payload):
             _save(journal, state)
         if state['result'] is not None:
             return copy.deepcopy(state['result'])
+        replay_reserved_now = False
+        if explicit_replay_once:
+            if payload != state['body']:
+                raise ApiError('saved session exit request differs; retain original evidence',
+                               code='session_exit_request_conflict')
+            exhausted = (state['attempts'] >= MAX_ATTEMPTS
+                         or state['receipt_reads'] >= MAX_RECEIPT_READS
+                         or _saved_deadline(state, deadline) <= time.monotonic())
+            if exhausted and state.get('explicit_replay_rounds', 0) == 0:
+                # Reserve exactly one extra POST before doing any network I/O.
+                # A crash after this save cannot silently obtain another try.
+                saved_deadline = _saved_deadline(state, deadline)
+                reserved_monotonic = time.monotonic()
+                state['explicit_replay_prior'] = {
+                    'attempts': state['attempts'],
+                    'receipt_reads': state['receipt_reads'],
+                    'exhaustion_reason': (
+                        'attempts' if state['attempts'] >= MAX_ATTEMPTS
+                        else 'receipts' if state['receipt_reads'] >= MAX_RECEIPT_READS
+                        else 'deadline'),
+                    'saved_deadline': saved_deadline,
+                    'reserved_monotonic': reserved_monotonic,
+                    'body_sha256': hashlib.sha256(
+                        json.dumps(state['body'], sort_keys=True,
+                                   separators=(',', ':')).encode()
+                    ).hexdigest(),
+                }
+                state['explicit_replay_rounds'] = 1
+                state['attempts'] = MAX_ATTEMPTS - 1
+                state['receipt_reads'] = MAX_RECEIPT_READS - 2
+                state['deadline'] = deadline
+                state.pop('wall_deadline', None)
+                _save(journal, state)
+                replay_reserved_now = True
         state['deadline'] = _saved_deadline(state, deadline)
         def save(*, before_write=False):
             _save(journal, {**state, **({'uncertain': True} if before_write else {})})
         try:
-            return await _recover(api, path, state['body'], state, save, allow_replay=payload == state['body'])
+            return await _recover(
+                api, path, state['body'], state, save,
+                allow_replay=(payload == state['body']
+                              and (state.get('explicit_replay_rounds', 0) == 0
+                                   or replay_reserved_now)),
+            )
         except ApiError as exc:
             if not state['uncertain'] and exc.status_code is not None and 400 <= exc.status_code < 500:
                 journal.unlink(missing_ok=True)

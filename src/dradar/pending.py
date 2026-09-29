@@ -295,3 +295,37 @@ def remove(
             )
         ]
         _save_unlocked(home, entries)
+
+
+def remove_exact(home: Path, expected: dict) -> None:
+    """Retire one reviewed fence only if its complete saved row is unchanged.
+
+    Ordinary upload acknowledgement uses ``remove``. Cleanup recovery uses
+    this stronger comparison after the exact server and boundary receipts are
+    durable, so a concurrent result or changed owner cannot be hidden.
+    """
+    with _locked(home):
+        entries = _load_unlocked(home)
+        matches = [index for index, entry in enumerate(entries) if entry == expected]
+        if len(matches) != 1:
+            raise PendingLedgerError(
+                "Cleanup fence changed during recovery; original record was kept."
+            )
+        del entries[matches[0]]
+        _save_unlocked(home, entries)
+
+
+def replace_exact(home: Path, expected: dict, replacement: dict) -> None:
+    """Persist one recovery request without overwriting changed result state."""
+    if (expected.get("assignment_id") != replacement.get("assignment_id")
+            or expected.get("scope_fingerprint") != replacement.get("scope_fingerprint")):
+        raise PendingLedgerError("Cleanup recovery cannot change assignment scope.")
+    with _locked(home):
+        entries = _load_unlocked(home)
+        matches = [index for index, entry in enumerate(entries) if entry == expected]
+        if len(matches) != 1:
+            raise PendingLedgerError(
+                "Cleanup fence changed during recovery; original record was kept."
+            )
+        entries[matches[0]] = replacement
+        _save_unlocked(home, entries)

@@ -60,6 +60,133 @@ def test_outer_cleanup_cannot_restart_attempt_count(monkeypatch, capsys):
     assert 'busy_not_executed' in capsys.readouterr().out
 
 
+def test_explicit_signed_replay_uses_same_close_body_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(session_exit_recovery.local_config, 'HOME', tmp_path)
+    monkeypatch.setattr(session_exit_recovery.random, 'uniform', lambda a, b: 0)
+    body = {'session_id': 'a'*32, 'batch_id': 'b'*32,
+            'seq': 18, 'reason': 'paused'}
+    requests = []
+    permit = {'value': False}
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={
+                'session_id': body['session_id'], 'batch_id': body['batch_id'],
+                'closed': False, 'capacity_released': False,
+                'device_generation': 3,
+            })
+        requests.append(json.loads(request.read()))
+        if permit['value']:
+            return httpx.Response(200, json={'ok': True, 'closed': True,
+                                              'capacity_released': False})
+        return httpx.Response(503, headers={'Retry-After': '.01'},
+                             json={'code': 'mutation_busy',
+                                   'write_outcome': 'not_executed',
+                                   'retry_after_seconds': .01})
+    client = api(handler)
+    for _ in range(2):
+        with pytest.raises(ApiError):
+            client.runner_close(body)
+    assert len(requests) == 2 and requests == [body, body]
+    journal = next((tmp_path / 'pending_session_exits').glob('*.json'))
+    state = json.loads(journal.read_text())
+    state.update(receipt_reads=3, uncertain=True, last_busy=False)
+    session_exit_recovery._save(journal, state)
+    permit['value'] = True
+    with pytest.raises(ApiError):
+        client.runner_close(body)
+    assert len(requests) == 2
+    assert client.runner_close(body, explicit_replay_once=True)['closed'] is True
+    assert requests == [body, body, body]
+    assert client.runner_close(body, explicit_replay_once=True)['closed'] is True
+    assert len(requests) == 3
+    saved = json.loads(journal.read_text())
+    assert saved['explicit_replay_prior']['attempts'] == 2
+    assert saved['explicit_replay_prior']['receipt_reads'] == 3
+
+
+def test_explicit_replay_failure_cannot_obtain_second_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr(session_exit_recovery.local_config, 'HOME', tmp_path)
+    monkeypatch.setattr(session_exit_recovery.random, 'uniform', lambda a, b: 0)
+    body = {'session_id': 'a'*32, 'batch_id': 'b'*32,
+            'seq': 18, 'reason': 'paused'}
+    posts = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={
+                'session_id': body['session_id'], 'batch_id': body['batch_id'],
+                'closed': False, 'capacity_released': False,
+                'device_generation': 3,
+            })
+        posts.append(json.loads(request.read()))
+        return httpx.Response(503, headers={'Retry-After': '.01'},
+                             json={'code': 'mutation_busy',
+                                   'write_outcome': 'not_executed',
+                                   'retry_after_seconds': .01})
+    client = api(handler)
+    with pytest.raises(ApiError):
+        client.runner_close(body)
+    assert len(posts) == 2
+    with pytest.raises(ApiError):
+        client.runner_close(body, explicit_replay_once=True)
+    assert len(posts) == 3
+    for _ in range(2):
+        with pytest.raises(ApiError):
+            client.runner_close(body, explicit_replay_once=True)
+    assert posts == [body, body, body]
+    journal = next((tmp_path / 'pending_session_exits').glob('*.json'))
+    state = json.loads(journal.read_text())
+    assert state['explicit_replay_rounds'] == 1
+    assert state['explicit_replay_prior']['attempts'] == 2
+    assert state['explicit_replay_prior']['receipt_reads'] == 0
+    with pytest.raises(ApiError, match='differs'):
+        client.runner_close({**body, 'seq': 19}, explicit_replay_once=True)
+    assert len(posts) == 3
+
+
+@pytest.mark.parametrize('exhaustion', ['receipts', 'deadline'])
+def test_reserved_replay_survives_crash_without_second_post(
+    monkeypatch, tmp_path, exhaustion,
+):
+    monkeypatch.setattr(session_exit_recovery.local_config, 'HOME', tmp_path)
+    body = {'session_id': 'a'*32, 'batch_id': 'b'*32,
+            'seq': 18, 'reason': 'paused'}
+    posts = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={
+                'session_id': body['session_id'], 'batch_id': body['batch_id'],
+                'closed': False, 'capacity_released': False,
+                'device_generation': 3,
+            })
+        posts.append(json.loads(request.read()))
+        raise httpx.ReadError('synthetic transport uncertainty')
+    client = api(handler)
+    with pytest.raises(ApiError):
+        client.runner_close(body)
+    journal = next((tmp_path / 'pending_session_exits').glob('*.json'))
+    state = json.loads(journal.read_text())
+    state.update(attempts=1, receipt_reads=3 if exhaustion == 'receipts' else 0,
+                 uncertain=True, result=None)
+    if exhaustion == 'deadline':
+        state['deadline'] = time.monotonic() - 1
+        state['wall_deadline'] = time.time() - 1
+    session_exit_recovery._save(journal, state)
+    before = len(posts)
+    original = session_exit_recovery._recover
+    async def crash(*_args, **_kwargs):
+        raise RuntimeError('synthetic crash after durable reservation')
+    monkeypatch.setattr(session_exit_recovery, '_recover', crash)
+    with pytest.raises(RuntimeError, match='synthetic crash'):
+        client.runner_close(body, explicit_replay_once=True)
+    monkeypatch.setattr(session_exit_recovery, '_recover', original)
+    reserved = json.loads(journal.read_text())
+    assert reserved['explicit_replay_rounds'] == 1
+    assert reserved['explicit_replay_prior']['exhaustion_reason'] == exhaustion
+    with pytest.raises(ApiError):
+        client.runner_close(body, explicit_replay_once=True)
+    assert len(posts) == before
+
+
 def test_release_receipt_with_other_evidence_never_confirms_success():
     def handler(request):
         if request.method == 'POST':

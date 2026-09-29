@@ -139,7 +139,8 @@ def _observe(state, home):
     return facts
 
 
-def recover(home, session_id, client, *, execute=False, expected_digest=None):
+def recover(home, session_id, client, *, execute=False, expected_digest=None,
+            explicit_replay_once=False):
     if not re.fullmatch(r"[0-9a-f]{32}", session_id):
         raise Error("An exact session ID is required.")
     path = home / "runner-reservations" / (session_id + ".json")
@@ -158,6 +159,12 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None):
         return state, digest
     if not execute:
         state, digest = inspect()
+        if explicit_replay_once:
+            if (sys.platform != "linux" or state.get("state") != "sealed"
+                    or not state.get("release_request")
+                    or not state.get("recovery_source_sha256")):
+                raise Error("Original sealed Linux exit recovery is required.")
+            _process_absent(state.get("owner_identity"))
         facts = {} if state.get("release_request") else _observe(state, home)
         return {"session_id": session_id, "journal_sha256": digest,
                 "status": "ready", "observations": facts, "mutated": False}
@@ -166,6 +173,12 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None):
     from .run_plans import _exclusive_lock
     with _exclusive_lock(path.with_suffix(".lock")):
         state, digest = inspect()
+        if explicit_replay_once:
+            if (sys.platform != "linux" or state.get("state") != "sealed"
+                    or not state.get("release_request")
+                    or not state.get("recovery_source_sha256")):
+                raise Error("Original sealed Linux exit recovery is required.")
+            _process_absent(state.get("owner_identity"))
         if not state.get("release_request"):
             facts = _observe(state, home)
             original = deepcopy(state)
@@ -202,9 +215,15 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None):
             else:
                 journal._write(snapshot, original)
             journal._write(path, state)
-    released = journal.reconcile_file(path, client)
-    return {"session_id": session_id, "status": "released" if released else "receipt_pending",
-            "mutated": True}
+    released = journal.reconcile_file(path, client,
+                                      explicit_replay_once=explicit_replay_once)
+    result = {"session_id": session_id,
+              "status": "released" if released else "receipt_pending",
+              "mutated": True}
+    if explicit_replay_once and not released:
+        result["next_action"] = "inspect_original_exit_journal_and_exact_server_receipt"
+        result["automatic_retry"] = False
+    return result
 
 
 def cmd_recover(args):
