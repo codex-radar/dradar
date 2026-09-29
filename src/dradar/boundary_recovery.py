@@ -20,6 +20,35 @@ class RecoveryBlocked(RuntimeError):
     pass
 
 
+def cmd_boundary_inspect(args) -> int:
+    """Show the exact locally saved set; never query or change server state."""
+    cfg = _load_config()
+    benchmark = args.benchmark or cfg.get("benchmark") or DEFAULT_BENCHMARK
+    try:
+        path = assignment_boundary.state_path(HOME, benchmark)
+        if not path.exists() and not path.is_symlink():
+            print(f"No saved personal assignment boundary for {benchmark}.")
+            return 0
+        state, digest = assignment_boundary.inspect_snapshot(path)
+        if state.get("benchmark_id") != benchmark or state.get("batch_id") is not None:
+            raise RecoveryBlocked("saved boundary scope differs from the selected benchmark")
+        expected = state["expected"]
+        if not expected:
+            raise RecoveryBlocked("saved boundary has no assignment IDs")
+    except (RecoveryBlocked, assignment_boundary.BoundaryError, OSError) as exc:
+        print(f"boundary inspection blocked: {exc}")
+        return 1
+    print(f"Saved personal boundary for {benchmark} (local SHA-256 {digest}):")
+    for aid in sorted(expected):
+        outcome = state["outcomes"].get(aid, {}).get("outcome", "unresolved")
+        print(f"  {aid}  local outcome: {outcome}")
+    print(f"Exact saved set: {len(expected)} assignment ID(s). This is local state, not server recovery proof.")
+    print("Recovery checks every saved ID and records only independently verified outcomes; "
+          "it keeps unknown work and files. After inspecting local work and server evidence, "
+          "repeat `--accept-assignment ID` for each saved ID with `dradar boundary recover`.")
+    return 0
+
+
 def _pending_ids(home: Path) -> set[str]:
     path = home / "pending_uploads.json"
     if path.is_symlink():
@@ -361,7 +390,10 @@ def cmd_boundary_recover(args) -> int:
             raise RecoveryBlocked("this command handles only a personal benchmark boundary")
         expected = set(state["expected"])
         if not expected or selected != expected:
-            raise RecoveryBlocked("accepted IDs must exactly match the saved boundary")
+            raise RecoveryBlocked(
+                "accepted IDs must exactly match the saved boundary; "
+                "run `dradar boundary inspect` to see the exact local set"
+            )
         client = _client(cfg)
         client.benchmark_id = benchmark
         identity = client.whoami()

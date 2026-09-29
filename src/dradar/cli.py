@@ -24,7 +24,7 @@ from . import __version__, local_jobs, pending, capacity_journal
 from .agent_schema import cmd_schema
 from .api_client import normalize_batch_id
 from .capacity import cmd_capacity
-from .boundary_recovery import cmd_boundary_recover
+from .boundary_recovery import cmd_boundary_inspect, cmd_boundary_recover
 from .cells import cmd_cells
 from .claim_receipts import cmd_claim_receipt
 from .doctor import cmd_doctor
@@ -153,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     p_boundary = sub.add_parser(
         "boundary", help="inspect or recover a saved assignment boundary")
     boundary_sub = p_boundary.add_subparsers(dest="boundary_command", required=True)
+    p_boundary_inspect = boundary_sub.add_parser(
+        "inspect", help="read the exact locally saved personal assignment IDs")
+    p_boundary_inspect.add_argument(
+        "--benchmark", help="saved benchmark channel (default: current channel)")
+    p_boundary_inspect.set_defaults(func=cmd_boundary_inspect)
     p_boundary_recover = boundary_sub.add_parser(
         "recover", help="reconcile exact terminal assignments with durable server evidence")
     p_boundary_recover.add_argument(
