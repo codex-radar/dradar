@@ -328,7 +328,7 @@ def test_changed_bytes_after_preflight_never_reach_server(case, monkeypatch, cha
     assert pending.load(home)[0]["record_kind"] == "cleanup_quarantine"
 
 
-def test_signed_result_entry_verifies_package_before_preflight(tmp_path, monkeypatch):
+def test_signed_result_entry_verifies_package_before_preflight(tmp_path, monkeypatch, capsys):
     calls = []
     home, manifest, package, _ = _signed_package(tmp_path, monkeypatch)
     monkeypatch.setattr(recovery, "HOME", home)
@@ -340,9 +340,12 @@ def test_signed_result_entry_verifies_package_before_preflight(tmp_path, monkeyp
             "--batch-id", "b" * 32, "--runner-session-id", "a" * 32]
     assert recovery.main_result(args) == 0
     assert calls == ["preflight"]
+    original_package = package.read_bytes()
     package.write_bytes(package.read_bytes() + b"tampered")
     assert recovery.main_result(args) == 2
     assert calls == ["preflight"]
+    capsys.readouterr()
+    package.write_bytes(original_package)
     with UpdateLock(home / "ota" / "launch.lock"):
         active = register_invocation(home / "ota")
         active.__enter__()
@@ -351,3 +354,4 @@ def test_signed_result_entry_verifies_package_before_preflight(tmp_path, monkeyp
     finally:
         active.__exit__(None, None, None)
     assert calls == ["preflight"]
+    assert "another DRadar invocation is active" in capsys.readouterr().err
