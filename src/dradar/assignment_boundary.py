@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -111,10 +112,10 @@ def _locked(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def _load(path: Path) -> dict | None:
+def _parse(raw: bytes) -> dict | None:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
         return None
@@ -137,6 +138,32 @@ def _load(path: Path) -> dict | None:
     ):
         return None
     return value
+
+
+def _load(path: Path) -> dict | None:
+    try:
+        return _parse(path.read_bytes())
+    except OSError:
+        return None
+
+
+def inspect_snapshot(path: Path) -> tuple[dict, str]:
+    """Read one validated local snapshot without creating a lock or directory."""
+    if path.is_symlink():
+        raise BoundaryError("saved assignment boundary is a symlink")
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise BoundaryError("saved assignment boundary is not a regular file")
+            raw = handle.read()
+    except OSError as exc:
+        raise BoundaryError("saved assignment boundary is unreadable") from exc
+    state = _parse(raw)
+    if state is None:
+        raise BoundaryError("saved assignment boundary is invalid")
+    return state, hashlib.sha256(raw).hexdigest()
 
 
 def _save(path: Path, state: dict) -> None:

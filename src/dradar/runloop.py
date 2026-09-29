@@ -4779,7 +4779,8 @@ def _prepare_assignment_boundary(
             sys.exit(
                 f"assignment boundary check failed: {exc}. No model was "
                 "started. A missing local outcome does not prove the work "
-                "finished. Run `dradar boundary recover` with every exact "
+                "finished. Run `dradar boundary inspect`, then "
+                "`dradar boundary recover` with every exact "
                 "--accept-assignment ID. It records only assignments "
                 "with exact server and local recovery evidence; unknown IDs "
                 "remain blocked. Inspect `dradar leases` or seek private review "
@@ -4787,7 +4788,8 @@ def _prepare_assignment_boundary(
             )
         sys.exit(
             f"assignment boundary check failed: {exc}. No model was started. "
-            "Inspect `dradar leases`; `dradar boundary recover` preserves "
+            "Run `dradar boundary inspect` and `dradar leases`; "
+            "`dradar boundary recover` preserves "
             "unknown original outcomes."
         )
     if path is not None:
@@ -5332,7 +5334,8 @@ def cmd_go(args) -> int:
         sys.exit(
             "--forget-assignment-boundary is no longer an unchecked recovery "
             "shortcut. For exact terminal work with server recovery evidence, use "
-            "`dradar boundary recover` with every exact assignment ID."
+            "`dradar boundary inspect` first, then `dradar boundary recover` "
+            "with every exact saved assignment ID."
         )
     try:
         args.batch_id = normalize_batch_id(getattr(args, "batch_id", None))
@@ -8353,7 +8356,11 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                     try:
                         if wants_refill:
                             raise boundary_recovery.RecoveryBlocked(
-                                "continuous refill cannot reuse a one-time historical proof"
+                                "continuous refill cannot reuse a one-time historical proof. "
+                                "Run `dradar boundary inspect`, then recover only outcomes "
+                                "with exact server and local evidence. If any outcome stays "
+                                "unknown, use a bounded `go --auto N` or `go --pick ...` "
+                                "with fresh admission proof; refill remains unavailable"
                             )
                         count = boundary_recovery.historical_unknown_allows_claim(
                             client, state, digest, path, HOME,
@@ -8364,8 +8371,9 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
                                 getattr(args, "auto", None) is not None or wants_refill):
                             raise SystemExit(
                                 "unfinished personal assignment boundary blocks new claims. "
-                                "No new assignment was claimed. Inspect the saved IDs and "
-                                "use `dradar boundary recover` only with exact evidence. "
+                                "No new assignment was claimed. Inspect the saved IDs with "
+                                "`dradar boundary inspect`; use `dradar boundary recover` "
+                                "only with exact evidence. "
                                 f"Current admission check: {exc}"
                             ) from exc
                         allow_new_claims = False
@@ -8435,7 +8443,7 @@ def _prepare_batch(args, client: ApiClient) -> tuple[list[dict], bool]:
     if blocked_by_boundary:
         print("unfinished personal assignment boundary: no new task was claimed; "
               "existing held work may still run. Inspect exact saved IDs with "
-              "`dradar boundary recover`.")
+              "`dradar boundary inspect`.")
     elif not allow_new_claims and wants:
         print("disk safety floor reached — not claiming new tasks; already held work "
               "can still run. Use `dradar cleanup --docker --dry-run` to inspect cleanup.")
