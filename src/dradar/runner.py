@@ -4591,6 +4591,53 @@ def _cleanup_exited_pier_runtime(
     return process_residue, cleanup
 
 
+_REGISTRATION_LOCAL_EXCEPTION_TYPES = frozenset({
+    "AgentSetupTimeoutError", "EnvironmentStartTimeoutError", "HealthcheckError",
+    "NonZeroAgentExitCodeError", "CancelledError", "TimeoutError",
+    "FileNotFoundError", "PermissionError", "OSError", "ValueError", "RuntimeError",
+    "DockerException", "APIError", "BuildError", "ContainerError", "ImageNotFound",
+})
+
+
+def _fresh_registration_trial_hint(job_dir: Path | None, launch_started_ns: int | None) -> str:
+    """Return a local-only hint from this launch's Pier trial result.
+
+    Pier can record a trial exception and still exit 0.  The failure report
+    deliberately keeps exception text and paths off the wire; this hint is
+    printed only in the volunteer's own CLI after the exact child exits.
+    A reused assignment/job directory must not lend an old result to a new
+    attempt, so uncertain or ambiguous files yield no exception attribution.
+    """
+    if job_dir is None or launch_started_ns is None:
+        return ""
+    try:
+        trials = [p for p in job_dir.glob("*__*") if p.is_dir()]
+        if len(trials) != 1:
+            return ""
+        result_path = trials[0] / "result.json"
+        if result_path.stat().st_mtime_ns < launch_started_ns:
+            return ""
+        raw = read_trial_file(
+            job_dir, result_path.relative_to(job_dir), max_bytes=2 * 1024 * 1024,
+        )
+        result = json.loads(raw)
+    except (OSError, UnsafeArtifact, ValueError, json.JSONDecodeError):
+        return ""
+    if not isinstance(result, dict):
+        return ""
+    info = result.get("exception_info")
+    if not isinstance(info, dict):
+        return ""
+    exception_type = info.get("exception_type")
+    if not isinstance(exception_type, str) or exception_type not in _REGISTRATION_LOCAL_EXCEPTION_TYPES:
+        return ""
+    return (
+        f"Pier trial recorded exception type: {exception_type}. "
+        f"Inspect local {result_path} or the adjacent exception.txt for the first error; "
+        "redact credentials, paths, and task content before sharing."
+    )
+
+
 def _wait_for_worker_registration(
     proc: subprocess.Popen,
     event_path: Path,
@@ -4601,6 +4648,7 @@ def _wait_for_worker_registration(
     log_path: Path | None = None,
     job_dir: Path | None = None,
     codex_version: str | None = None,
+    launch_started_ns: int | None = None,
 ) -> dict:
     """Wait for a bounded, structured Pier lifecycle record.
 
@@ -4694,6 +4742,12 @@ def _wait_for_worker_registration(
         # exception/cleanup path and is never misreported as an exit.
         exit_status = proc.poll()
         if exit_status is not None:
+            local_hint = (
+                _fresh_registration_trial_hint(job_dir, launch_started_ns)
+                if exit_status == 0 else ""
+            )
+            if local_hint:
+                print(f"  {local_hint}")
             report_detail: dict[str, object] = {
                 "registration_result": "process_exited",
                 "registration_elapsed_sec": min(3600, max(0, int(time.monotonic() - started))),
@@ -5408,6 +5462,8 @@ def _run_trial(
                 if execution_audit is not None:
                     execution_audit.pending(job_name, jobs_dir / job_name)
                 try:
+                    fresh_pier_job_dir = not (jobs_dir / job_name).exists()
+                    pier_launch_started_ns = time.time_ns()
                     proc = _spawn_pier_process(cmd, log, work_dir, env,
                                                job_dir=jobs_dir / job_name)
                     provider_stack.callback(_finalize_pier_process, proc, jobs_dir / job_name)
@@ -5442,6 +5498,9 @@ def _run_trial(
                         job_dir=jobs_dir / job_name,
                         codex_version=(
                             codex_cli_version if effective_agent == "codex" else None
+                        ),
+                        launch_started_ns=(
+                            pier_launch_started_ns if fresh_pier_job_dir else None
                         ),
                     )
                     if getattr(on_worker_registered, "_uses_registration_window", False):
