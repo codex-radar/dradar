@@ -4627,15 +4627,12 @@ def _fresh_registration_trial_hint(job_dir: Path | None, launch_started_ns: int 
         return ""
     info = result.get("exception_info")
     if not isinstance(info, dict):
-        return "Pier trial result has no recorded exception; inspect this attempt's local log and worker event sidecar."
+        return ""
     exception_type = info.get("exception_type")
-    safe_type = (
-        exception_type if isinstance(exception_type, str)
-        and exception_type in _REGISTRATION_LOCAL_EXCEPTION_TYPES
-        else "unrecognized"
-    )
+    if not isinstance(exception_type, str) or exception_type not in _REGISTRATION_LOCAL_EXCEPTION_TYPES:
+        return ""
     return (
-        f"Pier trial recorded exception type: {safe_type}. "
+        f"Pier trial recorded exception type: {exception_type}. "
         f"Inspect local {result_path} or the adjacent exception.txt for the first error; "
         "redact credentials, paths, and task content before sharing."
     )
@@ -4745,7 +4742,10 @@ def _wait_for_worker_registration(
         # exception/cleanup path and is never misreported as an exit.
         exit_status = proc.poll()
         if exit_status is not None:
-            local_hint = _fresh_registration_trial_hint(job_dir, launch_started_ns)
+            local_hint = (
+                _fresh_registration_trial_hint(job_dir, launch_started_ns)
+                if exit_status == 0 else ""
+            )
             if local_hint:
                 print(f"  {local_hint}")
             report_detail: dict[str, object] = {

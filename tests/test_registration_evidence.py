@@ -115,7 +115,10 @@ def test_exit_zero_shows_only_fresh_local_trial_exception_type(
     assert "RuntimeError" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("case", ["missing", "malformed", "stale", "ambiguous", "untrusted-type"])
+@pytest.mark.parametrize("case", [
+    "missing", "malformed", "stale", "ambiguous", "untrusted-type",
+    "no-exception", "invalid-exception-type",
+])
 def test_registration_result_hint_fails_closed_for_uncertain_local_evidence(
     tmp_path, case,
 ):
@@ -138,11 +141,36 @@ def test_registration_result_hint_fails_closed_for_uncertain_local_evidence(
         result.write_text(json.dumps({"exception_info": {
             "exception_type": "SECRET_CUSTOM_TYPE", "exception_message": "SECRET"
         }}))
+    elif case == "no-exception":
+        result.write_text('{"exception_info":null}')
+    elif case == "invalid-exception-type":
+        result.write_text('{"exception_info":{"exception_type":["SECRET"]}}')
     hint = runner._fresh_registration_trial_hint(job, launched)
-    if case == "untrusted-type":
-        assert "unrecognized" in hint and "SECRET" not in hint
-    else:
-        assert hint == ""
+    assert hint == ""
+
+
+def test_nonzero_process_exit_does_not_show_trial_hint(tmp_path, capsys):
+    job = tmp_path / "jobs" / f"a{ASSIGNMENT}"
+    trial = job / "task__1"
+    trial.mkdir(parents=True)
+    launched = time.time_ns()
+    (trial / "result.json").write_text(
+        '{"exception_info":{"exception_type":"RuntimeError"}}'
+    )
+
+    class Exited:
+        def poll(self):
+            return 17
+
+    with pytest.raises(runner.RunnerError) as raised:
+        runner._wait_for_worker_registration(
+            Exited(), tmp_path / "missing-sidecar",
+            environment_build_timeout_multiplier=1,
+            expected_session_id=SESSION, job_dir=job,
+            launch_started_ns=launched,
+        )
+    assert raised.value.report_detail["process_exit_code"] == 17
+    assert capsys.readouterr().out == ""
 
 
 def test_wrong_session_sidecar_cannot_register_even_with_current_trial_result(
