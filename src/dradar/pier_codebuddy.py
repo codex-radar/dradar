@@ -91,6 +91,20 @@ def _codebuddy_usage_facts(
     terminal_usage = _usage_values(
         terminal.get("usage") if terminal is not None else None
     )
+    # CodeBuddy bills its internal compaction summary request into the terminal
+    # aggregate only: that request has no usage in the event stream, the session
+    # record, or telemetry, so its own counters are unknowable. Detecting the
+    # compaction stops the impossible reconciliation instead of subtracting an
+    # amount nobody can observe.
+    compaction_detected = any(
+        isinstance(event, dict)
+        and event.get("type") == "system"
+        and (
+            event.get("status") == "compacting"
+            or event.get("subtype") == "compaction"
+        )
+        for event in events
+    )
     reasons: set[str] = set()
     if not terminal_events:
         reasons.add("terminal_aggregate_missing")
@@ -199,6 +213,10 @@ def _codebuddy_usage_facts(
         reasons.add("request_ledger_unavailable")
     if terminal_usage is not None and terminal_usage != totals:
         reasons.add("terminal_aggregate_mismatch")
+        if compaction_detected:
+            # The compaction summary request is billed into the terminal
+            # aggregate only, so an exact match is impossible by construction.
+            reasons.add("compaction_aggregate_unreconcilable")
     complete = bool(
         not reasons
         and terminal_usage is not None
@@ -224,6 +242,7 @@ def _codebuddy_usage_facts(
         "request_id_conflict",
         "request_ledger_unavailable",
         "terminal_aggregate_mismatch",
+        "compaction_aggregate_unreconcilable",
     )
     incomplete_reasons = [reason for reason in reason_order if reason in reasons]
     # These are CodeBuddy assistant.message.id values, not verified provider
@@ -280,6 +299,11 @@ def _codebuddy_usage_facts(
         "provider": "codebuddy",
         "model": SUPPORTED_MODEL,
         "complete": complete,
+        # A compacted run can never reconcile its terminal aggregate, but the
+        # per-request ledger is still the same figure upstream bills. Settle on
+        # the ledger instead of discarding it.
+        "compaction_detected": compaction_detected,
+        "ledger_authoritative": bool(observed and compaction_detected),
         "request_count": len(token_usage_events) if observed else 0,
         "n_input_tokens": prompt,
         "n_cache_tokens": selected["cache_read_input_tokens"],
@@ -571,12 +595,14 @@ class CodeBuddySubscription(ClaudeCode):
 
         super().populate_context_post_run(context)
         complete = usage["complete"] is True
+        # A compacted run can never match its terminal aggregate, and the
+        # compaction request's own usage is unknowable. The per-request ledger
+        # is what upstream bills, so it settles the run instead of zeroing it.
+        settled = complete or usage.get("ledger_authoritative") is True
         context.cost_usd = None
-        # Context counters are presented as run totals. Keep partial request
-        # observations in provider-usage.json until the terminal reconciles.
-        context.n_input_tokens = int(usage["n_input_tokens"]) if complete else 0
-        context.n_cache_tokens = int(usage["n_cache_tokens"]) if complete else 0
-        context.n_output_tokens = int(usage["n_output_tokens"]) if complete else 0
+        context.n_input_tokens = int(usage["n_input_tokens"]) if settled else 0
+        context.n_cache_tokens = int(usage["n_cache_tokens"]) if settled else 0
+        context.n_output_tokens = int(usage["n_output_tokens"]) if settled else 0
 
         trajectory_path = self.logs_dir / "trajectory.json"
         try:
@@ -604,9 +630,9 @@ class CodeBuddySubscription(ClaudeCode):
             metrics = {}
             trajectory["final_metrics"] = metrics
         metrics.update({
-            "total_prompt_tokens": usage["n_input_tokens"] if complete else None,
-            "total_cached_tokens": usage["n_cache_tokens"] if complete else None,
-            "total_completion_tokens": usage["n_output_tokens"] if complete else None,
+            "total_prompt_tokens": usage["n_input_tokens"] if settled else None,
+            "total_cached_tokens": usage["n_cache_tokens"] if settled else None,
+            "total_completion_tokens": usage["n_output_tokens"] if settled else None,
             "total_cost_usd": None,
         })
         extra = metrics.get("extra")
@@ -616,6 +642,8 @@ class CodeBuddySubscription(ClaudeCode):
             "billing_basis": "subscription",
             "cost_not_reported": True,
             "usage_complete": complete,
+            "usage_compaction_detected": usage.get("compaction_detected") is True,
+            "usage_ledger_authoritative": usage.get("ledger_authoritative") is True,
             "usage_evidence_tier": usage["usage_evidence_tier"],
             "usage_incomplete_reason": usage["usage_incomplete_reason"],
         })
