@@ -57,6 +57,12 @@ def _usage_values(value: object) -> dict[str, int] | None:
     parsed = {name: _nonnegative_int(value.get(name)) for name in names}
     if any(item is None for item in parsed.values()):
         return None
+    if (
+        parsed["cache_read_input_tokens"]
+        + parsed["cache_creation_input_tokens"]
+        > parsed["input_tokens"]
+    ):
+        return None
     return {name: int(item) for name, item in parsed.items() if item is not None}
 
 
@@ -105,16 +111,6 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
             continue
         message_id = message.get("id")
         runtime_model = message.get("model")
-        if (
-            isinstance(runtime_model, str)
-            and runtime_model
-            and runtime_model != SUPPORTED_MODEL
-        ):
-            # A mismatched model is never admitted to the observed ledger.
-            # Correctly identified requests in the same stream remain useful
-            # evidence, but the run cannot reconcile or settle.
-            reasons.add("request_model_mismatch")
-            continue
         raw_usage = message.get("usage")
         usage = _usage_values(raw_usage)
         if usage is None:
@@ -130,6 +126,11 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 reasons.add("request_usage_invalid")
             continue
         if sum(usage.values()) == 0:
+            continue
+        if runtime_model != SUPPORTED_MODEL:
+            # A positive request must prove its model identity. Zero stream
+            # fragments may omit it, but unknown-model tokens cannot settle.
+            reasons.add("request_model_mismatch")
             continue
         if not isinstance(message_id, str) or not message_id:
             reasons.add("request_id_missing")

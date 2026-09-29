@@ -560,14 +560,17 @@ def test_usage_quarantines_conflicting_duplicate_and_preserves_other_requests(
     }]
 
 
-def test_usage_rejects_wrong_model_without_erasing_the_reason() -> None:
+@pytest.mark.parametrize("model", ["not-hy4", None, ""])
+def test_usage_rejects_wrong_or_missing_model_without_erasing_the_reason(
+    model: str | None,
+) -> None:
     usage = {
         "input_tokens": 1, "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0, "output_tokens": 1,
     }
     facts = _usage_function()([
         {"type": "assistant", "message": {
-            "id": "m1", "model": "not-hy4", "usage": usage,
+            "id": "m1", "model": model, "usage": usage,
         }},
         {"type": "result", "subtype": "success", "num_turns": 1,
          "usage": usage},
@@ -576,6 +579,30 @@ def test_usage_rejects_wrong_model_without_erasing_the_reason() -> None:
     assert facts["request_usage_observed"] is False
     assert facts["usage_evidence_tier"] == "unavailable"
     assert facts["usage_incomplete_reason"] == "request_model_mismatch"
+    assert facts["n_input_tokens"] == 0
+    assert facts["token_usage_events"] == []
+
+
+@pytest.mark.parametrize("cache_read,cache_creation", [(21, 0), (10, 11)])
+def test_usage_rejects_cache_subsets_larger_than_input(
+    cache_read: int, cache_creation: int,
+) -> None:
+    usage = {
+        "input_tokens": 20,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+        "output_tokens": 4,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "m1", "model": CODEBUDDY_MODEL, "usage": usage,
+        }},
+        {"type": "result", "subtype": "success", "usage": usage},
+    ])
+    assert facts["complete"] is False
+    assert facts["request_usage_observed"] is False
+    assert facts["usage_evidence_tier"] == "unavailable"
+    assert "request_usage_invalid" in facts["usage_incomplete_reasons"]
     assert facts["n_input_tokens"] == 0
     assert facts["token_usage_events"] == []
 
