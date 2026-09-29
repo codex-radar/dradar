@@ -134,8 +134,11 @@ def _original_meta(home: Path, benchmark: str, batch_id: str,
         agent_cfg = result["config"]["agent"]
         kwargs = agent_cfg["kwargs"]
         version = agent_info["version"]
+        model_info = agent_info.get("model_info")
         if (agent_info.get("name") != "zcode"
                 or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+                or not isinstance(model_info, dict)
+                or model_info.get("name") != expected["model"]
                 or agent_cfg.get("import_path") != "_dradar_pier_zcode:ZCodeBigModel"
                 or agent_cfg.get("model_name") != expected["model"]
                 or kwargs.get("reasoning_effort") != expected["effort"]

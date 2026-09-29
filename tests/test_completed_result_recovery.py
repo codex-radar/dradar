@@ -102,7 +102,8 @@ def test_original_zcode_meta_requires_observed_agent_and_signed_version(tmp_path
     trial.mkdir()
     result_path = trial / "result.json"
     result = {
-        "agent_info": {"name": "zcode", "version": "0.16.5"},
+        "agent_info": {"name": "zcode", "version": "0.16.5",
+                       "model_info": {"name": "glm-5.3"}},
         "config": {"agent": {
             "import_path": "_dradar_pier_zcode:ZCodeBigModel",
             "model_name": "glm-5.3",
@@ -122,6 +123,12 @@ def test_original_zcode_meta_requires_observed_agent_and_signed_version(tmp_path
     assert meta["zcode_cli_version"] == "0.16.5"
     assert meta["model_config_version"].endswith("full-container-v3")
     assert meta["cost_usd"] is None
+    result["agent_info"]["model_info"]["name"] = "other-model"
+    result_path.write_text(json.dumps(result))
+    with pytest.raises(completed_result_recovery.CompletedResultRecoveryBlocked):
+        completed_result_recovery._original_meta(
+            tmp_path, "deep-swe", "b" * 32, AID, trial)
+    result["agent_info"]["model_info"]["name"] = "glm-5.3"
     result["config"]["agent"]["kwargs"]["reasoning_effort"] = "low"
     result_path.write_text(json.dumps(result))
     with pytest.raises(completed_result_recovery.CompletedResultRecoveryBlocked):
