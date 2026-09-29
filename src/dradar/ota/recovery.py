@@ -180,6 +180,37 @@ def main_cleanup(argv: list[str] | None = None) -> int:
         return 2
 
 
+def main_result(argv: list[str] | None = None) -> int:
+    """Inspect or upload one original completed result after verified exit."""
+    parser = argparse.ArgumentParser(prog="dradar.pyz recover-result")
+    parser.add_argument("--manifest", required=True, metavar="SIGNED_JSON")
+    parser.add_argument("--assignment-id", required=True, type=_assignment_id)
+    parser.add_argument("--benchmark", required=True)
+    parser.add_argument("--batch-id", required=True, type=_batch_id)
+    parser.add_argument("--runner-session-id", required=True, type=_assignment_id)
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--inventory-sha256")
+    args = parser.parse_args(argv)
+    if not args.benchmark.strip():
+        parser.error("--benchmark must not be empty")
+    if args.execute and not re.fullmatch(r"[0-9a-f]{64}", args.inventory_sha256 or ""):
+        parser.error("--execute requires the exact --inventory-sha256 from preflight")
+    try:
+        root = ota_root(HOME)
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
+            raise ValueError("OTA root is unsafe")
+        with UpdateLock(root / "launch.lock", timeout_seconds=0):
+            if active_invocations(root):
+                raise ValueError("another DRadar invocation is active")
+            _verify_package(Path(args.manifest).expanduser(), Path(sys.argv[0]), HOME)
+            from ..completed_result_recovery import cmd_recover
+            return cmd_recover(args)
+    except (InvalidTransition, ManifestError, OSError, ValueError, RuntimeError,
+            KeyError, zipfile.BadZipFile) as exc:
+        print(f"completed-result recovery rejected before upload: {exc}", file=sys.stderr)
+        return 2
+
+
 def main_session_exit(argv: list[str] | None = None) -> int:
     """One signed, explicit replay window for an exhausted original exit."""
     parser = argparse.ArgumentParser(prog="dradar.pyz recover-session-exit")
@@ -230,4 +261,4 @@ def main_session_exit(argv: list[str] | None = None) -> int:
         return 2
 
 
-__all__ = ["main", "main_cleanup", "main_session_exit"]
+__all__ = ["main", "main_cleanup", "main_result", "main_session_exit"]
