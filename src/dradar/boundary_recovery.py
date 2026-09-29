@@ -466,9 +466,24 @@ def historical_unknown_allows_claim(
     reviewed_ref = None
     reviewed_shape = None
     legacy_seen = False
+    retained_seen = False
     for aid in unresolved:
         row = _scoped_status(client, state, aid)
         proof = row.get("admission_evidence")
+        if row.get("admission_evidence_version") == 3:
+            from . import retained_admission
+            if (len(unresolved) != 1 or row.get("status") not in ("expired", "released")
+                    or row.get("has_submission") is not False
+                    or row.get("start_evidence") != "unknown_or_started"
+                    or row.get("exit_evidence") != "unknown" or not isinstance(proof, dict)):
+                raise RecoveryBlocked("retained exception does not match the exact unknown result")
+            try:
+                reviewed_ref = retained_admission.validate(client, home, aid, proof,
+                    batch_id=next(iter(saved_batches)))
+            except retained_admission.AdmissionBlocked as exc:
+                raise RecoveryBlocked(str(exc)) from exc
+            retained_seen = True
+            continue
         if (row.get("status") not in ("submitted", "invalid")
                 or row.get("has_submission") is not True
                 or row.get("start_evidence") != "unknown_or_started"
@@ -517,10 +532,11 @@ def historical_unknown_allows_claim(
             raise RecoveryBlocked(f"{aid}: historical nonblocking evidence is incomplete")
     # Close local races before the new claim. No state is recorded as settled
     # or cached for a future invocation.
-    if fleet_claim_operation is None:
-        _check_processes(home)
-    else:
-        _check_processes(home, fleet_claim_operation=fleet_claim_operation)
+    if not retained_seen:
+        if fleet_claim_operation is None:
+            _check_processes(home)
+        else:
+            _check_processes(home, fleet_claim_operation=fleet_claim_operation)
     if _pending_ids(home):
         raise RecoveryBlocked("a pending upload appeared during review")
     _, current_digest = assignment_boundary.snapshot(path)
