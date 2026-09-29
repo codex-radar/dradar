@@ -20,6 +20,7 @@ from .artifact_boundary import (
 )
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -2195,22 +2196,109 @@ def _bundled_completed_outcome(
     }
 
 
+def _register_cleanup_result_intent(client, entry: dict, intent_id: str) -> str:
+    """The signed explicit recovery path alone can cross a cleanup quarantine."""
+    recovery = entry.get("completed_result_recovery")
+    if (not pending.is_cleanup_quarantine(entry)
+            or entry.get("upload_blocked") != "cleanup_unconfirmed"
+            or not isinstance(recovery, dict)
+            or not isinstance(entry.get("upload_intent"), dict)
+            or entry["upload_intent"].get("id") != intent_id):
+        raise ValueError("original quarantine recovery binding is unavailable")
+    if recovery.get("mode") == "salvage":
+        payload = {
+            "assignment_id": entry["assignment_id"],
+            "nonce": entry["nonce"],
+            "source_session_id": entry["runner_session_id"],
+            "source_owner_epoch": entry["owner_epoch"],
+            "expected_owner_epoch": recovery["expected_owner_epoch"],
+            "salvage_session_id": recovery["upload_session_id"],
+            "release_evidence_id": recovery["release_evidence_id"],
+            "release_evidence_sha256": recovery["release_evidence_sha256"],
+            "upload_intent_id": intent_id,
+        }
+        response = client.register_completed_cleanup_result_salvage(payload)
+        if (not isinstance(response, dict) or response.get("ok") is not True
+                or type(response.get("replayed")) is not bool
+                or any(response.get(key) != value for key, value in (
+                    ("assignment_id", payload["assignment_id"]),
+                    ("session_id", payload["salvage_session_id"]),
+                    ("owner_epoch", recovery["upload_owner_epoch"]),
+                    ("upload_intent_id", intent_id),
+                    ("source_client_version", recovery["source_client_version"]),
+                ))
+                or (response.get("source_agent_version") is not None
+                    and response["source_agent_version"] != recovery["source_agent_version"])):
+            raise ValueError("server salvage receipt does not match the exact upload")
+        return intent_id
+    if recovery.get("mode") != "source":
+        raise ValueError("unknown cleanup result recovery mode")
+    payload = {
+        "schema_version": 1,
+        "assignment_id": entry["assignment_id"],
+        "batch_id": entry["batch_id"],
+        "nonce": entry["nonce"],
+        "source_session_id": entry["runner_session_id"],
+        "source_owner_epoch": entry["owner_epoch"],
+        "release_evidence_id": recovery["release_evidence_id"],
+        "release_evidence_sha256": recovery["release_evidence_sha256"],
+        "upload_intent_id": intent_id,
+        "request_id": recovery["request_id"],
+    }
+    response = client.register_completed_cleanup_result_intent(payload)
+    if (not isinstance(response, dict) or response.get("schema_version") != 1
+            or response.get("ok") is not True
+            or type(response.get("replayed")) is not bool
+            or any(response.get(key) != value for key, value in (
+                ("request_id", payload["request_id"]),
+                ("assignment_id", payload["assignment_id"]),
+                ("batch_id", payload["batch_id"]),
+                ("session_id", payload["source_session_id"]),
+                ("owner_epoch", payload["source_owner_epoch"]),
+                ("upload_intent_id", intent_id),
+                ("source_client_version", recovery["source_client_version"]),
+            ))
+            or (response.get("source_agent_version") is not None
+                and response["source_agent_version"] != recovery["source_agent_version"])):
+        raise ValueError("server recovery receipt does not match the original owner")
+    return intent_id
+
+
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
-                  upload_only_recovery=False):
+                  upload_only_recovery=False, cleanup_result_recovery=False):
     pending.require_uploadable(entry, request_salvage=request_salvage)
     pending.record(HOME, entry)
     try:
+        if cleanup_result_recovery:
+            if (not pending.is_cleanup_quarantine(entry)
+                    or entry.get("upload_blocked") != "cleanup_unconfirmed"
+                    or not isinstance(entry.get("completed_result_recovery"), dict)
+                    or not isinstance(entry.get("trial_dir"), str)):
+                print("  exact cleanup-result recovery binding is missing")
+                return "upload-blocked"
+            # The original process exit was already proven. Snapshot its
+            # logs/result now, then compare those bytes and the staged patch
+            # with the signed-command preflight hashes before any server write.
+            with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
+                return _upload_trial_checked(
+                    client, entry, ask_cleanup=ask_cleanup,
+                    log_snapshot=snapshot,
+                    upload_only_recovery=upload_only_recovery,
+                    cleanup_result_recovery=True,
+                )
         if (pending.is_cleanup_quarantine(entry)
                 or (entry.get("upload_blocked") and not request_salvage)
                 or not Path(entry["trial_dir"]).exists()):
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 upload_only_recovery=upload_only_recovery,
+                cleanup_result_recovery=cleanup_result_recovery,
             )
         with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 log_snapshot=snapshot, upload_only_recovery=upload_only_recovery,
+                cleanup_result_recovery=cleanup_result_recovery,
             )
     except UnsafeArtifact as exc:
         blocked = dict(entry)
@@ -2227,6 +2315,7 @@ def _upload_trial_checked(
     client: ApiClient, entry: dict, *, ask_cleanup: bool = False,
     request_salvage: bool = False, log_snapshot: Path | None = None,
     upload_only_recovery: bool = False,
+    cleanup_result_recovery: bool = False,
 ) -> str:
     """Scrub + upload one trial's artifacts, described by a pending-ledger
     entry dict (assignment_id/nonce/task_id/trial_dir/meta/outcome/job_dir/
@@ -2250,7 +2339,16 @@ def _upload_trial_checked(
     task_id = entry.get("task_id", "?")
     blocked_reason = entry.get("upload_blocked")
     quarantine = pending.is_cleanup_quarantine(entry)
-    if quarantine:
+    if cleanup_result_recovery and (
+        not quarantine or blocked_reason != "cleanup_unconfirmed"
+        or not isinstance(entry.get("completed_result_recovery"), dict)
+        or not entry["completed_result_recovery"].get("upload_session_id")
+        or type(entry["completed_result_recovery"].get("upload_owner_epoch")) is not int
+    ):
+        pending.record(HOME, entry)
+        print(f"  {task_id}: exact cleanup-result recovery binding is missing")
+        return "upload-blocked"
+    if quarantine and not cleanup_result_recovery:
         pending.record(HOME, entry)
         print(
             f"  {task_id}: process exit/cleanup is unconfirmed; result is "
@@ -2268,7 +2366,9 @@ def _upload_trial_checked(
             "owner_superseded completed upload; no state was changed"
         )
         return "upload-blocked"
-    if blocked_reason and not salvage_requested:
+    if blocked_reason and not salvage_requested and not (
+        cleanup_result_recovery and blocked_reason == "cleanup_unconfirmed"
+    ):
         # A persisted block is a terminal *automatic* recovery decision, not
         # a transient upload error.  Keep both the ledger row and artifacts so
         # the paid result can be inspected explicitly, but never restage it or
@@ -2381,6 +2481,23 @@ def _upload_trial_checked(
     patch = staged.staged
     if log_snapshot is not None:
         _, trajectory, result = trial_artifact_paths(log_snapshot)
+
+    if cleanup_result_recovery:
+        saved_hashes = entry["completed_result_recovery"].get("artifact_sha256")
+        if not isinstance(saved_hashes, dict):
+            print(f"  {task_id}: saved result hashes are unavailable; upload blocked")
+            return "upload-blocked"
+        observed = {"patch": hashlib.sha256(staged.data).hexdigest()}
+        if trajectory is None or result is None:
+            print(f"  {task_id}: original trajectory/result is missing; upload blocked")
+            return "upload-blocked"
+        for name, path in (("trajectory", trajectory), ("result", result)):
+            observed[name] = hashlib.sha256(
+                read_trial_file(log_snapshot, path.relative_to(log_snapshot))
+            ).hexdigest()
+        if observed != saved_hashes:
+            print(f"  {task_id}: original result bytes changed after preflight; upload blocked")
+            return "upload-blocked"
 
     # Use the byte snapshot verified while the staging lock was held. The
     # multipart request below gets its own temporary file, so a concurrent
@@ -2771,7 +2888,13 @@ def _upload_trial_checked(
             }
             if submit_bundle is not None:
                 submit_kwargs["trajectory_bundle"] = submit_bundle
-            runner_session_id = entry.get("runner_session_id")
+            recovery_owner = (entry.get("completed_result_recovery")
+                              if cleanup_result_recovery else None)
+            runner_session_id = (
+                recovery_owner.get("upload_session_id")
+                if isinstance(recovery_owner, dict)
+                else entry.get("runner_session_id")
+            )
             if runner_session_id:
                 manifest_kwargs = {
                     "assignment_id": assignment_id,
@@ -2867,7 +2990,11 @@ def _upload_trial_checked(
                         owner_epoch = None
                         intent_already_registered = True
                 if not legacy_entry:
-                    owner_epoch = int(entry["owner_epoch"])
+                    owner_epoch = int(
+                        recovery_owner["upload_owner_epoch"]
+                        if isinstance(recovery_owner, dict)
+                        else entry["owner_epoch"]
+                    )
                     manifest = submission_payload_manifest(
                         **manifest_kwargs,
                         owner_epoch=owner_epoch,
@@ -2893,6 +3020,9 @@ def _upload_trial_checked(
                     registered_intent_id = (
                         calculated_intent_id
                         if intent_already_registered
+                        else _register_cleanup_result_intent(
+                            client, entry, calculated_intent_id)
+                        if cleanup_result_recovery
                         else client.register_submission_upload_intent(
                             assignment_id,
                             entry["nonce"],
@@ -2904,6 +3034,15 @@ def _upload_trial_checked(
                 except ApiError as exc:
                     if retained_outcome := retain_unresolved_upload(exc):
                         return retained_outcome
+                    if cleanup_result_recovery:
+                        # This explicit quarantine path never falls back to
+                        # the legacy submit shape, even when an older server
+                        # does not expose its required intent endpoint.
+                        print(
+                            f"  {task_id}: server did not grant the exact "
+                            "cleanup-result upload intent; original result kept"
+                        )
+                        return "upload-failed"
                     if exc.status_code == 410:
                         # The assignment (or its claim batch) expired before
                         # the content-bound recovery fence could be registered.
@@ -2968,6 +3107,9 @@ def _upload_trial_checked(
                     return retained_outcome
                 if (submit_bundle is not None
                         and _is_trajectory_bundle_rejection(exc)):
+                    if cleanup_result_recovery:
+                        print(f"  {task_id}: recovered payload was rejected; exact intent kept")
+                        return "upload-failed"
                     # The bundle is optional. Persist the downgrade before the
                     # second request so a crash/transport failure cannot make
                     # the next retry rebuild and resend the rejected artifact.

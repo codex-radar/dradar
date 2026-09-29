@@ -33,7 +33,7 @@ _RESULT_NAMES = frozenset({
 _OUTPUT_DIRS = frozenset({"artifacts", "host-output", "artifact-staging"})
 
 
-def _job_inventory(home: Path, row: dict, assignment_id: str) -> str:
+def _job_inventory(home: Path, row: dict, assignment_id: str, *, allow_result: bool = False) -> str:
     raw = row.get("job_dir")
     root = home / "work" / "jobs"
     if (not isinstance(raw, str) or not Path(raw).is_absolute()
@@ -78,9 +78,9 @@ def _job_inventory(home: Path, row: dict, assignment_id: str) -> str:
                                            "finished_at", "n_total_trials", "stats"}):
                     raise CleanupRecoveryBlocked("job summary has an unknown result shape")
                 summary_sha256 = hashlib.sha256(summary_raw).hexdigest()
-            if ((name in _RESULT_NAMES and not job_summary)
+            if (not allow_result and ((name in _RESULT_NAMES and not job_summary)
                     or (stat.S_ISREG(info.st_mode)
-                        and any(part in _OUTPUT_DIRS for part in rel.parts[:-1]))):
+                        and any(part in _OUTPUT_DIRS for part in rel.parts[:-1])))):
                 raise CleanupRecoveryBlocked(
                     "possible local result remains; keep the quarantine for result review"
                 )
@@ -130,7 +130,7 @@ def _require_batch_capacity_settled(client, batch_id: str) -> None:
 
 def inspect(
     *, assignment_id: str, benchmark: str, batch_id: str,
-    session_id: str, home: Path = HOME,
+    session_id: str, home: Path = HOME, allow_result: bool = False,
 ) -> dict:
     """Read-only preflight with a digest that execution must recheck."""
     if (not re.fullmatch(r"[0-9a-f]{32}", assignment_id)
@@ -138,13 +138,21 @@ def inspect(
             or normalize_batch_id(batch_id) != batch_id or not benchmark):
         raise CleanupRecoveryBlocked("exact assignment, batch, session and benchmark are required")
     row = _exact_row(home, assignment_id)
+    saved_result = row.get("completed_result_recovery") if allow_result else None
     if (row.get("batch_id") != batch_id
             or row.get("runner_session_id") != session_id
             or type(row.get("owner_epoch")) is not int
             or type(row.get("resume_generation")) is not int
-            or row.get("outcome") is not None or row.get("trial_dir") is not None
-            or row.get("upload_intent") is not None
-            or row.get("upload_receipt_status") is not None):
+            or (row.get("outcome") is not None and
+                not (isinstance(saved_result, dict) and row["outcome"] == "completed"))
+            or (row.get("trial_dir") is not None and
+                not isinstance(saved_result, dict))
+            or (row.get("upload_intent") is not None and
+                not isinstance(saved_result, dict))
+            or (row.get("upload_receipt_status") is not None and not (
+                isinstance(saved_result, dict) and
+                row["upload_receipt_status"] in {
+                    "unknown_unreconciled", "busy_not_executed"}))):
         raise CleanupRecoveryBlocked("saved quarantine has another result or owner shape")
     cfg = {**_load_config(), "benchmark": benchmark}
     client = _client(cfg)
@@ -219,7 +227,8 @@ def inspect(
             or status.get("status") not in ({"leased", "expired", "released"}
                                           if saved_request else {"leased", "expired"})):
         raise CleanupRecoveryBlocked("exact server assignment is not unsubmitted and recoverable")
-    inventory_sha256 = _job_inventory(home, row, assignment_id)
+    inventory_sha256 = _job_inventory(home, row, assignment_id,
+                                      allow_result=allow_result)
     journal_sha256 = hashlib.sha256(capacity_journal._canonical(journal)).hexdigest()
     quarantine_sha256 = (saved_request.get("quarantine_sha256") if isinstance(saved_request, dict)
                          else hashlib.sha256(capacity_journal._canonical(row)).hexdigest())

@@ -1090,6 +1090,21 @@ class ApiClient:
             timeout=10.0, retry_rate_limit=False, retry_transport=False,
         ))
 
+    def register_completed_cleanup_result_intent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Register the exited original owner's exact completed upload only."""
+        return self._check(self._request(
+            "POST", "/api/v1/submission-cleanup-result-recovery/intent",
+            json=payload, timeout=10.0, retry_rate_limit=False,
+            retry_transport=False,
+        ))
+
+    def register_completed_cleanup_result_salvage(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Bind one released original to a current idle upload-only owner."""
+        return self._post(
+            "/api/v1/submission-upload-salvage/rebind", data=payload,
+            timeout=10.0, retry_rate_limit=False, retry_transport=False,
+        )
+
     def release_runner_capacity(self, payload: dict[str, Any], *, explicit_replay_once: bool = False) -> dict[str, Any]:
         """Send retained exact cleanup evidence once; reconcile a lost ACK by GET."""
         import asyncio
