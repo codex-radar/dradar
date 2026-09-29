@@ -1,6 +1,8 @@
 """Offline evidence for the two strict registration failure boundaries."""
 
 import json
+import os
+import time
 
 import pytest
 
@@ -68,6 +70,163 @@ def test_actual_process_exit_reports_only_bounded_status(
         "registration_result": "process_exited", "registration_elapsed_sec": 7,
         "session_id": SESSION, **expected,
     }
+
+
+def test_exit_zero_shows_only_fresh_local_trial_exception_type(
+    tmp_path, capsys,
+):
+    job = tmp_path / "jobs" / f"a{ASSIGNMENT}"
+    trial = job / "task__1"
+    trial.mkdir(parents=True)
+    launched = time.time_ns()
+    (trial / "result.json").write_text(json.dumps({
+        "exception_info": {
+            "exception_type": "RuntimeError",
+            "exception_message": "SECRET credential at /private/user/task",
+            "exception_traceback": "SECRET traceback",
+        },
+    }))
+
+    class Exited:
+        def poll(self):
+            return 0
+
+    with pytest.raises(runner.RunnerError) as raised:
+        runner._wait_for_worker_registration(
+            Exited(), tmp_path / "missing-sidecar",
+            environment_build_timeout_multiplier=1,
+            expected_session_id=SESSION, job_dir=job,
+            launch_started_ns=launched,
+        )
+    output = capsys.readouterr().out
+    assert "Pier trial recorded exception type: RuntimeError" in output
+    assert str(trial / "result.json") in output
+    assert "SECRET" not in output + str(raised.value)
+    assert raised.value.report_detail == {
+        "registration_result": "process_exited", "registration_elapsed_sec": 0,
+        "session_id": SESSION, "process_exit_code": 0,
+    }
+    report = failure_reports.build_report(
+        source="cli", phase="runner", failure_kind="runner_failed",
+        failure_code=raised.value.report_code,
+        detail=raised.value.report_detail | {"exception_message": "SECRET"},
+    )
+    assert "exception_message" not in report["detail"]
+    assert "RuntimeError" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("case", ["missing", "malformed", "stale", "ambiguous", "untrusted-type"])
+def test_registration_result_hint_fails_closed_for_uncertain_local_evidence(
+    tmp_path, case,
+):
+    job = tmp_path / "jobs" / f"a{ASSIGNMENT}"
+    trial = job / "task__1"
+    trial.mkdir(parents=True)
+    launched = time.time_ns()
+    result = trial / "result.json"
+    if case == "malformed":
+        result.write_text("{not json")
+    elif case == "stale":
+        result.write_text('{"exception_info":{"exception_type":"RuntimeError"}}')
+        os.utime(result, ns=(launched - 1_000_000_000, launched - 1_000_000_000))
+    elif case == "ambiguous":
+        result.write_text('{"exception_info":{"exception_type":"RuntimeError"}}')
+        other = job / "other__2"
+        other.mkdir()
+        (other / "result.json").write_text(result.read_text())
+    elif case == "untrusted-type":
+        result.write_text(json.dumps({"exception_info": {
+            "exception_type": "SECRET_CUSTOM_TYPE", "exception_message": "SECRET"
+        }}))
+    hint = runner._fresh_registration_trial_hint(job, launched)
+    if case == "untrusted-type":
+        assert "unrecognized" in hint and "SECRET" not in hint
+    else:
+        assert hint == ""
+
+
+def test_wrong_session_sidecar_cannot_register_even_with_current_trial_result(
+    tmp_path,
+):
+    job = tmp_path / "jobs" / f"a{ASSIGNMENT}"
+    trial = job / "task__1"
+    trial.mkdir(parents=True)
+    launched = time.time_ns()
+    (trial / "result.json").write_text(
+        '{"exception_info":{"exception_type":"RuntimeError"}}'
+    )
+    foreign = {
+        "protocol_version": 1, "event": "worker_registered",
+        "session_id": "d" * 32, "client_seq": 1,
+        "occurred_at_ms": 1, "runtime": "pier",
+        "context": "agent", "profile": "provider",
+    }
+
+    class Exited:
+        def poll(self):
+            return 0
+
+    with pytest.raises(runner.RunnerError) as raised:
+        runner._wait_for_worker_registration(
+            Exited(), tmp_path / "sidecar",
+            environment_build_timeout_multiplier=1,
+            worker_event_source=lambda: foreign,
+            expected_session_id=SESSION, job_dir=job,
+            launch_started_ns=launched,
+        )
+    assert raised.value.report_code == "worker-registration-process-exited"
+    assert raised.value.report_detail["session_id"] == SESSION
+
+
+def test_valid_current_worker_event_wins_over_exit_zero_and_has_no_failure_hint(
+    tmp_path, capsys,
+):
+    job = tmp_path / "jobs" / f"a{ASSIGNMENT}"
+    trial = job / "task__1"
+    trial.mkdir(parents=True)
+    launched = time.time_ns()
+    (trial / "result.json").write_text(
+        '{"exception_info":{"exception_type":"RuntimeError"}}'
+    )
+    current = {
+        "protocol_version": 1, "event": "worker_registered",
+        "session_id": SESSION, "client_seq": 1,
+        "occurred_at_ms": 1, "runtime": "pier",
+        "context": "agent", "profile": "provider",
+    }
+
+    class Exited:
+        def poll(self):
+            return 0
+
+    event = runner._wait_for_worker_registration(
+        Exited(), tmp_path / "sidecar",
+        environment_build_timeout_multiplier=1,
+        worker_event_source=lambda: current,
+        expected_session_id=SESSION, job_dir=job,
+        launch_started_ns=launched,
+    )
+    assert event["event"] == "worker_registered"
+    assert event["session_id"] == SESSION
+    assert capsys.readouterr().out == ""
+
+
+def test_corrupt_worker_event_does_not_register_or_leak_raw_content(
+    tmp_path, capsys,
+):
+    class Exited:
+        def poll(self):
+            return 0
+
+    with pytest.raises(runner.RunnerError) as raised:
+        runner._wait_for_worker_registration(
+            Exited(), tmp_path / "sidecar",
+            environment_build_timeout_multiplier=1,
+            worker_event_source=lambda: '{"event":"worker_registered","secret":"SECRET"',
+            expected_session_id=SESSION,
+        )
+    assert raised.value.report_code == "worker-registration-process-exited"
+    assert "SECRET" not in capsys.readouterr().out + str(raised.value)
 
 
 def test_poll_observation_error_is_not_mislabeled_as_process_exit(tmp_path):
