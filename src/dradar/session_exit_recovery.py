@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import math
+from pathlib import Path
 import random
 import re
 import time
@@ -46,6 +47,40 @@ def _valid_explicit_replay_state(state):
             type(prior.get('saved_deadline')) in (int, float) and
             type(prior.get('reserved_monotonic')) in (int, float) and
             prior['saved_deadline'] <= prior['reserved_monotonic'])
+
+
+def inspect_explicit_close_replay(home: Path, api, payload: dict) -> None:
+    """Read the exhausted, exact original close request without opening a window."""
+    operation = '/api/v1/runner/close'
+    scope = hashlib.sha256(json.dumps([api.server, operation, payload.get('session_id'),
+        payload.get('batch_id'), payload.get('evidence_id')], separators=(',', ':')).encode()).hexdigest()
+    root = home / 'pending_session_exits'
+    journal = root / (scope + '.json')
+    if root.is_symlink() or journal.is_symlink() or not journal.is_file():
+        raise ValueError('original pending close journal is unavailable')
+    try:
+        state = json.loads(journal.read_text())
+        if (not isinstance(state, dict) or state.get('schema_version') != 1
+                or state.get('scope') != scope or state.get('server') != api.server
+                or state.get('path') != operation or state.get('body') != payload
+                or type(state.get('attempts')) is not int
+                or not 0 <= state['attempts'] <= MAX_ATTEMPTS
+                or type(state.get('receipt_reads')) is not int
+                or not 0 <= state['receipt_reads'] <= MAX_RECEIPT_READS
+                or type(state.get('uncertain')) is not bool
+                or type(state.get('deadline')) not in (int, float)
+                or not math.isfinite(state['deadline'])
+                or state.get('result') is not None
+                or state.get('explicit_replay_rounds', 0) != 0
+                or not _valid_explicit_replay_state(state)):
+            raise ValueError('original pending close evidence differs')
+        exhausted = (state['attempts'] >= MAX_ATTEMPTS
+                     or state['receipt_reads'] >= MAX_RECEIPT_READS
+                     or _saved_deadline(state, time.monotonic() + TOTAL_SECONDS) <= time.monotonic())
+        if not exhausted:
+            raise ValueError('original pending close window is not exhausted')
+    except (OSError, UnicodeError, TypeError, KeyError, AttributeError, ValueError) as exc:
+        raise ValueError('original pending close evidence cannot be verified') from exc
 
 
 async def recover(api, path, payload, *, explicit_replay_once=False):

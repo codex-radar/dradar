@@ -95,13 +95,14 @@ def _containers(job, saved_daemon):
     return {"daemon": daemon, "containers": matched, "running": False}
 
 
-def _observe(state, home):
+def _observe(state, home, *, recheck_completed=False):
     if sys.platform != "linux":
         raise Error("Crash exit inspection currently requires the original Linux host.")
     _process_absent(state.get("owner_identity"))
     facts = {}
     for key, attempt in state["attempts"].items():
-        if attempt["status"] in {"confirmed_absent", "never_started", "recovered_absent"}:
+        if attempt["status"] == "never_started" or (not recheck_completed and
+                attempt["status"] in {"confirmed_absent", "recovered_absent"}):
             continue
         spawn = next((e for e in attempt["events"] if e["event"] == "spawned"), None)
         if spawn is None:
@@ -139,6 +140,42 @@ def _observe(state, home):
     return facts
 
 
+def _sealed_explicit_replay(state, home, client):
+    """Recheck the exact original exit, including normally sealed sessions."""
+    if (sys.platform != "linux" or state.get("state") != "sealed"
+            or not state.get("release_request")):
+        raise Error("Original sealed Linux exit recovery is required.")
+    request = state["release_request"]
+    if any(request.get(key) != value for key, value in (
+            ("exit_state", "confirmed"), ("process_tree", "confirmed_absent"),
+            ("owned_containers", "confirmed_absent"))):
+        raise Error("Original exit declaration is incomplete.")
+    if state.get("recovery_source_sha256") is None:
+        # CapacityJournal.seal() writes this normal form. The extra recovery
+        # seal belongs only to a crash recheck and must not be erased to make
+        # its evidence look like a normal finalization.
+        if (any(key in state for key in ("recovery_seal_sha256", "recovery_request_sha256"))
+                or any(a["status"] not in {"confirmed_absent", "never_started"}
+                       for a in state["attempts"].values())):
+            raise Error("Original sealed exit evidence is inconsistent.")
+        for attempt in state["attempts"].values():
+            if attempt["status"] != "confirmed_absent":
+                continue
+            spawn = next((e for e in attempt["events"] if e["event"] == "spawned"), None)
+            exit_event = attempt["events"][-1]
+            if (spawn is None or exit_event.get("event") != "confirmed_absent"
+                    or exit_event.get("evidence_kind") != "private_pgid_and_exact_job_docker_recheck_v1"
+                    or exit_event.get("pid") != spawn.get("pid")
+                    or exit_event.get("pgid") != spawn.get("pgid")):
+                raise Error("Original normal exit audit is incomplete.")
+    # The crash form is already checked by capacity_journal._read(), including
+    # its recovery seal and request binding. Both forms get a fresh physical
+    # recheck before the preflight and again before any write.
+    from .session_exit_recovery import inspect_explicit_close_replay
+    inspect_explicit_close_replay(home, client, state["close_request"])
+    return _observe(state, home, recheck_completed=True)
+
+
 def recover(home, session_id, client, *, execute=False, expected_digest=None,
             explicit_replay_once=False):
     if not re.fullmatch(r"[0-9a-f]{32}", session_id):
@@ -160,12 +197,9 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None,
     if not execute:
         state, digest = inspect()
         if explicit_replay_once:
-            if (sys.platform != "linux" or state.get("state") != "sealed"
-                    or not state.get("release_request")
-                    or not state.get("recovery_source_sha256")):
-                raise Error("Original sealed Linux exit recovery is required.")
-            _process_absent(state.get("owner_identity"))
-        facts = {} if state.get("release_request") else _observe(state, home)
+            facts = _sealed_explicit_replay(state, home, client)
+        else:
+            facts = {} if state.get("release_request") else _observe(state, home)
         return {"session_id": session_id, "journal_sha256": digest,
                 "status": "ready", "observations": facts, "mutated": False}
     if not expected_digest or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
@@ -174,11 +208,7 @@ def recover(home, session_id, client, *, execute=False, expected_digest=None,
     with _exclusive_lock(path.with_suffix(".lock")):
         state, digest = inspect()
         if explicit_replay_once:
-            if (sys.platform != "linux" or state.get("state") != "sealed"
-                    or not state.get("release_request")
-                    or not state.get("recovery_source_sha256")):
-                raise Error("Original sealed Linux exit recovery is required.")
-            _process_absent(state.get("owner_identity"))
+            _sealed_explicit_replay(state, home, client)
         if not state.get("release_request"):
             facts = _observe(state, home)
             original = deepcopy(state)
