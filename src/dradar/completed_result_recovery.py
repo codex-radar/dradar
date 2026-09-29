@@ -43,6 +43,65 @@ _ORIGINAL_ZCODE_PROFILE = {
 }
 
 
+def _original_task_identity_matches(result: dict, row: dict, trial: Path,
+                                    home: Path) -> bool:
+    """Match Pier's local task record to this exact quarantined job.
+
+    Pier records a LocalTaskId object for the temporary artifact overlay.
+    That directory is deleted after the run, so its recorded path must be
+    checked lexically against the original job and the separate trial config.
+    A bare string remains the historical exact-match form.
+    """
+    task_id = row["task_id"]
+    recorded = result.get("task_id")
+    if isinstance(recorded, str):
+        return recorded == task_id
+    if (not isinstance(recorded, dict) or set(recorded) != {"path"}
+            or not isinstance(recorded["path"], str)
+            or not isinstance(task_id, str)):
+        return False
+    raw = recorded["path"]
+    path = Path(raw)
+    job = Path(row["job_dir"])
+    prefix = f".{job.name}-artifact-task-"
+    overlay = path.parent.name
+    if (not path.is_absolute() or ".." in path.parts
+            or str(path) != raw or path.name != task_id
+            or path.parent.parent != home / "work"
+            or not overlay.startswith(prefix) or len(overlay) == len(prefix)
+            or result.get("task_name") != f"datacurve/{task_id}"
+            or result.get("trial_name") != trial.name
+            or not isinstance(result.get("task_checksum"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", result["task_checksum"])):
+        return False
+    config = result.get("config")
+    if (not isinstance(config, dict)
+            or not isinstance(config.get("task"), dict)
+            or config["task"].get("path") != raw):
+        return False
+    try:
+        recorded_config = json.loads(read_trial_file(trial, Path("config.json")))
+        job_config = json.loads(read_trial_file(job, Path("config.json")))
+        job_lock = json.loads(read_trial_file(job, Path("lock.json")))
+    except (UnsafeArtifact, OSError, ValueError, UnicodeError,
+            json.JSONDecodeError):
+        return False
+    if (not isinstance(recorded_config, dict) or recorded_config != config
+            or not isinstance(job_config, dict)
+            or not isinstance(job_config.get("tasks"), list)
+            or len(job_config["tasks"]) != 1
+            or not isinstance(job_config["tasks"][0], dict)
+            or job_config["tasks"][0].get("path") != raw
+            or not isinstance(job_lock, dict)
+            or not isinstance(job_lock.get("invocation"), list)):
+        return False
+    invocation = job_lock["invocation"]
+    indices = [index for index, value in enumerate(invocation) if value == "-p"]
+    return (len(indices) == 1 and indices[0] + 1 < len(invocation)
+            and invocation[indices[0] + 1] == raw
+            and invocation.count(raw) == 1)
+
+
 def inspect(
     *, assignment_id: str, benchmark: str, batch_id: str,
     session_id: str, home: Path = HOME,
@@ -87,7 +146,7 @@ def inspect(
             json.JSONDecodeError) as exc:
         raise CompletedResultRecoveryBlocked("original artifact cannot be verified") from exc
     if (not isinstance(result, dict)
-            or result.get("task_id") != row["task_id"]
+            or not _original_task_identity_matches(result, row, trial, home)
             or not isinstance(result.get("finished_at"), str)
             or not result["finished_at"]
             or not isinstance(result.get("agent_execution"), dict)
