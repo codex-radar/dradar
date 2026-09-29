@@ -9,7 +9,10 @@ import pytest
 from dradar import assignment_boundary, cleanup_recovery, completed_result_recovery, pending, runloop
 from dradar.api_client import ApiError
 from dradar.ota import recovery
+from dradar.ota.activity import register_invocation
+from dradar.ota.state import UpdateLock
 from test_cleanup_recovery import AID, case  # noqa: F401 - shared physical-exit fixture
+from test_recover_upload import _signed_package
 
 
 @pytest.fixture(autouse=True)
@@ -327,20 +330,24 @@ def test_changed_bytes_after_preflight_never_reach_server(case, monkeypatch, cha
 
 def test_signed_result_entry_verifies_package_before_preflight(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(recovery, "HOME", tmp_path)
-    monkeypatch.setattr(recovery, "active_invocations", lambda _root: [])
-    monkeypatch.setattr(sys, "argv", [str(tmp_path / "candidate.pyz"), "recover-result"])
-    monkeypatch.setattr(recovery, "_verify_package",
-                        lambda *_args: calls.append("verified"))
+    home, manifest, package, _ = _signed_package(tmp_path, monkeypatch)
+    monkeypatch.setattr(recovery, "HOME", home)
+    monkeypatch.setattr(sys, "argv", [str(package), "recover-result"])
     monkeypatch.setattr(completed_result_recovery, "cmd_recover",
                         lambda _args: calls.append("preflight") or 0)
-    args = ["--manifest", str(tmp_path / "signed.json"),
+    args = ["--manifest", str(manifest),
             "--assignment-id", AID, "--benchmark", "deep-swe",
             "--batch-id", "b" * 32, "--runner-session-id", "a" * 32]
     assert recovery.main_result(args) == 0
-    assert calls == ["verified", "preflight"]
-    calls.clear()
-    monkeypatch.setattr(recovery, "_verify_package",
-                        lambda *_args: (_ for _ in ()).throw(ValueError("invalid signature")))
+    assert calls == ["preflight"]
+    package.write_bytes(package.read_bytes() + b"tampered")
     assert recovery.main_result(args) == 2
-    assert calls == []
+    assert calls == ["preflight"]
+    with UpdateLock(home / "ota" / "launch.lock"):
+        active = register_invocation(home / "ota")
+        active.__enter__()
+    try:
+        assert recovery.main_result(args) == 2
+    finally:
+        active.__exit__(None, None, None)
+    assert calls == ["preflight"]
