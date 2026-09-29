@@ -131,3 +131,27 @@ def test_rotated_token_without_newer_expiry_is_not_published(tmp_path: Path) -> 
         _finish(agent, Environment(), marker)
     assert json.loads(source.read_text())["refresh_token"] == "original"
     assert marker.exists()
+
+
+@pytest.mark.parametrize("output, code, accepted", [
+    ("kiro-cli 2.26.0", 0, True),
+    ("kiro-cli 2.24.1", 0, False),
+    ("kiro-cli 2.26.0-preview", 0, False),
+    ("kiro-cli 12.26.0", 0, False),
+    ("kiro-cli 2.24.1\nkiro-cli 2.26.0", 0, False),
+    ("kiro-cli 2.26.0", 1, False),
+])
+def test_real_install_spec_requires_exact_successful_version(tmp_path, monkeypatch,
+                                                             output, code, accepted):
+    import shlex
+    import subprocess
+    from pathlib import PurePosixPath
+    cli = tmp_path / "fake kiro"
+    cli.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(output)
+                   + "\nexit " + str(code) + "\n")
+    cli.chmod(0o700)
+    monkeypatch.setattr(KiroOpus55, "_CLI", PurePosixPath(cli))
+    spec = KiroOpus55.__new__(KiroOpus55).install_spec()
+    assert spec.version == "2.26.0"
+    result = subprocess.run(["sh", "-c", spec.verification_command], capture_output=True)
+    assert (result.returncode == 0) is accepted

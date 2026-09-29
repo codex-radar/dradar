@@ -55,9 +55,9 @@ ARCHIVE_SHA256 = {
 }
 
 
-def _version_check(cli: str) -> str:
+def _version_check(cli: str | PurePosixPath) -> str:
     expected = shlex.quote("kiro-cli " + VERSION)
-    return f'actual=$({shlex.quote(cli)} --version) && [ "$actual" = {expected} ]'
+    return f'actual=$({shlex.quote(str(cli))} --version) && [ "$actual" = {expected} ]'
 
 
 def _install_command() -> str:
