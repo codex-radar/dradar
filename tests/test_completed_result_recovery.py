@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,27 @@ def _complete_trial(job):
     return trial
 
 
+def _pier_local_task_trial(job, home):
+    """Pier's real LocalTaskId shape with the CLI's removed artifact overlay."""
+    trial = _complete_trial(job)
+    path = str(home / "work" / f".{job.name}-artifact-task-abc12345" / "task")
+    config = {"task": {"path": path}, "agent": {"model_name": "gpt-6-sol"}}
+    result_path = trial / "result.json"
+    result = json.loads(result_path.read_text())
+    result.update({
+        "task_id": {"path": path}, "task_name": "datacurve/task",
+        "trial_name": trial.name, "task_checksum": "a" * 64,
+        "config": config,
+    })
+    result_path.write_text(json.dumps(result))
+    (trial / "config.json").write_text(json.dumps(config))
+    (job / "config.json").write_text(json.dumps({"tasks": [{"path": path}]}))
+    (job / "lock.json").write_text(json.dumps({
+        "invocation": ["pier", "run", "-p", path],
+    }))
+    return trial
+
+
 def test_exact_completed_result_preflight_is_read_only(case):
     server, job, boundary, common = case
     trial = _complete_trial(job)
@@ -58,6 +80,65 @@ def test_exact_completed_result_preflight_is_read_only(case):
     assert (common["home"] / "pending_uploads.json").read_bytes() == before
     assert pending.load(common["home"])[0]["upload_blocked"] == "cleanup_unconfirmed"
     assert boundary.is_file() and server.disposition is None
+
+
+def test_pier_local_task_id_binds_original_artifact_overlay(case):
+    server, job, _boundary, common = case
+    trial = _pier_local_task_trial(job, common["home"])
+    path = json.loads((trial / "result.json").read_text())["task_id"]["path"]
+    assert not Path(path).exists()  # Pier removed the overlay.
+    before = (common["home"] / "pending_uploads.json").read_bytes()
+    assert completed_result_recovery.inspect(**common)["status"] == "ready"
+    assert (common["home"] / "pending_uploads.json").read_bytes() == before
+    assert server.disposition is None
+
+
+@pytest.mark.parametrize("change", [
+    "wrong_task", "wrong_job_prefix", "path_escape", "extra_task_key",
+    "different_result_config", "different_trial_config", "different_job_config",
+    "different_lock_path", "duplicate_lock_path", "wrong_task_name",
+    "wrong_trial_name", "invalid_checksum", "missing_trial_config",
+])
+def test_pier_local_task_id_mismatch_keeps_quarantine(case, change):
+    server, job, _boundary, common = case
+    trial = _pier_local_task_trial(job, common["home"])
+    result_path = trial / "result.json"
+    result = json.loads(result_path.read_text())
+    path = result["task_id"]["path"]
+    if change == "wrong_task":
+        result["task_id"]["path"] = path.rsplit("/", 1)[0] + "/other-task"
+    elif change == "wrong_job_prefix":
+        result["task_id"]["path"] = str(
+            common["home"] / "work" / ".another-job-artifact-task-abc12345" / "task")
+    elif change == "path_escape":
+        result["task_id"]["path"] = path.replace("/task", "/../task")
+    elif change == "extra_task_key":
+        result["task_id"]["git_url"] = "https://example.invalid/other"
+    elif change == "different_result_config":
+        result["config"]["task"]["path"] = "/outside/task"
+    elif change == "different_trial_config":
+        (trial / "config.json").write_text(json.dumps({"task": {"path": "/outside/task"}}))
+    elif change == "different_job_config":
+        (job / "config.json").write_text(json.dumps({"tasks": [{"path": "/outside/task"}]}))
+    elif change == "different_lock_path":
+        (job / "lock.json").write_text(json.dumps({"invocation": ["pier", "run", "-p", "/outside/task"]}))
+    elif change == "duplicate_lock_path":
+        (job / "lock.json").write_text(json.dumps({"invocation": ["pier", "run", "-p", path, "--other", path]}))
+    elif change == "wrong_task_name":
+        result["task_name"] = "datacurve/other-task"
+    elif change == "wrong_trial_name":
+        result["trial_name"] = "other__abc12345"
+    elif change == "invalid_checksum":
+        result["task_checksum"] = "bad"
+    elif change == "missing_trial_config":
+        (trial / "config.json").unlink()
+    result_path.write_text(json.dumps(result))
+    before = (common["home"] / "pending_uploads.json").read_bytes()
+    with pytest.raises(completed_result_recovery.CompletedResultRecoveryBlocked,
+                       match="original trial does not prove a completed agent result"):
+        completed_result_recovery.inspect(**common)
+    assert (common["home"] / "pending_uploads.json").read_bytes() == before
+    assert server.disposition is None
 
 
 @pytest.mark.parametrize("change", ["other_task", "unfinished", "exception", "empty_patch", "link"])
