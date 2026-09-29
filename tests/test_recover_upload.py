@@ -354,8 +354,13 @@ def test_signed_session_exit_entry_binds_original_batch_and_digest(
     digest = "d" * 64
     monkeypatch.setattr(capacity_journal, "_read",
                         lambda _path: {"batch_id": BATCH})
+    plan_scoped = {"value": False}
+    class Client:
+        def runner_session_receipt(self, session_id, *, batch_id):
+            assert (session_id, batch_id) == (session, BATCH)
+            return {"plan_scoped": plan_scoped["value"]}
     monkeypatch.setattr(legacy_capacity, "_existing_client",
-                        lambda _args: (object(), {"kind": "account"}, ()))
+                        lambda _args: (Client(), {"kind": "account"}, ()))
     reached = []
     def recover_one(home_arg, session_arg, client, **kwargs):
         reached.append((home_arg, session_arg, kwargs))
@@ -371,6 +376,10 @@ def test_signed_session_exit_entry_binds_original_batch_and_digest(
     assert reached[-1][2]["execute"] is True
     assert len(reached) == 2
     assert 'released' in capsys.readouterr().out
+    plan_scoped["value"] = True
+    assert recovery.main_session_exit(args + ["--execute", "--journal-sha256", digest]) == 2
+    assert len(reached) == 2
+    plan_scoped["value"] = False
     package.write_bytes(package.read_bytes() + b"tampered")
     assert recovery.main_session_exit(args) == 2
     assert len(reached) == 2

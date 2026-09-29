@@ -33,10 +33,19 @@ def _valid_explicit_replay_state(state):
         return False
     digest = hashlib.sha256(json.dumps(state['body'], sort_keys=True,
                                 separators=(',', ':')).encode()).hexdigest()
-    return (prior.get('attempts') == MAX_ATTEMPTS
-            and type(prior.get('receipt_reads')) is int
-            and 0 <= prior['receipt_reads'] <= MAX_RECEIPT_READS
-            and prior.get('body_sha256') == digest)
+    attempts = prior.get('attempts')
+    reads = prior.get('receipt_reads')
+    reason = prior.get('exhaustion_reason')
+    if (type(attempts) is not int or not 0 <= attempts <= MAX_ATTEMPTS
+            or type(reads) is not int or not 0 <= reads <= MAX_RECEIPT_READS
+            or prior.get('body_sha256') != digest):
+        return False
+    return (reason == 'attempts' and attempts == MAX_ATTEMPTS
+            or reason == 'receipts' and reads == MAX_RECEIPT_READS
+            or reason == 'deadline' and
+            type(prior.get('saved_deadline')) in (int, float) and
+            type(prior.get('reserved_monotonic')) in (int, float) and
+            prior['saved_deadline'] <= prior['reserved_monotonic'])
 
 
 async def recover(api, path, payload, *, explicit_replay_once=False):
@@ -86,9 +95,17 @@ async def recover(api, path, payload, *, explicit_replay_once=False):
             if exhausted and state.get('explicit_replay_rounds', 0) == 0:
                 # Reserve exactly one extra POST before doing any network I/O.
                 # A crash after this save cannot silently obtain another try.
+                saved_deadline = _saved_deadline(state, deadline)
+                reserved_monotonic = time.monotonic()
                 state['explicit_replay_prior'] = {
                     'attempts': state['attempts'],
                     'receipt_reads': state['receipt_reads'],
+                    'exhaustion_reason': (
+                        'attempts' if state['attempts'] >= MAX_ATTEMPTS
+                        else 'receipts' if state['receipt_reads'] >= MAX_RECEIPT_READS
+                        else 'deadline'),
+                    'saved_deadline': saved_deadline,
+                    'reserved_monotonic': reserved_monotonic,
                     'body_sha256': hashlib.sha256(
                         json.dumps(state['body'], sort_keys=True,
                                    separators=(',', ':')).encode()

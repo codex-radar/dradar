@@ -186,6 +186,7 @@ def main_session_exit(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True, metavar="SIGNED_JSON")
     parser.add_argument("--session-id", required=True, type=_assignment_id)
     parser.add_argument("--batch-id", required=True, type=_batch_id)
+    parser.add_argument("--plan", help="Original local run plan code when the session is plan scoped")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--journal-sha256")
     args = parser.parse_args(argv)
@@ -203,13 +204,19 @@ def main_session_exit(argv: list[str] | None = None) -> int:
             from .. import capacity_journal, session_recovery
             from types import SimpleNamespace
 
-            client, scope, _ = _existing_client(SimpleNamespace(plan=None, server=None))
-            if scope["kind"] != "account":
-                raise ValueError("original account identity is required")
+            client, scope, _ = _existing_client(
+                SimpleNamespace(plan=args.plan, server=None))
+            if scope.get("batch_id") and scope["batch_id"] != args.batch_id:
+                raise ValueError("original plan belongs to another batch")
             journal = capacity_journal._read(
                 HOME / "runner-reservations" / f"{args.session_id}.json")
             if journal["batch_id"] != args.batch_id:
                 raise ValueError("original session belongs to another batch")
+            receipt = client.runner_session_receipt(
+                args.session_id, batch_id=args.batch_id)
+            if (type(receipt.get("plan_scoped")) is not bool
+                    or receipt["plan_scoped"] != (scope["kind"] == "plan")):
+                raise ValueError("original session plan/account scope is unverified")
             result = session_recovery.recover(
                 HOME, args.session_id, client, execute=args.execute,
                 expected_digest=args.journal_sha256,
