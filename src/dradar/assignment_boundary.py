@@ -316,10 +316,15 @@ def confirm_cleanup_recovery(
                 "quarantine_sha256": quarantine_sha256,
                 "execution_started": "unknown",
             }
-            if existing is not None:
+            if existing is not None and existing.get("outcome") == "terminated_unsubmitted":
                 if any(existing.get(key) != value for key, value in outcome.items()):
                     raise BoundaryError("saved assignment already has another outcome")
                 return
+            if existing is not None:
+                if (set(existing) != {"outcome", "updated_at"}
+                        or existing.get("outcome") != "cleanup-unconfirmed"):
+                    raise BoundaryError("saved assignment already has another outcome")
+                outcome["prior_outcome"] = existing
             state["outcomes"][assignment_id] = {**outcome, "updated_at": _now()}
             _save(path, state)
 

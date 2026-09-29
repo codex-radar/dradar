@@ -104,17 +104,19 @@ def _require_batch_capacity_settled(client, batch_id: str) -> None:
     after = ""
     seen = set()
     for _ in range(20):
-        page = client.runner_reservations(limit=100, after=after)
+        page = client.runner_reservations(limit=200, after=after, batch_id=batch_id)
         if (not isinstance(page, dict) or page.get("schema_version") != 1
+                or page.get("batch_id") != batch_id
                 or not isinstance(page.get("reservations"), list)):
             raise CleanupRecoveryBlocked("server reservation inventory is incomplete")
         for item in page["reservations"]:
             if not isinstance(item, dict):
                 raise CleanupRecoveryBlocked("server reservation inventory has an unknown row")
-            if item.get("batch_id") == batch_id:
-                raise CleanupRecoveryBlocked(
-                    "another original session still has unknown capacity; keep OTA blocked"
-                )
+            if item.get("batch_id") != batch_id:
+                raise CleanupRecoveryBlocked("server reservation inventory escaped batch scope")
+            raise CleanupRecoveryBlocked(
+                "another original session still has unknown capacity; keep OTA blocked"
+            )
         next_after = page.get("next_after")
         if next_after is None:
             return
@@ -160,11 +162,14 @@ def inspect(
         raise CleanupRecoveryBlocked("original assignment boundary differs")
     prior = state["outcomes"].get(assignment_id)
     saved_request = row.get("cleanup_recovery")
-    if prior is not None and (
-        prior.get("outcome") != "terminated_unsubmitted"
-        or not isinstance(saved_request, dict)
-        or prior.get("request_id") != saved_request.get("request_id")
-    ):
+    quarantined_prior = (isinstance(prior, dict)
+                         and set(prior) == {"outcome", "updated_at"}
+                         and prior.get("outcome") == "cleanup-unconfirmed")
+    confirmed_prior = (isinstance(prior, dict)
+                       and prior.get("outcome") == "terminated_unsubmitted"
+                       and isinstance(saved_request, dict)
+                       and prior.get("request_id") == saved_request.get("request_id"))
+    if prior is not None and not (quarantined_prior or confirmed_prior):
         raise CleanupRecoveryBlocked("assignment has another saved outcome")
     journal_path = home / "runner-reservations" / f"{session_id}.json"
     journal = capacity_journal._read(journal_path)
@@ -311,8 +316,8 @@ def cmd_recover(args) -> int:
                   "benchmark": args.benchmark or _load_config().get("benchmark") or DEFAULT_BENCHMARK,
                   "batch_id": args.batch_id,
                   "session_id": args.runner_session_id}
-        result = (execute(**common, inventory_sha256=args.inventory_sha256)
-                  if args.execute else inspect(**common))
+        result = (execute(**common, inventory_sha256=args.inventory_sha256, home=HOME)
+                  if args.execute else inspect(**common, home=HOME))
     except (CleanupRecoveryBlocked, assignment_boundary.BoundaryError,
             capacity_journal.CapacityEvidenceError, pending.PendingLedgerError,
             ApiError, OSError, ValueError, KeyError, TypeError) as exc:

@@ -50,13 +50,17 @@ def test_reads_have_exact_scope_and_default_protocol_capability():
     client.claim_request_receipt('saved-request-id-0001',expected_fingerprint='a'*64)
     client.runner_session_receipt('saved-session-id',batch_id='b'*32)
     client.runner_reservations(limit=200,after='saved-session-id',quarantine_after='c'*64)
-    assert [r.method for r in seen]==['GET']*4
+    client.runner_reservations(limit=200, after='saved-session-id', batch_id='b'*32)
+    assert [r.method for r in seen]==['GET']*5
     assert [r.url.path for r in seen]==['/api/v1/run-plans/capabilities',
         '/api/v1/claim-requests/saved-request-id-0001',
-        '/api/v1/runner/sessions/saved-session-id/receipt','/api/v1/runner/reservations']
+        '/api/v1/runner/sessions/saved-session-id/receipt','/api/v1/runner/reservations',
+        '/api/v1/runner/reservations']
     assert dict(seen[1].url.params)=={'expected_fingerprint':'a'*64}
     assert dict(seen[2].url.params)=={'batch_id':'b'*32}
     assert dict(seen[3].url.params)=={'limit':'200','after':'saved-session-id','quarantine_after':'c'*64}
+    assert dict(seen[4].url.params)=={'limit':'200','after':'saved-session-id',
+                                      'quarantine_after':'','batch_id':'b'*32}
     assert all(RUNNER_RESERVATION_CAPABILITY in r.headers['X-DRadar-Capabilities'].split(',') for r in seen)
     assert all(r.headers['Authorization']=='Bearer drp_test' for r in seen)
 

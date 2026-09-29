@@ -233,8 +233,8 @@ def test_recovery_terminal_server_failure_keeps_ledger_and_artifacts(
                      else ["/api/v1/submission-upload-intents", "/api/v1/submissions"])
 
 
-def _signed_package(tmp_path, monkeypatch):
-    root = tmp_path / "home"
+def _signed_package(tmp_path, monkeypatch, *, home=None):
+    root = home if home is not None else tmp_path / "home"
     seed_lkg(root / "ota")
     identity = root / "flight-recorder" / "client_id"
     identity.parent.mkdir(parents=True)
