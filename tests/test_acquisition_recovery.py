@@ -75,6 +75,34 @@ def test_preallocated_fleet_claim_identity_cannot_be_changed_after_send():
     assert methods.count('POST') == 1
 
 
+def test_reconciled_fleet_claim_retires_only_original_allocation_journal():
+    first_id, second_id = 'a' * 32, 'b' * 32
+    writes = []
+    def handler(request):
+        if request.method == 'POST':
+            rid = parse_qs(request.read().decode())['request_id'][0]
+            writes.append(rid)
+            if rid == first_id:
+                raise httpx.ReadError('synthetic lost ACK')
+            return httpx.Response(200, json={'assignment': {'assignment_id': 'c' * 32}})
+        return receipt(request, 'unknown')
+    api = client(handler)
+    with pytest.raises(ApiError):
+        api.claim_assignment('t1', 'm', 'e', request_id=first_id)
+    saved = list((local_config.HOME / 'pending_acquisitions').glob('*.json'))
+    assert len(saved) == 1
+    with pytest.raises(ApiError, match='saved allocation identity is unreadable'):
+        acquisition_recovery.clear_reconciled_claim(api, {second_id:
+            {'task_id': 't1', 'model': 'm', 'effort': 'e'}})
+    assert saved[0].exists()
+    acquisition_recovery.clear_reconciled_claim(api, {first_id:
+        {'task_id': 't1', 'model': 'm', 'effort': 'e'}})
+    assert not saved[0].exists()
+    assert api.claim_assignment('t2', 'm', 'e', request_id=second_id)['assignment']['assignment_id'] == 'c' * 32
+    assert writes.count(first_id) == acquisition_recovery.MAX_ATTEMPTS
+    assert writes[-1] == second_id
+
+
 def test_first_server_rejection_proves_exact_request_was_not_claimed():
     request_id = 'c' * 32
     def reject(request):

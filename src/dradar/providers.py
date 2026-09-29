@@ -1625,7 +1625,7 @@ def _grok_probe_revision(credential: Path):
     return hashlib.sha256(raw).digest(), identities
 
 
-def _run_grok_live_probe(cli: str, credential: Path, root: Path) -> str | None:
+def _run_grok_live_probe(cli: str, credential: Path, root: Path, model: str) -> str | None:
     from .grok_probe import ProbeUnavailable
 
     try:
@@ -1666,21 +1666,24 @@ def _run_grok_live_probe(cli: str, credential: Path, root: Path) -> str | None:
         )
     if proc.returncode != 0:
         return "Grok live model check failed; check this machine's network/proxy"
-    if GROK_MODEL not in output:
-        return f"Grok OAuth account cannot access {GROK_MODEL}"
+    if not re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(model)}(?![A-Za-z0-9_.-])", output):
+        return f"Grok OAuth account cannot access {model}"
     return None
 
 
 def grok_live_error(
     executable: str | Path | None = None,
     auth_path: Path | None = None,
+    *, model: str = GROK_MODEL,
 ) -> str | None:
-    """Verify the saved OAuth session and Grok 4.6 catalog without a prompt.
+    """Verify the saved OAuth session and selected Grok catalog without a prompt.
 
     A Linux utility container on the task daemon binds the canonical store.
     Its pinned CLI uses ``GROK_AUTH_PATH`` for reads and native refresh locks.
     The host never refreshes a fork or attempts to emulate a Docker VM's lock.
     """
+    if model not in GROK_MODELS:
+        return f"unsupported Grok subscription model {model!r}"
     cli = str(executable or grok_cli_path() or "")
     if not cli:
         return f"official Grok CLI {GROK_CLI_VERSION} is not installed"
@@ -1693,8 +1696,8 @@ def grok_live_error(
         if auth_path is None:
             # Validate the same canonical store exposed to paid runs.
             with grok_subscription_session(root / "slot") as run_copy:
-                return _run_grok_live_probe(cli, run_copy, root)
-        return _run_grok_live_probe(cli, canonical, root)
+                return _run_grok_live_probe(cli, run_copy, root, model)
+        return _run_grok_live_probe(cli, canonical, root, model)
 
 
 def store_grok_auth(source: Path, *, home: Path | None = None) -> Path:

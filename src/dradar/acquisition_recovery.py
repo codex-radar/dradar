@@ -184,6 +184,49 @@ def recover(api, operation, body, *, check=None, request_id=None):
         return asyncio.run(_recover(api, operation, body, entry, path, deadline, permitted))
 
 
+def clear_reconciled_claim(api, settled: dict[str, dict]) -> None:
+    """Retire only the exact saved claim after its committed receipt is held.
+
+    Fleet recovery has already matched the authenticated receipt and written
+    the exact boundary. The old acquisition journal otherwise blocks the next
+    finite claim because ordinary personal claims share one account scope.
+    """
+    if (not isinstance(settled, dict) or not settled or any(
+            not isinstance(rid, str) or not re.fullmatch(r'[0-9a-f]{32}', rid)
+            or not isinstance(assignment, dict)
+            for rid, assignment in settled.items())):
+        raise ApiError('invalid reconciled claim request', code='acquisition_journal_invalid')
+    account = asyncio.run(_claim_account_scope(api))
+    scope = hashlib.sha256(json.dumps([
+        account, None, api.benchmark_id, 'assignment_claim', None,
+    ], separators=(',', ':')).encode()).hexdigest()
+    root = local_config.HOME / 'pending_acquisitions'
+    path = root / (scope + '.json')
+    if not path.exists():
+        return
+    with _operation_lock(root / (scope + '.lock'), lambda: None):
+        try:
+            entry = json.loads(path.read_text())
+            body = entry['body']
+            assignment = settled.get(entry.get('request_id'))
+            valid = (entry.get('schema_version') == 1
+                     and entry.get('scope') == scope
+                     and entry.get('operation') == 'assignment_claim'
+                     and isinstance(assignment, dict)
+                     and entry.get('server') == api.server
+                     and entry.get('batch_id') is None
+                     and entry.get('sent') is True
+                     and isinstance(body, dict)
+                     and all(body.get(key) == assignment.get(key)
+                             for key in ('task_id', 'model', 'effort')))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            valid = False
+        if not valid:
+            raise ApiError('saved allocation identity is unreadable; kept unchanged',
+                           code='acquisition_journal_invalid')
+        path.unlink()
+
+
 async def _recover(api, operation, requested, entry, path, deadline, permitted):
     rid = entry['request_id']
     original = {**entry['body'], 'request_id': rid}

@@ -2238,6 +2238,7 @@ def _preflight_subscription_before_build(
     agent: str,
     *,
     grok_cli: Path | None = None,
+    grok_model: str | None = None,
     kimi_cli: Path | None = None,
 ) -> None:
     """Run a bounded, no-prompt provider check before any Docker build.
@@ -2254,7 +2255,9 @@ def _preflight_subscription_before_build(
     if agent == GROK_AGENT:
         if grok_cli is None:
             raise RunnerError("Grok CLI was not prepared for provider preflight")
-        issue = grok_live_error(grok_cli)
+        if grok_model not in GROK_MODELS:
+            raise RunnerError("Grok selected model is missing or unsupported before preflight")
+        issue = grok_live_error(grok_cli, model=grok_model)
     elif agent == KIMI_AGENT:
         if kimi_cli is None:
             raise RunnerError("Kimi CLI was not prepared for provider preflight")
@@ -5192,6 +5195,7 @@ def _run_trial(
         provider_cli_path = _validated_grok_cli_path()
         _preflight_subscription_before_build(
             effective_agent, grok_cli=provider_cli_path,
+            grok_model=effective_assignment["model"],
         )
         print("Grok provider preflight passed before Docker build")
     elif effective_agent == KIMI_AGENT:

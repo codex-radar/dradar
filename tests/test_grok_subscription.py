@@ -519,6 +519,43 @@ def test_grok_live_probe_uses_native_private_home(
     assert GROK_API_KEY_ENV not in seen["env"]
 
 
+@pytest.mark.parametrize(
+    "model,output,returncode,expected",
+    [
+        ("grok-4.7", "You are logged in.\n* grok-4.7 (default)\n", 0, None),
+        ("grok-4.6", "You are logged in.\n* grok-4.6 (default)\n", 0, None),
+        ("grok-4.7", "You are logged in.\n* grok-4.6 (default)\n", 0, "cannot access grok-4.7"),
+        ("grok-4.7", "You are logged in.\n* grok-4.7-preview\n", 0, "cannot access grok-4.7"),
+        ("grok-4.7", "Not authenticated.\n* grok-4.7\n", 0, "not authenticated"),
+        ("grok-4.7", "Settings fetch failed.\n* grok-4.7\n", 0, "network/proxy"),
+    ],
+)
+def test_grok_live_probe_checks_selected_model_and_preserves_failure_kind(
+    tmp_path, monkeypatch, model, output, returncode, expected,
+):
+    auth = _write_auth(tmp_path / "auth.json")
+    monkeypatch.setattr(providers.subprocess, "run", lambda cmd, **kwargs:
+        subprocess.CompletedProcess(cmd, returncode, output, ""))
+    issue = providers.grok_live_error("/inert/grok", auth, model=model)
+    assert (issue is None) if expected is None else expected in issue
+
+
+def test_runner_grok_preflight_uses_selected_assignment_model(monkeypatch):
+    selected = []
+    monkeypatch.setattr(runner, "grok_live_error", lambda _cli, *, model:
+                        selected.append(model) or None)
+    runner._preflight_subscription_before_build(
+        GROK_AGENT, grok_cli=Path("/inert/grok"), grok_model="grok-4.7")
+    assert selected == ["grok-4.7"]
+    with pytest.raises(RunnerError, match="selected model is missing"):
+        runner._preflight_subscription_before_build(
+            GROK_AGENT, grok_cli=Path("/inert/grok"))
+    with pytest.raises(RunnerError, match="selected model is missing"):
+        runner._preflight_subscription_before_build(
+            GROK_AGENT, grok_cli=Path("/inert/grok"), grok_model="grok-4.8")
+    assert selected == ["grok-4.7"]
+
+
 def test_grok_live_probe_native_rotation_persists_in_canonical_store(
     tmp_path: Path, monkeypatch,
 ) -> None:

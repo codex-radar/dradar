@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import assignment_boundary, boundary_recovery, fleet, run_intent
+from . import acquisition_recovery, assignment_boundary, boundary_recovery, fleet, run_intent
 from .api_client import ApiError
 from .identity import _client
 from .local_config import DEFAULT_BENCHMARK, HOME, _load_config
@@ -685,6 +685,10 @@ def cmd_fleet_claim_recover(args) -> int:
               + ", ".join(rid[:8] for rid in unresolved))
         print("No new claim or model start was authorized; retry receipt reconciliation later.")
         return 1
+    held = {slot["request_id"]: slot["assignment"]
+            for slot in operation.get("slots", []) if slot.get("status") == "held"}
+    if held:
+        acquisition_recovery.clear_reconciled_claim(client, held)
     completed = _call("claim_reconcile_complete", {
         "operation_id": operation["operation_id"],
         "boundary_batch_id": batch_id,
