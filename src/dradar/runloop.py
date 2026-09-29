@@ -1866,8 +1866,14 @@ def _subscription_trial_usage(trial_dir: Path, meta: dict) -> dict | None:
             return None
     else:
         events = []
+    # The CodeBuddy sidecar retains local reconciliation details, including
+    # per-run message-ID digests. Never copy them into uploaded result.json.
+    upload_value = (
+        {key: item for key, item in value.items() if key != "local_reconciliation"}
+        if expected_provider == "codebuddy" else value
+    )
     normalized = {
-        **value,
+        **upload_value,
         "token_usage_events": events,
         "request_usage_complete": request_complete,
         "request_usage_observed": observed,

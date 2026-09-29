@@ -1861,6 +1861,9 @@ def test_incomplete_codebuddy_usage_uploads_observed_ledger_without_settlement(
     trial_dir = _make_trial_dir(tmp_path)
     agent_dir = trial_dir / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / "result.json").write_text(
+        json.dumps({"agent_result": {}}), encoding="utf-8",
+    )
     (agent_dir / "provider-usage.json").write_text(json.dumps({
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "codebuddy",
@@ -1879,6 +1882,11 @@ def test_incomplete_codebuddy_usage_uploads_observed_ledger_without_settlement(
         "timed_usage_complete": False,
         "provider_actual_cost_observed": False,
         "cost_semantics": "server-priced-api-equivalent",
+        "local_reconciliation": {
+            "schema": "dradar-codebuddy-local-reconciliation-v1",
+            "terminal_usage": {"input_tokens": 301},
+            "message_id_digests": [{"digest": "local-only"}],
+        },
         "token_usage_events": [{
             "n_input_tokens": 300,
             "n_cache_tokens": 200,
@@ -1912,6 +1920,9 @@ def test_incomplete_codebuddy_usage_uploads_observed_ledger_without_settlement(
             }]
             assert meta["cost_usd"] is None
             assert meta["provider_actual_cost_observed"] is False
+            assert "local_reconciliation" not in meta
+            uploaded_result = json.loads(result.read_text(encoding="utf-8"))
+            assert "local_reconciliation" not in json.dumps(uploaded_result)
             return {"submission_id": "s1", "grade_status": "pending"}
 
     assert runloop._upload_trial(
