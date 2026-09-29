@@ -7,6 +7,40 @@ import json
 from dradar.runloop import _subscription_trial_usage
 
 
+def test_kiro_credits_preserve_unknown_tokens_and_reject_fabricated_spend(tmp_path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    payload = {
+        "schema": "dradar-subscription-provider-usage-v1",
+        "provider": "kiro", "model": "kiro-claude-opus-5.5",
+        "observed_model": "claude-opus-5.5",
+        "observed_model_status": "session-metadata-verified",
+        "thinking_effort_verified": True,
+        "verified_thinking_effort": "high",
+        "complete": False, "request_usage_observed": False,
+        "usage_incomplete_reason": "kiro_cli_does_not_expose_token_ledger",
+        "request_count": None, "n_input_tokens": None,
+        "n_cache_tokens": None, "n_output_tokens": None,
+        "kiro_credits": 1.25, "kiro_estimated_usd": 0.05,
+        "kiro_credit_rate_usd": 0.04,
+        "kiro_credit_rate_version": "stationmaster-2026-09-28-v1",
+        "kiro_credit_source": "official-kiro-cli-per-turn-metering",
+    }
+    path = agent / "provider-usage.json"
+    path.write_text(json.dumps(payload))
+    meta = {"kiro_cli_version": "2.24.1", "kiro_effort": "high"}
+    facts = _subscription_trial_usage(tmp_path, meta)
+    assert facts is not None and facts["kiro_credits"] == 1.25
+    assert facts["n_input_tokens"] is None
+
+    path.write_text(json.dumps({**payload, "n_input_tokens": 0}))
+    assert _subscription_trial_usage(tmp_path, meta) is None
+    path.write_text(json.dumps({**payload, "kiro_estimated_usd": 0.5}))
+    assert _subscription_trial_usage(tmp_path, meta) is None
+    path.write_text(json.dumps({**payload, "verified_thinking_effort": "medium"}))
+    assert _subscription_trial_usage(tmp_path, meta) is None
+
+
 def test_subscription_usage_requires_timed_events_to_match_aggregate(tmp_path) -> None:
     agent = tmp_path / "agent"
     agent.mkdir()

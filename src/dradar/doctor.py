@@ -24,6 +24,7 @@ from .codebuddy_provider import (
     managed_codebuddy_home,
 )
 from .identity import _client
+from .kiro_provider import KIRO_AGENT, KIRO_CLI_VERSION, kiro_access_status
 from .local_config import HOME, _load_config, tasks_root_from_config
 from .providers import (
     ANTIGRAVITY_AGENT,
@@ -197,7 +198,7 @@ def _plan_agent_recovery(
             },
         ))
     if harness in {
-        "codex", "dsh-minimal", GROK_AGENT, KIMI_AGENT, CLAUDE_AGENT, ZCODE_AGENT,
+        "codex", "dsh-minimal", GROK_AGENT, KIMI_AGENT, CLAUDE_AGENT, KIRO_AGENT, ZCODE_AGENT,
         ANTIGRAVITY_AGENT, CODEBUDDY_AGENT,
     }:
         commands.append({
@@ -238,6 +239,7 @@ def _plan_issue(
 
 _BUNDLED_ADAPTERS = {
     CLAUDE_AGENT: "pier_claude.py",
+    KIRO_AGENT: "pier_kiro.py",
     ANTIGRAVITY_AGENT: "pier_antigravity.py",
     "dsh-minimal": "pier_dsh.py",
     ZCODE_AGENT: "pier_zcode.py",
@@ -432,6 +434,15 @@ def plan_environment_issue(
                 harness, "current_tool_not_ready",
                 "这次运行需要 Claude Code；请完成 Claude Code 的安装和登录后重试。",
                 "setup_current_tool", setup_provider="claude",
+            )
+        return None
+    if harness == KIRO_AGENT:
+        ready, issue = kiro_access_status()
+        if not ready:
+            return _plan_issue(
+                harness, "current_tool_not_ready",
+                "这次运行需要已登录的官方 Kiro CLI 与 Opus 5.5 权限。",
+                "authenticate_current_tool", requires_user_action=True,
             )
         return None
     if harness == ZCODE_AGENT:
@@ -676,6 +687,7 @@ def cmd_doctor(args) -> int:
     selected_agent = getattr(args, "agent", None)
     codex_only = selected_agent == "codex"
     claude_only = selected_agent == CLAUDE_AGENT
+    kiro_only = selected_agent == KIRO_AGENT
     dsh_only = selected_agent == "dsh-minimal"
     grok_only = selected_agent == GROK_AGENT
     kimi_only = selected_agent == KIMI_AGENT
@@ -685,6 +697,7 @@ def cmd_doctor(args) -> int:
     scopes = {
         "codex": " — Codex",
         CLAUDE_AGENT: " — Claude Code",
+        KIRO_AGENT: " — Kiro Opus 5.5",
         "dsh-minimal": " — DSH Minimal",
         GROK_AGENT: " — Grok Build",
         KIMI_AGENT: " — Kimi Code",
@@ -810,6 +823,8 @@ def cmd_doctor(args) -> int:
     claude_cli = claude_cli_path() if claude_requested else None
     claude_oauth_issue = claude_subscription_error() if claude_requested else None
     claude_ready = bool(claude_cli and claude_oauth_issue is None)
+    kiro_requested = kiro_only
+    kiro_ready, kiro_issue = kiro_access_status() if kiro_requested else (False, "")
     grok_requested = grok_only or (
         selected_agent is None and grok_auth_path().exists()
     )
@@ -907,7 +922,7 @@ def cmd_doctor(args) -> int:
         if deepseek_key_ready:
             _check("DeepSeek V4 Flash / Pro / Vision — DSH Minimal agent ready", True)
     elif (
-        claude_requested or grok_requested or kimi_requested or zcode_requested
+        claude_requested or kiro_requested or grok_requested or kimi_requested or zcode_requested
         or antigravity_requested or codebuddy_requested
     ):
         if claude_requested:
@@ -926,6 +941,12 @@ def cmd_doctor(args) -> int:
                     "Claude Sonnet 5 / Opus 5 / Opus 5.5 — five native effort tiers ready",
                     set(CLAUDE_MODELS) == {"claude-sonnet-5", "claude-opus-5", "claude-opus-5-5"},
                 )
+        if kiro_requested:
+            all_ok &= _check(
+                f"Kiro CLI {KIRO_CLI_VERSION} — Opus 5.5 subscription runner",
+                kiro_ready,
+                kiro_issue or "sign in to the official Kiro CLI on this machine",
+            )
         if grok_requested:
             all_ok &= _check(
                 f"Grok CLI {GROK_CLI_VERSION} — subscription runner",
@@ -1053,6 +1074,7 @@ def cmd_doctor(args) -> int:
         not dsh_only
         and not deepseek_requested
         and not claude_requested
+        and not kiro_requested
         and not grok_requested
         and not kimi_requested
         and not zcode_requested

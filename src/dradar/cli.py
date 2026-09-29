@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     p_doc = sub.add_parser("doctor", help="preflight checks")
     p_doc.add_argument(
         "--agent", choices=(
-            "codex", "claude-code", "dsh-minimal", "grok-build", "kimi-code", "zcode", "antigravity",
+            "codex", "claude-code", "kiro", "dsh-minimal", "grok-build", "kimi-code", "zcode", "antigravity",
             "codebuddy",
         ), default=None,
         help="check only the dependencies required by this agent",
@@ -725,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--refill-harness", metavar="HARNESS",
             help="restrict every auto-refill claim to one harness (for example "
-                 "claude-code, dsh, kimi-code, zcode, grok-build, codebuddy, "
+                 "claude-code, kiro, dsh, kimi-code, zcode, grok-build, codebuddy, "
                  "antigravity, or codex)",
         )
         p.add_argument(

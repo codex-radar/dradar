@@ -176,6 +176,7 @@ def default_registry() -> AuthRegistry:
         ANTIGRAVITY_AGENT, ANTIGRAVITY_PROVIDER, ZCODE_AGENT, ZCODE_PROVIDER, DSH_AGENT,
     )
     from .codebuddy_provider import CODEBUDDY_AGENT, CODEBUDDY_PROVIDER
+    from .kiro_provider import KIRO_AGENT, KIRO_PROVIDER
     registry = AuthRegistry()
 
     def add(harness, provider, hook, argument, capabilities, *, kind='file',
@@ -199,6 +200,8 @@ def default_registry() -> AuthRegistry:
                            'oauth_config_file' if native else 'oauth_token_file')
     registry.register(AuthAdapter(CLAUDE_AGENT, CLAUDE_PROVIDER, _source('claude_subscription_session'), claude_bind), default=True)
     add(GROK_AGENT, GROK_PROVIDER, 'grok_subscription_session', 'auth_json_file', shared)
+    add(KIRO_AGENT, KIRO_PROVIDER, 'kiro_subscription_session', 'auth_json_file',
+        AuthCapabilities('file-copy', 'native-cli', 'validated-merge'))
     add(KIMI_AGENT, KIMI_PROVIDER, 'kimi_subscription_session', 'auth_json_file', shared)
     add(ANTIGRAVITY_AGENT, ANTIGRAVITY_PROVIDER, 'antigravity_subscription_session', 'auth_home_dir', shared, kind='directory')
     add(CODEBUDDY_AGENT, CODEBUDDY_PROVIDER, 'codebuddy_subscription_session', 'auth_dir', AuthCapabilities('directory-copy', 'native-cli', 'validated-merge'), kind='directory')
