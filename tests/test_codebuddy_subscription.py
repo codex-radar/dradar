@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,7 +83,11 @@ def _usage_function():
         ],
         type_ignores=[],
     )
-    namespace = {"SUPPORTED_MODEL": CODEBUDDY_MODEL}
+    namespace = {
+        "SUPPORTED_MODEL": CODEBUDDY_MODEL,
+        "hashlib": hashlib,
+        "os": os,
+    }
     exec(compile(module, str(source), "exec"), namespace)  # noqa: S102
     return namespace["_codebuddy_usage_facts"]
 
@@ -514,6 +519,10 @@ def test_usage_accepts_real_stream_fragments_and_ignores_num_turns() -> None:
     assert facts["n_input_tokens"] == 8152
     assert facts["n_cache_tokens"] == 768
     assert facts["n_output_tokens"] == 70
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["terminal_usage"] == request
+    assert diagnostic["retained_event_sum"] == request
+    assert set(diagnostic["terminal_minus_retained_event_sum"].values()) == {0}
 
 
 def test_usage_quarantines_conflicting_duplicate_and_preserves_other_requests(
@@ -558,6 +567,12 @@ def test_usage_quarantines_conflicting_duplicate_and_preserves_other_requests(
         "n_output_tokens": 4,
         "cache_creation_tokens": 7,
     }]
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["message_id_conflict_count"] == 1
+    assert {item["status"] for item in diagnostic["message_id_digests"]} == {
+        "retained", "conflicted",
+    }
+    assert [item["event_index"] for item in diagnostic["message_id_digests"]] == [0, None]
 
 
 @pytest.mark.parametrize("model", ["not-hy4", None, ""])
@@ -662,6 +677,78 @@ def test_usage_preserves_observed_requests_on_terminal_aggregate_mismatch(
     assert facts["n_input_tokens"] == 80
     assert facts["n_output_tokens"] == 6
     assert len(facts["token_usage_events"]) == 1
+    diagnostic = facts["local_reconciliation"]
+    assert diagnostic["schema"] == "dradar-codebuddy-local-reconciliation-v1"
+    assert diagnostic["counter_semantics"] == "input_includes_cache_read_and_creation"
+    assert diagnostic["event_counter_mode"] == "unknown"
+    assert diagnostic["terminal_usage"] == {
+        **request, "output_tokens": 9,
+    }
+    assert diagnostic["retained_event_sum"] == request
+    assert diagnostic["terminal_minus_retained_event_sum"] == {
+        "input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 3,
+    }
+    assert diagnostic["provider_request_id_status"] == "unknown"
+    assert diagnostic["identity_source"] == "assistant.message.id"
+    assert len(diagnostic["message_id_digests"]) == 1
+    assert "m1" not in json.dumps(diagnostic)
+
+
+def test_local_reconciliation_records_message_dedup_without_claiming_request_ids(
+) -> None:
+    first = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    later = {
+        "input_tokens": 30, "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 7, "output_tokens": 3,
+    }
+    facts = _usage_function()([
+        {"type": "assistant", "message": {
+            "id": "message-one", "model": CODEBUDDY_MODEL, "usage": first,
+        }},
+        {"type": "assistant", "message": {
+            "id": "message-one", "model": CODEBUDDY_MODEL, "usage": first,
+        }},
+        {"type": "assistant", "message": {
+            "id": "message-two", "model": CODEBUDDY_MODEL, "usage": later,
+        }},
+        {"type": "result", "subtype": "success", "usage": later},
+    ])
+    diagnostic = facts["local_reconciliation"]
+    assert facts["complete"] is False
+    assert facts["usage_incomplete_reason"] == "terminal_aggregate_mismatch"
+    assert diagnostic["message_id_duplicate_count"] == 1
+    assert diagnostic["message_id_conflict_count"] == 0
+    assert diagnostic["retained_event_sum"]["input_tokens"] == 50
+    assert diagnostic["terminal_usage"]["input_tokens"] == 30
+    assert diagnostic["terminal_minus_retained_event_sum"]["input_tokens"] == -20
+    assert diagnostic["event_counter_mode"] == "unknown"
+    assert diagnostic["reconciliation_assumption"] == "per_message_incremental"
+    assert "message-one" not in json.dumps(diagnostic)
+
+
+def test_local_reconciliation_keeps_unknown_terminal_and_missing_id_unknown(
+) -> None:
+    usage = {
+        "input_tokens": 20, "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 6, "output_tokens": 2,
+    }
+    facts = _usage_function()([{"type": "assistant", "message": {
+        "model": CODEBUDDY_MODEL, "usage": usage,
+    }}])
+    diagnostic = facts["local_reconciliation"]
+    assert facts["complete"] is False
+    assert facts["request_count"] == 0
+    assert diagnostic["terminal_usage"] is None
+    assert diagnostic["terminal_minus_retained_event_sum"] is None
+    assert diagnostic["message_id_missing_count"] == 1
+    assert diagnostic["message_id_digests"] == []
+    assert diagnostic["provider_request_id_status"] == "unknown"
 
 
 def test_usage_separates_terminal_model_and_total_mismatch_reasons() -> None:
@@ -724,6 +811,7 @@ def test_normalized_usage_preserves_codebuddy_attestation_fields(
     assert normalized["request_usage_observed"] is True
     assert normalized["provider_actual_cost_observed"] is False
     assert normalized["cost_semantics"] == "server-priced-api-equivalent"
+    assert "local_reconciliation" not in normalized
 
 
 def test_normalized_usage_preserves_unreconciled_codebuddy_observations(

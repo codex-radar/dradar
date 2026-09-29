@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -102,6 +103,8 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
     totals = {name: 0 for name in names}
     usage_by_message_id: dict[str, dict[str, int]] = {}
     conflicted_message_ids: set[str] = set()
+    duplicate_message_count = 0
+    missing_message_id_count = 0
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant":
             continue
@@ -134,6 +137,7 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
             continue
         if not isinstance(message_id, str) or not message_id:
             reasons.add("request_id_missing")
+            missing_message_id_count += 1
             continue
         if message_id in conflicted_message_ids:
             continue
@@ -145,6 +149,8 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
                 reasons.add("request_id_conflict")
                 conflicted_message_ids.add(message_id)
                 del usage_by_message_id[message_id]
+            else:
+                duplicate_message_count += 1
             continue
         usage_by_message_id[message_id] = usage
 
@@ -214,6 +220,50 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
         "terminal_aggregate_mismatch",
     )
     incomplete_reasons = [reason for reason in reason_order if reason in reasons]
+    # These are CodeBuddy assistant.message.id values, not verified provider
+    # request IDs. Keyed digests are comparable only within this sidecar: the
+    # ephemeral key is never written, so runs cannot be linked by identifier.
+    digest_key = os.urandom(16)
+    retained_message_digests = [
+        {
+            "digest": hashlib.blake2b(
+                message_id.encode("utf-8"), key=digest_key, digest_size=16,
+            ).hexdigest(),
+            "status": "retained",
+            "event_index": index,
+        }
+        for index, message_id in enumerate(usage_by_message_id)
+    ]
+    conflicted_message_digests = [
+        {
+            "digest": hashlib.blake2b(
+                message_id.encode("utf-8"), key=digest_key, digest_size=16,
+            ).hexdigest(),
+            "status": "conflicted",
+            "event_index": None,
+        }
+        for message_id in sorted(conflicted_message_ids)
+    ]
+    local_reconciliation = {
+        "schema": "dradar-codebuddy-local-reconciliation-v1",
+        "counter_semantics": "input_includes_cache_read_and_creation",
+        "event_counter_mode": "unknown",
+        "reconciliation_assumption": "per_message_incremental",
+        "terminal_usage": terminal_usage,
+        "retained_event_sum": totals,
+        "terminal_minus_retained_event_sum": (
+            {name: terminal_usage[name] - totals[name] for name in names}
+            if terminal_usage is not None else None
+        ),
+        "identity_source": "assistant.message.id",
+        "provider_request_id_status": "unknown",
+        "message_id_duplicate_count": duplicate_message_count,
+        "message_id_conflict_count": len(conflicted_message_ids),
+        "message_id_missing_count": missing_message_id_count,
+        "message_id_digests": (
+            retained_message_digests + conflicted_message_digests
+        ),
+    }
     return {
         "schema": "dradar-subscription-provider-usage-v1",
         "provider": "codebuddy",
@@ -239,6 +289,7 @@ def _codebuddy_usage_facts(events: list[dict]) -> dict[str, object]:
         ),
         "provider_actual_cost_observed": False,
         "cost_semantics": "server-priced-api-equivalent",
+        "local_reconciliation": local_reconciliation,
     }
 
 
