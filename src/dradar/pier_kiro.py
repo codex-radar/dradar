@@ -44,14 +44,14 @@ except ModuleNotFoundError:
     from dradar.artifact_boundary import private_post_run
 
 
-VERSION = "2.24.1"
+VERSION = "2.26.0"
 KIRO_CREDIT_USD_RATE = Decimal("0.04")
 KIRO_CREDIT_RATE_VERSION = "stationmaster-2026-09-28-v1"
 LANE_MODEL = "kiro-claude-opus-5.5"
 REQUEST_MODEL = "claude-opus-5.5"
 ARCHIVE_SHA256 = {
-    "x86_64": "89e26b61707a3a17bcf0d0dfa7043366d94b48bfe35e9605058bd5de4b7199ce",
-    "aarch64": "fab94745fb92c3d5d40c39432757edc4740fe40ed3d681a61129e790c2fe2f10",
+    "x86_64": "fad32095530facd3ed28d4210798804d2340373643b69f256492798f9befd479",
+    "aarch64": "bdef2a21a82d8e40d73cfae233710adc56ad9c99d4d0f8ceccbc74206912ce7b",
 }
 
 

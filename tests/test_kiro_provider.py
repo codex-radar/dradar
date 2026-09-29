@@ -193,3 +193,18 @@ def test_pending_native_return_preserves_private_snapshot(tmp_path, monkeypatch)
         current = json.loads(conn.execute(
             "SELECT value FROM auth_kv WHERE key='kirocli:social:token'").fetchone()[0])
     assert current == original
+
+
+@pytest.mark.parametrize("version, ready", [
+    ("2.26.0", True), ("2.24.1", False), ("2.26.1", False),
+    ("2.26.0-preview", False),
+])
+def test_kiro_host_version_is_exact_before_auth(monkeypatch, version, ready):
+    monkeypatch.setattr(kiro_provider, "kiro_cli_path", lambda: Path("/fake/kiro-cli"))
+    monkeypatch.setattr(kiro_provider.subprocess, "run", lambda *a, **kw:
+                        SimpleNamespace(stdout=f"kiro-cli {version}\n"))
+    auth_reads = []
+    monkeypatch.setattr(kiro_provider, "social_token", lambda: auth_reads.append(True))
+    actual, _ = kiro_provider.kiro_status()
+    assert actual is ready
+    assert bool(auth_reads) is ready
