@@ -260,7 +260,7 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
     assert '"GROK_HOME": remote_home' not in source
     assert 'f"models_output=$({shlex.quote(remote_cli)} models 2>&1); "' in source
     assert "EPIPE" in source
-    assert "grep -Fq" in source
+    assert "grep -Eq" in source
     assert "grok-4.6" in source
     assert "DRADAR_GROK_PREFLIGHT_FAILURE=%s" in source
     assert "preflight_kind=auth" in source
@@ -287,6 +287,7 @@ def test_grok_adapter_primes_dynamic_46_model_catalog() -> None:
         # The binaries' bundled fallback catalog lists 4.6 and 4.5 only, so a
         # slot that never fetched the live catalog must not pass for 4.7.
         ("grok-4.7", "* grok-4.6 (default)\n  grok-4.5\n", 0, "catalog"),
+        ("grok-4.7", "* grok-4.7-preview (default)\n", 0, "catalog"),
         ("grok-4.6", "Not authenticated; refresh=TOPSECRET\n", 1, "auth"),
         ("grok-4.6", "settings fetch failed for https://token.example\n", 1, "network"),
         ("grok-4.6", "opaque failure TOPSECRET\n", 1, "unknown"),

@@ -68,6 +68,11 @@ def _grok_model_preflight_command(remote_cli: str, model: str) -> str:
     if model not in GROK_MODELS:
         raise ValueError(f"unsupported Grok model {model!r}")
 
+    catalog_pattern = (
+        "(^|[^[:alnum:]_.-])" + model.replace(".", "[.]")
+        + "($|[^[:alnum:]_.-])"
+    )
+
     return (
         "umask 077; "
         f"models_output=$({shlex.quote(remote_cli)} models 2>&1); "
@@ -91,7 +96,7 @@ def _grok_model_preflight_command(remote_cli: str, model: str) -> str:
         # Do not pipe the Rust CLI directly into grep -q. grep exits on the
         # first match and some Grok releases then panic on EPIPE.
         "if ! printf '%s\\n' \"$models_output\" "
-        f"  | grep -Fq {shlex.quote(model)}; then "
+        f"  | grep -Eq {shlex.quote(catalog_pattern)}; then "
         "  printf 'DRADAR_GROK_PREFLIGHT_FAILURE=catalog\\n'; "
         "  exit 78; "
         "fi"
