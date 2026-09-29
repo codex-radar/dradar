@@ -395,6 +395,52 @@ class UpdateController:
                 return False
         return True
 
+    def retryable_legacy_download_failure(self) -> bool:
+        """Allow a first install to retry only an uncommitted, cleaned download."""
+
+        if any(
+            os.path.lexists(path)
+            for path in (self.current_path, self.last_known_good_path, self.pending_path)
+        ):
+            return False
+        if self.state_path.is_symlink() or not self.state_path.is_file():
+            return False
+        try:
+            record = self.state()
+            if (
+                not record
+                or set(record)
+                != {"schema_version", "state", "release", "updated_at", "reason"}
+                or record["state"] != UpdateState.FAILED.value
+                or record["reason"] != "update_download_failed"
+            ):
+                return False
+            pointer = _release_pointer(record["release"])
+            if pointer is None:
+                return False
+            if any(
+                name in {"", ".", ".."} or "/" in name or "\\" in name
+                for name in (pointer.release_id, pointer.artifact)
+            ):
+                return False
+            if not os.path.lexists(self.releases):
+                return True
+            if self.releases.is_symlink() or not self.releases.is_dir():
+                return False
+            entries = list(self.releases.iterdir())
+            if not entries:
+                return True
+            if len(entries) != 1 or entries[0].name != pointer.release_id:
+                return False
+            release_dir = entries[0]
+            return (
+                not release_dir.is_symlink()
+                and release_dir.is_dir()
+                and not any(release_dir.iterdir())
+            )
+        except (InvalidTransition, OSError, ValueError):
+            return False
+
     def lock(self, *, timeout_seconds: float = 0.0) -> UpdateLock:
         return UpdateLock(self.lock_path, timeout_seconds=timeout_seconds)
 

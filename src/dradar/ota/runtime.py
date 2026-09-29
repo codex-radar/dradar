@@ -151,7 +151,10 @@ class UpdateRuntime:
             # existed. Sequence zero is never accepted after a signed commit.
             if (
                 committed_sequence != 0
-                or not self.controller.pristine_for_legacy_bootstrap()
+                or not (
+                    self.controller.pristine_for_legacy_bootstrap()
+                    or self.controller.retryable_legacy_download_failure()
+                )
             ):
                 raise
             baseline = ReleasePointer(

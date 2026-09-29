@@ -346,6 +346,128 @@ def test_interrupted_download_fails_closed_and_records_reason(tmp_path):
     assert not list((root / "downloads").rglob("*.partial"))
 
 
+@pytest.mark.parametrize("self_test_pass", [True, False])
+def test_first_download_failure_can_retry_signed_legacy_bootstrap(
+    tmp_path, self_test_pass
+):
+    class Offline(Response):
+        def iter_bytes(self, chunk_size=65536):
+            del chunk_size
+            yield b"partial"
+            raise ConnectionError("controlled interruption")
+
+    root = tmp_path / "ota"
+    runtime = UpdateRuntime(
+        root,
+        recorder=FlightRecorder(tmp_path / "audit"),
+        download_client=Client(Offline([])),
+    )
+    document, keys = signed_release()
+
+    def attempt():
+        return runtime.prepare(
+            document,
+            trusted_keys=keys,
+            current_version="0.5.175",
+            committed_sequence=0,
+            compatibility=compatibility(),
+            rollout=RolloutContext(subject=runtime.audit.recorder.client_id),
+            target=PlatformTarget("linux", "x86_64"),
+        )
+
+    with pytest.raises(ConnectionError, match="controlled interruption"):
+        attempt()
+    assert runtime.controller.state()["reason"] == "update_download_failed"
+    assert runtime.controller.retryable_legacy_download_failure() is True
+    assert not list(root.rglob("*.partial"))
+    assert not (root / "current.json").exists()
+
+    corrupted = json.loads(json.dumps(document))
+    corrupted["signature"]["value"] = base64.b64encode(b"x" * 64).decode()
+    with pytest.raises(ManifestError):
+        runtime.prepare(
+            corrupted,
+            trusted_keys=keys,
+            current_version="0.5.175",
+            committed_sequence=0,
+            compatibility=compatibility(),
+            rollout=RolloutContext(subject=runtime.audit.recorder.client_id),
+            target=PlatformTarget("linux", "x86_64"),
+        )
+    assert runtime.controller.state()["state"] == "failed"
+
+    runtime.download_client = Client(Response([BODY]))
+    assert attempt().eligible is True
+    final_state = runtime.activate_and_self_test(
+        SafePointSnapshot(),
+        lambda artifact: self_test_pass and artifact.read_bytes() == BODY,
+    )
+    if self_test_pass:
+        assert final_state is UpdateState.COMMITTED
+        assert runtime.controller.committed_pointer().sequence == 600
+    else:
+        assert final_state is UpdateState.ROLLED_BACK
+        assert json.loads((root / "current.json").read_text()) == {
+            "schema_version": 1,
+            "legacy_fallback": True,
+        }
+        with pytest.raises(InvalidTransition, match="trusted committed OTA baseline"):
+            runtime.controller.committed_pointer()
+
+
+def test_legacy_download_retry_rejects_untrusted_or_dirty_state(tmp_path):
+    root = tmp_path / "ota"
+    runtime = UpdateRuntime(
+        root,
+        recorder=FlightRecorder(tmp_path / "audit"),
+        download_client=Client(Response([BODY])),
+    )
+    document, keys = signed_release()
+    release = document["release_id"]
+    artifact = document["artifacts"][2]["filename"]
+    failed = {
+        "schema_version": 1,
+        "state": "failed",
+        "release": {
+            "release_id": release,
+            "version": document["version"],
+            "sequence": document["sequence"],
+            "artifact": artifact,
+        },
+        "updated_at": "2026-09-29T00:00:00Z",
+        "reason": "update_download_failed",
+    }
+    root.mkdir()
+
+    def rejected():
+        with pytest.raises(InvalidTransition, match="trusted committed OTA baseline"):
+            runtime.prepare(
+                document,
+                trusted_keys=keys,
+                current_version="0.5.175",
+                committed_sequence=0,
+                compatibility=compatibility(),
+                rollout=RolloutContext(subject=runtime.audit.recorder.client_id),
+                target=PlatformTarget("linux", "x86_64"),
+            )
+
+    for change in (
+        {"reason": "update_stage_failed"},
+        {"state": "waiting_safe_point"},
+        {"release": {**failed["release"], "release_id": "../outside"}},
+    ):
+        _atomic_json(root / "update-state.json", {**failed, **change})
+        rejected()
+
+    _atomic_json(root / "update-state.json", failed)
+    (root / "releases" / release).mkdir(parents=True)
+    (root / "releases" / release / "partial.pyz").write_bytes(b"partial")
+    rejected()
+    (root / "releases" / release / "partial.pyz").unlink()
+    _atomic_json(root / "current.json", failed["release"])
+    rejected()
+
+
 def test_keyboard_interrupt_during_prepare_is_durable_and_cleans_partial(tmp_path):
     class Interrupted(Response):
         def iter_bytes(self, chunk_size=65536):
