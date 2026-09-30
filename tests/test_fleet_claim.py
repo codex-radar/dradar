@@ -250,15 +250,20 @@ def test_fleet_process_proof_allows_owned_tree_but_rejects_foreign_runner(
     monkeypatch.setattr(runtime_identity, "process_identity",
                         lambda pid: {os.getpid(): owner, 101: pool}.get(pid))
     monkeypatch.setattr(launcher_handoff, "supervisor", lambda: None)
+    argvs = {100: ["python", "-m", "dradar.cli", "fleet", "serve"],
+             101: ["python", "-m", "dradar.cli", "resume"],
+             102: ["python", "-m", "dradar.cli", "go", "--worker-child"],
+             999: ["python", "-m", "dradar.cli", "go"],
+             os.getpid(): ["python", "-m", "dradar.cli", "fleet", "claim"]}
+    monkeypatch.setattr(boundary_recovery, "_fleet_process_argv", lambda pid, ppid: (
+        {os.getpid(): owner, 101: pool}.get(pid, {"pid": pid}), argvs[pid]))
     foreign = {"value": False}
     def run(command, **_kwargs):
         if command[0] == "ps":
-            lines = ["100 1 python -m dradar.cli fleet serve",
-                     "101 100 python -m dradar.cli resume",
-                     "102 101 python -m dradar.cli go --worker-child",
-                     f"{os.getpid()} {os.getppid()} python -m dradar.cli fleet claim"]
+            assert command == ["ps", "-axo", "pid=,ppid="]
+            lines = ["100 1", "101 100", "102 101", f"{os.getpid()} {os.getppid()}"]
             if foreign["value"]:
-                lines.append("999 1 python -m dradar.cli go")
+                lines.append("999 1")
             return SimpleNamespace(stdout="\n".join(lines))
         assert command[:3] == ["docker", "ps", "-q"]
         return SimpleNamespace(stdout="")
