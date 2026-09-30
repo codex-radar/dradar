@@ -138,6 +138,10 @@ def _looks_like_runner_process(command: str) -> bool:
         parts = shlex.split(command)
     except ValueError:
         return True  # An unparseable command cannot prove a runner is absent.
+    return _looks_like_runner_argv(parts)
+
+
+def _looks_like_runner_argv(parts: list[str]) -> bool:
     if "--worker-child" in parts:
         return True
     actions = {"go", "resume", "run", "fleet"}
@@ -152,6 +156,52 @@ def _looks_like_runner_process(command: str) -> bool:
     # The signed OTA launcher can execute Python from an anonymous fd: its
     # process command line contains only /dev/fd/N and the CLI action.
     return any(part.startswith("/dev/fd/") for part in parts)
+
+
+def _fleet_process_argv(pid: int, ppid: int) -> tuple[dict, list[str]] | None:
+    """Read Linux argument boundaries, bound to the same PID and parent.
+
+    ps command text is a display string, not shell-quoted argv. In particular,
+    task prompts containing quotes must never become host runner evidence.
+    No argument content is included in errors or persisted.
+    """
+    from . import runtime_identity
+
+    try:
+        before = runtime_identity.process_identity(pid)
+        if before is None:
+            return None  # An exited process cannot own live work.
+        root = Path(f"/proc/{pid}")
+        stat = (root / "stat").read_text().rsplit(") ", 1)[1].split()
+        raw = (root / "cmdline").read_bytes()
+        after = runtime_identity.process_identity(pid)
+        final_stat = (root / "stat").read_text().rsplit(") ", 1)[1].split()
+        if (before != after or int(stat[1]) != ppid or int(final_stat[1]) != ppid
+                or int(stat[19]) != before["start_ticks"]
+                or int(final_stat[19]) != before["start_ticks"]):
+            raise RecoveryBlocked("runner process identity or ancestry changed")
+        if not raw:
+            # Linux kernel threads and zombies cannot execute a CLI action.
+            # Empty argv from a live userspace process is unknown, not proof.
+            if (stat[0] == final_stat[0] == "Z"
+                    or int(stat[6]) & int(final_stat[6]) & 0x00200000):
+                return before, []
+            raise RecoveryBlocked("runner process arguments are unavailable")
+        if not raw.endswith(b"\0") or raw.startswith(b"\0"):
+            raise RecoveryBlocked("runner process arguments are invalid")
+        return before, [os.fsdecode(part) for part in raw[:-1].split(b"\0")]
+    except FileNotFoundError as exc:
+        # A disappearing row is safe only when the PID really is absent;
+        # exec/PID reuse or unreadable identity must not silently pass.
+        try:
+            current = runtime_identity.process_identity(pid)
+        except (OSError, ValueError, IndexError) as identity_exc:
+            raise RecoveryBlocked("runner process identity could not be verified") from identity_exc
+        if current is None:
+            return None
+        raise RecoveryBlocked("runner process identity could not be verified") from exc
+    except (OSError, ValueError, IndexError, KeyError) as exc:
+        raise RecoveryBlocked("runner process identity could not be verified") from exc
 
 
 def _check_fleet_claim_processes(home: Path, operation_id: str) -> None:
@@ -171,17 +221,24 @@ def _check_fleet_claim_processes(home: Path, operation_id: str) -> None:
         raise RecoveryBlocked("Fleet claim controller or foreground ownership changed")
     try:
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="], capture_output=True,
+            ["ps", "-axo", "pid=,ppid="], capture_output=True,
             text=True, timeout=10, check=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RecoveryBlocked("runner process inspection failed") from exc
     processes = {}
+    identities = {}
+    seen_processes = set()
     for line in proc.stdout.splitlines():
-        match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(.+)", line)
-        if not match or int(match.group(1)) in processes:
+        match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s*", line)
+        if not match or int(match.group(1)) in seen_processes:
             raise RecoveryBlocked("runner process inspection returned an unknown row")
-        processes[int(match.group(1))] = (int(match.group(2)), match.group(3))
+        pid, ppid = int(match.group(1)), int(match.group(2))
+        seen_processes.add(pid)
+        snapshot = _fleet_process_argv(pid, ppid)
+        if snapshot is not None:
+            identities[pid], argv = snapshot
+            processes[pid] = (ppid, argv)
     own = processes.get(os.getpid())
     if own is None or own[0] != os.getppid() or state.get("pid") not in processes:
         raise RecoveryBlocked("Fleet claim process ancestry could not be verified")
@@ -200,6 +257,9 @@ def _check_fleet_claim_processes(home: Path, operation_id: str) -> None:
     def pool_for(pid: int) -> str | None:
         seen = set()
         while pid in processes and pid not in seen:
+            current = _fleet_process_argv(pid, processes[pid][0])
+            if current != (identities[pid], processes[pid][1]):
+                raise RecoveryBlocked("Fleet process identity or ancestry changed")
             if pid in pool_roots:
                 return pool_roots[pid]
             if pid == state["pid"]:
@@ -208,17 +268,14 @@ def _check_fleet_claim_processes(home: Path, operation_id: str) -> None:
             pid = processes[pid][0]
         return None
 
-    for pid, (_ppid, command) in processes.items():
+    for pid, (_ppid, argv) in processes.items():
         if pid == os.getpid() or pid == state["pid"] or pid in pool_roots:
             continue
         if supervisor is not None and pid == supervisor[0] == own[0]:
-            try:
-                if launcher_handoff.argv_digest(shlex.split(command)) == supervisor[1]:
-                    continue
-            except ValueError:
-                pass
+            if launcher_handoff.argv_digest(argv) == supervisor[1]:
+                continue
             raise RecoveryBlocked("runner launcher identity could not be verified")
-        if _looks_like_runner_process(command) and pool_for(pid) is None:
+        if _looks_like_runner_argv(argv) and pool_for(pid) is None:
             raise RecoveryBlocked("another DRadar runner process may be active")
 
     jobs_root = (home / "work" / "jobs").resolve()
@@ -325,6 +382,15 @@ def _check_fleet_claim_processes(home: Path, operation_id: str) -> None:
             if isinstance(source, str) and Path(source).resolve().is_relative_to(jobs_root):
                 if not any(Path(source).resolve().is_relative_to(job) for job in owned_jobs):
                     raise RecoveryBlocked("a non-Fleet DRadar job container is still running")
+
+    # Docker inspection may take time. Recheck the foreground, controller and
+    # every process before relying on the earlier absence/ownership proof.
+    for pid, (ppid, argv) in processes.items():
+        current = _fleet_process_argv(pid, ppid)
+        if current is None and pid not in {os.getpid(), state["pid"], *pool_roots}:
+            continue
+        if current != (identities[pid], argv):
+            raise RecoveryBlocked("runner process identity or ancestry changed")
 
 
 def _check_processes(home: Path, *, fleet_claim_operation: str | None = None) -> None:

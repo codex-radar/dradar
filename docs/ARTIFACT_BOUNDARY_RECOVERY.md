@@ -76,3 +76,51 @@ shell uses 002. The CLI does not change its own/global umask, and does not chmod
 existing trials. Existing group/world-writable roots still lack the required
 private-host precondition: retain their evidence and use the authorized offline
 review workflow above. This is not an automatic migration or unblock operation.
+
+## Reviewed server secret rejection
+
+A `server_secret_guard` result is still blocked during ordinary `retry-upload`
+and `go`. After source review, an authorized operator may run one newer,
+**officially signed** OTA zipapp with:
+
+```
+python /path/to/verified/newer.pyz recover-upload \
+  --manifest /path/to/official-signed-manifest.json \
+  --assignment-id <exact-id> --benchmark <benchmark> \
+  --batch-id <exact-batch> --runner-session-id <exact-original-session> \
+  --review-server-secret-guard --patch-sha256 <reviewed-original-sha256>
+```
+
+Obtain the package with the existing trusted client's public OTA verification
+path in a disposable home. This entry checks the real home's committed
+anti-rollback baseline, signed package identity and exclusive invocation lock.
+It runs without activating the newer package, so a pending result need not be
+cleared to reach recovery. Never run a development checkout against the real
+home, edit the ledger flag, or replace either original patch copy.
+
+The operation accepts only a completed, exact account/server/benchmark/batch/
+session row whose preserved source and staged patch match the reviewed digest
+and original content-bound intent. It uses the ordinary added-hunk redactor,
+validates patch structure and rescans. Credentials in metadata, context or
+deletion lines are refused. The signed review cannot bypass the Server's last
+scan, nonce/owner/lease/deadline checks or content-bound upload acknowledgement.
+
+Every prepared component must reproduce the original saved intent before
+this password coverage change. Only the standard patch/display redaction
+and the two patch-redaction metadata fields may differ. Changed result,
+usage, metadata or optional-artifact presence is refused. The comparison
+uses the same verified snapshot; prior display bytes are never uploaded.
+If intent registration is unavailable, including HTTP 404/405, this reviewed
+operation keeps the block and never falls back to an unfenced submission.
+
+Both raw copies remain intact. The original intent is retained in the local
+review record when a new sanitized intent is registered. The automatic block
+stays persisted through crashes and failed uploads; only confirmed submission
+settles the pending row. Repeat only as another explicit reviewed operation,
+after diagnosing the failure. A superseded owner, expired lease, changed
+artifact or different block needs its own supported recovery review.
+
+Generic credential shapes may occur in synthetic tests. Source review must
+establish their purpose; a filename or a dummy-looking value alone is not
+permission to exempt that file from scanning. If the value is a real credential,
+keep the rejection and seek a separately reviewed redaction/recovery decision.
