@@ -35,7 +35,7 @@ from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, artifact_preflight_message,
 )
-from . import agent_stderr, cancellation, egress, image_cache, net_probe
+from . import agent_stderr, cancellation, egress, grok_artifact_cache, image_cache, net_probe
 from .windows_job import WindowsJobError, WindowsJobProcess
 from .container_auth import AUTH_REGISTRY, AuthRequest, ContainerAuthError
 from .kiro_provider import (
@@ -1585,6 +1585,7 @@ def _pier_process_env(
     zcode_module_dir: Path | None = None,
     dsh_module_dir: Path | None = None,
     codebuddy_module_dir: Path | None = None,
+    grok_artifact: tuple[Path, str] | None = None,
 ) -> dict[str, str]:
     """Keep provider secrets out of Pier's inherited environment."""
 
@@ -1594,6 +1595,8 @@ def _pier_process_env(
     # code before the network fence is installed.
     env.pop("PYTHONPATH", None)
     env.pop("PYTHONHOME", None)
+    env.pop(grok_artifact_cache.GROK_ARTIFACT_ENV, None)
+    env.pop(grok_artifact_cache.GROK_ARTIFACT_SHA_ENV, None)
     python_dirs = [
         path for path in (
             pier_bootstrap_dir, codex_module_dir, claude_module_dir,
@@ -1651,6 +1654,10 @@ def _pier_process_env(
             if name.startswith("CODEBUDDY_") or name in CODEBUDDY_API_KEY_ENVS:
                 env.pop(name, None)
         env[CODEBUDDY_SOURCE_IMAGE_ENV] = CODEBUDDY_CONTAINER_IMAGE
+    if assignment.get("agent") == GROK_AGENT and grok_artifact is not None:
+        path, digest = grok_artifact
+        env[grok_artifact_cache.GROK_ARTIFACT_ENV] = str(path)
+        env[grok_artifact_cache.GROK_ARTIFACT_SHA_ENV] = digest
     if egress_environment:
         env.update(egress_environment)
     # Pier's stdout/stderr are redirected to our UTF-8 log. On Windows an
@@ -5250,6 +5257,7 @@ def _run_trial(
     work_dir.mkdir(parents=True, exist_ok=True)
     provider_auth_path = None
     provider_cli_path = None
+    grok_artifact = None
     provider_stack = ExitStack()
     # Resolve subscription credentials before touching Docker.  A rejected
     # OAuth grant is an account problem and must not consume a full image
@@ -5281,7 +5289,21 @@ def _run_trial(
         raise RunnerError(
             f"Pier egress environment is not ready: {exc}; no model quota was used"
         ) from exc
-    if egress_environment or effective_agent == CODEBUDDY_AGENT:
+    if (effective_agent == GROK_AGENT and os.environ.get(
+        grok_artifact_cache.GROK_ARTIFACT_CACHE_MODE_ENV, "on"
+    ).strip().lower() != "off"):
+        try:
+            grok_artifact = grok_artifact_cache.ensure_grok_artifact(
+                seed_path=(
+                    provider_cli_path if platform.system() == "Linux" else None
+                ),
+            )
+        except (OSError, grok_artifact_cache.GrokArtifactError) as exc:
+            raise RunnerError(
+                f"verified public Grok artifact is unavailable: {exc}"
+            ) from exc
+        print("verified shared public Grok CLI artifact before Docker build")
+    if egress_environment or effective_agent == CODEBUDDY_AGENT or grok_artifact:
         _ensure_pier_sitecustomize(work_dir)
     builder_lease = image_cache.prepare_trial_builder(
         work_dir.parent,
@@ -5448,6 +5470,7 @@ def _run_trial(
             codebuddy_module_dir=(
                 work_dir if effective_agent == CODEBUDDY_AGENT else None
             ),
+            grok_artifact=grok_artifact,
         )
         # Pier adapters publish a single JSON lifecycle record to this private
         # sidecar after environment setup and immediately before provider work.

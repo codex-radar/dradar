@@ -7,6 +7,7 @@ isolated Python environment, where the ``dradar`` package is not installed.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -17,7 +18,10 @@ from pathlib import Path
 
 _IMAGE_ENV = "DRADAR_EGRESS_PROXY_IMAGE"
 _CODEBUDDY_SOURCE_IMAGE_ENV = "DRADAR_CODEBUDDY_SOURCE_IMAGE"
-_PATCH_MARKER = "_dradar_prebuilt_egress_codebuddy_v2"
+_GROK_ARTIFACT_ENV = "DRADAR_GROK_PUBLIC_ARTIFACT"
+_GROK_ARTIFACT_SHA_ENV = "DRADAR_GROK_PUBLIC_ARTIFACT_SHA256"
+_GROK_ARTIFACT_SOURCE = "https://storage.googleapis.com/grok-build-public-artifacts/cli"
+_PATCH_MARKER = "_dradar_prebuilt_egress_codebuddy_grok_v3"
 _LOCAL_IMAGE_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _CODEBUDDY_SOURCE_IMAGE_RE = re.compile(
     r"dradar-codebuddy:(?P<version>[0-9]+\.[0-9]+\.[0-9]+)\Z"
@@ -265,10 +269,86 @@ def _rewrite_codebuddy_agent_dockerfile(environment) -> None:
     )
 
 
+def _rewrite_grok_agent_dockerfile(environment) -> None:
+    """Use the verified public host artifact for this exact Pier install."""
+    install = environment.agent_install_spec
+    if install is None or install.agent_name != "grok-build":
+        return
+    source_name = os.environ.get(_GROK_ARTIFACT_ENV)
+    digest = os.environ.get(_GROK_ARTIFACT_SHA_ENV, "")
+    if not source_name or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        # An explicit no-cache run keeps the original checked download path.
+        if not source_name and not digest:
+            return
+        raise RuntimeError("Grok public artifact metadata is incomplete")
+    source = Path(source_name)
+    match = re.fullmatch(
+        r"grok-(?P<version>[0-9]+\.[0-9]+\.[0-9]+)-linux-"
+        r"(?P<arch>x86_64|aarch64)-(?P<sha>[0-9a-f]{64})-(?P<source>[0-9a-f]{12})",
+        source.name,
+    )
+    if match is None or match.group("version") != install.version or match.group("sha") != digest:
+        raise RuntimeError("Grok public artifact does not match install spec")
+    if match.group("source") != hashlib.sha256(_GROK_ARTIFACT_SOURCE.encode("ascii")).hexdigest()[:12]:
+        raise RuntimeError("Grok public artifact source differs from install spec")
+    if len(install.steps) != 1 or install.steps[0].user != "root":
+        raise RuntimeError("Grok install spec shape changed unexpectedly")
+    if digest not in install.steps[0].run:
+        raise RuntimeError("Grok install checksum differs from cached artifact")
+    arch = match.group("arch")
+    if _GROK_ARTIFACT_SOURCE not in install.steps[0].run:
+        raise RuntimeError("Grok install source changed unexpectedly")
+    if f"grok_arch={arch}; grok_sha={digest}" not in install.steps[0].run:
+        raise RuntimeError("Grok artifact architecture pin differs from install spec")
+    marker = 'case "$(uname -m)" in '
+    if not install.steps[0].run.startswith("set -euo pipefail; ") or install.steps[0].run.count(marker) != 1:
+        raise RuntimeError("Grok install dependency contract changed unexpectedly")
+    dependency_command = install.steps[0].run.split(marker, 1)[0]
+    build_dir = environment._agent_build_context_dir
+    if build_dir is None:
+        raise RuntimeError("Grok agent build context was not prepared")
+    dockerfile_path = Path(build_dir) / "Dockerfile"
+    dockerfile = dockerfile_path.read_text(encoding="utf-8")
+    install_run = "RUN " + json.dumps(["/bin/bash", "-c", install.steps[0].run])
+    suffix = f"USER root\n{install_run}\n"
+    if not dockerfile.endswith(suffix):
+        raise RuntimeError("Grok generated Dockerfile shape changed unexpectedly")
+    h = hashlib.sha256()
+    with source.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    if h.hexdigest() != digest or source.is_symlink():
+        raise RuntimeError("Grok public artifact failed build-context validation")
+    staged = Path(build_dir) / "dradar-grok-public-artifact"
+    try:
+        os.link(source, staged)
+    except OSError:
+        shutil.copyfile(source, staged)
+    command = (
+        "set -euo pipefail; "
+        f"case \"$(uname -m)\" in {'x86_64' if arch == 'x86_64' else 'aarch64|arm64'}) ;; "
+        "*) echo 'Grok artifact architecture mismatch' >&2; exit 1 ;; esac; "
+        "mkdir -p /opt/grok-runtime/bin; "
+        f"printf '%s  %s\\n' {digest} /opt/grok-runtime/bin/grok "
+        "| sha256sum --check --strict -; "
+        "chmod 0755 /opt/grok-runtime/bin/grok; "
+        "timeout --kill-after=5s 15s /opt/grok-runtime/bin/grok --version "
+        f"| grep -Eq '(^| ){re.escape(install.version)}( |$)'"
+    )
+    replacement = (
+        "USER root\n"
+        "RUN " + json.dumps(["/bin/bash", "-c", dependency_command]) + "\n"
+        "COPY dradar-grok-public-artifact /opt/grok-runtime/bin/grok\n"
+        "RUN " + json.dumps(["/bin/bash", "-c", command]) + "\n"
+    )
+    dockerfile_path.write_text(dockerfile[:-len(suffix)] + replacement, encoding="utf-8")
+
+
 def _patch_pier() -> None:
     image = os.environ.get(_IMAGE_ENV)
     codebuddy_source = os.environ.get(_CODEBUDDY_SOURCE_IMAGE_ENV)
-    if not image and not codebuddy_source:
+    grok_source = os.environ.get(_GROK_ARTIFACT_ENV)
+    if not image and not codebuddy_source and not grok_source:
         return
     if image and not _image_is_immutable(image):
         raise RuntimeError("DRadar egress image is not pinned by digest")
@@ -289,9 +369,12 @@ def _patch_pier() -> None:
         docker_environment.DockerEnvironment._prepare_agent_build_context
     )
 
-    def prepare_agent_with_local_codebuddy(self) -> None:
+    def prepare_agent_with_public_artifacts(self) -> None:
         original_agent_prepare(self)
-        _rewrite_codebuddy_agent_dockerfile(self)
+        if codebuddy_source:
+            _rewrite_codebuddy_agent_dockerfile(self)
+        if grok_source:
+            _rewrite_grok_agent_dockerfile(self)
 
     def prepare_with_build_proxy(self) -> None:
         assert original_prepare is not None
@@ -316,9 +399,9 @@ def _patch_pier() -> None:
         docker_environment.DockerEnvironment._prepare_egress_proxy_compose = (
             prepare_with_build_proxy
         )
-    if codebuddy_source:
+    if codebuddy_source or grok_source:
         docker_environment.DockerEnvironment._prepare_agent_build_context = (
-            prepare_agent_with_local_codebuddy
+            prepare_agent_with_public_artifacts
         )
     setattr(docker_environment, _PATCH_MARKER, True)
 
