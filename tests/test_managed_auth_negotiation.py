@@ -4,7 +4,7 @@ from dradar import managed_auth_selection as selection
 from dradar.api_client import ApiClient, ApiError
 
 
-def client(monkeypatch, response, *, selected=True, gpt6=False):
+def client(monkeypatch, response, *, selected=True, gpt6=False, gpt61=False):
     monkeypatch.setattr(selection,'load_selection',lambda: object() if selected else None)
     monkeypatch.setattr(selection,'selection_requested',lambda:selected)
     monkeypatch.setattr(selection,'trial_platform_ready',lambda:True)
@@ -15,7 +15,7 @@ def client(monkeypatch, response, *, selected=True, gpt6=False):
             return httpx.Response(200,json={'volunteer_id':'c'*32})
         if req.method=='GET':return response
         return httpx.Response(200,json={'assignment':{'auth_runtime':selection.PROFILE,'assignment_id':'a'*32,'auth_cohort_id':'b'*32}})
-    api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),capabilities=[selection.CAPABILITY,selection.TRIAL_CAPABILITY]+(["codex-gpt6-sol-luna-v1"] if gpt6 else []))
+    api=ApiClient('https://fixture.invalid','fake-server-token',transport=httpx.MockTransport(request),capabilities=[selection.CAPABILITY,selection.TRIAL_CAPABILITY]+(["codex-gpt6-sol-luna-v1"] if gpt6 else [])+(["codex-gpt6-1-sol-v1"] if gpt61 else []))
     return api,calls
 
 
@@ -103,6 +103,20 @@ def test_new_model_needs_exact_managed_container_version_before_claim(monkeypatc
     api.claim_assignment('fixture',model,'medium')
     assert [method for method,_,_ in calls]==['GET','GET','POST']
     assert calls[1][1]=='/api/v1/whoami'
+
+
+def test_gpt61_needs_its_own_capability_and_runtime_before_claim(monkeypatch):
+    def descriptor(version):
+        return {'schema':'dradar.auth-runtime.v1','profiles':[{'id':selection.PROFILE,
+            'capability':selection.TRIAL_CAPABILITY,'agent':'codex','provider':'openai','agent_version':version}]}
+    for advertised,version in ((False,'0.159.2'),(True,'0.155.1')):
+        api,calls=client(monkeypatch,httpx.Response(200,json=descriptor(version)),gpt61=advertised)
+        with pytest.raises(ApiError,match=''):
+            api.claim_assignment('fixture','gpt-6.1-sol','high')
+        assert [method for method,_,_ in calls]==['GET']
+    api,calls=client(monkeypatch,httpx.Response(200,json=descriptor('0.159.2')),gpt61=True)
+    api.claim_assignment('fixture','gpt-6.1-sol','high')
+    assert [method for method,_,_ in calls]==['GET','GET','POST']
 
 @pytest.mark.parametrize('model', ['gpt-6-sol', 'gpt-6-luna'])
 def test_new_model_bound_continuation_checks_new_version(monkeypatch, model):

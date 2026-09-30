@@ -115,7 +115,7 @@ class CodexRegistered(Codex):
             raise ValueError(status)
 
     def verify_gpt6_subscription_auth(self, source):
-        if (self.model_name or "").split("/")[-1] not in ("gpt-6-sol", "gpt-6-luna"):
+        if (self.model_name or "").split("/")[-1] not in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"):
             return
         # These lanes are subscription-only. Reject an API credential before
         # Pier can deliver it to the task container; never echo auth contents.
@@ -151,7 +151,7 @@ class CodexRegistered(Codex):
         return snapshot
 
     async def verify_gpt6_runtime(self, environment):
-        if (self.model_name or "").split("/")[-1] not in ("gpt-6-sol", "gpt-6-luna"):
+        if (self.model_name or "").split("/")[-1] not in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"):
             return
         result = await self.exec_as_agent(
             environment, command=self.get_version_command(), timeout_sec=10,
@@ -162,7 +162,7 @@ class CodexRegistered(Codex):
             raise RuntimeError("GPT-6 Codex container version does not match the requested runtime")
 
     async def run(self, instruction, environment, context):
-        gpt6 = (self.model_name or "").split("/")[-1] in ("gpt-6-sol", "gpt-6-luna")
+        gpt6 = (self.model_name or "").split("/")[-1] in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol")
         source = self._resolve_auth_json_path() if gpt6 else None
         snapshot = None
         if gpt6:

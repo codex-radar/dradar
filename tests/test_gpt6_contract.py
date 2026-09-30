@@ -1,7 +1,8 @@
 """Offline contracts only: no provider credentials, requests, or Docker runs."""
 import json
 import pytest
-from dradar.gpt6 import GPT6_EFFORTS, GPT6_CAPABILITY, GPT6_CODEX_VERSION
+from dradar.gpt6 import (GPT6_EFFORTS, GPT6_CAPABILITY, GPT61_CAPABILITY,
+                         GPT6_CODEX_VERSION, GPT6_MODEL_VERSIONS)
 from dradar import runner
 from dradar.providers import advertised_capabilities
 
@@ -15,23 +16,26 @@ def test_dispatch_preserves_model_effort_and_pins_install(tmp_path, monkeypatch,
     monkeypatch.setenv('CODEX_AUTH_JSON_PATH',str(auth))
     home=tmp_path/'home';home.mkdir()
     a={'assignment_id':'fixture','task_id':'task','agent':'codex','model':model,
-       'effort':effort,'agent_version':GPT6_CODEX_VERSION,'benchmark_id':benchmark}
+       'effort':effort,'agent_version':GPT6_MODEL_VERSIONS[model],'benchmark_id':benchmark}
     cmd=runner.build_pier_command(a,tmp_path,tmp_path/'jobs','fixture',home)
     assert cmd[cmd.index('--model')+1]==model
     assert f'reasoning_effort={effort}' in cmd
-    assert f'version={GPT6_CODEX_VERSION}' in cmd
+    assert f'version={GPT6_MODEL_VERSIONS[model]}' in cmd
     assert '--disable-verification' in cmd
     assert all('gpt-5.6-' not in value for value in cmd)
     # Inspect the real installed Pier adapter, not a hand-written fake argv.
     from pier.agents.installed.codex import Codex
-    agent=Codex(logs_dir=tmp_path/'logs',model_name=model,version=GPT6_CODEX_VERSION,reasoning_effort=effort)
-    assert any(f'@openai/codex@{GPT6_CODEX_VERSION}' in str(c) for c in agent.install_spec().steps)
+    agent=Codex(logs_dir=tmp_path/'logs',model_name=model,version=GPT6_MODEL_VERSIONS[model],reasoning_effort=effort)
+    assert any(f'@openai/codex@{GPT6_MODEL_VERSIONS[model]}' in str(c) for c in agent.install_spec().steps)
 
 @pytest.mark.parametrize('model,effort,version', [
     ('gpt-6-luna','ultra','0.155.1'),('gpt-6-sol','bogus','0.155.1'),
     ('gpt-6-sol','medium','0.154.0'),('gpt-6-sol','medium','latest'),
     ('gpt-6-sol-unknown','medium','0.155.1'),
     ('gpt-6-foo','medium','0.155.1'),
+    ('gpt-6.1-sol','none','0.159.2'), ('gpt-6.1-sol','minimal','0.159.2'),
+    ('gpt-6.1-sol','ultra','0.159.2'), ('gpt-6.1-sol','high','0.155.1'),
+    ('gpt-6.1-sol-unknown','high','0.159.2'),
 ])
 def test_invalid_contract_rejected_before_execution(model,effort,version):
     with pytest.raises(runner.RunnerError):
@@ -42,6 +46,7 @@ def test_existing_model_contract_is_not_rewritten():
 
 def test_new_client_advertises_gpt6_contract():
     assert GPT6_CAPABILITY in advertised_capabilities()
+    assert GPT61_CAPABILITY in advertised_capabilities()
 
 @pytest.mark.parametrize('stdout,code,accepted', [
     ('codex-cli 0.155.1',0,True),('known warning\ncodex-cli 0.155.1',0,True),

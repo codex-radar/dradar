@@ -825,11 +825,11 @@ class ApiClient:
             selected = None
         if selected is None or CAPABILITY not in self.capabilities:
             raise ApiError("受控登录源不可用；请检查状态或恢复，没有自动切换账号。", status_code=409, code="managed_auth_unavailable")
-        if model in ("gpt-6-sol", "gpt-6-luna"):
-            from .gpt6 import GPT6_CAPABILITY
-            if GPT6_CAPABILITY not in self.capabilities:
+        from .gpt6 import GPT6_MODEL_CAPABILITIES, GPT6_MODEL_VERSIONS
+        if model in GPT6_MODEL_CAPABILITIES:
+            if GPT6_MODEL_CAPABILITIES[model] not in self.capabilities:
                 raise ApiError("客户端不支持该 GPT-6 受控任务。", status_code=409, code="auth_runtime_unavailable")
-        expected = {"id":PROFILE,"capability":TRIAL_CAPABILITY,"agent":"codex","provider":"openai","agent_version":"0.155.1" if model in ("gpt-6-sol", "gpt-6-luna") else "0.154.0"}
+        expected = {"id":PROFILE,"capability":TRIAL_CAPABILITY,"agent":"codex","provider":"openai","agent_version":GPT6_MODEL_VERSIONS.get(model, "0.154.0")}
         if sum(item == expected for item in result["profiles"]) != 1:
             raise ApiError("服务端未提供匹配的受控运行模式，受控操作未继续。", status_code=409, code="auth_runtime_unavailable")
         if assignment_id is not None:
