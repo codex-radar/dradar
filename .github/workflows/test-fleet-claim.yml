@@ -1,0 +1,48 @@
+name: Fleet claim process evidence
+on:
+  pull_request:
+    paths:
+      - 'src/dradar/boundary_recovery.py'
+      - 'src/dradar/fleet_claim.py'
+      - 'src/dradar/runtime_identity.py'
+      - 'tests/test_fleet_claim.py'
+      - 'tests/test_fleet_claim_process.py'
+      - 'tests/test_fleet_process_identity.py'
+      - '.github/workflows/test-fleet-claim.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-claim:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install . pytest
+      - name: Check admission, identity and result protection
+        env:
+          DRADAR_HOME: ${{ runner.temp }}/dradar-fleet-claim-home
+        run: >-
+          python -m pytest -q
+          tests/test_fleet_process_identity.py tests/test_fleet_claim.py
+          tests/test_boundary_recovery.py tests/test_historical_admission.py
+          tests/test_result_protection.py
+      - name: Actual CLI and API adapter in an isolated Linux PID namespace
+        shell: bash
+        run: |
+          python_path=$(command -v python)
+          sudo unshare --mount --pid --fork --mount-proc \
+            env PATH="$PATH" PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            DRADAR_HOME="$RUNNER_TEMP/dradar-fleet-claim-process-home" \
+            DRADAR_FLEET_PROC_TEST=1 \
+            "$python_path" -m pytest -q tests/test_fleet_claim_process.py \
+              --basetemp="$RUNNER_TEMP/fleet-claim-process-tests"
