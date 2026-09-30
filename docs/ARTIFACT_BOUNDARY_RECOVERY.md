@@ -105,6 +105,14 @@ validates patch structure and rescans. Credentials in metadata, context or
 deletion lines are refused. The signed review cannot bypass the Server's last
 scan, nonce/owner/lease/deadline checks or content-bound upload acknowledgement.
 
+Every prepared component must reproduce the original saved intent before
+this password coverage change. Only the standard patch/display redaction
+and the two patch-redaction metadata fields may differ. Changed result,
+usage, metadata or optional-artifact presence is refused. The comparison
+uses the same verified snapshot; prior display bytes are never uploaded.
+If intent registration is unavailable, including HTTP 404/405, this reviewed
+operation keeps the block and never falls back to an unfenced submission.
+
 Both raw copies remain intact. The original intent is retained in the local
 review record when a new sanitized intent is registered. The automatic block
 stays persisted through crashes and failed uploads; only confirmed submission

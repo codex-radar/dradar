@@ -2584,12 +2584,6 @@ def _upload_trial_checked(
                 != secret_review["sanitized_patch_sha256"]):
             print("  reviewed redaction changed before upload; preserved block retained")
             return "upload-blocked"
-        # Keep the automatic block through crashes and transient failures.
-        # The original intent remains available for audit when the explicit
-        # reviewed operation replaces it with the sanitized content identity.
-        entry.setdefault("secret_guard_review", {
-            **secret_review, "original_upload_intent": entry.get("upload_intent"),
-        })
 
     entry_meta = entry.get("meta") or {}
     is_zcode_pompeii = (
@@ -2723,6 +2717,22 @@ def _upload_trial_checked(
 
     with tempfile.TemporaryDirectory() as td:
         scrubbed = Path(td)
+        prior_paths = {}
+        prior_meta = dict(upload_meta)
+        if secret_review is not None:
+            prior_meta.pop("patch_redacted", None)
+            prior_meta.pop("patch_redaction_labels", None)
+            prior_patch = scrubbed / "prior-model.patch"
+            prior_patch.write_bytes(raw_patch)
+            prior_paths["patch"] = prior_patch
+
+        def display_bytes(name, data):
+            if secret_review is not None:
+                prior_path = scrubbed / ("prior-" + name)
+                prior_path.write_bytes(scrub_json_bytes(data, _before_password_alignment=True))
+                prior_paths[name] = prior_path
+            return scrub_json_bytes(data)
+
         upload_patch = scrubbed / "model.patch"
         upload_patch.write_bytes(
             redacted_patch if redacted_patch is not None else raw_patch
@@ -2734,7 +2744,7 @@ def _upload_trial_checked(
                 trajectory_bundle, ensure_ascii=False, separators=(",", ":"),
             ).encode("utf-8")
             try:
-                scrubbed_bundle = scrub_json_bytes(serialized)
+                scrubbed_bundle = display_bytes("trajectory_bundle.json", serialized)
                 json.loads(scrubbed_bundle)
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                 # The bundle is optional display data.  A redaction bug must
@@ -2750,7 +2760,7 @@ def _upload_trial_checked(
         if trajectory:
             traj_scrubbed = scrubbed / "trajectory.json"
             try:
-                scrubbed_trajectory = scrub_json_bytes(read_trial_file(trial_dir, trajectory.relative_to(trial_dir)))
+                scrubbed_trajectory = display_bytes("trajectory.json", read_trial_file(trial_dir, trajectory.relative_to(trial_dir)))
                 value = json.loads(scrubbed_trajectory)
                 if not isinstance(value, dict):
                     raise ValueError("top level is not an object")
@@ -2763,9 +2773,11 @@ def _upload_trial_checked(
         result_scrubbed = None
         if result:
             result_scrubbed = scrubbed / "result.json"
-            result_scrubbed.write_bytes(scrub_json_bytes(read_trial_file(trial_dir, result.relative_to(trial_dir))))
+            result_scrubbed.write_bytes(display_bytes("result.json", read_trial_file(trial_dir, result.relative_to(trial_dir))))
             if usage is not None:
                 _apply_usage_to_result(result_scrubbed, usage)
+                if secret_review is not None:
+                    _apply_usage_to_result(prior_paths["result.json"], usage)
         # Refresh before submitting: from here on an unacked completed trial
         # has the canonical paths + digest in its ledger entry. The server
         # dedupes replays (409 "already submitted"), so duplicates are safe.
@@ -3070,6 +3082,25 @@ def _upload_trial_checked(
                     )
                     calculated_intent_id = upload_intent_id(manifest)
                     saved_intent = entry.get("upload_intent")
+                    if secret_review is not None:
+                        from .secret_guard_recovery import verify_prepared_payload
+                        prior_manifest = submission_payload_manifest(
+                            assignment_id=assignment_id, session_id=runner_session_id,
+                            owner_epoch=owner_epoch, outcome=outcome, meta=prior_meta,
+                            patch=prior_paths["patch"],
+                            trajectory=prior_paths.get("trajectory.json") if traj_scrubbed else None,
+                            result=prior_paths.get("result.json") if result_scrubbed else None,
+                            trajectory_bundle=prior_paths.get("trajectory_bundle.json") if submit_bundle else None,
+                        )
+                        try:
+                            verify_prepared_payload(entry, manifest, prior_manifest)
+                        except ValueError:
+                            print("  reviewed result components changed; preserved block retained")
+                            return "upload-blocked"
+                        # Persist audit binding only after all components pass.
+                        entry.setdefault("secret_guard_review", {
+                            **secret_review, "original_upload_intent": saved_intent,
+                        })
                     if saved_intent is not None and secret_review is None and (
                         not isinstance(saved_intent, dict)
                         or saved_intent.get("id") != calculated_intent_id
@@ -3103,13 +3134,13 @@ def _upload_trial_checked(
                 except ApiError as exc:
                     if retained_outcome := retain_unresolved_upload(exc):
                         return retained_outcome
-                    if cleanup_result_recovery:
+                    if cleanup_result_recovery or secret_review is not None:
                         # This explicit quarantine path never falls back to
                         # the legacy submit shape, even when an older server
                         # does not expose its required intent endpoint.
                         print(
                             f"  {task_id}: server did not grant the exact "
-                            "cleanup-result upload intent; original result kept"
+                            "reviewed upload intent; original result kept"
                         )
                         return "upload-failed"
                     if exc.status_code == 410:

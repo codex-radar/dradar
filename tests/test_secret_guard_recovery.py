@@ -91,7 +91,7 @@ def test_review_refusals_preserve_ledger_and_do_not_upload(tmp_path, monkeypatch
     assert (tmp_path / "pending_uploads.json").read_bytes() == before
 
 
-@pytest.mark.parametrize("failure", [None, "intent_409", "submit_503", "submit_422"])
+@pytest.mark.parametrize("failure", [None, "intent_404", "intent_405", "intent_409", "submit_503", "submit_422"])
 def test_review_replaces_original_content_intent_and_preserves_failure_block(tmp_path, monkeypatch, failure):
     row = saved(tmp_path, monkeypatch)
     original_intent = row["upload_intent"]
@@ -110,7 +110,8 @@ def test_review_replaces_original_content_intent_and_preserves_failure_block(tmp
             assert new["secret_guard_review"]["original_upload_intent"] == original_intent
             assert new["upload_blocked"] == "server_secret_guard"
             assert new["upload_intent"]["manifest"]["components"]["model.patch"]["sha256"] == hashlib.sha256(sanitized).hexdigest()
-            return httpx.Response(409 if failure == "intent_409" else 200, json={"detail": "owner superseded"} if failure == "intent_409" else {"ok": True})
+            status = int(failure.removeprefix("intent_")) if failure and failure.startswith("intent_") else 200
+            return httpx.Response(status, json={"detail": "intent unavailable"} if status != 200 else {"ok": True})
         assert request.url.path.endswith("submissions")
         assert sanitized in request.content and b"synthetic-secret-value" not in request.content
         status = 503 if failure == "submit_503" else 422 if failure == "submit_422" else 200
@@ -123,7 +124,7 @@ def test_review_replaces_original_content_intent_and_preserves_failure_block(tmp
     monkeypatch.setattr(runloop, "_run_and_submit", lambda *a, **k: pytest.fail("model was started"))
     rc = recover()
     assert rc == (0 if failure is None else 1)
-    assert calls == ["/api/v1/submission-upload-intents"] + ([] if failure == "intent_409" else ["/api/v1/submissions"] * (2 if failure == "submit_503" else 1))
+    assert calls == ["/api/v1/submission-upload-intents"] + ([] if failure and failure.startswith("intent_") else ["/api/v1/submissions"] * (2 if failure == "submit_503" else 1))
     assert {k: Path(row[k]).read_bytes() for k in raw_before} == raw_before
     if failure is None:
         assert pending.load(tmp_path) == []
@@ -135,6 +136,41 @@ def test_review_replaces_original_content_intent_and_preserves_failure_block(tmp
         assert (tmp_path / "pending_uploads.json").read_bytes() == before
         if failure == "submit_503":
             assert recover() == 1
+
+
+@pytest.mark.parametrize("change", ["result", "trajectory", "meta", "saved_fact"])
+def test_review_never_approves_other_result_changes(tmp_path, monkeypatch, change):
+    row = saved(tmp_path, monkeypatch)
+    trial = Path(row["trial_dir"])
+    (trial / "agent").mkdir()
+    result = trial / "result.json"
+    trajectory = trial / "agent/trajectory.json"
+    result.write_bytes(b'{"original":1}')
+    trajectory.write_bytes(b'{"steps":[]}')
+    manifest = submission_payload_manifest(
+        assignment_id=ASSIGNMENT, session_id=row["runner_session_id"], owner_epoch=1,
+        outcome="completed", meta={}, patch=trial / "artifacts/model.patch",
+        trajectory=trajectory, result=result, trajectory_bundle=None,
+    )
+    row["upload_intent"] = {"id": upload_intent_id(manifest), "manifest": manifest}
+    if change == "result":
+        result.write_bytes(b'{"original":2}')
+    elif change == "trajectory":
+        trajectory.write_bytes(b'{"steps":["changed"]}')
+    elif change == "meta":
+        row["meta"] = {"n_output_tokens": 999}
+    else:
+        manifest["components"]["result.json"]["sha256"] = "0" * 64
+        row["upload_intent"]["id"] = upload_intent_id(manifest)
+    pending.record(tmp_path, row)
+    client = ApiClient("https://api.example.com", "drt_test", capabilities=(), benchmark_id="deep-swe", batch_id=BATCH,
+                       transport=httpx.MockTransport(lambda _: pytest.fail("network upload reached")))
+    monkeypatch.setattr(runloop, "_client", lambda _: client)
+    assert recover() == 1
+    kept = pending.load(tmp_path)[0]
+    assert kept["upload_blocked"] == "server_secret_guard"
+    assert kept["upload_intent"] == row["upload_intent"]
+    assert (trial / "artifacts/model.patch").read_bytes() == PATCH
 
 
 def test_signed_zipapp_review_entry_bypasses_activation_but_not_trust(tmp_path, monkeypatch):

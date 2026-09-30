@@ -62,3 +62,21 @@ def review_patch(entry: dict, expected_sha256: str) -> dict:
         "sanitized_patch_sha256": sanitized_sha256,
         "redacted_labels": labels,
     }
+
+
+def verify_prepared_payload(entry: dict, manifest: dict, prior_manifest: dict) -> None:
+    """Bind every component to the old intent, allowing only derived scrub.
+
+    prior_manifest is built from the same verified snapshot and usage inputs,
+    using the display scrubber before this password coverage change. The
+    current manifest uses the stronger scrubber and reviewed added-line patch.
+    """
+    saved = entry.get("upload_intent")
+    review = entry.get("secret_guard_review")
+    original = review.get("original_upload_intent") if isinstance(review, dict) else saved
+    if (not isinstance(original, dict)
+            or original.get("id") != upload_intent_id(prior_manifest)
+            or original.get("manifest") != prior_manifest
+            or not isinstance(saved, dict)
+            or saved not in (original, {"id": upload_intent_id(manifest), "manifest": manifest})):
+        raise ValueError("reviewed result components differ from the original upload intent")
