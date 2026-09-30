@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from .gpt6 import GPT6_CAPABILITY
+from .gpt6 import GPT6_CAPABILITY, GPT61_CAPABILITY
 from .kiro_provider import (
     KIRO_AGENT, KIRO_PROVIDER, KIRO_MODEL, KIRO_CLI_VERSION,
     KIRO_CAPABILITY, KIRO_SUPPORTED_EFFORTS, kiro_status,
@@ -2137,7 +2137,7 @@ def advertised_capabilities(
     # public task repository.  Servers activate this marker only when their
     # configured task package requires the new distribution path, allowing a
     # CLI-first rolling upgrade while old servers harmlessly ignore it.
-    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY, RUNNER_RESERVATION_CAPABILITY,
+    capabilities = [TASK_PACKAGE_SYNC_CAPABILITY, GPT6_CAPABILITY, GPT61_CAPABILITY, RUNNER_RESERVATION_CAPABILITY,
                     RUN_PLAN_INTENT_CAPABILITY]
     from .managed_auth_selection import load_selection, CAPABILITY as managed_capability
     from .auth_refresh import RefreshUnavailable

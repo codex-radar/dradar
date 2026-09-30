@@ -15,6 +15,23 @@ def consumer(tmp_path, **kwargs):
                         managed_bridge_file=str(tmp_path/'unused.cjs'), **kwargs)
 
 
+def test_gpt61_managed_runtime_is_exact_and_keeps_old_sol_pin(tmp_path):
+    from dradar.pier_codex_managed import validate_codex_version_output
+    validate_codex_version_output('codex-cli 0.159.2\n', '0.159.2')
+    with pytest.raises(RuntimeError, match='managed container version mismatch'):
+        validate_codex_version_output('codex-cli 0.155.1\n', '0.159.2')
+    def make(model, version):
+        return CodexManaged(logs_dir=tmp_path, model_name=model, version=version,
+                            managed_config_file=str(tmp_path/'unused.json'),
+                            managed_bridge_file=str(tmp_path/'unused.cjs'))
+    make('gpt-6.1-sol', '0.159.2')
+    with pytest.raises(ValueError, match='GPT-6.1 Sol managed consumer'):
+        make('gpt-6.1-sol', '0.155.1')
+    make('gpt-6-sol', '0.155.1')
+    with pytest.raises(ValueError, match='GPT-6 managed consumer'):
+        make('gpt-6-sol', '0.159.2')
+
+
 def test_native_acceptance_receipt_never_becomes_request_proof(tmp_path, monkeypatch):
     destination=tmp_path/'status.json'
     monkeypatch.setenv('DRADAR_MANAGED_STATUS_FILE', str(destination))

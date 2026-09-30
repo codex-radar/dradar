@@ -31,7 +31,7 @@ except ModuleNotFoundError:
 def validate_codex_version_output(output, expected_version="0.154.0"):
     """Pier may merge stderr before or after stdout; require one exact version."""
     lines = (output or '').strip().splitlines()
-    if expected_version not in ('0.154.0', '0.155.1'):
+    if expected_version not in ('0.154.0', '0.155.1', '0.159.2'):
         raise RuntimeError('managed container version unsupported')
     version = 'codex-cli ' + expected_version
     home = r'/tmp/dradar-managed-[a-f0-9]{32}/codex-home'
@@ -56,12 +56,14 @@ class CodexManaged(Codex):
         super().__init__(*args, **kwargs)
         if any(key in self._extra_env for key in ('OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_AUTH_JSON_PATH', 'CODEX_FORCE_AUTH_JSON')):
             raise ValueError('managed consumer rejects alternate credential environment')
-        if self._version not in ('0.154.0', '0.155.1'):
+        if self._version not in ('0.154.0', '0.155.1', '0.159.2'):
             raise ValueError('managed consumer runtime unsupported')
         model = (self.model_name or '').split('/')[-1]
+        if model == 'gpt-6.1-sol' and self._version != '0.159.2':
+            raise ValueError('GPT-6.1 Sol managed consumer requires Codex 0.159.2')
         if model in ('gpt-6-sol', 'gpt-6-luna') and self._version != '0.155.1':
             raise ValueError('GPT-6 managed consumer requires Codex 0.155.1')
-        if model not in ('gpt-6-sol', 'gpt-6-luna') and self._version != '0.154.0':
+        if model not in ('gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol') and self._version != '0.154.0':
             raise ValueError('legacy managed consumer requires Codex 0.154.0')
 
     def _module(self, name):

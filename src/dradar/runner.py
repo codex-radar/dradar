@@ -30,7 +30,7 @@ from pathlib import Path
 
 import httpx
 
-from .gpt6 import GPT6_EFFORTS, GPT6_CODEX_VERSION
+from .gpt6 import GPT6_EFFORTS, GPT6_MODEL_VERSIONS
 from .artifact_boundary import (
     TrialFiles, UnsafeArtifact, preferred_log_path, read_trial_file, snapshot_agent,
     preflight_artifact_platform, artifact_preflight_message,
@@ -722,7 +722,7 @@ def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True
     if not isinstance(model, str):
         raise RunnerError("assignment model must be a string")
     if model not in GPT6_EFFORTS:
-        if model.startswith("gpt-6-") and model != "gpt-6-astra":
+        if (model.startswith("gpt-6-") or model.startswith("gpt-6.")) and model != "gpt-6-astra":
             raise RunnerError(f"unsupported GPT-6 model: {model}")
         return
     if assignment.get("effort") not in GPT6_EFFORTS[model]:
@@ -730,8 +730,8 @@ def _validate_gpt6_assignment(assignment: dict, *, validate_version: bool = True
     if validate_version:
         version = assignment.get("agent_version", "")
         if (not isinstance(version, str) or not _STABLE_CODEX_VERSION_RE.fullmatch(version)
-                or tuple(map(int, version.split("."))) < tuple(map(int, GPT6_CODEX_VERSION.split(".")))):
-            raise RunnerError(f"{model} requires the DRadar candidate Codex runtime >= {GPT6_CODEX_VERSION}")
+                or tuple(map(int, version.split("."))) < tuple(map(int, GPT6_MODEL_VERSIONS[model].split(".")))):
+            raise RunnerError(f"{model} requires the DRadar candidate Codex runtime >= {GPT6_MODEL_VERSIONS[model]}")
 
 
 def resolve_latest_codex_cli_version(
@@ -1986,7 +1986,7 @@ def build_pier_command(
                 "starting the task container"
             )
         if managed:
-            if version != (GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"):
+            if version != GPT6_MODEL_VERSIONS.get(assignment["model"], "0.154.0"):
                 raise RunnerError("managed runtime version differs from the assigned model contract")
             cmd += ["--ak", f"managed_config_file={managed_auth_config}",
                     "--ak", f"managed_bridge_file={managed_bridge}",
@@ -5171,7 +5171,7 @@ def _run_trial(
                 f"{codex_cli_version}"
             )
         elif managed_auth_config is not None:
-            codex_cli_version = GPT6_CODEX_VERSION if assignment["model"] in GPT6_EFFORTS else "0.154.0"
+            codex_cli_version = GPT6_MODEL_VERSIONS.get(assignment["model"], "0.154.0")
         else:
             # Resolve before creating the job, extending the lease, or starting
             # Pier. A registry outage therefore consumes no model quota and leaves
