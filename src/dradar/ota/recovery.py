@@ -116,11 +116,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark", required=True)
     parser.add_argument("--batch-id", type=_batch_id)
     parser.add_argument("--runner-session-id")
+    parser.add_argument("--review-server-secret-guard", action="store_true",
+                        help="Explicitly review one server_secret_guard row using added-line redaction")
+    parser.add_argument("--patch-sha256", help="SHA256 of the preserved original patch reviewed by the operator")
     args = parser.parse_args(argv)
     if not args.benchmark.strip():
         parser.error("--benchmark must not be empty")
     if args.runner_session_id is not None and not args.runner_session_id.strip():
         parser.error("--runner-session-id must not be empty")
+    if args.review_server_secret_guard:
+        if (not args.batch_id or not args.runner_session_id
+                or not re.fullmatch(r"[0-9a-f]{32}", args.runner_session_id)
+                or not re.fullmatch(r"[0-9a-f]{64}", args.patch_sha256 or "")):
+            parser.error("secret review requires exact --batch-id, --runner-session-id and --patch-sha256")
+    elif args.patch_sha256 is not None:
+        parser.error("--patch-sha256 requires --review-server-secret-guard")
     try:
         root = ota_root(HOME)
         if root.is_symlink() or (root.exists() and not root.is_dir()):
@@ -132,11 +142,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("another DRadar invocation is active")
             _verify_package(Path(args.manifest).expanduser(), Path(sys.argv[0]), HOME)
             from ..runloop import recover_one_pending_upload
+            kwargs = {}
+            if args.review_server_secret_guard:
+                kwargs["reviewed_secret_guard_sha256"] = args.patch_sha256
             return recover_one_pending_upload(
                 assignment_id=args.assignment_id,
                 benchmark=args.benchmark,
                 batch_id=args.batch_id,
                 runner_session_id=args.runner_session_id,
+                **kwargs,
             )
     except (InvalidTransition, ManifestError, OSError, ValueError, RuntimeError,
             KeyError, zipfile.BadZipFile) as exc:

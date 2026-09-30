@@ -42,7 +42,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("BEARER", re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/-]{20,}=*")),
     ("AUTH-HEADER", re.compile(r"(?i)authorization[\"']?\s*[:=]\s*[\"']?[^\s\"']{12,}")),
     ("KEY-ASSIGN", re.compile(
-        r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret)"
+        r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9._~+/-]{16,}=*"
     )),
 ]
@@ -59,7 +59,7 @@ _SECRET_SCRUB_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]{20,}=*"), r"\1[REDACTED-BEARER]"),
     (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)[^\s\"']{12,}"), r"\1[REDACTED-AUTH]"),
     (re.compile(
-        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret)"
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9._~+/-]{16,}=*"
     ), r"\1[REDACTED]"),
 ]
@@ -79,7 +79,17 @@ _HOME_RE = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+")
 # protection explicitly instead of relying on serialized punctuation.
 _SENSITIVE_JSON_KEY_RE = re.compile(
     r"(?i)(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|secret)$"
+    r"client[_-]?secret|secret|password|passwd)$"
+)
+# Bounded comparison for pending results created immediately before this
+# coverage change. The old output is used only to verify the saved intent.
+_BEFORE_PASSWORD_SCRUB_PATTERNS = [
+    (re.compile(pat.pattern.replace("|password|passwd", ""), pat.flags), repl)
+    for pat, repl in _SCRUB_PATTERNS
+]
+_BEFORE_PASSWORD_JSON_KEY_RE = re.compile(
+    _SENSITIVE_JSON_KEY_RE.pattern.replace("|password|passwd", ""),
+    _SENSITIVE_JSON_KEY_RE.flags,
 )
 _AUTH_JSON_KEY_RE = re.compile(r"(?i)authorization$")
 _OPAQUE_AUTH_VALUE_RE = re.compile(r"[^\s\"']{12,}")
@@ -152,8 +162,13 @@ def patch_structure_is_valid(data: bytes) -> bool:
     return proc.returncode == 0
 
 
-def scrub_text(text: str) -> str:
-    for pat, repl in _SCRUB_PATTERNS:
+def scrub_text(text: str, *, _before_password_alignment: bool = False) -> str:
+    patterns = _SCRUB_PATTERNS
+    if _before_password_alignment:
+        # Comparison only: reproduce the prior display fingerprints of an
+        # already paid result. These bytes must never be sent to the server.
+        patterns = _BEFORE_PASSWORD_SCRUB_PATTERNS
+    for pat, repl in patterns:
         text = pat.sub(repl, text)
     return _HOME_RE.sub("/[HOME]", text)
 
@@ -178,21 +193,26 @@ def _compact_inline_images(text: str) -> str:
     return _INLINE_IMAGE_DATA_RE.sub(marker, text)
 
 
-def _scrub_json_value(value: object) -> object:
+def _scrub_json_value(value: object, *, _before_password_alignment: bool = False) -> object:
     if isinstance(value, str):
         # Compact first: credential regexes should not scan megabytes of image
         # encoding, and screenshots can visually contain data that text-only
         # redaction cannot reliably detect.
-        return scrub_text(_compact_inline_images(value))
+        return scrub_text(_compact_inline_images(value),
+                          _before_password_alignment=_before_password_alignment)
     if isinstance(value, list):
-        return [_scrub_json_value(item) for item in value]
+        return [_scrub_json_value(item, _before_password_alignment=_before_password_alignment)
+                for item in value]
     if isinstance(value, dict):
         scrubbed: dict[str, object] = {}
         for key, item in value.items():
             # json.loads always produces string object keys.
-            clean_key = scrub_text(key)
+            clean_key = scrub_text(key, _before_password_alignment=_before_password_alignment)
             is_auth = bool(_AUTH_JSON_KEY_RE.search(key))
-            is_sensitive = bool(_SENSITIVE_JSON_KEY_RE.search(key))
+            sensitive_keys = _SENSITIVE_JSON_KEY_RE
+            if _before_password_alignment:
+                sensitive_keys = _BEFORE_PASSWORD_JSON_KEY_RE
+            is_sensitive = bool(sensitive_keys.search(key))
             should_redact = isinstance(item, str) and (
                 (is_auth and _OPAQUE_AUTH_VALUE_RE.match(item) is not None)
                 or (is_sensitive and not is_auth
@@ -202,12 +222,13 @@ def _scrub_json_value(value: object) -> object:
                 scrubbed[clean_key] = ("[REDACTED-AUTH]"
                                        if is_auth else "[REDACTED]")
             else:
-                scrubbed[clean_key] = _scrub_json_value(item)
+                scrubbed[clean_key] = _scrub_json_value(
+                    item, _before_password_alignment=_before_password_alignment)
         return scrubbed
     return value
 
 
-def scrub_json_bytes(data: bytes) -> bytes:
+def scrub_json_bytes(data: bytes, *, _before_password_alignment: bool = False) -> bytes:
     """Redact a JSON artifact without editing its serialized syntax.
 
     Parsing before redaction keeps escape backslashes out of the regex input;
@@ -215,7 +236,7 @@ def scrub_json_bytes(data: bytes) -> bytes:
     Invalid JSON raises instead of being uploaded or bypassing redaction.
     """
     value = json.loads(data)
-    scrubbed = _scrub_json_value(value)
+    scrubbed = _scrub_json_value(value, _before_password_alignment=_before_password_alignment)
     serialized = json.dumps(
         scrubbed, ensure_ascii=False, separators=(",", ":"),
     )

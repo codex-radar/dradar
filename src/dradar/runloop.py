@@ -2302,7 +2302,8 @@ def _register_cleanup_result_intent(client, entry: dict, intent_id: str) -> str:
 
 
 def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
-                  upload_only_recovery=False, cleanup_result_recovery=False):
+                  upload_only_recovery=False, cleanup_result_recovery=False,
+                  reviewed_secret_guard_sha256=None):
     pending.require_uploadable(entry, request_salvage=request_salvage)
     pending.record(HOME, entry)
     try:
@@ -2324,18 +2325,21 @@ def _upload_trial(client, entry, *, ask_cleanup=False, request_salvage=False,
                     cleanup_result_recovery=True,
                 )
         if (pending.is_cleanup_quarantine(entry)
-                or (entry.get("upload_blocked") and not request_salvage)
+                or (entry.get("upload_blocked") and not request_salvage
+                    and reviewed_secret_guard_sha256 is None)
                 or not Path(entry["trial_dir"]).exists()):
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 upload_only_recovery=upload_only_recovery,
                 cleanup_result_recovery=cleanup_result_recovery,
+                reviewed_secret_guard_sha256=reviewed_secret_guard_sha256,
             )
         with snapshot_agent(Path(entry["trial_dir"]), include_result=True) as snapshot:
             return _upload_trial_checked(
                 client, entry, ask_cleanup=ask_cleanup, request_salvage=request_salvage,
                 log_snapshot=snapshot, upload_only_recovery=upload_only_recovery,
                 cleanup_result_recovery=cleanup_result_recovery,
+                reviewed_secret_guard_sha256=reviewed_secret_guard_sha256,
             )
     except UnsafeArtifact as exc:
         blocked = dict(entry)
@@ -2353,6 +2357,7 @@ def _upload_trial_checked(
     request_salvage: bool = False, log_snapshot: Path | None = None,
     upload_only_recovery: bool = False,
     cleanup_result_recovery: bool = False,
+    reviewed_secret_guard_sha256: str | None = None,
 ) -> str:
     """Scrub + upload one trial's artifacts, described by a pending-ledger
     entry dict (assignment_id/nonce/task_id/trial_dir/meta/outcome/job_dir/
@@ -2376,6 +2381,16 @@ def _upload_trial_checked(
     task_id = entry.get("task_id", "?")
     blocked_reason = entry.get("upload_blocked")
     quarantine = pending.is_cleanup_quarantine(entry)
+    secret_review = None
+    if reviewed_secret_guard_sha256 is not None:
+        from .secret_guard_recovery import review_patch
+        try:
+            if not upload_only_recovery or request_salvage or cleanup_result_recovery:
+                raise ValueError("secret review requires exact upload-only recovery")
+            secret_review = review_patch(entry, reviewed_secret_guard_sha256)
+        except ValueError as exc:
+            print(f"  secret review rejected before upload: {exc}")
+            return "upload-blocked"
     if cleanup_result_recovery and (
         not quarantine or blocked_reason != "cleanup_unconfirmed"
         or not isinstance(entry.get("completed_result_recovery"), dict)
@@ -2403,7 +2418,7 @@ def _upload_trial_checked(
             "owner_superseded completed upload; no state was changed"
         )
         return "upload-blocked"
-    if blocked_reason and not salvage_requested and not (
+    if blocked_reason and secret_review is None and not salvage_requested and not (
         cleanup_result_recovery and blocked_reason == "cleanup_unconfirmed"
     ):
         # A persisted block is a terminal *automatic* recovery decision, not
@@ -2540,6 +2555,10 @@ def _upload_trial_checked(
     # multipart request below gets its own temporary file, so a concurrent
     # pause/cleanup cannot change or remove the bytes mid-upload.
     raw_patch = staged.data
+    if (secret_review is not None
+            and hashlib.sha256(raw_patch).hexdigest() != reviewed_secret_guard_sha256):
+        print("  reviewed patch changed before upload; preserved block retained")
+        return "upload-blocked"
     leaked = scan_secrets(raw_patch)
     redacted_patch: bytes | None = None
     redacted_labels: list[str] = []
@@ -2560,6 +2579,11 @@ def _upload_trial_checked(
         print(f"patch contained secret-shaped content "
               f"({', '.join(redacted_labels)}); uploading a structurally validated "
               "redacted copy. The raw patch stays local.")
+    if secret_review is not None:
+        if (redacted_patch is None or hashlib.sha256(redacted_patch).hexdigest()
+                != secret_review["sanitized_patch_sha256"]):
+            print("  reviewed redaction changed before upload; preserved block retained")
+            return "upload-blocked"
 
     entry_meta = entry.get("meta") or {}
     is_zcode_pompeii = (
@@ -2693,6 +2717,22 @@ def _upload_trial_checked(
 
     with tempfile.TemporaryDirectory() as td:
         scrubbed = Path(td)
+        prior_paths = {}
+        prior_meta = dict(upload_meta)
+        if secret_review is not None:
+            prior_meta.pop("patch_redacted", None)
+            prior_meta.pop("patch_redaction_labels", None)
+            prior_patch = scrubbed / "prior-model.patch"
+            prior_patch.write_bytes(raw_patch)
+            prior_paths["patch"] = prior_patch
+
+        def display_bytes(name, data):
+            if secret_review is not None:
+                prior_path = scrubbed / ("prior-" + name)
+                prior_path.write_bytes(scrub_json_bytes(data, _before_password_alignment=True))
+                prior_paths[name] = prior_path
+            return scrub_json_bytes(data)
+
         upload_patch = scrubbed / "model.patch"
         upload_patch.write_bytes(
             redacted_patch if redacted_patch is not None else raw_patch
@@ -2704,7 +2744,7 @@ def _upload_trial_checked(
                 trajectory_bundle, ensure_ascii=False, separators=(",", ":"),
             ).encode("utf-8")
             try:
-                scrubbed_bundle = scrub_json_bytes(serialized)
+                scrubbed_bundle = display_bytes("trajectory_bundle.json", serialized)
                 json.loads(scrubbed_bundle)
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                 # The bundle is optional display data.  A redaction bug must
@@ -2720,7 +2760,7 @@ def _upload_trial_checked(
         if trajectory:
             traj_scrubbed = scrubbed / "trajectory.json"
             try:
-                scrubbed_trajectory = scrub_json_bytes(read_trial_file(trial_dir, trajectory.relative_to(trial_dir)))
+                scrubbed_trajectory = display_bytes("trajectory.json", read_trial_file(trial_dir, trajectory.relative_to(trial_dir)))
                 value = json.loads(scrubbed_trajectory)
                 if not isinstance(value, dict):
                     raise ValueError("top level is not an object")
@@ -2733,9 +2773,11 @@ def _upload_trial_checked(
         result_scrubbed = None
         if result:
             result_scrubbed = scrubbed / "result.json"
-            result_scrubbed.write_bytes(scrub_json_bytes(read_trial_file(trial_dir, result.relative_to(trial_dir))))
+            result_scrubbed.write_bytes(display_bytes("result.json", read_trial_file(trial_dir, result.relative_to(trial_dir))))
             if usage is not None:
                 _apply_usage_to_result(result_scrubbed, usage)
+                if secret_review is not None:
+                    _apply_usage_to_result(prior_paths["result.json"], usage)
         # Refresh before submitting: from here on an unacked completed trial
         # has the canonical paths + digest in its ledger entry. The server
         # dedupes replays (409 "already submitted"), so duplicates are safe.
@@ -3040,7 +3082,26 @@ def _upload_trial_checked(
                     )
                     calculated_intent_id = upload_intent_id(manifest)
                     saved_intent = entry.get("upload_intent")
-                    if saved_intent is not None and (
+                    if secret_review is not None:
+                        from .secret_guard_recovery import verify_prepared_payload
+                        prior_manifest = submission_payload_manifest(
+                            assignment_id=assignment_id, session_id=runner_session_id,
+                            owner_epoch=owner_epoch, outcome=outcome, meta=prior_meta,
+                            patch=prior_paths["patch"],
+                            trajectory=prior_paths.get("trajectory.json") if traj_scrubbed else None,
+                            result=prior_paths.get("result.json") if result_scrubbed else None,
+                            trajectory_bundle=prior_paths.get("trajectory_bundle.json") if submit_bundle else None,
+                        )
+                        try:
+                            verify_prepared_payload(entry, manifest, prior_manifest)
+                        except ValueError:
+                            print("  reviewed result components changed; preserved block retained")
+                            return "upload-blocked"
+                        # Persist audit binding only after all components pass.
+                        entry.setdefault("secret_guard_review", {
+                            **secret_review, "original_upload_intent": saved_intent,
+                        })
+                    if saved_intent is not None and secret_review is None and (
                         not isinstance(saved_intent, dict)
                         or saved_intent.get("id") != calculated_intent_id
                         or saved_intent.get("manifest") != manifest
@@ -3073,13 +3134,13 @@ def _upload_trial_checked(
                 except ApiError as exc:
                     if retained_outcome := retain_unresolved_upload(exc):
                         return retained_outcome
-                    if cleanup_result_recovery:
+                    if cleanup_result_recovery or secret_review is not None:
                         # This explicit quarantine path never falls back to
                         # the legacy submit shape, even when an older server
                         # does not expose its required intent endpoint.
                         print(
                             f"  {task_id}: server did not grant the exact "
-                            "cleanup-result upload intent; original result kept"
+                            "reviewed upload intent; original result kept"
                         )
                         return "upload-failed"
                     if exc.status_code == 410:
@@ -4810,6 +4871,7 @@ def cmd_retry_upload(args) -> int:
 def recover_one_pending_upload(
     *, assignment_id: str, benchmark: str, batch_id: str | None,
     runner_session_id: str | None = None,
+    reviewed_secret_guard_sha256: str | None = None,
 ) -> int:
     """Replay exactly one durable result after the signed recovery gate.
 
@@ -4838,7 +4900,7 @@ def recover_one_pending_upload(
         print("recovery rejected: process exit/cleanup is unconfirmed and the "
               "result is unknown; keep the safety record for review")
         return 1
-    if entry.get("upload_blocked"):
+    if entry.get("upload_blocked") and reviewed_secret_guard_sha256 is None:
         print("recovery rejected: saved upload requires separate owner/artifact review")
         return 1
     if runner_session_id is not None and entry.get("runner_session_id") != runner_session_id:
@@ -4847,7 +4909,19 @@ def recover_one_pending_upload(
     if not _pending_entry_matches_scope(client, entry, batch_id=batch_id):
         print("recovery rejected: server/account/benchmark/batch scope does not match")
         return 1
-    outcome = _upload_trial(client, entry, upload_only_recovery=True)
+    if reviewed_secret_guard_sha256 is not None:
+        from .secret_guard_recovery import review_patch
+        try:
+            if not batch_id or not runner_session_id:
+                raise ValueError("secret review requires exact batch and runner session")
+            review_patch(entry, reviewed_secret_guard_sha256)
+        except (KeyError, OSError, UnsafeArtifact, ValueError) as exc:
+            print(f"recovery rejected before upload: {exc}")
+            return 1
+    kwargs = {"upload_only_recovery": True}
+    if reviewed_secret_guard_sha256 is not None:
+        kwargs["reviewed_secret_guard_sha256"] = reviewed_secret_guard_sha256
+    outcome = _upload_trial(client, entry, **kwargs)
     return 0 if outcome in {"submitted", "interrupted"} else 1
 
 
