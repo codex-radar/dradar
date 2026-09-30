@@ -42,7 +42,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("BEARER", re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/-]{20,}=*")),
     ("AUTH-HEADER", re.compile(r"(?i)authorization[\"']?\s*[:=]\s*[\"']?[^\s\"']{12,}")),
     ("KEY-ASSIGN", re.compile(
-        r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret)"
+        r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9._~+/-]{16,}=*"
     )),
 ]
@@ -59,7 +59,7 @@ _SECRET_SCRUB_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]{20,}=*"), r"\1[REDACTED-BEARER]"),
     (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)[^\s\"']{12,}"), r"\1[REDACTED-AUTH]"),
     (re.compile(
-        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret)"
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9._~+/-]{16,}=*"
     ), r"\1[REDACTED]"),
 ]
@@ -79,7 +79,7 @@ _HOME_RE = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+")
 # protection explicitly instead of relying on serialized punctuation.
 _SENSITIVE_JSON_KEY_RE = re.compile(
     r"(?i)(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|secret)$"
+    r"client[_-]?secret|secret|password|passwd)$"
 )
 _AUTH_JSON_KEY_RE = re.compile(r"(?i)authorization$")
 _OPAQUE_AUTH_VALUE_RE = re.compile(r"[^\s\"']{12,}")
