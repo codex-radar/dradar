@@ -54,6 +54,35 @@ def test_verified_host_binary_seeds_cache_without_network(tmp_path, monkeypatch)
     assert path.read_bytes() == data
 
 
+def test_waiters_recover_after_first_download_fails(tmp_path, monkeypatch):
+    data = b"verified-artifact"
+    count = 0
+
+    def download(url, target, deadline):
+        nonlocal count
+        count += 1
+        if count == 1:
+            target.write_bytes(b"partial")
+            raise cache.GrokArtifactError("bounded download failure")
+        target.write_bytes(data)
+
+    monkeypatch.setattr(cache, "_download", download)
+    def ensure(_):
+        try:
+            return cache.ensure_grok_artifact(
+                cache_root=tmp_path, version="1.0.40", arch="x86_64",
+                digests=_pins(data),
+            )
+        except cache.GrokArtifactError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(ensure, range(16)))
+    assert results.count(None) == 1
+    assert count == 2
+    assert all(result is None or result[0].read_bytes() == data for result in results)
+
+
 def test_corruption_and_failed_download_do_not_poison_cache(tmp_path, monkeypatch):
     data = b"correct-public-binary"
     digest = _pins(data)

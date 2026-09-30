@@ -115,7 +115,11 @@ def _download(url: str, target: Path, deadline: float) -> None:
                 status = response.status
                 if offset:
                     content_range = response.headers.get("Content-Range", "")
-                    if status != 206 or not content_range.startswith(f"bytes {offset}-"):
+                    if status == 200:
+                        # The origin ignored Range. This response is a fresh
+                        # complete body, so replace rather than append.
+                        offset = 0
+                    elif status != 206 or not content_range.startswith(f"bytes {offset}-"):
                         target.unlink(missing_ok=True)
                         raise GrokArtifactError("Grok artifact server rejected safe resume")
                 elif status != 200:
@@ -131,7 +135,7 @@ def _download(url: str, target: Path, deadline: float) -> None:
         except (
             urllib.error.URLError, TimeoutError, socket.timeout,
             http.client.IncompleteRead,
-        ) as exc:
+        ):
             if attempt == 2 or time.monotonic() >= deadline:
                 raise GrokArtifactError("Grok artifact download failed after bounded retries") from None
             time.sleep(2)
@@ -169,7 +173,12 @@ def ensure_grok_artifact(
                 url = f"{GROK_ARTIFACT_URL}/grok-{version}-linux-{arch}"
                 deadline = time.monotonic() + _DOWNLOAD_BUDGET_SECONDS
                 for checksum_attempt in range(2):
-                    _download(url, temporary, deadline)
+                    if not _valid(temporary, sha):
+                        try:
+                            _download(url, temporary, deadline)
+                        except GrokArtifactError:
+                            if not _valid(temporary, sha):
+                                raise
                     if _valid(temporary, sha):
                         break
                     temporary.unlink(missing_ok=True)
