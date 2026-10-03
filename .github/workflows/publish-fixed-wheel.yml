@@ -1,0 +1,43 @@
+name: Publish reviewed fixed wheel to existing R2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dradar-cli-ota-production
+  cancel-in-progress: false
+env:
+  PYTHONPATH: src
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ota-production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Prepare locked environment and reviewed artifact
+        run: |
+          set -euo pipefail
+          uv venv "${RUNNER_TEMP}/fixed-wheel-venv" --python 3.13
+          uv pip install --python "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" --require-hashes -r release/ota/requirements.lock
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"
+      - name: Verify existing immutable bucket policy
+        env:
+          DRADAR_OTA_CLOUDFLARE_API_TOKEN: ${{ secrets.DRADAR_OTA_CLOUDFLARE_API_TOKEN }}
+        run: |
+          "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" scripts/ota_release.py cloudflare-preflight --account-id 4d94f3bcb89bc16989d5ea715eaac061 --bucket dradar-cli-ota-production --public-base-url https://updates.codexradar.com
+      - name: Conditional publish and direct HTTP verification
+        env:
+          DRADAR_OTA_R2_ACCESS_KEY_ID: ${{ secrets.DRADAR_OTA_R2_ACCESS_KEY_ID }}
+          DRADAR_OTA_R2_SECRET_ACCESS_KEY: ${{ secrets.DRADAR_OTA_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" scripts/publish_fixed_wheel.py --wheel release/wheels/dradar-0.5.289-py3-none-any.whl --receipt "${RUNNER_TEMP}/DOWNLOAD_RECEIPT.json"
+          cat "${RUNNER_TEMP}/DOWNLOAD_RECEIPT.json"
