@@ -1,4 +1,4 @@
-"""Final024 boundary tests: synthetic readiness, no HTTP/model/container calls."""
+"""Current64 boundary tests: synthetic readiness, no HTTP/model/container calls."""
 from copy import deepcopy
 import hashlib
 import json
@@ -25,13 +25,13 @@ def ready_bootstrap():
             public_task_hashes={t:h for (s,t),h in MEMBER_HASHES.items() if s==b},
             public_bundle={**source['public_bundle'],'archive_root_prefix':source['archive_root_prefix']})
     return {'capabilities':['on-demand-v2',POOL_CAPABILITY],
-        'library_catalog':{'catalog_version':CATALOG_VERSION,'total_mapped_tasks':68,
+        'library_catalog':{'catalog_version':CATALOG_VERSION,'total_mapped_tasks':64,
             'collections':rows,'unified_pool':{'benchmark':POOL,'selection_version':CATALOG_VERSION,
-            'task_count':68,'source_counts':CONTRACT['source_counts'],'single_start_entry':True,
+            'task_count':64,'source_counts':CONTRACT['source_counts'],'single_start_entry':True,
             'members_sha256':MEMBERS_SHA256,'members':deepcopy(MEMBERS),
             'required_client_capabilities':[POOL_CAPABILITY,MODEL_CAPABILITY,AUTH_RUNTIME],
             'production_claim_enabled':True}},'contribution_policy':deepcopy(SERVER_CONTRIBUTION_POLICY),
-        'benchmarks':[{'benchmark':POOL,'task_count':68,'source_benchmarks':list(SOURCES),
+        'benchmarks':[{'benchmark':POOL,'task_count':64,'source_benchmarks':list(SOURCES),
             'required_client_capabilities':[POOL_CAPABILITY], 'models':selections}],
         'limits':{'max_total_count':None,'max_concurrency':None}}
 
@@ -69,7 +69,7 @@ def assignment_value(c,m,n=0):
 @pytest.mark.parametrize('effort',EFFORTS)
 def test_complete_fixed_selection_supports_each_existing_effort(effort):
     scope=selection_scope(ready_bootstrap(),MODEL,effort)
-    assert members_digest(scope['members'])==MEMBERS_SHA256 and len(scope['members'])==68
+    assert members_digest(scope['members'])==MEMBERS_SHA256 and len(scope['members'])==64
 
 @pytest.mark.parametrize('fault',['cap','catalog','count','members','member_hash','pool_pause',
     'source_pause','source_missing','source_hash','bundle','root_prefix','model_map','contribution',
@@ -132,7 +132,7 @@ def test_outside_scope_or_changed_selection_cannot_launch(tmp_path,fault):
     finally:c.pool.shutdown()
 
 @pytest.mark.parametrize('fault',[None,'partial','duplicate','root_collapse','hash','schema','not_object'])
-def test_mixed_binding_requires_exact68_and_four_roots(tmp_path,fault):
+def test_mixed_binding_requires_exact64_and_four_roots(tmp_path,fault):
     b=synthetic_binding(tmp_path)
     if fault=='partial':b['tasks'].pop()
     elif fault=='duplicate':b['tasks'][-1]=deepcopy(b['tasks'][0])

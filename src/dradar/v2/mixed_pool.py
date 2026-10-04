@@ -1,11 +1,11 @@
-"""Exact Server024 mixed selection; source tasks retain their original identity."""
+"""Exact current64 mixed selection; source tasks retain their original identity."""
 from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
 from importlib.resources import files
 
-CONTRACT = json.loads(files('dradar.v2').joinpath('final68_contract.json').read_text(encoding='utf-8'))
+CONTRACT = json.loads(files('dradar.v2').joinpath('final64_contract.json').read_text(encoding='utf-8'))
 POOL = CONTRACT['pool_benchmark']
 POOL_CAPABILITY = CONTRACT['pool_capability']
 CATALOG_VERSION = CONTRACT['catalog_version']
@@ -18,39 +18,39 @@ def members_digest(members):
     return hashlib.sha256(json.dumps(members, sort_keys=True, separators=(',', ':'),
                                     ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
-if len(MEMBERS) != 68 or len(MEMBER_HASHES) != 68 or members_digest(MEMBERS) != MEMBERS_SHA256:
-    raise ValueError('packaged final68 membership commitment mismatch')
+if len(MEMBERS) != 64 or len(MEMBER_HASHES) != 64 or members_digest(MEMBERS) != MEMBERS_SHA256:
+    raise ValueError('packaged final64 membership commitment mismatch')
 
 def selection_scope(bootstrap, model, effort):
     try:
         return _selection_scope(bootstrap, model, effort)
     except (KeyError, TypeError, AttributeError) as exc:
-        raise ValueError('malformed Server024 mixed selection contract') from exc
+        raise ValueError('malformed current64 mixed selection contract') from exc
 
 def _selection_scope(bootstrap, model, effort):
     from .host_contract import (MODEL, EFFORTS, MODEL_CAPABILITY, AUTH_RUNTIME,
                                 SERVER_CONTRIBUTION_POLICY)
     if model != MODEL or effort not in EFFORTS:
-        raise ValueError('unsupported fixed final68 model/effort')
+        raise ValueError('unsupported fixed final64 model/effort')
     if not {'on-demand-v2', POOL_CAPABILITY} <= set(bootstrap.get('capabilities', [])):
-        raise ValueError('Server024 mixed capability required before new work')
+        raise ValueError('current64 mixed capability required before new work')
     library = bootstrap.get('library_catalog') or {}
-    if library.get('catalog_version') != CATALOG_VERSION or library.get('total_mapped_tasks') != 68:
-        raise ValueError('exact Server024 final68 catalog required')
+    if library.get('catalog_version') != CATALOG_VERSION or library.get('total_mapped_tasks') != 64:
+        raise ValueError('exact current final64 catalog required')
     policy = bootstrap.get('contribution_policy')
     if not isinstance(policy, dict) or any(k not in policy or policy[k] != v for k,v in SERVER_CONTRIBUTION_POLICY.items()):
         raise ValueError('deferred contribution policy mismatch')
     pool = library.get('unified_pool') or {}
     required = {POOL_CAPABILITY, MODEL_CAPABILITY, AUTH_RUNTIME}
     if (pool.get('benchmark') != POOL or pool.get('selection_version') != CATALOG_VERSION
-            or pool.get('task_count') != 68 or pool.get('source_counts') != CONTRACT['source_counts']
+            or pool.get('task_count') != 64 or pool.get('source_counts') != CONTRACT['source_counts']
             or pool.get('single_start_entry') is not True
             or pool.get('members_sha256') != MEMBERS_SHA256
             or pool.get('members') != MEMBERS or members_digest(pool.get('members')) != MEMBERS_SHA256
             or set(pool.get('required_client_capabilities', [])) != required):
         raise ValueError('exact mixed pool membership/capability binding required')
     if pool.get('production_claim_enabled') is not True:
-        raise ValueError('Server final68 pool remains pending; no new claim')
+        raise ValueError('Server final64 pool remains pending; no new claim')
     rows = library.get('collections')
     if not isinstance(rows,list) or len(rows) != 4 or {x.get('benchmark') for x in rows} != set(SOURCES):
         raise ValueError('complete four-source library binding required')
@@ -74,14 +74,36 @@ def _selection_scope(bootstrap, model, effort):
     if len(choices) != 1 or len(bootstrap.get('benchmarks', [])) != 1:
         raise ValueError('one exact mixed start entry required')
     choice = choices[0]
-    if (choice.get('task_count') != 68 or choice.get('source_benchmarks') != list(SOURCES)
+    if (choice.get('task_count') != 64 or choice.get('source_benchmarks') != list(SOURCES)
             or POOL_CAPABILITY not in choice.get('required_client_capabilities', [])
             or not any(x.get('model') == model and x.get('effort') == effort for x in choice.get('models', []))):
         raise ValueError('complete account-eligible mixed selection required')
     return {'catalog_version': CATALOG_VERSION, 'pool_benchmark': POOL,
             'members_sha256': MEMBERS_SHA256, 'members': MEMBERS}
 
-def validate_assignment(scope, task):
+LEGACY68_CONTRACT = json.loads(files('dradar.v2').joinpath('final68_contract.json').read_text(encoding='utf-8'))
+LEGACY68_POOL = LEGACY68_CONTRACT['pool_benchmark']
+
+def is_historical_pool(benchmark,scope=None):
+    return benchmark == LEGACY68_POOL and (benchmark != POOL
+        or (isinstance(scope,dict) and scope.get('members_sha256')==LEGACY68_CONTRACT['members_sha256']))
+
+def validate_assignment(scope, task, *, allow_historical=False):
+    if allow_historical and isinstance(scope,dict) and scope.get('pool_benchmark')==LEGACY68_POOL:
+        legacy=LEGACY68_CONTRACT
+        if (scope.get('catalog_version')!=legacy['catalog_version']
+                or scope.get('members_sha256')!=legacy['members_sha256']
+                or scope.get('members')!=legacy['members']
+                or members_digest(scope['members'])!=legacy['members_sha256']):
+            raise ValueError('exact historical68 scope required for recovery')
+        hashes={(m['source_benchmark'],m['task_id']):m['task_content_hash'] for m in legacy['members']}
+        key=(task.get('benchmark'),task.get('task_id'))
+        if key not in hashes or hashes[key]!=task.get('task_content_hash'):
+            raise ValueError('historical assignment outside original scope')
+        sources={x['benchmark']:x for x in legacy['collections']}
+        if task.get('task_bundle')!=sources[key[0]]['public_bundle']:
+            raise ValueError('historical task bundle changed')
+        return
     if (not isinstance(scope,dict) or scope.get('catalog_version') != CATALOG_VERSION
             or scope.get('pool_benchmark') != POOL or scope.get('members_sha256') != MEMBERS_SHA256
             or scope.get('members') != MEMBERS):
@@ -130,9 +152,9 @@ def _validate_public_roots(binding):
             roots[benchmark]=root
         directory=roots[benchmark]/task['task_id']
         if directory.is_symlink() or not directory.is_dir():
-            raise ValueError('complete68 public task directories required before new work')
+            raise ValueError('complete64 public task directories required before new work')
         for name in ('instruction.md','task.toml'):
             p=directory/name
             if not p.is_file() or p.resolve(strict=True)!=p:
-                raise ValueError('complete68 regular public task inputs required before new work')
+                raise ValueError('complete64 regular public task inputs required before new work')
     return roots

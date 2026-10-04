@@ -59,7 +59,7 @@ claim/start/result lost ACK 重用原持久请求 ID 和原 body。429/503 尊�
 
 ## 官方宿主身份 + Codex 0.160 remote-only 候选
 
-固定候选 `0.5.290`，能力 `codex-gpt6-1-sol-host-remote-v1`，auth_runtime `codex-host-keyring-remote-v1`，runtime_config_version `host-remote-0160-v1`。保留冻结模型映射的Sol6.1五档`low/medium/high/xhigh/max`，BINDING列完整`efforts`，用户实际选择原样传入；两题Low试验不限制其他既有档位。目前真实模型证据仅覆盖 `gpt-6.1-sol / low`，其余四档仅合成适配验证。每次 durable execution 只允许一个turn，最多两并发；显式关闭multi_agent与multi_agent_v2，不拿工作会话模型设置替代被测模型。旧0.5.290已正常发布；当前0.5.291仍是固定新候选，实际发布与运行证明由新候选证据决定，既有两题试验不能授权第三题。
+固定候选 `0.5.290`，能力 `codex-gpt6-1-sol-host-remote-v1`，auth_runtime `codex-host-keyring-remote-v1`，runtime_config_version `host-remote-0160-v1`。保留冻结模型映射的Sol6.1五档`low/medium/high/xhigh/max`，BINDING列完整`efforts`，用户实际选择原样传入；两题Low试验不限制其他既有档位。目前真实模型证据仅覆盖 `gpt-6.1-sol / low`，其余四档仅合成适配验证。每次 durable execution 只允许一个turn，最多两并发；显式关闭multi_agent与multi_agent_v2，不拿工作会话模型设置替代被测模型。旧0.5.290、0.5.291/s113和0.5.292/s114已有正式发行证据；当前0.5.294为64题新候选，实际发布与运行仍按新候选证据核实，既有两题试验不能授权第三题。
 
 ```sh
 python -m dradar.v2 run --state-root "$STATE" --tasks-root "$TASKS" --benchmark "$BENCHMARK" --model gpt-6.1-sol --effort "$EFFORT" --total-count "$TOTAL" --concurrency "$CONCURRENCY" --host-runtime-binding "$BINDING" --host-runtime-sha256 "$TRUSTED_SHA256"
@@ -99,8 +99,19 @@ Server021 deferred contribution policy: bootstrap must explicitly declare missin
 
 Server023 最终新字段契约：公开 statistics_policy 使用 dradar-product-signals-audit-v2；新增轨迹工具名、URL、超时文本的自产网络猜测提示仅审计。实际网络隔离、认证/预算/身份/产物摘要、缺完整轨迹与任务 hash 不匹配、可信 verifier 的任何 flags（含同名 network）仍保留；旧隔离不重算。费用投影保留 actual_cost_usd、cost_complete、cost_basis、token_pricing_version、tariff_sha256；只有服务端验证完整 usage/cache-write/request ledger，且配置明确同模型 requires_cache_write_usage 价行及版本/hash后，cost_basis 才是 official_standard_api_equivalent，展示为“API等价值”，不能称订阅实付。证据或配置缺失时这些值维持 NULL/false，当前真实 host 三类 terminal tokens 不足，真实费用仍未知；不猜缓存写入、不扩 collector，也不因此阻断判分/待结算或其他已获权流程。具体价格矩阵差异按 Server023 的 MATRIX_MERGE_DELTA023.json 由实际配置主责核真实来源接，不提供 CLI 数值 override。
 
-本轮正式新候选为 CLI0.5.291 + Server产品024，catalog dradar-four-library-server024-20261004-final68。雷达Bench统一入口 radar-bench-final68-20261004，68题为Deep15/Pom16/TB17/Science20；单run选择pool，assignment仍保留来源benchmark和原task_id。mixed能力 on-demand-v2-mixed-pool-v1 必须由完整精确68成员、四个已验证公共包根与实际runtime绑定获得，不能仅放宽catalog/来源校验。用户已给的model/effort/数量/并发沿原计划；68/340与cap1000只是库存/forward页上限，不是授权模型预算或并发。
+历史68题基线为 CLI0.5.291/292 + Server产品024，catalog dradar-four-library-server024-20261004-final68。雷达Bench统一入口 radar-bench-final68-20261004，68题为Deep15/Pom16/TB17/Science20；单run选择pool，assignment仍保留来源benchmark和原task_id。mixed能力 on-demand-v2-mixed-pool-v1 必须由完整精确68成员、四个已验证公共包根与实际runtime绑定获得，不能仅放宽catalog/来源校验。用户已给的model/effort/数量/并发沿原计划；68/340与cap1000只是库存/forward页上限，不是授权模型预算或并发。
 新四来源host binding schema为 dradar.codex_host_binding.v2，runtime_config_version=host-remote-0160-final68-v1；tasks数组精确68，每条增加source_root（公共archive解包根），同来源一致且四来源根不同。marker .dradar-task-bundle.json 在source_root记录原archiveSHA与来源benchmark；Deep/Pom任务根等于source_root，TB/Science为source_root/server-tasks，instruction/task.toml/原任务hash/collector选择沿同一固定根。运行时仍官方Codex0.160、独立Sol6.1五档与host keyring/auth/on-request/outer isolation；新图像/collector/真实根摘要由实际发布配置核对，不用registry image冒充source-built。未获完整绑定就停止新领取，不回旧auth/Pier。旧v1 binding只保其原明确单来源合同，不提供mixed能力。
 Server权威score_version=radar-bench-v1，策略radar-bench-v1-last3-per-task-equal-weight-100：每个有有效判分的原任务最近最多3个raw reward取均值，再对有覆盖任务等权取均值乘100；不设旧时间窗。coverage整数0..68，required_tasks68；coverage0时score=NULL、missing_current_result，有覆盖但不足68为provisional，满68为complete，真实0分有效。通过公开 /api/v1/radar-bench?model=gpt-6.1-sol&effort=档位 获取精确task_set_sha256/selection/scoring_policy/coverage/trend；CLI不计算四库总分或把pending/infra/unrun置0，不把积分/费用当Bench分。原四来源判分结构、储存、NULL待结算、API等价值和audit-v2保持。gpt-5.5精确ID全档从新Codex工作/选择退出，gpt-5.6、gpt-6.1-sol及Claude/kiro的5.5不受此条影响，历史答卷/积分/恢复保留。0.5.290/s112已发布，不能原地重写其不可变签名；新候选须正常同head artifact/签名OTA及真实子runtime更新证明。
 
 完整混池binding通过后，CLI在声明mixed capability和run:create之前检查四个canonical source_root、四个原archive marker及全部68任务的regular instruction.md/task.toml可用性；任一缺失或symlink即停止新工作。这是公共资产就位预检；每个实际assignment仍在start前核原任务内容hash与collector，不把marker或目录存在当成全部68实际运行验收。
+
+
+## 当前首发64题（CLI0.5.294候选）
+
+用户已明确从当前领取、执行和统计成员移除四题：TB的heat-pump-warranty、intrastat-meldung、live-database-cutover及Science的protein-active-learning。当前固定成员为DeepSWE15/Pompeii16/TB14/Science19，共64题；四题原资料、历史成绩、账本与旧签名发行全部保留。CLI0.5.293原生服务适配保留离线候选，不作为本次首发依赖，不继续四题专项验收或模型试验。
+
+新工作沿用户采纳的007实际配置64成员（运行于既有Server024，非新019发行包）、source/task原内容hash、版本化来源/选择版本、原公开bundle/root及评分pin，当前catalog为dradar-four-library-deployment007-server024-20261004-config64，pool为radar-bench-final64-20261004，成员SHA为f75ff09b6117cd83d3ab6ea744fe379ac117676c042538d5df5e38489af27bc4；具体摘要从可信固定交付清单核对。不得只改数量64而继续68成员或再把四题加回。`dradar.codex_host_binding.v2` / `host-remote-0160-final64-v1`明确绑定完整64任务及四个公共根；无需四题native_services或native服务bootstrap能力。保留既有host0.160、Sol6.1五档、账号/预算/并发、租约start栅栏、on-request/user、外层隔离和成果上传协议；DS0 Server/grader无需ChatGPT账号，不复制Mac auth文件。
+
+当前64的目录、成员摘要、公开包与实际runtime绑定全部核对后才允许run:create；缺项/暂停/来源hash不符则阻断。原runtime64题资产可沿可信字节证明复用，仅从新绑定排除四题并采用权威新pin，不能删除或在原目录覆盖历史资产。65/68条绑定、四题assignment或旧68元数据不能进入新执行；数量64不是新增模型次数或预算。
+
+旧68题STATE只保留stop/progress/upload-only，严格核原catalog/memberSHA/source/task/bundle、run/device/lease/epoch和原结果hash，保留已有判分/NULL待结算；不能拿旧STATE重新create/claim/start/prepare/execute，也不将旧scope改写成64。按当前64新计划必须用新STATE。旧答卷仍可以历史查询与原成果上传；当前榜单/coverage/required_tasks沿实际64成员评分契约，coverage分母64、五档320格；Server批准64题的代码门槛仍需对应固定修正，CLI不重算成绩或把未跑题填零。生产服务、实际发布与正式安装状态分别据证，新候选不等于已发布或全64实机验收。
