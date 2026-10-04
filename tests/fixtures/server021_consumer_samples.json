@@ -1,0 +1,230 @@
+{
+  "source": "Server021 installed-wheel synthetic lifecycle; not real model/official grader/DS0",
+  "interface_sha256": "837366b09c1f88c10deba3f4b694a82abb28bdc60861c3d5b794df8ab59c0356",
+  "captured_lifecycle_sha256": "2789fe11da3454959b686c67ba30a64b0256f54770d062519d9c2f48384a51f2",
+  "contribution_policy": {
+    "missing_reward_basis": "defer",
+    "points_until_basis_resolved": null,
+    "deferred_state": "deferred_reward_missing_basis",
+    "known_basis_policy": "existing_codex_frozen_reward"
+  },
+  "assignments": {
+    "submitted_pending_grade": {
+      "assignment_id": "08ede5f864c7466b80557862236e47f2",
+      "run_id": "9ca83e722b234e32ba0ff673090088cd",
+      "device_id": "88ac603922134d139e827dc5fb5b3d83",
+      "slot_id": 0,
+      "work_key": "e548b78378eb75409600c1a1eb2aaf96d53601fdfdc80e59d220a54eb369183f",
+      "lease_id": "d7ebe0ea54e345d486f4cb1f6c49e0f9",
+      "owner_epoch": 1,
+      "state": "submitted",
+      "lease_expires_at": null,
+      "execution_id": "6c508bba74684fbc9b2015daf8729858",
+      "task": {
+        "benchmark": "tb4-scc-pilot-20261003",
+        "effort": "medium",
+        "model": "gpt-5.5",
+        "task_bundle": {
+          "bytes": 39,
+          "format": "tar.gz",
+          "sha256": "e603d80bcbe3367609c4fc0475b3575bb612d0f2bc10393eaa38529488591c62",
+          "url": "/api/v2/library-bundles/tb4-scc-pilot-20261003"
+        },
+        "task_commit": null,
+        "task_content_hash": "2d2d5a5a41376acf6ce3b995a0333dd76276325f52fcba04ab4206940cf2415e",
+        "task_id": "tb4-sound-change-cascade"
+      },
+      "runner": {
+        "agent": "codex",
+        "agent_version": "0.160.0",
+        "agent_version_verified": true,
+        "auth_runtime": null,
+        "billing_mode": null,
+        "est_minutes": null,
+        "provider": "openai"
+      },
+      "phase": "finished",
+      "progress": {
+        "elapsed_ms": null,
+        "tokens": {
+          "input": null,
+          "missing_reason": "not_reported",
+          "output": null,
+          "source": null,
+          "total": null
+        }
+      },
+      "completed_at": null,
+      "outcome": "completed",
+      "started_at": "2026-10-04T05:24:34.648951Z",
+      "submission_id": "c210f55aec9b40199ca9d6987e96730b",
+      "result_sha256": "320951fa1b3d5e78f62c59c8d428e5bcfff205c92e9797b7721508509ab88637",
+      "contribution": {
+        "state": "deferred_reward_missing_basis",
+        "points_base": null,
+        "earned_points": null,
+        "missing_fields": [
+          "points_base"
+        ],
+        "basis_source": "missing_matrix_cell_and_explicit_task_reward"
+      },
+      "grading": {
+        "state": "pending",
+        "graded_at": null,
+        "reward": null,
+        "earned_points": null,
+        "inventory_settlement_state": "unmanaged",
+        "score": null,
+        "passed": null,
+        "flagged": false,
+        "reason_code": null,
+        "points_settlement_state": "deferred_reward_missing_basis",
+        "source_protocol": "v2"
+      }
+    },
+    "graded_pending_reward": {
+      "assignment_id": "08ede5f864c7466b80557862236e47f2",
+      "run_id": "9ca83e722b234e32ba0ff673090088cd",
+      "device_id": "88ac603922134d139e827dc5fb5b3d83",
+      "slot_id": 0,
+      "work_key": "e548b78378eb75409600c1a1eb2aaf96d53601fdfdc80e59d220a54eb369183f",
+      "lease_id": "d7ebe0ea54e345d486f4cb1f6c49e0f9",
+      "owner_epoch": 1,
+      "state": "submitted",
+      "lease_expires_at": null,
+      "execution_id": "6c508bba74684fbc9b2015daf8729858",
+      "task": {
+        "benchmark": "tb4-scc-pilot-20261003",
+        "effort": "medium",
+        "model": "gpt-5.5",
+        "task_bundle": {
+          "bytes": 39,
+          "format": "tar.gz",
+          "sha256": "e603d80bcbe3367609c4fc0475b3575bb612d0f2bc10393eaa38529488591c62",
+          "url": "/api/v2/library-bundles/tb4-scc-pilot-20261003"
+        },
+        "task_commit": null,
+        "task_content_hash": "2d2d5a5a41376acf6ce3b995a0333dd76276325f52fcba04ab4206940cf2415e",
+        "task_id": "tb4-sound-change-cascade"
+      },
+      "runner": {
+        "agent": "codex",
+        "agent_version": "0.160.0",
+        "agent_version_verified": true,
+        "auth_runtime": null,
+        "billing_mode": null,
+        "est_minutes": null,
+        "provider": "openai"
+      },
+      "phase": "finished",
+      "progress": {
+        "elapsed_ms": null,
+        "tokens": {
+          "input": null,
+          "missing_reason": "not_reported",
+          "output": null,
+          "source": null,
+          "total": null
+        }
+      },
+      "completed_at": null,
+      "outcome": "completed",
+      "started_at": "2026-10-04T05:24:34.648951Z",
+      "submission_id": "c210f55aec9b40199ca9d6987e96730b",
+      "result_sha256": "320951fa1b3d5e78f62c59c8d428e5bcfff205c92e9797b7721508509ab88637",
+      "contribution": {
+        "state": "deferred_reward_missing_basis",
+        "points_base": null,
+        "earned_points": null,
+        "missing_fields": [
+          "points_base"
+        ],
+        "basis_source": "missing_matrix_cell_and_explicit_task_reward"
+      },
+      "grading": {
+        "state": "graded",
+        "graded_at": "2026-10-04T05:24:34.669574Z",
+        "reward": 0,
+        "earned_points": null,
+        "inventory_settlement_state": "unmanaged",
+        "score": 0.0,
+        "passed": false,
+        "flagged": false,
+        "reason_code": null,
+        "points_settlement_state": "deferred_reward_missing_basis",
+        "source_protocol": "v2"
+      }
+    },
+    "graded_reward_settled": {
+      "assignment_id": "08ede5f864c7466b80557862236e47f2",
+      "run_id": "9ca83e722b234e32ba0ff673090088cd",
+      "device_id": "88ac603922134d139e827dc5fb5b3d83",
+      "slot_id": 0,
+      "work_key": "e548b78378eb75409600c1a1eb2aaf96d53601fdfdc80e59d220a54eb369183f",
+      "lease_id": "d7ebe0ea54e345d486f4cb1f6c49e0f9",
+      "owner_epoch": 1,
+      "state": "submitted",
+      "lease_expires_at": null,
+      "execution_id": "6c508bba74684fbc9b2015daf8729858",
+      "task": {
+        "benchmark": "tb4-scc-pilot-20261003",
+        "effort": "medium",
+        "model": "gpt-5.5",
+        "task_bundle": {
+          "bytes": 39,
+          "format": "tar.gz",
+          "sha256": "e603d80bcbe3367609c4fc0475b3575bb612d0f2bc10393eaa38529488591c62",
+          "url": "/api/v2/library-bundles/tb4-scc-pilot-20261003"
+        },
+        "task_commit": null,
+        "task_content_hash": "2d2d5a5a41376acf6ce3b995a0333dd76276325f52fcba04ab4206940cf2415e",
+        "task_id": "tb4-sound-change-cascade"
+      },
+      "runner": {
+        "agent": "codex",
+        "agent_version": "0.160.0",
+        "agent_version_verified": true,
+        "auth_runtime": null,
+        "billing_mode": null,
+        "est_minutes": null,
+        "provider": "openai"
+      },
+      "phase": "finished",
+      "progress": {
+        "elapsed_ms": null,
+        "tokens": {
+          "input": null,
+          "missing_reason": "not_reported",
+          "output": null,
+          "source": null,
+          "total": null
+        }
+      },
+      "completed_at": null,
+      "outcome": "completed",
+      "started_at": "2026-10-04T05:24:34.648951Z",
+      "submission_id": "c210f55aec9b40199ca9d6987e96730b",
+      "result_sha256": "320951fa1b3d5e78f62c59c8d428e5bcfff205c92e9797b7721508509ab88637",
+      "contribution": {
+        "state": "quoted",
+        "points_base": 2.0,
+        "earned_points": null,
+        "missing_fields": [],
+        "basis_source": null
+      },
+      "grading": {
+        "state": "graded",
+        "graded_at": "2026-10-04T05:24:34.669574Z",
+        "reward": 0,
+        "earned_points": 6.0,
+        "inventory_settlement_state": "unmanaged",
+        "score": 0.0,
+        "passed": false,
+        "flagged": false,
+        "reason_code": null,
+        "points_settlement_state": "settled",
+        "source_protocol": "v2"
+      }
+    }
+  }
+}

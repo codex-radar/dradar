@@ -57,13 +57,29 @@ def assignment_view(a: dict) -> dict:
     tokens = progress.get("tokens") or {}
     measured = progress.get("elapsed_ms")
     usage = Usage(tokens.get("input"), tokens.get("output"), tokens.get("total"))
+    grading = a.get("grading") or {}
+    contribution = a.get("contribution") or {}
+    settlement = grading.get("points_settlement_state")
+    if settlement is None and contribution.get("state") == "deferred_reward_missing_basis":
+        settlement = "deferred_reward_missing_basis"
+    points = grading.get("earned_points")
+    points_text = ("待结算" if settlement == "deferred_reward_missing_basis" else
+                   "已结算" if settlement == "settled" and points is not None else "未知")
     execution = a.get("outcome")
     if execution not in {"completed", "failed", "interrupted"}:
         execution = {"leased": "preparing", "running": "running"}.get(a.get("state"), "unknown")
     return {"task_id": a["task"]["task_id"], "assignment_id": a["assignment_id"],
             "device_id": a["device_id"], "slot_id": a["slot_id"], "phase": a.get("phase", "unknown"),
             "execution": execution, "upload": "accepted" if a.get("state") == "submitted" else "pending",
-            "grading": a.get("grading_state", "unknown"),
+            "grading": grading.get("state", a.get("grading_state", "unknown")),
+            "reward": grading.get("reward"), "score": grading.get("score"),
+            "passed": grading.get("passed"), "graded_at": grading.get("graded_at"),
+            "flagged": grading.get("flagged"), "reason_code": grading.get("reason_code"),
+            "earned_points": points, "points_settlement_state": settlement or "unknown",
+            "points_status_text": points_text,
+            "contribution": {"state": contribution.get("state", "unknown"),
+                             "points_base": contribution.get("points_base"),
+                             "missing_fields": contribution.get("missing_fields")},
             "elapsed_ms": "unknown" if measured is None else measured, "tokens": usage.view()}
 
 def run_view(snapshot: dict) -> dict:
