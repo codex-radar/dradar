@@ -104,6 +104,10 @@ class HostCodexRuntime(CodexRuntime):
             raise RuntimeUnavailable('host runtime uses exact preinstalled image binding; no alternate builder')
         self.binding_path=Path(host_runtime_binding).resolve(strict=True)
         self.binding=load_binding(self.binding_path,host_runtime_sha256)
+        from .host_contract import MIXED_SCHEMA
+        if self.binding['schema']==MIXED_SCHEMA:
+            from .mixed_pool import validate_public_roots
+            validate_public_roots(self.binding)
         journal.bind('host_runtime_binding_sha256',host_runtime_sha256)
         self.controller_factory=controller_factory
         self.controllers={}
@@ -114,7 +118,16 @@ class HostCodexRuntime(CodexRuntime):
     def prepare(self,a):
         if set(a.get('runner') or {}) != {'agent','agent_version','agent_version_verified','auth_runtime','provider','billing_mode','est_minutes'}:
             raise RuntimeUnavailable('Server runner must retain exact seven-field contract')
-        prepared=super().prepare(a)
+        from .host_contract import MIXED_SCHEMA
+        roots = None
+        if self.binding['schema'] == MIXED_SCHEMA:
+            matches=[t for t in self.binding['tasks'] if (t['benchmark'],t['task_id']) == (a['task']['benchmark'],a['task']['task_id'])]
+            if len(matches)!=1 or matches[0]['task_content_hash']!=a['task']['task_content_hash']:
+                raise RuntimeUnavailable('fixed mixed source/task runtime binding missing')
+            from .mixed_pool import public_task_root
+            roots = public_task_root(matches[0])
+        prepared=super().prepare(a,**({'tasks_root':roots[0],'bundle_root':roots[1]} if roots else {}))
+        if roots:prepared['tasks_root']=str(roots[0])
         if any(prepared.get(k)!=v for k,v in {
             'agent':'codex','agent_version':VERSION,'agent_version_verified':True,
             'auth_runtime':AUTH_RUNTIME,'provider':PROVIDER,'billing_mode':BILLING_MODE,
@@ -139,7 +152,7 @@ class HostCodexRuntime(CodexRuntime):
         folder.chmod(0o700)
         cfg={**self.binding['host'],**task,'task':prepared['task_id'],
              'model':MODEL,'effort':prepared['effort'],'capability':CAPABILITY,
-             'runtime_config_version':CONFIG_VERSION,'max_model_parallel':2,
+             'runtime_config_version':self.binding['runtime_config_version'],'max_model_parallel':2,
              'container_name':'dradar-host-'+hashlib.sha256((str(self.journal.root)+aid).encode()).hexdigest()[:24],
              'lock_path':str(Path(self.binding['host']['host_home'])/'runner'/f'host-remote-slot-{a["slot_id"]}.lock'),
              'journal_root':str(self.journal.root),'assignment_id':aid,
@@ -171,7 +184,7 @@ class HostCodexRuntime(CodexRuntime):
             with launch_guard():
                 controller.request({'op':'authorize-one-turn','start_barrier_committed':True})
                 started=time.monotonic()
-                prompt=(self.tasks_root/prepared['task_id']/'instruction.md').read_text()
+                prompt=(Path(prepared.get('tasks_root',self.tasks_root))/prepared['task_id']/'instruction.md').read_text()
                 response=controller.request({'op':'rpc','method':'turn/start','params':{
                     'threadId':thread,'model':MODEL,'effort':prepared['effort'],
                     'input':[{'type':'text','text':prompt,'text_elements':[]}]}})

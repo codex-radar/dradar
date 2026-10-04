@@ -1,4 +1,4 @@
-"""Publish the reviewed four-library 0.5.290 wheel without changing any OTA channel pointer."""
+"""Publish the reviewed four-library 0.5.291 wheel without changing any OTA channel pointer."""
 import argparse
 import hashlib
 import json
@@ -9,8 +9,8 @@ from pathlib import Path
 import httpx
 from ota_release import R2Client
 
-SHA256 = "8abe49231390e7fc2d491e27378a4951ab41b12e2bc7176273fea94dc2d43be7"
-SIZE = 903661
+SHA256 = "d77d1673b6c13524c4b97aaf4d98f71390943b3def9579022ec9b6a325e1caff"
+SIZE = 913779
 ACCOUNT = "4d94f3bcb89bc16989d5ea715eaac061"
 BUCKET = "dradar-cli-ota-production"
 
@@ -18,7 +18,7 @@ BUCKET = "dradar-cli-ota-production"
 def publish(wheel, receipt, store, client, *, source_commit):
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("Expected the actual full reviewed main commit")
-    if wheel.name != 'dradar-0.5.290-py3-none-any.whl':
+    if wheel.name != 'dradar-0.5.291-py3-none-any.whl':
         raise ValueError('Unexpected wheel filename')
     body = wheel.read_bytes()
     if len(body) != SIZE or hashlib.sha256(body).hexdigest() != SHA256:
