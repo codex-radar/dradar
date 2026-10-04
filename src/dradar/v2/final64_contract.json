@@ -1,0 +1,531 @@
+{
+  "catalog_version": "dradar-four-library-deployment007-server024-20261004-config64",
+  "catalog_sha256": "f85c1d7f227e58a5d92576b947045e23865f4b277e439e7b6ede5163c983ae33",
+  "interface_sha256": "2509de92b0938a604da510751e928aafe54e47e19dcc5e761bed2f52db0f02ea",
+  "pool_benchmark": "radar-bench-final64-20261004",
+  "pool_capability": "on-demand-v2-mixed-pool-v1",
+  "members_sha256": "f75ff09b6117cd83d3ab6ea744fe379ac117676c042538d5df5e38489af27bc4",
+  "members": [
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "igel-persist-feature-schema",
+      "task_content_hash": "74eb5d622e1af229331c3d5664baeb793faff9eebc7992c8727103f120b72f20"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "kombu-virtual-queue-dead-lettering",
+      "task_content_hash": "537d0b215f10e989b9852baee73decc031b49e1db295634f78b01731548230ad"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "bandit-interprocedural-taint-checks",
+      "task_content_hash": "b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "claude-code-by-agents-recursive-delegation",
+      "task_content_hash": "3e53cab7147406640ec161513862b8d02c3701ee794581855243e84a1393947a"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "ts-pattern-match-each",
+      "task_content_hash": "aab444013661fbc73f4b7e972d33d19fae42747d4498b791a624acc10523fe98"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "csstree-shorthand-expansion-compression",
+      "task_content_hash": "dbd9c9f731d1df65768330a4662dc78dde669d8cd025612ce64339488f724a24"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "aiomonitor-task-snapshots-diff",
+      "task_content_hash": "de53c49bb4ff8baa02d5db9310893413792e923b69643eb5fd254cf53ff7307a"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "anko-typed-variable-bindings",
+      "task_content_hash": "def19fffd57190b635c2ee19c2233dfd7434e9b8751a6140bd0a9fa60ec1bd87"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "mobly-grouped-test-barriers",
+      "task_content_hash": "5c2681190e9c1316bead539be3b27585fe3e3c34ea3f77005b5da159c5a4ab81"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "superjson-error-stack-serialization",
+      "task_content_hash": "41d12ea88d2962c8bd38471e6e937151280404dceec5f435e94b171603fcec64"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "dateutil-rfc5545-timezone-interop",
+      "task_content_hash": "43db08e1e5bda8fe61842e8b02001a2e21515a0e132305fc7809cd1077da7c2d"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "abs-module-cache-flags",
+      "task_content_hash": "824aa73cb818925ac845732e712f34c35144833a6197435572d0f29395457a9a"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "updo-policy-alerting",
+      "task_content_hash": "5cd97eab5a7f851fadae55608379cd34943dee8cfe3fea15c48c98ba5968c0de"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "httpx-streaming-json-iteration",
+      "task_content_hash": "0c33857574b2a345950c140642eeefd406c02983884f931c655c88fd40a437b2"
+    },
+    {
+      "source_benchmark": "deepswe15-20261003-v4",
+      "collection_id": "deepswe",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_id": "cliffy-config-file-parsing",
+      "task_content_hash": "481c17c44e6eac22d2c0749a3b6979e8dce25adf32f2cbf503ae63290551d4d0"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-002",
+      "task_content_hash": "55d00b1d5abc195ebf61a9e47d99ccadf9d06004c8ad6371ee1a9279f9c8bd4a"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-005",
+      "task_content_hash": "f90e6506a9b087b982d3b5b8e9061fb0fca28711449fda44f87c2acc77a0fff9"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-013",
+      "task_content_hash": "c52802d442d3005812b1134ac3d842734758f08bf8ff939da98f63f8b0f5be68"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-014",
+      "task_content_hash": "0159f74b1bd807f935a5d9e68855d4e8f902c436d5ae4261f6e2c7d166e1a418"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-016",
+      "task_content_hash": "0abaa6c5782c0980dcd314e709677c38fb7abd40f15f806068cd2b449eadb1a7"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-019",
+      "task_content_hash": "067911d4256783e1ccbd7ab589249a5fb749d5e6f6cb12771bc0251b7d76405a"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-025",
+      "task_content_hash": "28b6444e1a849793e41a9f7e4d93b054692ec5183d6b875df8fd76ca41276915"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-029",
+      "task_content_hash": "5ccf0250b2a40f73e08aad334a63a4c2378b62d4bd755945b058c7088db06b22"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-040",
+      "task_content_hash": "1d29537843b927f48e5a62ce2d5f3162c237eacb90aa5d213ef7741c973f52cc"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-042",
+      "task_content_hash": "02751a3106c43fd68651dbedc3835b2a845bfa6b9c33a1b45b7e1175e67b308c"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-044",
+      "task_content_hash": "27cebe2f5f7dcc0d663ffe58e5e457db4d3829914fb54a85670c659f9836eabe"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-060",
+      "task_content_hash": "bba5d9a008c37bd6916e57de969e1bfafa059229dc275929b06b8463655a8f51"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-069",
+      "task_content_hash": "7978af2d44b997ad1cbbf832a151b3f95e1830d98c8658e50e526dbf51b977f9"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-071",
+      "task_content_hash": "314ce1b839ce6e2a30a0ee840673b3fecca39f7665ddf87a2e2f744721f8c2bb"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-083",
+      "task_content_hash": "350a26e6aa12d71aed8d1c2d1b517fa8aee910cd87374412b55270afcb98ec8f"
+    },
+    {
+      "source_benchmark": "pompeii16-20261003-v2",
+      "collection_id": "pompeii",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_id": "pompeii-adjacency-rp-086",
+      "task_content_hash": "68e7076930eacd8d82e9707b17a4032f1e05f9887743b0fa19a87bb30b2e6cab"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "freecad-spring-clip",
+      "task_content_hash": "41650c4476f352c75e11f17a759902c8ffeb86a1469312b3e340b763db84ff2f"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "hof-topology-interpenetration",
+      "task_content_hash": "e7a03909a2685b5eee4579b5d083bfd2309d1b2d4bc11225138e8fe51689d513"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "interleaved-vigenere",
+      "task_content_hash": "531f29f1182c68e29c120e8059d5d9174a287a7431df683fdbecb894692285ef"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "sound-change-cascade",
+      "task_content_hash": "0dacd25d881a3ac8e0f89f99a812b6fc39cbc93694aacda20dd56c9eca7b5128"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "mvcc-lsm-compaction",
+      "task_content_hash": "212700691340b57961b8a09f12d4cf0439676a593527c000e6d9882da7f16d9e"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "cad-model",
+      "task_content_hash": "5fb17bc9810c01ddec8b5e52fa48c18eb4b09b5c35e11ad6bd5554a8007e1039"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "wal-recovery-ordering",
+      "task_content_hash": "7ebf24dcde274d3359ca74a398cd9547ed1adc14cf7dd1bcd8a516650490ff43"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "satb-audio-transcription",
+      "task_content_hash": "0e6a47693e5d551f21096d52787e244a562d2cc0cf393a6238a05fef3ed269ea"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "sglang-qwen-burst",
+      "task_content_hash": "2feec3fdb73449fc99682bafd757c64c0afdd112a61d8a7be2ce1e0fe474a222"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "risk-scorer-replay",
+      "task_content_hash": "ca3feabd1ec080cda62871064cb2082e6d9e5a8bdadc092d1bf09951ada60ed2"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "embedding-drift-monitor",
+      "task_content_hash": "ce5f9bf84e6ceef5976456d492b7f43c182304425d66ccfb8f883a5fa6bf8573"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "atrx-vep-crispr",
+      "task_content_hash": "53e7c9d486cbaa83e8f9bed2b993e064711522fedf1d359466bba11796a9da46"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "react-lead-form",
+      "task_content_hash": "ba0cc14aa877aa122939741f5c96f4f6f4d7115b7e72c4539864212c72b457a0"
+    },
+    {
+      "source_benchmark": "tb4-selected14-20261004-config64",
+      "collection_id": "tb4",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_id": "batched-eval-parity",
+      "task_content_hash": "154dcb412305228caf54b2c48afd7ba35752ac1e395933109ebee721f4a9f3cf"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "eeg-erp-recovery",
+      "task_content_hash": "ca7e820619788fc4f7fa527ef2c232a56d8fead4defc3a11f49f459ee5ec89d1"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "ode-law-discovery",
+      "task_content_hash": "88f2e63af47b65508dbfb3c35e955bb9d8f71695ab0a69491f2c6e7a0576974b"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "koopman-mfg-id",
+      "task_content_hash": "c642a0e4f777833635b7ee4fa71c87efbb152bb41be1415e80435555cc4a0efb"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "duan-thesis",
+      "task_content_hash": "27f527cc66ea0d307f7d6821a9ba70f57055cb3d2a5f245a4b0f0f1d68eec46b"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "neo-orbit-determination",
+      "task_content_hash": "0c956f98adf799e93baf87ae15afaac605c33804a26e487674691142e5703c3e"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "mendota-ice-phenology",
+      "task_content_hash": "618fb0102aece6fc1d4f6b2bf8bceced62ac10cdd3df981345bdd40e77e79890"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "cilia-segmentation",
+      "task_content_hash": "a8a0ca207250c1ad47acb0fda831ae4535fbae7a292de65590d2097304b6a1cd"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "ont-tn-qc",
+      "task_content_hash": "84302f6c50e4fbd9c093c43cb15aa6a138e0a4634b82e6ca423fa3ab84af89b6"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "xrd-multiphase-qpa",
+      "task_content_hash": "04df66e5b67612c1cd0d3cb9f80ec021eb9bacbe1e5e58ba78d51eda3077079b"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "linked-cell-suppression",
+      "task_content_hash": "418b79b8c2a248cd698489a153909bc920f258c252e4a9842795d05c0916fb95"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "genomic-model-ranking",
+      "task_content_hash": "95e905029879f8bcde32f2f6caf86737cd0b5ca8adefc9fdad2d3a2b58072dc2"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "small-area-equivalence",
+      "task_content_hash": "654eb73a9ef378aef6552dcc1f014cde41514972628ede1eaaa9f912d81c4c6b"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "diag-chipseq",
+      "task_content_hash": "ca1a9951c08c0735581d1dd0ce3031c8617a5dc4fbb16ff7b719c1f7b4d99f10"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "spatial-cell-annotation",
+      "task_content_hash": "5149d85d7c5e9b2fbad334f949fdeb767018766a1f80736f51c725a0e3beba55"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "ankle-mri-findings",
+      "task_content_hash": "14c850f664a11f9e794dfb8eb0c8b7789e5282a80528c88ed6b59f8dcb681a29"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "nanoindentation-property-extraction",
+      "task_content_hash": "e9d35e72c1b87190adbbfc4ddc8886ba0c31bd200426d94fe262e3c032cc87d5"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "tumor-immune-interface",
+      "task_content_hash": "1dfb5717f204c4f36aad4e4596ec6cce5f524e720e4b7d1e5c9ff0160e9ef3c0"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "supraglacial-lake-classification",
+      "task_content_hash": "49df97d46c8115b6cd96f12c48939b02f2a0928214f32a2497057587bedabf16"
+    },
+    {
+      "source_benchmark": "science-selected19-20261004-config64",
+      "collection_id": "science",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_id": "guided-wave-localization",
+      "task_content_hash": "d312aaad621cdfb65b1eac094cb098dcce6f6582f9e06a855c94e6e89a2284bf"
+    }
+  ],
+  "source_counts": {
+    "deepswe": 15,
+    "pompeii": 16,
+    "tb4": 14,
+    "science": 19
+  },
+  "collections": [
+    {
+      "collection_id": "deepswe",
+      "benchmark": "deepswe15-20261003-v4",
+      "selection_version": "deepswe-refined-20261003-v4-15",
+      "task_count": 15,
+      "archive_root_prefix": "",
+      "public_bundle": {
+        "url": "/api/v2/library-bundles/deepswe15-20261003-v4",
+        "sha256": "17a3bad22b6664c1d6a78516bd60b6ef4a3eaab10b2aca25056fa85a7647be82",
+        "bytes": 23936,
+        "format": "tar.gz"
+      }
+    },
+    {
+      "collection_id": "pompeii",
+      "benchmark": "pompeii16-20261003-v2",
+      "selection_version": "pompeii-compact16-v2-20261003",
+      "task_count": 16,
+      "archive_root_prefix": "",
+      "public_bundle": {
+        "url": "/api/v2/library-bundles/pompeii16-20261003-v2",
+        "sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+        "bytes": 11405554,
+        "format": "tar.gz"
+      }
+    },
+    {
+      "collection_id": "tb4",
+      "benchmark": "tb4-selected14-20261004-config64",
+      "selection_version": "tb4-public-history-owner021-v2-agent120-20261004-deployment007-exclude4-config64",
+      "task_count": 14,
+      "archive_root_prefix": "server-tasks",
+      "public_bundle": {
+        "url": "/api/v2/library-bundles/tb4-selected14-20261004-config64",
+        "sha256": "f100119a0bb2e101e6ed31071e4c7f3c1ddc6be72848628f6ce0c19d0061c59c",
+        "bytes": 172654834,
+        "format": "tar.gz"
+      }
+    },
+    {
+      "collection_id": "science",
+      "benchmark": "science-selected19-20261004-config64",
+      "selection_version": "science-estimated-agent120-20261004-v2-deployment007-exclude4-config64",
+      "task_count": 19,
+      "archive_root_prefix": "server-tasks",
+      "public_bundle": {
+        "url": "/api/v2/library-bundles/science-selected19-20261004-config64",
+        "sha256": "cf480c862fe5eb697efbe746ab7c104969046775c99de7ce58c879273f3b15d7",
+        "bytes": 246528975,
+        "format": "tar.gz"
+      }
+    }
+  ],
+  "provenance": {
+    "kind": "007 actual installed024 configuration, parent explicitly adopted for current64",
+    "catalog_sha256_meaning": "actual catalog-config64.json byte SHA256; not a019 semantic manifest hash",
+    "interface_sha256_meaning": "actual minimum64 consumer JSON byte SHA256; not a fabricated019 interface hash",
+    "catalog_file_sha256": "f85c1d7f227e58a5d92576b947045e23865f4b277e439e7b6ede5163c983ae33",
+    "catalog_canonical_configuration_sha256": "f99f07f0bb55e76e7d9b59d14ff371d98d35b678e7eee56518ff6a46635cd237",
+    "runtime_public_configuration_sha256": "70d12896ea2af1039b82ca732e1acef7417a0fe753769b35c66e21e186a8c39e",
+    "registry_sha256": "b21ba920a7098c5d8fde8c67c269b85555d39081025b24a6855e84b76962f167",
+    "actual_installed_runtime_sha256": "14eedc22903a29207b909b01cbb693d8528a7b15c203bd15323b91d79c763e6e",
+    "claims_enabled_at_capture": false,
+    "formal_production_API": false,
+    "new019_package": false
+  }
+}

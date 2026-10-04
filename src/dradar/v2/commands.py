@@ -57,8 +57,8 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
     if args.command == "schema":
         from .skill_install import packaged_skill
         from .host_contract import AUTH_RUNTIME, CAPABILITY, CONFIG_VERSION, VERSION, BENCHMARK_POLICIES, EFFORTS, WIRE_CAPABILITIES, SERVER_CATALOG_VERSION, MIXED_SCHEMA, MIXED_CONFIG_VERSION, MIXED_WIRE_CAPABILITIES
-        from .mixed_pool import POOL, MEMBERS_SHA256
-        emit({**SCHEMA,"local_commands":["schema","install-skill","host-approval"],"skill_sha256":hashlib.sha256(packaged_skill()).hexdigest(),"host_runtime":{"version":VERSION,"auth_runtime":AUTH_RUNTIME,"capability":CAPABILITY,"wire_capabilities":list(WIRE_CAPABILITIES),"server_catalog_version":SERVER_CATALOG_VERSION,"runtime_config_version":CONFIG_VERSION,"model":"gpt-6.1-sol","supported_efforts":list(EFFORTS),"live_validated_efforts":["low"],"max_parallel":2,"versioned_benchmark_policy_ids":BENCHMARK_POLICIES,"explicit_binding_required":True,"mixed_pool":{"benchmark":POOL,"members_sha256":MEMBERS_SHA256,"task_count":68,"binding_schema":MIXED_SCHEMA,"runtime_config_version":MIXED_CONFIG_VERSION,"wire_capabilities":list(MIXED_WIRE_CAPABILITIES),"live_validated":False}}})
+        from .mixed_pool import POOL, MEMBERS_SHA256, is_historical_pool
+        emit({**SCHEMA,"local_commands":["schema","install-skill","host-approval"],"skill_sha256":hashlib.sha256(packaged_skill()).hexdigest(),"host_runtime":{"version":VERSION,"auth_runtime":AUTH_RUNTIME,"capability":CAPABILITY,"wire_capabilities":list(WIRE_CAPABILITIES),"server_catalog_version":SERVER_CATALOG_VERSION,"runtime_config_version":CONFIG_VERSION,"model":"gpt-6.1-sol","supported_efforts":list(EFFORTS),"live_validated_efforts":["low"],"max_parallel":2,"versioned_benchmark_policy_ids":BENCHMARK_POLICIES,"explicit_binding_required":True,"mixed_pool":{"benchmark":POOL,"members_sha256":MEMBERS_SHA256,"task_count":64,"binding_schema":MIXED_SCHEMA,"runtime_config_version":MIXED_CONFIG_VERSION,"wire_capabilities":list(MIXED_WIRE_CAPABILITIES),"live_validated":False}}})
         return 0
     if args.command == "install-skill":
         from .skill_install import install_skill
@@ -130,10 +130,13 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
                     raise RuntimeUnavailable('Existing approved Harness-model/effort and total/concurrency plan is required from the launcher or saved configuration; user claim chooses only the library, never a cell. No guessed model/effort/budget default.')
                 emit({"status": "selection_required", "questions": missing})
                 return 2
+            from .mixed_pool import is_historical_pool
+            if args.command=='run' and is_historical_pool(chosen.get('benchmark'),json.loads(journal.value('mixed_pool_scope') or 'null')):
+                raise RuntimeUnavailable('旧68题范围已停止新执行；保留原STATE用stop/progress/upload-only，按当前64题新建运行')
             selected = resolve(chosen, catalog)
             from .mixed_pool import POOL
             if args.command == 'run' and selected.benchmark == POOL and (not host or binding['schema'] != MIXED_SCHEMA):
-                raise RuntimeUnavailable('Final68 requires explicit complete four-source mixed host binding; no legacy fallback')
+                raise RuntimeUnavailable('Current64 requires explicit complete four-source mixed host binding; no legacy fallback')
             if host:
                 from .host_contract import require_server_library
                 require_server_library(bootstrap, selected.benchmark, selected.model, selected.effort)

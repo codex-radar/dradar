@@ -208,7 +208,7 @@ def test_declared_schema_exposes_new_capability_without_changing_legacy(case,cap
     assert value['host_runtime']['capability']==CAPABILITY
     assert value['host_runtime']['version']=='0.160.0'
     assert value['host_runtime']['max_parallel']==2
-    assert __version__=='0.5.292'
+    assert __version__=='0.5.294'
     from dradar.gpt6 import GPT61_CODEX_VERSION
     assert GPT61_CODEX_VERSION=='0.159.2'
 
@@ -324,6 +324,7 @@ def test_server024_pin_rejects_old_pilot_and_unknown_versions():
          'model_effort_selections':[{'model':MODEL,'effort':e}for e in EFFORTS]}
     for version in ['dradar-four-library-server018-20261004','unbound-future-catalog']:
         boot={'library_catalog':{'catalog_version':version,'collections':[row]}}
-        with pytest.raises(ValueError,match='Server024 library catalog binding'):
+        with pytest.raises(ValueError,match='current64 library catalog binding'):
             require_server_library(boot,row['benchmark'],MODEL,'low')
-    assert SERVER_CATALOG_VERSION=='dradar-four-library-server024-20261004-final68'
+    from dradar.v2.mixed_pool import CATALOG_VERSION
+    assert SERVER_CATALOG_VERSION==CATALOG_VERSION and SERVER_CATALOG_VERSION!='dradar-four-library-server024-20261004-final68'

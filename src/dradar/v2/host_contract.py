@@ -20,7 +20,7 @@ EFFORTS = GPT6_EFFORTS[MODEL]
 PROVIDER = 'openai'
 BILLING_MODE = 'subscription'
 MODEL_CAPABILITY = 'codex-gpt6-1-sol-v1'
-SERVER_CATALOG_VERSION = 'dradar-four-library-server024-20261004-final68'
+from .mixed_pool import CATALOG_VERSION as SERVER_CATALOG_VERSION
 SERVER_CONTRIBUTION_POLICY = {
     'missing_reward_basis': 'defer',
     'points_until_basis_resolved': None,
@@ -30,7 +30,7 @@ SERVER_CONTRIBUTION_POLICY = {
 WIRE_CAPABILITIES = ('on-demand-v2', MODEL_CAPABILITY, AUTH_RUNTIME)
 MIXED_WIRE_CAPABILITIES = WIRE_CAPABILITIES + ('on-demand-v2-mixed-pool-v1',)
 MIXED_SCHEMA = 'dradar.codex_host_binding.v2'
-MIXED_CONFIG_VERSION = 'host-remote-0160-final68-v1'
+MIXED_CONFIG_VERSION = 'host-remote-0160-final64-v1'
 SCHEMA = 'dradar.codex_host_binding.v1'
 CONFIG_VERSION = 'host-remote-0160-v1'
 BENCHMARK_POLICIES = {
@@ -41,6 +41,11 @@ BENCHMARK_POLICIES = {
     'tb4-selected17-20261004-v2': 'tb4',
     'science-selected20-20261004-v2': 'science',
 }
+
+from .mixed_pool import SOURCES as _CURRENT_SOURCES
+for _source in _CURRENT_SOURCES.values():
+    _policy={'deepswe':'deep-swe','pompeii':'pompeii-adjacency','tb4':'tb4','science':'science'}[_source['collection_id']]
+    BENCHMARK_POLICIES[_source['benchmark']]=_policy
 
 def digest(value):
     return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value) is not None
@@ -57,13 +62,13 @@ def policy_id(benchmark):
     return BENCHMARK_POLICIES.get(benchmark, benchmark)
 
 def require_server_library(bootstrap, benchmark, model, effort):
-    """Exact Server024 contract; paused metadata cannot authorize work."""
+    """Exact current64 contract; paused metadata cannot authorize work."""
     from .mixed_pool import POOL, selection_scope
     if benchmark == POOL:
         return selection_scope(bootstrap, model, effort)
     library = bootstrap.get('library_catalog')
     if not isinstance(library, dict) or library.get('catalog_version') != SERVER_CATALOG_VERSION:
-        raise ValueError('Server024 library catalog binding required; no guessed capability')
+        raise ValueError('current64 library catalog binding required; no guessed capability')
     policy = bootstrap.get('contribution_policy')
     if not isinstance(policy, dict) or any(
         key not in policy or policy[key] != value
@@ -133,7 +138,7 @@ def load_binding(path, expected_sha256):
         if mixed:
             from .mixed_pool import MEMBER_HASHES, SOURCES
             if MEMBER_HASHES.get((t['benchmark'],t['task_id'])) != t['task_content_hash'] or t['benchmark'] not in SOURCES:
-                raise ValueError('runtime task outside fixed final68 membership')
+                raise ValueError('runtime task outside fixed final64 membership')
             absolute(t['source_root'])
         if t['benchmark'] not in BENCHMARK_POLICIES or t['policy_id']!=policy_id(t['benchmark']):
             raise ValueError('unknown versioned benchmark or policy mismatch')
@@ -167,7 +172,7 @@ def load_binding(path, expected_sha256):
             raise ValueError('bounded output allowlist required')
     if mixed:
         from .mixed_pool import MEMBER_HASHES, SOURCES
-        if seen != set(MEMBER_HASHES):raise ValueError('complete exact68 runtime binding required')
+        if seen != set(MEMBER_HASHES):raise ValueError('complete exact64 runtime binding required')
         roots = {b:{t['source_root'] for t in c['tasks'] if t['benchmark']==b} for b in SOURCES}
         if any(len(r)!=1 for r in roots.values()) or len({next(iter(r)) for r in roots.values()})!=4:
             raise ValueError('four distinct fixed source roots required')

@@ -65,6 +65,8 @@ class Controller:
             if type(configuration[key]) is not int or configuration[key] < 1:
                 raise ValueError("positive integer run limits required")
         self.configuration = dict(configuration)
+        from .mixed_pool import is_historical_pool
+        self.historical_mixed_scope = is_historical_pool(configuration['benchmark'],json.loads(self.journal.value('mixed_pool_scope') or 'null'))
         self.journal.bind("configuration", json.dumps(configuration, sort_keys=True, separators=(",", ":")))
         installation = installation or Journal(self.journal.root.parent / "installation")
         current_device = installation.identity("device")
@@ -72,7 +74,7 @@ class Controller:
         if saved_device is None:
             self.journal.bind("device", current_device)
         self.device_id = self.journal.value("device")
-        self.launch_allowed = self.device_id == current_device
+        self.launch_allowed = self.device_id == current_device and not self.historical_mixed_scope
         self.run_id = self.journal.identity("run")
         self.pool = ThreadPoolExecutor(max_workers=configuration["concurrency"], thread_name_prefix="dradar-v2")
         self.futures: dict[str, Future] = {}
@@ -107,6 +109,8 @@ class Controller:
         from ..harness_policy import reject_retired_combination
         reject_retired_combination(self.configuration['agent'],self.configuration['model'])
         self._require_lock()
+        if self.historical_mixed_scope:
+            raise ExecutionBlocked('historical68 permits only stop/progress/upload-only; no new claim/start/execute')
         if not self.launch_allowed:
             raise ExecutionBlocked("copied journal permits upload-only until original controller exit is confirmed")
         boot = self.client.bootstrap()
@@ -139,9 +143,9 @@ class Controller:
             if any(a['task'][k] != self.configuration[k] for k in ('model','effort')):
                 raise ProtocolError('assignment changed requested model/effort')
             from .mixed_pool import POOL, validate_assignment
-            if self.configuration['benchmark'] == POOL:
+            if self.configuration['benchmark'] == POOL or self.historical_mixed_scope:
                 scope = json.loads(self.journal.value('mixed_pool_scope') or 'null')
-                validate_assignment(scope,a['task'])
+                validate_assignment(scope,a['task'],allow_historical=self.historical_mixed_scope)
             elif a['task']['benchmark'] != self.configuration['benchmark']:
                 raise ProtocolError('assignment changed requested source benchmark')
             task_id = a['task']['task_id']
@@ -279,6 +283,8 @@ class Controller:
             yield
 
     def _work(self, initial: dict):
+        if self.historical_mixed_scope:
+            raise ExecutionBlocked('historical68 execution stopped; retain original recovery evidence')
         from ..harness_policy import reject_retired_combination
         reject_retired_combination(self.configuration['agent'], self.configuration['model'])
         initial = self._assignment(initial,slot_id=initial['slot_id'])
@@ -392,6 +398,8 @@ class Controller:
 
     def tick(self, *, now: float | None = None) -> dict:
         self._require_lock()
+        if self.historical_mixed_scope:
+            raise ExecutionBlocked('historical68 is recovery-only; no new scheduling')
         if not self.launch_allowed:
             raise ExecutionBlocked("copied journal is upload-only")
         now = time.monotonic() if now is None else now
