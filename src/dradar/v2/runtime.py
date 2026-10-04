@@ -37,6 +37,14 @@ def normalize_assignment(a: dict) -> dict:
             "effort": task["effort"], "task_content_hash": task["task_content_hash"],
             "deep_swe_commit": task.get("task_commit")}
 
+class TaskNotReady(RuntimeUnavailable):
+    """Selected task fails before any controller/paid execution is created."""
+    def __init__(self,code):
+        if code not in {'runtime_binding_missing','task_inputs_unavailable','collector_unavailable','image_unavailable'}:
+            raise ValueError('fixed task readiness reason required')
+        self.code=code
+        super().__init__('selected task not ready: '+code)
+
 class CodexRuntime:
     def __init__(self, journal: Journal, tasks_root: Path, *, run_trial=None, managed_auth_config: Path | None = None, build_cache_mode="shared", public_image_options=None):
         self.journal, self.tasks_root = journal, Path(tasks_root)

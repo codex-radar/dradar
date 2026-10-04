@@ -51,6 +51,10 @@ def _selection_scope(bootstrap, model, effort):
         raise ValueError('exact mixed pool membership/capability binding required')
     if pool.get('production_claim_enabled') is not True:
         raise ValueError('Server final64 pool remains pending; no new claim')
+    from .host_contract import PER_TASK_CAPABILITY, PER_TASK_POLICY
+    per_task=PER_TASK_CAPABILITY in bootstrap.get('capabilities',[])
+    if per_task and bootstrap.get('runtime_readiness_policy')!=PER_TASK_POLICY:
+        raise ValueError('exact per-assignment runtime readiness policy required')
     rows = library.get('collections')
     if not isinstance(rows,list) or len(rows) != 4 or {x.get('benchmark') for x in rows} != set(SOURCES):
         raise ValueError('complete four-source library binding required')
@@ -60,7 +64,7 @@ def _selection_scope(bootstrap, model, effort):
             raise ValueError('source identity/count mismatch')
         if set(row.get('required_client_capabilities', [])) != {MODEL_CAPABILITY, AUTH_RUNTIME}:
             raise ValueError('source host capability mismatch')
-        if row.get('production_claim_enabled') is not True or row.get('missing_bindings'):
+        if not per_task and (row.get('production_claim_enabled') is not True or row.get('missing_bindings')):
             raise ValueError('Server source remains pending; no partial pool')
         if {'model': model,'effort': effort} not in row.get('model_effort_selections', []):
             raise ValueError('source model/effort unavailable')
@@ -158,3 +162,22 @@ def _validate_public_roots(binding):
             if not p.is_file() or p.resolve(strict=True)!=p:
                 raise ValueError('complete64 regular public task inputs required before new work')
     return roots
+
+
+def validate_selected_public_root(task):
+    """Only the selected task's archive marker and inputs; full bytes pin at prepare."""
+    from ..taskpacks import MARKER
+    root,base=public_task_root(task)
+    marker=base/MARKER
+    if marker.is_symlink() or not marker.is_file() or marker.stat().st_size>1048576:
+        raise ValueError('selected source regular archive marker required')
+    value=json.loads(marker.read_text())
+    benchmark=task['benchmark']
+    if not isinstance(value,dict) or value.get('benchmark_id')!=benchmark or value.get('sha256')!=SOURCES[benchmark]['public_bundle']['sha256']:
+        raise ValueError('selected source archive marker mismatch')
+    directory=root/task['task_id']
+    if directory.is_symlink() or not directory.is_dir():raise ValueError('selected public task directory required')
+    for name in ('instruction.md','task.toml'):
+        p=directory/name
+        if not p.is_file() or p.resolve(strict=True)!=p:raise ValueError('selected regular public inputs required')
+    return root,base

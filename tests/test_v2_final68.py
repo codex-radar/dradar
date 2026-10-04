@@ -131,8 +131,8 @@ def test_outside_scope_or_changed_selection_cannot_launch(tmp_path,fault):
         assert not c.futures and not j.requests()
     finally:c.pool.shutdown()
 
-@pytest.mark.parametrize('fault',[None,'partial','duplicate','root_collapse','hash','schema','not_object'])
-def test_mixed_binding_requires_exact64_and_four_roots(tmp_path,fault):
+@pytest.mark.parametrize('fault',[None,'partial','duplicate','hash','schema','not_object'])
+def test_mixed_binding_requires_exact_current_identities_with_deferred_resources(tmp_path,fault):
     b=synthetic_binding(tmp_path)
     if fault=='partial':b['tasks'].pop()
     elif fault=='duplicate':b['tasks'][-1]=deepcopy(b['tasks'][0])
@@ -142,7 +142,7 @@ def test_mixed_binding_requires_exact64_and_four_roots(tmp_path,fault):
     elif fault=='schema':b['runtime_config_version']='host-remote-0160-v1'
     elif fault=='not_object':b=[]
     p=tmp_path/'binding.json';p.write_text(json.dumps(b));sha=hashlib.sha256(p.read_bytes()).hexdigest()
-    if fault is None:assert load_binding(p,sha)==b
+    if fault in [None,'partial']:assert load_binding(p,sha)==b
     else:
         with pytest.raises(ValueError):load_binding(p,sha)
 
@@ -216,21 +216,21 @@ def test_actual_client_initialize_pins_pool_before_create_without_claiming(tmp_p
         assert len(j.requests())==1 and not c.futures
     finally:client.close()
 
-def test_formal_entry_missing_roots_blocks_before_cap_offer_or_bootstrap(tmp_path,monkeypatch,capsys):
+def test_formal_entry_missing_unrelated_roots_reaches_bootstrap_but_keeps_paused_gate(tmp_path,monkeypatch,capsys):
     import dradar.v2.commands as command
     binding=tmp_path/'binding.json';binding.write_text(json.dumps(synthetic_binding(tmp_path)))
-    digest=hashlib.sha256(binding.read_bytes()).hexdigest();closed=[]
+    digest=hashlib.sha256(binding.read_bytes()).hexdigest();closed=[];offered=[];boot=ready_bootstrap();boot['library_catalog']['unified_pool']['production_claim_enabled']=False
     monkeypatch.setattr(command,'runtime_config',lambda:{'server':'http://localhost:9','token':'synthetic'})
     def client_factory(server,token,journal):
         return SimpleNamespace(close=lambda:closed.append(True),
-            offer_bound_host_runtime=lambda **kw:pytest.fail('unverified mixed capability offered'),
-            bootstrap=lambda:pytest.fail('bootstrap reached'))
+            offer_bound_host_runtime=lambda **kw:offered.append(kw),
+            bootstrap=lambda:boot)
     assert command.main(['run','--state-root',str(tmp_path/'state'),'--tasks-root',str(tmp_path/'unused'),
         '--host-runtime-binding',str(binding),'--host-runtime-sha256',digest,
         '--benchmark',POOL,'--model',MODEL,'--effort','low','--total-count','1','--concurrency','1'],
         client_factory=client_factory)==3
     assert json.loads(capsys.readouterr().out)['status']=='blocked'
-    assert closed==[True] and not Journal(tmp_path/'state').requests()
+    assert closed==[True] and offered==[{'mixed':True,'per_task':True}] and not Journal(tmp_path/'state').requests()
 
 @pytest.mark.parametrize('effort',EFFORTS)
 def test_exact_gpt55_retirement_keeps_adjacent_models_and_other_harnesses(effort):

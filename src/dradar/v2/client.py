@@ -73,9 +73,10 @@ class Client:
     def close(self) -> None:
         self.http.close()
 
-    def offer_bound_host_runtime(self, *, mixed=False):
-        from .host_contract import WIRE_CAPABILITIES, MIXED_WIRE_CAPABILITIES
-        self.http.headers['X-DRadar-Capabilities'] = ','.join(MIXED_WIRE_CAPABILITIES if mixed else WIRE_CAPABILITIES)
+    def offer_bound_host_runtime(self, *, mixed=False, per_task=False):
+        from .host_contract import WIRE_CAPABILITIES, MIXED_WIRE_CAPABILITIES, PER_TASK_WIRE_CAPABILITIES
+        if per_task and not mixed:raise ValueError('per-task readiness requires mixed contract')
+        self.http.headers['X-DRadar-Capabilities'] = ','.join(PER_TASK_WIRE_CAPABILITIES if per_task else MIXED_WIRE_CAPABILITIES if mixed else WIRE_CAPABILITIES)
 
     def _response(self, response: httpx.Response) -> dict:
         if response.status_code == 429 or response.status_code >= 500:
