@@ -37,7 +37,7 @@ jobs:
           uv venv .release-venv --python 3.13
           uv pip install --python .release-venv/bin/python --require-hashes -r release/ota/requirements.lock
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "${RUNNER_TEMP}/artifact.json"
-          python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); assert not d["expired"]; assert d["name"] == "dradar-cli-0.5.290-d0a32f2110322fad"; assert d["workflow_run"]["head_sha"] == os.environ["GITHUB_SHA"]; assert d["workflow_run"]["head_branch"] == "main"' "${RUNNER_TEMP}/artifact.json"
+          python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); assert not d["expired"]; assert d["name"] == "dradar-cli-0.5.290-7e237a52c13581ee"; assert d["workflow_run"]["head_sha"] == os.environ["GITHUB_SHA"]; assert d["workflow_run"]["head_branch"] == "main"' "${RUNNER_TEMP}/artifact.json"
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${RUNNER_TEMP}/artifact.zip"
           mkdir fixed-wheel
           python3 - <<'PY'
@@ -49,7 +49,7 @@ jobs:
               item = files[0]
               assert '/' not in item.filename and '\\' not in item.filename
               assert item.filename.startswith('dradar-') and item.filename.endswith('.whl')
-              assert item.file_size == 901818
+              assert item.file_size == 903099
               Path('fixed-wheel', item.filename).write_bytes(archive.read(item))
           PY
       - name: Verify existing immutable bucket policy

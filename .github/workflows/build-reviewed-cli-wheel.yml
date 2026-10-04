@@ -30,7 +30,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dradar-cli-0.5.290-d0a32f2110322fad
+          name: dradar-cli-0.5.290-7e237a52c13581ee
           path: ${{ env.WHEEL_FILE }}
           if-no-files-found: error
           retention-days: 7

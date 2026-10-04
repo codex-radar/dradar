@@ -280,7 +280,9 @@ def test_server020_explicit_five_effort_mapping_and_pending_gate():
     row={'benchmark':'science-sr-pilot-20261003','required_client_capabilities':[MODEL_CAPABILITY,AUTH_RUNTIME],
          'production_claim_enabled':True,'missing_bindings':[],
          'model_effort_selections':[{'model':MODEL,'effort':e}for e in EFFORTS]}
+    from dradar.v2.host_contract import SERVER_CONTRIBUTION_POLICY
     boot={'library_catalog':{'catalog_version':SERVER_CATALOG_VERSION,'collections':[row]}}
+    boot['contribution_policy']=SERVER_CONTRIBUTION_POLICY.copy()
     for e in EFFORTS:assert require_server_library(boot,row['benchmark'],MODEL,e)==row
     row['production_claim_enabled']=False
     with pytest.raises(ValueError,match='pending'):require_server_library(boot,row['benchmark'],MODEL,'low')

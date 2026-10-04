@@ -21,6 +21,12 @@ PROVIDER = 'openai'
 BILLING_MODE = 'subscription'
 MODEL_CAPABILITY = 'codex-gpt6-1-sol-v1'
 SERVER_CATALOG_VERSION = 'dradar-four-library-server020-20261004'
+SERVER_CONTRIBUTION_POLICY = {
+    'missing_reward_basis': 'defer',
+    'points_until_basis_resolved': None,
+    'deferred_state': 'deferred_reward_missing_basis',
+    'known_basis_policy': 'existing_codex_frozen_reward',
+}
 WIRE_CAPABILITIES = ('on-demand-v2', MODEL_CAPABILITY, AUTH_RUNTIME)
 SCHEMA = 'dradar.codex_host_binding.v1'
 CONFIG_VERSION = 'host-remote-0160-v1'
@@ -46,10 +52,16 @@ def policy_id(benchmark):
     return BENCHMARK_POLICIES.get(benchmark, benchmark)
 
 def require_server_library(bootstrap, benchmark, model, effort):
-    """Fixed Server020 public contract; paused metadata cannot authorize work."""
+    """Server021/022 policy with unchanged catalog020; paused metadata cannot authorize work."""
     library = bootstrap.get('library_catalog')
     if not isinstance(library, dict) or library.get('catalog_version') != SERVER_CATALOG_VERSION:
         raise ValueError('Server020 library catalog binding required; no guessed capability')
+    policy = bootstrap.get('contribution_policy')
+    if not isinstance(policy, dict) or any(
+        key not in policy or policy[key] != value
+        for key, value in SERVER_CONTRIBUTION_POLICY.items()
+    ):
+        raise ValueError('Server021 deferred contribution policy required; upgrade the Server before new claims')
     rows = [c for c in library.get('collections', []) if c.get('benchmark') == benchmark]
     if len(rows) != 1:
         raise ValueError('exact versioned Server library required')
