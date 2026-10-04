@@ -1,0 +1,207 @@
+{
+  "contract_version": "0.2",
+  "synthetic_only": true,
+  "ids": {
+    "create_request": "00000000000040008000000000000001",
+    "run": "00000000000040008000000000000002",
+    "device": "00000000000040008000000000000003",
+    "claim_request": "00000000000040008000000000000004",
+    "start_request": "00000000000040008000000000000005",
+    "execution": "00000000000040008000000000000006",
+    "assignment": "00000000000040008000000000000007",
+    "lease": "00000000000040008000000000000008",
+    "result_request": "00000000000040008000000000000009",
+    "stop_request": "0000000000004000800000000000000a",
+    "heartbeat_request": "0000000000004000800000000000000b",
+    "submission": "0000000000004000800000000000000c"
+  },
+  "requests": {
+    "create_run": {
+      "request_id": "00000000000040008000000000000001",
+      "run_id": "00000000000040008000000000000002",
+      "device_id": "00000000000040008000000000000003",
+      "benchmark": "fixture-benchmark",
+      "model": "fixture-model",
+      "effort": "high",
+      "agent": "codex",
+      "total_count": 4,
+      "concurrency": 2
+    },
+    "claim": {
+      "request_id": "00000000000040008000000000000004",
+      "device_id": "00000000000040008000000000000003",
+      "slot_id": 0
+    },
+    "start": {
+      "device_id": "00000000000040008000000000000003",
+      "lease_id": "00000000000040008000000000000008",
+      "owner_epoch": 1,
+      "request_id": "00000000000040008000000000000005",
+      "execution_id": "00000000000040008000000000000006"
+    },
+    "heartbeat": {
+      "device_id": "00000000000040008000000000000003",
+      "lease_id": "00000000000040008000000000000008",
+      "owner_epoch": 1,
+      "request_id": "0000000000004000800000000000000b",
+      "execution_id": "00000000000040008000000000000006",
+      "phase": "running",
+      "progress": {
+        "elapsed_ms": 1000,
+        "tokens": {
+          "input": null,
+          "output": null,
+          "total": null,
+          "source": null,
+          "missing_reason": "provider has not reported usage"
+        }
+      }
+    },
+    "result_metadata": {
+      "device_id": "00000000000040008000000000000003",
+      "lease_id": "00000000000040008000000000000008",
+      "owner_epoch": 1,
+      "request_id": "00000000000040008000000000000009",
+      "result_sha256": "cbb61804da3db94cfe15bacfc35f12b28efb1d58798b4fd38e65ab5c183ba960",
+      "execution_id": "00000000000040008000000000000006",
+      "outcome": "completed",
+      "exit_confirmed": true,
+      "completed_at": "2026-10-02T17:00:30Z",
+      "elapsed_ms": 30000,
+      "tokens": {
+        "input": null,
+        "output": null,
+        "total": null,
+        "source": null,
+        "missing_reason": "fixture runner does not report usage"
+      },
+      "failure": null,
+      "artifacts": [
+        {
+          "name": "patch",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0,
+          "content_type": "text/x-diff"
+        }
+      ]
+    },
+    "stop": {
+      "request_id": "0000000000004000800000000000000a",
+      "device_id": "00000000000040008000000000000003",
+      "reason": "user_stop"
+    }
+  },
+  "result_file_parts": {
+    "patch": {
+      "encoding": "utf-8",
+      "content": ""
+    }
+  },
+  "result_hash_canonical_json": "{\"artifacts\":[{\"content_type\":\"text/x-diff\",\"name\":\"patch\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"size_bytes\":0}],\"completed_at\":\"2026-10-02T17:00:30Z\",\"elapsed_ms\":30000,\"execution_id\":\"00000000000040008000000000000006\",\"exit_confirmed\":true,\"failure\":null,\"outcome\":\"completed\",\"tokens\":{\"input\":null,\"missing_reason\":\"fixture runner does not report usage\",\"output\":null,\"source\":null,\"total\":null}}",
+  "responses": {
+    "retry": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000004",
+      "status": "retry",
+      "reason": "slot_busy",
+      "retry_after_seconds": 5,
+      "replayed": false
+    },
+    "no_work": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000004",
+      "status": "no_work",
+      "reason": "no_eligible_tasks",
+      "retry_after_seconds": null,
+      "replayed": false
+    },
+    "total_reached": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000004",
+      "status": "stop",
+      "reason": "total_reached",
+      "retry_after_seconds": null,
+      "replayed": false
+    },
+    "run_stopped": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000004",
+      "status": "stop",
+      "reason": "run_stopped",
+      "retry_after_seconds": null,
+      "replayed": false
+    },
+    "result": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000009",
+      "status": "submitted",
+      "assignment_id": "00000000000040008000000000000007",
+      "execution_id": "00000000000040008000000000000006",
+      "submission_id": "0000000000004000800000000000000c",
+      "result_sha256": "cbb61804da3db94cfe15bacfc35f12b28efb1d58798b4fd38e65ab5c183ba960",
+      "grading_state": "queued",
+      "replayed": false
+    },
+    "leased_budget_wait": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "request_id": "00000000000040008000000000000004",
+      "status": "retry",
+      "reason": "temporarily_unavailable",
+      "retry_after_seconds": 5,
+      "replayed": false
+    },
+    "result_before_start": {
+      "schema_version": 2,
+      "server_time": "2026-10-02T17:00:00Z",
+      "error": {
+        "code": "execution_conflict",
+        "message": "The assignment has no accepted execution authorization.",
+        "retryable": false,
+        "retry_after_seconds": null
+      }
+    }
+  },
+  "interpretation_cases": [
+    {
+      "name": "leased budget is temporary",
+      "total_count": 2,
+      "concurrency": 3,
+      "started": 0,
+      "leased": 2,
+      "free_slot_claim_response": "leased_budget_wait"
+    },
+    {
+      "name": "started budget is terminal",
+      "total_count": 2,
+      "concurrency": 3,
+      "started": 2,
+      "leased": 0,
+      "free_slot_claim_response": "total_reached"
+    },
+    {
+      "name": "result requires start",
+      "assignment_state": "leased",
+      "accepted_execution_id": null,
+      "response": "result_before_start",
+      "accepted_results": 0,
+      "grading_enqueues": 0
+    },
+    {
+      "name": "submitted heartbeat is read-only observation",
+      "assignment_state": "submitted",
+      "late_heartbeat_changes_final_result": false
+    },
+    {
+      "name": "copied cross-machine journal is upload-only by default",
+      "original_controller_exit": "unknown",
+      "replacement_launches": 0,
+      "replacement_claims": 0
+    }
+  ]
+}

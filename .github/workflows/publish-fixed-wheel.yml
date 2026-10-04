@@ -1,8 +1,14 @@
 name: Publish reviewed fixed wheel to existing R2
 on:
   workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Same-repository Actions artifact containing the exact reviewed 0.5.290 wheel
+        required: true
+        type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: dradar-cli-ota-production
   cancel-in-progress: false
@@ -22,22 +28,40 @@ jobs:
           version: 0.9.7
           enable-cache: false
       - name: Prepare locked environment and reviewed artifact
+        env:
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          uv venv "${RUNNER_TEMP}/fixed-wheel-venv" --python 3.13
-          uv pip install --python "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" --require-hashes -r release/ota/requirements.lock
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test -z "$(git status --porcelain)"
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          uv venv .release-venv --python 3.13
+          uv pip install --python .release-venv/bin/python --require-hashes -r release/ota/requirements.lock
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "${RUNNER_TEMP}/artifact.json"
+          python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); assert not d["expired"]; assert d["name"] == "dradar-cli-0.5.290-d0a32f2110322fad"; assert d["workflow_run"]["head_sha"] == os.environ["GITHUB_SHA"]; assert d["workflow_run"]["head_branch"] == "main"' "${RUNNER_TEMP}/artifact.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${RUNNER_TEMP}/artifact.zip"
+          mkdir fixed-wheel
+          python3 - <<'PY'
+          import os, zipfile
+          from pathlib import Path
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'artifact.zip') as archive:
+              files = [i for i in archive.infolist() if not i.is_dir()]
+              assert len(files) == 1
+              item = files[0]
+              assert '/' not in item.filename and '\\' not in item.filename
+              assert item.filename.startswith('dradar-') and item.filename.endswith('.whl')
+              assert item.file_size == 901818
+              Path('fixed-wheel', item.filename).write_bytes(archive.read(item))
+          PY
       - name: Verify existing immutable bucket policy
         env:
           DRADAR_OTA_CLOUDFLARE_API_TOKEN: ${{ secrets.DRADAR_OTA_CLOUDFLARE_API_TOKEN }}
         run: |
-          "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" scripts/ota_release.py cloudflare-preflight --account-id 4d94f3bcb89bc16989d5ea715eaac061 --bucket dradar-cli-ota-production --public-base-url https://updates.codexradar.com
+          .release-venv/bin/python scripts/ota_release.py cloudflare-preflight --account-id 4d94f3bcb89bc16989d5ea715eaac061 --bucket dradar-cli-ota-production --public-base-url https://updates.codexradar.com
       - name: Conditional publish and direct HTTP verification
         env:
           DRADAR_OTA_R2_ACCESS_KEY_ID: ${{ secrets.DRADAR_OTA_R2_ACCESS_KEY_ID }}
           DRADAR_OTA_R2_SECRET_ACCESS_KEY: ${{ secrets.DRADAR_OTA_R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/fixed-wheel-venv/bin/python" scripts/publish_fixed_wheel.py --wheel release/wheels/dradar-0.5.289-py3-none-any.whl --receipt "${RUNNER_TEMP}/DOWNLOAD_RECEIPT.json"
-          cat "${RUNNER_TEMP}/DOWNLOAD_RECEIPT.json"
+          .release-venv/bin/python scripts/publish_fixed_wheel.py --wheel fixed-wheel/*.whl --receipt fixed-wheel/DOWNLOAD_RECEIPT.json --source-commit "${GITHUB_SHA}"
+          cat fixed-wheel/DOWNLOAD_RECEIPT.json

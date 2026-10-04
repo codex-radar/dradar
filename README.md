@@ -1,3 +1,7 @@
+# 新版系统分配领取契约
+
+用户只选题库；复用真实已批准Harness-model/effort与数量/并发计划。Server先未跑、再少跑，均衡覆盖与次数；不因历史尝试、重复或冷却拒领，全部跑过仍可继续。必要所有权、幂等、真实运行资源和维护边界保留，旧结果不得重复结算。表格显示已跑次数/最近3次红绿/悬停结果，不要求先点格子。当前V2入口与固定host候选见 `src/dradar/v2/skill/SKILL.md`。下方旧CLI恢复诊断资料不构成新版选格或冷却门槛。
+
 # dradar — 众测雷达客户端 CLI
 
 `dradar` 是众测雷达的开源客户端，运行在参与者自己的电脑上。它负责连接雷达服务、
@@ -61,8 +65,7 @@ codex login
 
 ## 安装与快速开始
 
-最简单的入口是在官网用 GitHub 登录，选择一个开放格子，然后把页面生成的完整提示词粘贴
-给 Codex。提示词会检查环境、安装最新版 CLI、登录并询问运行方式。
+新版入口在官网用 GitHub 登录后只选题库直接领取。网页与既有计划提供已批准的 Harness、模型档位、数量和并发；系统分配题目，不要求先点格子。计划上下文缺失时明确停止，不默认Low或新增预算。
 
 手动使用时，可以一直通过 GitHub 主线运行最新版：
 
@@ -261,65 +264,15 @@ macOS 官方登录通常写入 Keychain；只有 Keychain 登录而没有上述�
 | Claude Opus 5 | `low`、`medium`、`high`、`xhigh`、`max` |
 | Claude Opus 5.5 | `low`、`medium`、`high`、`xhigh`、`max` |
 
-这些格子都只允许网页显式领取，不进入默认自动推荐。凭证保存在 provider 专用的 `0600`
+该Harness仅沿既有已批准模型计划进入系统分配。凭证保存在 provider 专用的 `0600`
 私有文件中，不进入命令参数、任务目录、trajectory 或服务端请求；任务容器使用隔离配置和
 Claude Code safe mode，不加载宿主的 `CLAUDE.md`、skills、plugins、hooks、MCP、自定义命令
 或自定义 agents。榜单金额按服务器收到的真实 token 用量重新计算为官方 API 等价美元，
 只用于横向比较，不表示 Claude Code 订阅实际扣款。
 
-### DeepSeek V4 Flash / Pro 补充 provider
+### Codex Harness 当前模型范围
 
-DeepSeek 是 Codex 路径的可选补充，不会替换 `~/.codex/config.toml`、Codex
-`auth.json`、Claude 配置，也不会让原有任务自动切换 provider。只有在网页明确选择
-DeepSeek 格子时才会使用按量计费的 DeepSeek API。
-
-在用户自己的交互式终端中配置 key（输入不会回显）：
-
-```bash
-dradar provider setup deepseek
-dradar provider status deepseek --live
-dradar doctor
-dradar go --pick TASK_ID:deepseek-v4-flash:max
-dradar go --pick TASK_ID:deepseek-v4-pro:high
-```
-
-key 保存在 `~/.dradar/secrets/deepseek_api_key`，POSIX 系统权限固定为 `0600`，
-不会进入 `config.json`、命令参数、复制提示词或 DRadar 服务端。运行时 CLI 生成短期
-Codex `auth.json`，通过公开 Pier 的 `CODEX_AUTH_JSON_PATH` 文件上传机制送入容器；
-Pier 退出后立即删除。该本地文件存在时优先使用，避免桌面应用或 shell 遗留的旧
-`DEEPSEEK_API_KEY` 静默覆盖用户刚配置的新 key；没有本地文件的自动化环境仍可临时
-设置 `DEEPSEEK_API_KEY`，CLI 会先写入短期 auth 文件，再从 Pier 的继承环境中移除该变量。
-
-DeepSeek API 价格按北京时间分段：每天 `09:00–12:00`、`14:00–18:00` 为高峰价，
-其余时间为非高峰价（高峰价的 50%）。CLI 会在领取/启动前显示当前价段与三类 token
-单价，并把每次 provider usage 的时间和 token 桶一并上传；服务端按请求发生时间拆分
-跨价段任务并冻结账单，后续调价不会倒算已有记录。
-
-运行前 CLI 会校验随包发布的 DeepSeek 官方 Codex `models.json` 的 SHA-256，并由一个
-很窄的公开 Pier 子类把它上传到任务容器隔离的 `/tmp/codex-home/models.json`。文件缺失、
-被修改或不含 `none`/`low`/`high`/`max` 上游档位时，能力不会上报、`doctor` 会失败，任务也会在发出任何
-付费模型请求前终止。目录启用后，上下文、自动压缩、推理摘要、并行工具和补丁工具等
-元数据均由目录决定，不再用本地 TOML 重复覆盖。
-
-当前公开边界：
-
-- 模型固定为 `deepseek-v4-flash` 或 `deepseek-v4-pro`，两者公开启用的产品档位都是
-  `off`、`high` 和 `max`。`off` 在 Codex Responses API 链路上严格转换为
-  `reasoning.effort=none`，其余两档原样传递。上游目录中的 `low` 仅为完整性校验保留，
-  不可领取或运行；`medium`、`xhigh` 也不建立重复实验格。
-- 每次启动前解析 npm 的最新稳定版 Codex，并把精确版本传给 Pier 以刷新 Docker 构建
-  缓存；`0.147.0` 仅作为最低兼容版本。继续使用 Responses API，以及官方目录声明的
-  1,048,576 token 上下文和 95% 有效上下文比例。
-- 使用公开 Pier `codex` agent；附加代码只负责校验并上传官方模型目录。
-- 基准配置关闭 Codex apps、remote plugin 和 web search，避免无关联网探测影响隔离性。
-- DeepSeek 格子只能显式领取，不进入 `/suggest`、`--auto` 或持续补题。
-- 不提供任务中途 checkpoint；运行完成后由 content-bound 待上传账本保护精确产物。
-- 未显式领取 DeepSeek 格子时，原有 OpenAI Codex 与 Claude 行为完全不变。
-
-配置依据：[DeepSeek 官方 Codex 集成文档](https://api-docs.deepseek.com/quick_start/agent_integrations/codex/)、
-[官方安装脚本](https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.sh)、
-[Responses API](https://api-docs.deepseek.com/guides/responses_api/) 和
-[Codex 自定义 provider](https://developers.openai.com/codex/config-advanced/#custom-model-providers)。
+Codex Harness 在所有题库停用 DeepSeek，新配置、领取和执行均拒绝。当前推荐、模型卡片、任务网格、默认快照与统计排除该组合；原始历史与账本保留。DeepSWE题库及原生DSH/DeepSeek保留，其他Harness沿原已批准配置。Sol6.1保留Low/Medium/High/XHigh/Max，试验Low不是全局限制。
 
 ### DeepSeek Harness Minimal
 
@@ -327,7 +280,7 @@ DSH Minimal 是与 Codex 分开的实验 Harness。它复用同一份本地 Deep
 `off`、`high`、`max` 三档，并固定使用 DSH 自带 `minimal` persona、持久 Bash 与字符串
 替换编辑器；同时保留容器内的文件搜索、后台任务、原生 spawn/fork 子代理、workflow、
 todo/goal 与 compaction。所有调用使用 `danger-full-access`/`never`，Docker 与精确网络
-出口负责隔离。网页认领 DSH 格子后，仍走普通志愿者的本机流程：本机 Docker、公开
+出口负责隔离。既有获准DSH计划在所选题库由系统分配后，仍走普通志愿者的本机流程：本机 Docker、公开
 CLI、当前账号已认领批次，再由 `resume` 启动，不需要单独安装宿主机 Pier。
 
 DSH 的 DeepSWE 模型面包含 V4 Pro、V4 Flash 和 V4 Flash Vision Exp。Vision Exp 在
@@ -338,13 +291,12 @@ DeepSWE 中走官方纯文本能力，不附带图片；在庞贝壁画题中仍
 dradar provider setup deepseek
 dradar provider status deepseek --live
 dradar doctor --agent dsh-minimal
-# 回到网页认领 DSH 格子后：
+# 既有获准DSH计划分配后：
 dradar resume -y
 ```
 
 运行器通过 `uvx --isolated` 使用公开 `datacurve-pier==0.3.0`，并在任务容器内安装固定的
-`@deepseek-ai/dsh` 版本。普通 Codex、Claude、Grok 和 DeepSeek Codex 的环境检查与运行
-路径不受影响。DSH 不创建或恢复任务 checkpoint；owner handoff 只负责容器文件权限，
+`@deepseek-ai/dsh` 版本。其他获准Harness的环境检查与运行路径保留。DSH 不创建或恢复任务 checkpoint；owner handoff 只负责容器文件权限，
 不会重新启动已经完成或中断的模型会话。
 
 ### Grok 订阅 OAuth 补充 agent
@@ -510,11 +462,11 @@ dradar cells
 dradar cells --available --model gpt-5.6-sol --effort high
 dradar cells --available --min-multiplier 2 --sort multiplier
 dradar cells --model gpt-5.5 --max-tests 2 --sort tests --reverse
-dradar cells --state cooldown --task cache --sort minutes
-dradar cells --available --format pick
+dradar cells --task cache --sort minutes
+dradar cells --all --json
 dradar cells --available --all --json
 dradar cells --available --max-minutes 15 --max-cost 2 --min-pass-rate 0.5
-dradar cells --model deepseek-v4-flash --price-band peak --sort cost
+dradar cells --model gpt-6.1-sol --sort tests
 ```
 
 ### 格子状态
@@ -525,9 +477,9 @@ dradar cells --model deepseek-v4-flash --price-band peak --sort cost
 | `leased` | 已被持有或为专属保留格，当前容量已满 |
 | `running` | 已有人真正启动任务并持续上报心跳 |
 | `queued` | 已提交并等待服务端判分，判分队列占满该格容量 |
-| `cooldown` | 最近产生有效判分，处于重新开放前的冷却期 |
+| 历史有效结果 | 展示已跑次数、最近3次红绿及悬停近期结果；历史尝试和冷却不构成新版领取门槛 |
 
-使用 `--available` 等价于只看 `open`；也可以重复传入 `--state` 查看多个状态。
+新版领取由系统在同有效Harness-model/题库范围先分配未跑荒地、再分配少跑任务，全部跑过仍可继续；在途计数只轻量分散。题格用于展示，不作为必选领取前置。旧快照状态仅供历史诊断，不能沿用为新版冷却门槛。
 
 ### 输出字段
 
@@ -936,7 +888,7 @@ dradar config show
 
 | 错误码 | 含义 | CLI 行为 |
 | --- | --- | --- |
-| `cell_unavailable` | 格子已满、冷却或对当前用户不可领取 | 精确选题跳过；自动选题继续候选 |
+| 新版暂不可领取 | 缺少真实运行绑定、维护或必要所有权/资源约束 | 明示真实原因；历史跑过、重复尝试和冷却不能作为拒领理由 |
 | `claim_limit_reached` | 本人持有任务达到上限 | 停止继续领取，先运行或释放已有任务 |
 | `invalid_cell` | 模型、effort 或任务已不在当前配置 | 跳过并提示刷新格子表 |
 | `run_limit_reached` | 正在运行的任务达到账号并发上限 | 保留租约，不启动超额任务 |

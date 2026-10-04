@@ -23,7 +23,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Callable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -360,6 +360,11 @@ not wait for or invoke `/tests/pre_artifacts.sh`, and do not create or inspect
 """
 
 POMPEII_BENCHMARK_ID = "pompeii-adjacency"
+
+def _benchmark_policy_id(benchmark_id):
+    from .v2.host_contract import policy_id
+    return policy_id(benchmark_id)
+
 POMPEII_SOFT_BUDGET_SEC = 90 * 60
 POMPEII_AGENT_TIMEOUT_SEC = 120 * 60
 KIMI_POMPEII_AGENT_TIMEOUT_SEC = 240 * 60
@@ -999,7 +1004,7 @@ def _ensure_allowlist(home: Path) -> Path:
 def _ensure_codex_submission_prompt(
     home: Path, benchmark_id: str | None = None,
 ) -> Path:
-    if benchmark_id == POMPEII_BENCHMARK_ID:
+    if _benchmark_policy_id(benchmark_id) == POMPEII_BENCHMARK_ID:
         # Keep the benchmark-specific prompt at its own immutable path. Workers
         # from two benchmark channels can share DRADAR_HOME, so overwriting the
         # generic prompt in place would create a cross-run race.
@@ -1014,7 +1019,7 @@ def _ensure_codex_submission_prompt(
 def _ensure_zcode_submission_prompt(
     home: Path, benchmark_id: str | None = None,
 ) -> Path:
-    if benchmark_id != POMPEII_BENCHMARK_ID:
+    if _benchmark_policy_id(benchmark_id) != POMPEII_BENCHMARK_ID:
         return _ensure_codex_submission_prompt(home, benchmark_id)
     # ZCode needs an explicit repository boundary for this schema-only visual
     # benchmark. Keep it separate so other agents retain their existing prompt
@@ -1400,19 +1405,7 @@ def _validate_deepseek_assignment(
     *,
     validate_version: bool = True,
 ) -> None:
-    if assignment.get("model") not in DEEPSEEK_MODELS:
-        raise RunnerError(
-            f"unsupported DeepSeek model {assignment.get('model')!r}; "
-            f"enabled models are {', '.join(DEEPSEEK_MODELS)}"
-        )
-    if assignment.get("effort") not in DEEPSEEK_SUPPORTED_EFFORTS:
-        supported = ", ".join(sorted(DEEPSEEK_SUPPORTED_EFFORTS))
-        raise RunnerError(
-            f"DeepSeek effort must be one of {supported}; "
-            f"got {assignment.get('effort')!r}"
-        )
-    if validate_version:
-        _deepseek_codex_version(assignment)
+    raise RunnerError("Codex Harness no longer supports DeepSeek on any benchmark; original history is retained")
 
 
 def _validate_grok_assignment(assignment: dict) -> None:
@@ -1764,14 +1757,14 @@ def _agent_timeout_multiplier(assignment: dict, task_path: Path) -> float:
     """
     base = _task_agent_timeout_sec(task_path)
     if not base:
-        if assignment.get("benchmark_id") == POMPEII_BENCHMARK_ID:
+        if _benchmark_policy_id(assignment.get("benchmark_id")) == POMPEII_BENCHMARK_ID:
             hard_budget_sec = pompeii_agent_timeout_sec(assignment)
             raise RunnerError(
                 "Pompeii tasks require a readable [agent].timeout_sec so the "
                 f"{hard_budget_sec // 60}-minute execution limit can be enforced"
             )
         return 1.0
-    if assignment.get("benchmark_id") == POMPEII_BENCHMARK_ID:
+    if _benchmark_policy_id(assignment.get("benchmark_id")) == POMPEII_BENCHMARK_ID:
         # Managed Pompeii packs in the field declare either 5400s or 7200s.
         # Normalize both at launch to the assignment-specific hard limit. Floor
         # the serialized ratio so unusual task defaults can stop a fraction
@@ -3611,7 +3604,7 @@ def _zcode_trial_timeout_sec(assignment: dict) -> int:
 
 
 def _effective_trial_timeout_sec(assignment: dict) -> int:
-    if assignment.get("benchmark_id") == POMPEII_BENCHMARK_ID:
+    if _benchmark_policy_id(assignment.get("benchmark_id")) == POMPEII_BENCHMARK_ID:
         # The outer watchdog starts before image/environment setup while Pier's
         # hard agent deadline starts at agent execution. Keep setup outside the
         # promised execution budget instead of undercutting it.
@@ -3661,7 +3654,7 @@ def _effective_run_timeout_sec(
     # override rather than replacing it with the normal build allowance.
     if current <= 0:
         return current
-    if assignment.get("benchmark_id") == POMPEII_BENCHMARK_ID:
+    if _benchmark_policy_id(assignment.get("benchmark_id")) == POMPEII_BENCHMARK_ID:
         # ``current`` already includes Pompeii's hard agent deadline plus its
         # finalization slack.  Keep that complete budget, then add the build
         # allowance before the outer watchdog is armed.
@@ -4718,6 +4711,7 @@ def _wait_for_worker_registration(
     job_dir: Path | None = None,
     codex_version: str | None = None,
     launch_started_ns: int | None = None,
+    execution_stop_requested: Callable[[], bool] | None = None,
 ) -> dict:
     """Wait for a bounded, structured Pier lifecycle record.
 
@@ -4788,6 +4782,8 @@ def _wait_for_worker_registration(
     # just because the build kept talking afterwards.
     last_reason: str | None = None
     while True:
+        if execution_stop_requested is not None and execution_stop_requested():
+            raise RunnerError("v2 run stop requested before worker registration")
         if worker_event_source is not None:
             raw_event = worker_event_source()
         else:
@@ -5054,6 +5050,9 @@ def run_trial(
     on_auth_observed: Callable[[dict], None] | None = None,
     managed_auth_config: Path | None = None,
     execution_observer: Callable[[dict], None] | None = None,
+    provider_launch_guard: Callable | None = None,
+    public_image_preparer: object | None = None,
+    execution_stop_requested: Callable[[], bool] | None = None,
 ) -> TrialArtifacts:
     audit = ExecutionAudit(assignment, work_dir, execution_observer)
     try:
@@ -5067,6 +5066,9 @@ def run_trial(
             environment_build_timeout_multiplier=environment_build_timeout_multiplier,
             build_cache_mode=build_cache_mode, on_auth_observed=on_auth_observed,
             managed_auth_config=managed_auth_config, execution_audit=audit,
+            **({"provider_launch_guard": provider_launch_guard} if provider_launch_guard is not None else {}),
+            **({"public_image_preparer": public_image_preparer} if public_image_preparer is not None else {}),
+            **({"execution_stop_requested": execution_stop_requested} if execution_stop_requested is not None else {}),
         )
     except BaseException as exc:
         if not audit.confirmed:
@@ -5102,7 +5104,13 @@ def _run_trial(
     on_auth_observed: Callable[[dict], None] | None = None,
     managed_auth_config: Path | None = None,
     execution_audit: ExecutionAudit | None = None,
+    provider_launch_guard: Callable | None = None,
+    public_image_preparer: object | None = None,
+    execution_stop_requested: Callable[[], bool] | None = None,
 ) -> TrialArtifacts:
+    from .harness_policy import reject_retired_combination
+    try:reject_retired_combination(dev_agent or assignment.get('agent'),assignment.get('model'),assignment.get('provider'))
+    except ValueError as exc:raise RunnerError(str(exc)) from exc
     cancellation.begin_execution()
     try:
         preflight_artifact_platform(work_dir)
@@ -5430,6 +5438,13 @@ def _run_trial(
                     baseline_request_path=baseline_request_path,
                 )
             )
+        image_args = []
+        if public_image_preparer is not None:
+            pier_tasks_root, image_args = public_image_preparer.prepare(
+                assignment=effective_assignment, tasks_root=pier_tasks_root,
+                work_dir=work_dir, job_root=jobs_dir / job_name,
+                builder_lease=builder_lease,
+            )
         build_options = dict(provider_kwargs)
         if managed_auth_config is not None:
             build_options["managed_auth_config"] = managed_auth_config
@@ -5448,6 +5463,7 @@ def _run_trial(
             effective_assignment, pier_tasks_root, jobs_dir, job_name, work_dir,
             dev_agent, **build_options,
         )
+        cmd += image_args
         env = _pier_process_env(
             effective_assignment,
             pier_bootstrap_dir=(work_dir if egress_environment else None),
@@ -5472,6 +5488,8 @@ def _run_trial(
             ),
             grok_artifact=grok_artifact,
         )
+        if public_image_preparer is not None:
+            public_image_preparer.child_environment(env)
         # Pier adapters publish a single JSON lifecycle record to this private
         # sidecar after environment setup and immediately before provider work.
         # It is intentionally separate from combined stdout/stderr.
@@ -5550,7 +5568,7 @@ def _run_trial(
             # Preparation may outlive a stop. Check again at the actual local
             # launch, using the same short lock as stop publication; all remote
             # work and provider registration stay outside this lock.
-            with run_intent.worker_launch_guard(work_dir.parent):
+            with run_intent.worker_launch_guard(work_dir.parent), (provider_launch_guard() if provider_launch_guard else nullcontext()):
                 if execution_audit is not None:
                     execution_audit.pending(job_name, jobs_dir / job_name)
                 try:
@@ -5594,6 +5612,7 @@ def _run_trial(
                         launch_started_ns=(
                             pier_launch_started_ns if fresh_pier_job_dir else None
                         ),
+                        **({"execution_stop_requested": execution_stop_requested} if execution_stop_requested is not None else {}),
                     )
                     if getattr(on_worker_registered, "_uses_registration_window", False):
                         from .registration import RegistrationWindow
@@ -5606,7 +5625,7 @@ def _run_trial(
                     # Remote registration is complete before this short lock.
                     # A stop published while it was pending must win before
                     # either ordinary or managed provider permission is written.
-                    with run_intent.worker_launch_guard(work_dir.parent):
+                    with run_intent.worker_launch_guard(work_dir.parent), (provider_launch_guard() if provider_launch_guard else nullcontext()):
                         if start_gate is not None:
                             if proc.poll() is not None:
                                 raise RunnerError("worker exited before ownership confirmation")
@@ -5625,9 +5644,11 @@ def _run_trial(
                 started = time.time()
                 next_beat = started + HEARTBEAT_SEC
                 while True:
+                    if execution_stop_requested is not None and execution_stop_requested():
+                        raise RunnerError("v2 run stop requested; preserve original artifacts")
                     if managed_observation_reader is not None:managed_observation_reader.drain()
                     try:
-                        proc.wait(timeout=min(30, HEARTBEAT_SEC))
+                        proc.wait(timeout=min(1 if execution_stop_requested is not None else 30, HEARTBEAT_SEC))
                         break
                     except subprocess.TimeoutExpired:
                         pass

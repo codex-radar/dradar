@@ -440,6 +440,8 @@ def validate_refill_scope(
     agent = normalize_refill_harness(harness)
     normalized_model = model.strip().lower() if model else None
     normalized_effort = effort.strip().lower() if effort else None
+    from .harness_policy import reject_retired_combination
+    reject_retired_combination(agent,normalized_model)
     constraint = REFILL_HARNESS_CONSTRAINTS.get(agent)
     if constraint is not None:
         models, efforts = constraint
@@ -2148,15 +2150,7 @@ def advertised_capabilities(
             if trial_platform_ready(environ):capabilities.append(TRIAL_CAPABILITY)
     except (OSError, ValueError, TypeError, RefreshUnavailable):
         pass
-    if deepseek_catalog_error() is None:
-        capabilities.extend((
-            DEEPSEEK_CAPABILITY,
-            DEEPSEEK_PRO_CAPABILITY,
-            DEEPSEEK_FLASH_41_CAPABILITY,
-            DEEPSEEK_FLASH_OFF_CAPABILITY,
-            DEEPSEEK_PRO_OFF_CAPABILITY,
-            DEEPSEEK_FLASH_41_OFF_CAPABILITY,
-        ))
+    # Codex/DeepSeek retired globally; original IDs stay for history decoding.
     # The adapter installs its pinned DSH runtime inside each task image, so
     # its only local runtime prerequisite is a usable DeepSeek credential.
     # Unlike the legacy Codex capabilities, keep these new paid-agent cells
@@ -2231,8 +2225,10 @@ def advertised_capabilities(
 def normalize_capabilities(values: Iterable[str]) -> tuple[str, ...]:
     """Return a deterministic, header-safe capability list."""
 
+    from .harness_policy import RETIRED_CODEX_CAPABILITIES
     return tuple(sorted({
         value.strip()
         for value in values
         if isinstance(value, str) and value.strip() and "," not in value
+        and value.strip() not in RETIRED_CODEX_CAPABILITIES
     }))

@@ -750,6 +750,9 @@ class ApiClient:
         legacy `assignment`/`resumed` (first active lease) for older clients."""
         path = self._benchmark_path("/api/v1/assignment")
         data = self._get(self._query_path(path, "batch_id", self.batch_id))
+        if isinstance(data.get("menu"),list):
+            from .harness_policy import current_catalog
+            data={**data,"menu":current_catalog({"menu":data["menu"]})["menu"]}
         self._check_managed_assignments(data)
         if self.batch_id is None:
             return data
@@ -877,6 +880,9 @@ class ApiClient:
     ) -> dict[str, Any]:
         """Returns {assignment: dict, resumed: False}. Raises ApiError (409) if
         the cell went stale or the volunteer is already at the concurrent cap."""
+        from .harness_policy import reject_retired_combination
+        # Bare DeepSeek IDs are the retired Codex lanes; DSH uses dsh-* IDs.
+        reject_retired_combination('codex',model)
         profile = self._negotiate_managed_auth_runtime(task_id=task_id, model=model, effort=effort)
         data = {"task_id": task_id, "model": model, "effort": effort}
         if profile is not None:
@@ -926,6 +932,8 @@ class ApiClient:
         refill_mode: str | None = None,
     ) -> dict[str, Any]:
         """Idempotently create the server-authoritative multi-machine plan."""
+        from .harness_policy import reject_retired_combination
+        reject_retired_combination(harness,model)
         payload = {
             "batch_id": batch_id,
             "benchmark_id": self.benchmark_id or "deep-swe",
@@ -964,7 +972,8 @@ class ApiClient:
         need a prior web claim. Returns {cells: [menu-entry dict, ...]};
         candidates only, not yet claimed. The server applies ordinary/super
         account-specific recommendation limits."""
-        return self._get(self._benchmark_path(f"/api/v1/suggest?n={n}"))
+        from .harness_policy import current_catalog
+        return current_catalog(self._get(self._benchmark_path(f"/api/v1/suggest?n={n}")))
 
     def table(self) -> dict[str, Any]:
         """Public full-board snapshot.
@@ -973,7 +982,8 @@ class ApiClient:
         coverage metadata for every cell.  Unlike suggest() this is not
         personalized and never claims or reserves work.
         """
-        return self._get(self._benchmark_path("/api/v1/table"))
+        from .harness_policy import current_catalog
+        return current_catalog(self._get(self._benchmark_path("/api/v1/table")))
 
     def mark_started(
         self, assignment_id: str, session_id: str | None = None,
