@@ -45,31 +45,36 @@ class CodexRuntime:
         self.build_cache_mode = build_cache_mode
         self.public_image_options = public_image_options
 
-    def prepare(self, a: dict) -> dict:
+    def prepare(self, a: dict, *, tasks_root=None, bundle_root=None) -> dict:
+        root = Path(tasks_root) if tasks_root is not None else self.tasks_root
+        marker_root = Path(bundle_root) if bundle_root is not None else root
         normalized = normalize_assignment(a)
         if normalized["auth_runtime"] is not None and self.managed_auth_config is None:
             raise RuntimeUnavailable("explicit configured authentication runtime required; no silent credential switch")
-        if not self.tasks_root.is_dir() or self.tasks_root.is_symlink():
+        if not root.is_dir() or root.is_symlink():
             raise RuntimeUnavailable("verified local task package is required")
-        task = self.tasks_root / normalized["task_id"]
+        task = root / normalized["task_id"]
         if task.is_symlink() or not (task / "instruction.md").is_file() or not (task / "task.toml").is_file():
             raise RuntimeUnavailable("task package is incomplete")
         if any(p.is_symlink() for p in task.rglob("*")):
             raise RuntimeUnavailable("unvalidated task symlink")
-        if task_content_hash(self.tasks_root, normalized["task_id"]) != normalized["task_content_hash"]:
+        if task_content_hash(root, normalized["task_id"]) != normalized["task_content_hash"]:
             raise RuntimeUnavailable("immutable task content hash mismatch")
         bundle = a["task"].get("task_bundle")
         if bundle is not None:
             from ..taskpacks import MARKER
             try:
-                marker = json.loads((self.tasks_root / MARKER).read_text())
+                marker_path = marker_root / MARKER
+                if marker_path.is_symlink() or not marker_path.is_file():
+                    raise RuntimeUnavailable('regular verified archive task-pack marker required')
+                marker = json.loads(marker_path.read_text())
             except (OSError, ValueError) as exc:
                 raise RuntimeUnavailable("verified archive task-pack marker required") from exc
             if marker.get("sha256") != bundle["sha256"] or marker.get("benchmark_id") != normalized["benchmark_id"]:
                 raise RuntimeUnavailable("archive task-pack digest mismatch")
         elif self._run_trial is None:
             from ..runner import local_deep_swe_commit
-            if local_deep_swe_commit(self.tasks_root) != normalized["deep_swe_commit"]:
+            if local_deep_swe_commit(root) != normalized["deep_swe_commit"]:
                 raise RuntimeUnavailable("immutable Git task commit mismatch; update the isolated task cache")
         return normalized
 

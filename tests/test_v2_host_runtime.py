@@ -113,6 +113,14 @@ def test_real_adapter_orders_environment_ack_fence_turn_collect_cleanup(case):
     assert ops.index('environment_ready')<ops.index('authorize-one-turn')<ops.index('rpc')<ops.index('collect')<ops.index('physical_cleanup')
     assert sum(isinstance(v,dict)and v.get('method')=='turn/start'for v in f.calls)==1
 
+def test_archive_marker_symlink_blocks_before_controller(case):
+    root,tasks,_,_,_,_=case
+    marker=tasks/MARKER;copy=root/'synthetic-marker.json';copy.write_bytes(marker.read_bytes())
+    marker.unlink();marker.symlink_to(copy)
+    rt,j,a=runtime(case)
+    with pytest.raises(RuntimeUnavailable,match='regular verified'):rt.prepare(a)
+    assert not FakeController.instances and not j.requests()
+
 @pytest.mark.parametrize('effort',EFFORTS)
 def test_all_existing_sol_efforts_reach_controller_without_low_override(case,effort):
     rt,j,a=runtime(case);a['task']['effort']=effort
@@ -200,7 +208,7 @@ def test_declared_schema_exposes_new_capability_without_changing_legacy(case,cap
     assert value['host_runtime']['capability']==CAPABILITY
     assert value['host_runtime']['version']=='0.160.0'
     assert value['host_runtime']['max_parallel']==2
-    assert __version__=='0.5.290'
+    assert __version__=='0.5.291'
     from dradar.gpt6 import GPT61_CODEX_VERSION
     assert GPT61_CODEX_VERSION=='0.159.2'
 
@@ -310,12 +318,12 @@ def test_missing_actual_host_dependency_blocks_before_run_and_controller(case,mo
     assert not j.requests()and not FakeController.instances
 
 
-def test_server020_pin_rejects_old018_and_unknown_versions():
+def test_server024_pin_rejects_old_pilot_and_unknown_versions():
     row={'benchmark':'science-sr-pilot-20261003','required_client_capabilities':[MODEL_CAPABILITY,AUTH_RUNTIME],
          'production_claim_enabled':True,'missing_bindings':[],
          'model_effort_selections':[{'model':MODEL,'effort':e}for e in EFFORTS]}
     for version in ['dradar-four-library-server018-20261004','unbound-future-catalog']:
         boot={'library_catalog':{'catalog_version':version,'collections':[row]}}
-        with pytest.raises(ValueError,match='Server020 library catalog binding'):
+        with pytest.raises(ValueError,match='Server024 library catalog binding'):
             require_server_library(boot,row['benchmark'],MODEL,'low')
-    assert SERVER_CATALOG_VERSION=='dradar-four-library-server020-20261004'
+    assert SERVER_CATALOG_VERSION=='dradar-four-library-server024-20261004-final68'

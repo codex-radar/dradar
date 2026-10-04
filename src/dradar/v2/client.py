@@ -73,9 +73,9 @@ class Client:
     def close(self) -> None:
         self.http.close()
 
-    def offer_bound_host_runtime(self):
-        from .host_contract import WIRE_CAPABILITIES
-        self.http.headers['X-DRadar-Capabilities'] = ','.join(WIRE_CAPABILITIES)
+    def offer_bound_host_runtime(self, *, mixed=False):
+        from .host_contract import WIRE_CAPABILITIES, MIXED_WIRE_CAPABILITIES
+        self.http.headers['X-DRadar-Capabilities'] = ','.join(MIXED_WIRE_CAPABILITIES if mixed else WIRE_CAPABILITIES)
 
     def _response(self, response: httpx.Response) -> dict:
         if response.status_code == 429 or response.status_code >= 500:

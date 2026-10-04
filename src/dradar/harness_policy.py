@@ -21,10 +21,12 @@ def retired_combination(agent='codex',model=None,provider=None):
         return False
     m=model.strip().lower()if isinstance(model,str)else''
     p=provider.strip().lower()if isinstance(provider,str)else''
-    return p=='deepseek' or m in RETIRED_CODEX_DEEPSEEK_MODELS or m.startswith('deepseek-')
+    return m=='gpt-5.5' or p=='deepseek' or m in RETIRED_CODEX_DEEPSEEK_MODELS or m.startswith('deepseek-')
 
 def reject_retired_combination(agent='codex',model=None,provider=None):
     if retired_combination(agent,model,provider):
+        if isinstance(model,str) and model.strip().lower()=='gpt-5.5':
+            raise ValueError('Codex Harness gpt-5.5 is retired for new work; preserve historical results')
         raise ValueError('Codex Harness no longer supports DeepSeek on any benchmark; history is retained outside current display/statistics')
 
 def current_catalog(value):
@@ -36,6 +38,7 @@ def current_catalog(value):
     """
     result=copy.deepcopy(value)
     excluded=0
+    retired_gpt55=False
     retired_ids=set()
     for row in value.get('configs',[]):
         if isinstance(row,dict)and retired_combination(row.get('agent',row.get('harness','codex')),row.get('model'),row.get('provider')):
@@ -46,11 +49,13 @@ def current_catalog(value):
     for key in ['model_scores','model_stats']:
         if isinstance(result.get(key),dict):result[key]={k:v for k,v in result[key].items()if k not in retired_ids}
     def filter_rows(rows):
-        nonlocal excluded
+        nonlocal excluded, retired_gpt55
         if not isinstance(rows,list):return rows
         kept=[]
         for row in rows:
             if isinstance(row,dict) and (row.get('config_id') in retired_ids or retired_combination(row.get('agent',row.get('harness','codex')),row.get('model'),row.get('provider'))):
+                if isinstance(row.get('model'),str) and row['model'].strip().lower()=='gpt-5.5':
+                    retired_gpt55=True
                 excluded+=1;continue
             kept.append(row)
         return kept
@@ -62,5 +67,6 @@ def current_catalog(value):
         result['harness_policy_excluded_rows']=excluded
         for key in ['coverage','statistics','scores','totals']:
             if key in result:result[key]=None
-        result['aggregate_missing_reason']='upstream_snapshot_contains_retired_codex_deepseek'
+        result['aggregate_missing_reason']=('upstream_snapshot_contains_retired_codex_gpt_5_5' if retired_gpt55
+            else 'upstream_snapshot_contains_retired_codex_deepseek')
     return result

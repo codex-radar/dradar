@@ -118,6 +118,10 @@ class Controller:
         choices = [(b["benchmark"], m["model"], m["effort"]) for b in boot.get("benchmarks", []) for m in b.get("models", [])]
         if (self.configuration["benchmark"], self.configuration["model"], self.configuration["effort"]) not in choices:
             raise ValueError("requested benchmark/model/effort is unavailable")
+        from .mixed_pool import POOL, selection_scope
+        if self.configuration['benchmark'] == POOL:
+            scope = selection_scope(boot,self.configuration['model'],self.configuration['effort'])
+            self.journal.bind('mixed_pool_scope',json.dumps(scope,sort_keys=True,separators=(',',':')))
         req = self.journal.prepare("run:create", "/api/v2/runs", {"run_id": self.run_id, "device_id": self.device_id, **self.configuration})
         response = envelope(self.client.send(req), req.request_id)
         if response.get("status") != "accepted":
@@ -132,8 +136,14 @@ class Controller:
                 raise ProtocolError('assignment identity changed')
             if a['slot_id'] >= self.configuration['concurrency']:
                 raise ProtocolError('assignment outside local slot range')
-            if any(a['task'][k] != self.configuration[k] for k in ('benchmark','model','effort')):
-                raise ProtocolError('assignment changed requested selection')
+            if any(a['task'][k] != self.configuration[k] for k in ('model','effort')):
+                raise ProtocolError('assignment changed requested model/effort')
+            from .mixed_pool import POOL, validate_assignment
+            if self.configuration['benchmark'] == POOL:
+                scope = json.loads(self.journal.value('mixed_pool_scope') or 'null')
+                validate_assignment(scope,a['task'])
+            elif a['task']['benchmark'] != self.configuration['benchmark']:
+                raise ProtocolError('assignment changed requested source benchmark')
             task_id = a['task']['task_id']
             if Path(task_id).name != task_id or task_id in {'.','..'} or '\\' in task_id:
                 raise ProtocolError('unsupported task selection')
