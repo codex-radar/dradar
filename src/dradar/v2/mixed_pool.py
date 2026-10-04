@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from importlib.resources import files
 
-CONTRACT = json.loads(Path(__file__).with_name('final68_contract.json').read_text())
+CONTRACT = json.loads(files('dradar.v2').joinpath('final68_contract.json').read_text(encoding='utf-8'))
 POOL = CONTRACT['pool_benchmark']
 POOL_CAPABILITY = CONTRACT['pool_capability']
 CATALOG_VERSION = CONTRACT['catalog_version']

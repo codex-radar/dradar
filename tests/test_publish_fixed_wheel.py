@@ -20,7 +20,7 @@ def test_publication_receipt_only_after_verified_http(tmp_path, monkeypatch, upl
     body = b'synthetic wheel bytes'
     monkeypatch.setattr(module, 'SIZE', len(body))
     monkeypatch.setattr(module, 'SHA256', hashlib.sha256(body).hexdigest())
-    wheel = tmp_path / 'dradar-0.5.291-py3-none-any.whl'
+    wheel = tmp_path / 'dradar-0.5.292-py3-none-any.whl'
     wheel.write_bytes(body)
     receipt = tmp_path / 'receipt.json'
     store = Mock()
@@ -38,7 +38,7 @@ def test_publication_receipt_only_after_verified_http(tmp_path, monkeypatch, upl
 
 
 def test_wrong_local_bytes_never_upload(tmp_path):
-    wheel = tmp_path / 'dradar-0.5.291-py3-none-any.whl'
+    wheel = tmp_path / 'dradar-0.5.292-py3-none-any.whl'
     wheel.write_bytes(b'wrong')
     store = Mock()
     with pytest.raises(ValueError):
@@ -50,7 +50,7 @@ def test_conflicting_immutable_object_never_receipts(tmp_path, monkeypatch):
     body = b'synthetic'
     monkeypatch.setattr(module, 'SIZE', len(body))
     monkeypatch.setattr(module, 'SHA256', hashlib.sha256(body).hexdigest())
-    wheel = tmp_path / 'dradar-0.5.291-py3-none-any.whl'
+    wheel = tmp_path / 'dradar-0.5.292-py3-none-any.whl'
     wheel.write_bytes(body)
     store = Mock()
     store.put_new.return_value = httpx.Response(412)

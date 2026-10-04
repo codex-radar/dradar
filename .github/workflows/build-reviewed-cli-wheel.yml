@@ -25,12 +25,12 @@ jobs:
           uv venv "${build_venv}" --python 3.13
           uv pip install --python "${build_venv}/bin/python" --index-url https://pypi.org/simple -r release/ota/requirements-build.txt
           "${build_venv}/bin/python" scripts/build_reviewed_cli_wheel.py --source-root . --output-dir "${output_dir}"
-          echo "WHEEL_FILE=${output_dir}/dradar-0.5.291-py3-none-any.whl" >> "${GITHUB_ENV}"
+          echo "WHEEL_FILE=${output_dir}/dradar-0.5.292-py3-none-any.whl" >> "${GITHUB_ENV}"
       - name: Save the verified wheel as a real same-repository artifact
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dradar-cli-0.5.291-d77d1673b6c13524
+          name: dradar-cli-0.5.292-8863d4f7f21d4144
           path: ${{ env.WHEEL_FILE }}
           if-no-files-found: error
           retention-days: 7
