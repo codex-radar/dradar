@@ -54,6 +54,9 @@ def save_completion(root: Path, assignment: dict, execution_id: str, value: Comp
                 if residual or scan_secrets(data) or (data and not patch_structure_is_valid(data)):
                     raise ArtifactError("patch upload quarantined; raw evidence retained")
             else:
+                parsed = json.loads(data, parse_constant=lambda value: (_ for _ in ()).throw(ArtifactError("nonfinite artifact JSON")))
+                if not isinstance(parsed, dict) and not (name == "trajectory" and isinstance(parsed, list) and all(isinstance(event, dict) for event in parsed)):
+                    raise ArtifactError("display artifact object or trajectory event array required")
                 data = scrub_json_bytes(data)
             target = Path(directory) / name
             target.write_bytes(data)

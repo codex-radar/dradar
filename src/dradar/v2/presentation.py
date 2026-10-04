@@ -70,6 +70,8 @@ def assignment_view(a: dict) -> dict:
         execution = {"leased": "preparing", "running": "running"}.get(a.get("state"), "unknown")
     return {"task_id": a["task"]["task_id"], "assignment_id": a["assignment_id"],
             "device_id": a["device_id"], "slot_id": a["slot_id"], "phase": a.get("phase", "unknown"),
+            "original_reported_outcome": a.get('original_reported_outcome'),
+            "completion_correction": a.get('completion_correction'),
             "execution": execution, "upload": "accepted" if a.get("state") == "submitted" else "pending",
             "grading": grading.get("state", a.get("grading_state", "unknown")),
             "reward": grading.get("reward"), "score": grading.get("score"),

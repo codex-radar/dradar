@@ -60,3 +60,19 @@ def result_receipt(value: dict, request_id: str, assignment_id: str, payload: di
         raise ProtocolError("result ACK does not match saved evidence")
     opaque(value.get("submission_id"))
     return value
+
+def correction_receipt(value: dict, request_id: str, assignment_id: str, body: dict) -> dict:
+    result_receipt(value, request_id, assignment_id, body['corrected_result'])
+    original, corrected = body['original_result'], body['corrected_result']
+    proof = value.get('completion_correction')
+    expected = {'schema': body['correction_schema'],
+                'original_request_id': original['request_id'],
+                'original_result_sha256': original['result_sha256'],
+                'corrected_request_id': request_id,
+                'corrected_result_sha256': corrected['result_sha256'],
+                'exit_evidence_sha256': body['exit_evidence_sha256']}
+    if (value.get('grading_state') != 'queued' or not isinstance(proof, dict)
+            or any(proof.get(k) != v for k, v in expected.items())
+            or not isinstance(proof.get('authorization_ref'), str) or not proof['authorization_ref']):
+        raise ProtocolError('correction ACK does not bind original evidence and authorization')
+    return value

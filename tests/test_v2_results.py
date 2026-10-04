@@ -36,6 +36,20 @@ def test_failed_result_can_have_no_files(tmp_path):
     assert payload["artifacts"] == []
     assert upload_files(tmp_path / "artifacts", "a", payload) == {}
 
+def test_native_trajectory_array_is_preserved_without_legacy_wrapper(tmp_path):
+    path = tmp_path / 'events.json'
+    events = [{'method': 'turn/completed', 'threadId': 'real-thread', 'turnId': 'real-turn'}]
+    path.write_text(json.dumps(events))
+    payload = save_completion(tmp_path / 'artifacts', A, 'e', Completion('failed', True, {'trajectory': path}))
+    assert json.loads(upload_files(tmp_path / 'artifacts', 'a', payload)['trajectory'].read_bytes()) == events
+
+@pytest.mark.parametrize('name,raw',[('runner_result','[]'),('trajectory','[1]'),('trajectory','[{"usage":NaN}]')])
+def test_bad_array_or_nonfinite_artifact_is_quarantined(tmp_path,name,raw):
+    path=tmp_path/'display.json';path.write_text(raw)
+    with pytest.raises(ArtifactError):save_completion(tmp_path/'artifacts',A,'e',Completion('failed',True,{name:path}))
+    assert (tmp_path/'artifacts/raw/a'/name).read_text()==raw
+    assert not (tmp_path/'artifacts/upload/a').exists()
+
 def test_receipt_requires_exact_hash_identity_and_submission():
     payload = {"execution_id": "e", "result_sha256": "proof"}
     reply = {"schema_version": 2, "server_time": "now", "request_id": "r", "status": "submitted", "assignment_id": "a", "execution_id": "e", "submission_id": "s", "result_sha256": "proof", "grading_state": "queued"}

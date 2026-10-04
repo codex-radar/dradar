@@ -46,7 +46,7 @@ def case(tmp_path):
     return tmp_path,tasks,binding,p,digest,a
 
 class FakeController:
-    instances=[];auth='chatgpt';exit_known=True;stop_after_start=False;changed=False;usage_complete=True
+    instances=[];auth='chatgpt';exit_known=True;stop_after_start=False;changed=False;usage_complete=True;scratch=[]
     def __init__(self,c,folder):
         self.c=c;self.folder=folder;self.calls=[];self.turn=None;self.interrupted=False
         self.__class__.instances.append(self)
@@ -80,7 +80,7 @@ class FakeController:
         if op=='status':return {'last_turn_status':'interrupted' if self.interrupted else None if self.stop_after_start else 'completed'}
         if op=='collect':
             d=self.folder/'collected';d.mkdir();(d/'model.patch').write_bytes(PATCH)
-            c={'patch_sha256':hashlib.sha256(PATCH).hexdigest(),'public_inputs_unchanged':not self.changed,'unexpected_workspace_changes':[],'missing_deliverables':[]}
+            c={'patch_sha256':hashlib.sha256(PATCH).hexdigest(),'public_inputs_unchanged':not self.changed,'unexpected_workspace_changes':list(self.scratch),'missing_deliverables':[], 'public_inputs_sha256':{'/app/public.txt':'d'*64}, 'outputs':{'result.txt':{'sha256':hashlib.sha256(b'synthetic\n').hexdigest(),'bytes':10}}}
             (d/'COLLECTION.json').write_text(json.dumps(c));return c
         raise AssertionError(r)
     def close(self):
@@ -91,6 +91,7 @@ class FakeController:
 def reset():
     FakeController.instances=[];FakeController.auth='chatgpt';FakeController.exit_known=True
     FakeController.stop_after_start=False;FakeController.changed=False;FakeController.usage_complete=True
+    FakeController.scratch=[]
 
 def runtime(case):
     root,tasks,b,p,sha,a=case
@@ -112,6 +113,19 @@ def test_real_adapter_orders_environment_ack_fence_turn_collect_cleanup(case):
     ops=[v.get('op')if isinstance(v,dict)else v for v in f.calls]
     assert ops.index('environment_ready')<ops.index('authorize-one-turn')<ops.index('rpc')<ops.index('collect')<ops.index('physical_cleanup')
     assert sum(isinstance(v,dict)and v.get('method')=='turn/start'for v in f.calls)==1
+    assert out.completed_at.endswith('Z')
+
+def test_safe_untracked_scratch_does_not_fail_new_completion(case):
+    FakeController.scratch=['?? infer.py','?? engine/__pycache__/apply.pyc']
+    rt,j,a=runtime(case);out=execute(rt,j,a)
+    assert out.outcome=='completed' and out.failure is None and out.completed_at.endswith('Z')
+    assert json.loads(out.files['runner_result'].read_text())['unexpected_workspace_changes']==FakeController.scratch
+
+@pytest.mark.parametrize('scratch',[' M tracked.py',' D tracked.py','?? ../outside','?? /tmp/file','?? public.txt'])
+def test_new_completion_still_rejects_unsafe_or_protected_mutation(case,scratch):
+    FakeController.scratch=[scratch]
+    rt,j,a=runtime(case);out=execute(rt,j,a)
+    assert out.outcome=='failed' and out.exit_confirmed
 
 def test_archive_marker_symlink_blocks_before_controller(case):
     root,tasks,_,_,_,_=case
@@ -208,7 +222,7 @@ def test_declared_schema_exposes_new_capability_without_changing_legacy(case,cap
     assert value['host_runtime']['capability']==CAPABILITY
     assert value['host_runtime']['version']=='0.160.0'
     assert value['host_runtime']['max_parallel']==2
-    assert __version__=='0.5.295'
+    assert __version__=='0.5.296'
     from dradar.gpt6 import GPT61_CODEX_VERSION
     assert GPT61_CODEX_VERSION=='0.159.2'
 

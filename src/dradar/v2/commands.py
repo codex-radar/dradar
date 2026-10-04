@@ -10,13 +10,15 @@ from ..local_config import HOME, runtime_config
 from ..scrub import scrub_text
 from .client import Client, ProtocolError, RemoteError, TransportUnknown
 from .journal import Journal, JournalConflict
+from .artifacts import ArtifactError
+from ..assignment_lock import AssignmentBusy
 from .presentation import run_view
 from .runtime import CodexRuntime, RuntimeUnavailable
 from .scheduler import Controller, ExecutionBlocked, stop_saved_run
 from .selection import Catalog, questions, resolve
 
 SCHEMA = {"schema_version": 2, "protocol": "on-demand-v2", "candidate": True,
-          "commands": ["catalog", "select", "run", "progress", "upload-only", "stop"],
+          "commands": ["catalog", "select", "run", "progress", "upload-only", "supplement-result", "stop"],
           "selection_fields": ["benchmark", "model", "total_count", "concurrency"],
           "execution_barrier": "worker_registered_start_ack_durable_launch_intent", "entry": "python -m dradar.v2"}
 
@@ -40,6 +42,10 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
         p.add_argument("--state-root", required=True, type=Path, help="private v2 run directory; reuse for recovery")
         p.add_argument("--server", help="must match configured login and saved run server")
         p.add_argument("--json", action="store_true", help="structured truthful progress (currently default)")
+        if name == 'supplement-result':
+            p.add_argument('--assignment-id', required=True)
+            p.add_argument('--original-result-sha256', required=True)
+            p.add_argument('--exit-evidence-sha256', required=True)
         if name in {"select", "run"}:
             p.add_argument("--benchmark")
             p.add_argument("--model")
@@ -101,6 +107,16 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
             raise RuntimeUnavailable("所选站点与已有账号登录站点不一致")
         journal = Journal(args.state_root)
         client = client_factory(server, cfg["token"], journal)
+        if args.command == 'supplement-result':
+            from .completion_correction import supplement_result
+            receipt = supplement_result(client, args.assignment_id, args.original_result_sha256, args.exit_evidence_sha256)
+            emit({'status': 'completion_correction_accepted', 'assignment_id': receipt['assignment_id'],
+                  'execution_id': receipt['execution_id'], 'submission_id': receipt['submission_id'],
+                  'result_sha256': receipt['result_sha256'], 'grading_state': receipt['grading_state'],
+                  'completion_correction': receipt['completion_correction'],
+                  'original_outcome': 'failed', 'accepted_outcome': 'completed',
+                  'model_started': False, 'run_remains_stopped': True})
+            return 0
         host = args.command == 'run' and bool(args.host_runtime_binding or args.host_runtime_sha256)
         if host:
             from .host_contract import load_binding
@@ -212,7 +228,7 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
                 controller.upload_only()
                 emit({"status": "stopped", "user_message": "已停止此运行的新领取，原任务收尾成果已保存；未知状态仍保留"})
                 return 130
-    except (RuntimeUnavailable, ExecutionBlocked, ProtocolError, JournalConflict, RemoteError, TransportUnknown, ValueError) as exc:
+    except (RuntimeUnavailable, ExecutionBlocked, ProtocolError, JournalConflict, RemoteError, TransportUnknown, ArtifactError, AssignmentBusy, ValueError, OSError) as exc:
         emit({"status": "blocked", "error_type": type(exc).__name__, "user_message": scrub_text(str(exc)), "evidence_preserved": True})
         return 3
     finally:

@@ -39,7 +39,7 @@ def server_url(value: str) -> str:
     return value.rstrip("/")
 
 def _path(path: str) -> str:
-    if not re.fullmatch(r"/api/v2/(?:bootstrap|runs(?:/[A-Za-z0-9_-]+(?:/(?:claim|stop))?)?|assignments/[A-Za-z0-9_-]+(?:/(?:start|heartbeat|result|release))?)", path):
+    if not re.fullmatch(r"/api/v2/(?:bootstrap|runs(?:/[A-Za-z0-9_-]+(?:/(?:claim|stop))?)?|assignments/[A-Za-z0-9_-]+(?:/(?:start|heartbeat|result|result-correction|release))?)", path):
         raise ProtocolError("unknown v2 API path")
     return path
 
@@ -149,7 +149,12 @@ class Client:
         return self.send(self.journal.prepare(operation, _path(path), body))
 
     def send_result(self, request: Request, files: dict[str, Path]) -> dict:
-        from .protocol import result_receipt
+        from .protocol import result_receipt, correction_receipt
+        correction = request.path.endswith('/result-correction')
+        if correction != request.operation.startswith('completion-correction:'):
+            raise ProtocolError('result route and request namespace mismatch')
+        payload = request.body['corrected_result'] if correction else request.body
+        validate_receipt = correction_receipt if correction else result_receipt
         if self._bootstrap is None:
             self.bootstrap()
         prepared = self.journal.prepare(request.operation, request.path,
@@ -157,8 +162,8 @@ class Client:
         if prepared.body_json != request.body_json or prepared.request_id != request.request_id:
             raise ProtocolError("result request is not the durable original")
         if prepared.response is not None:
-            return prepared.response
-        artifacts = request.body["artifacts"]
+            return validate_receipt(prepared.response, request.request_id, request.path.split('/')[-2], request.body)
+        artifacts = payload["artifacts"]
         if set(files) != {f["name"] for f in artifacts}:
             raise ProtocolError("multipart file set mismatch")
         with ExitStack() as stack:
@@ -175,6 +180,6 @@ class Client:
                 response = self.http.post(_path(request.path), files=parts)
             except httpx.TransportError as exc:
                 raise TransportUnknown("result ACK unknown; preserve exact upload") from exc
-            value = result_receipt(self._response(response), request.request_id, request.path.split("/")[-2], request.body)
+            value = validate_receipt(self._response(response), request.request_id, request.path.split("/")[-2], request.body)
             self.journal.acknowledge(request, value)
             return value
