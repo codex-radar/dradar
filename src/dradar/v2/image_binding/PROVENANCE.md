@@ -1,0 +1,2 @@
+Imported candidate r1 from Library libfile_a6a3217f05c0819193827127be841d53; archive SHA256 aeb4efb5f09af6f91210fd3006044732e5b7678e86cced8c08bc415e5e03644d. Independent final audit unfinished. Original package module import string adjusted for private bootstrap; no global Pier patch.
+Local core extension: explicit Inspector/verify_paid_image_proof environment mapping for thread-safe parent inspection. Local pier_cache allocates the actual child trial/session and freezes parent descriptor. Local changes require independent review; installed Pier source fence remains exact.

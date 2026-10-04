@@ -1,22 +1,24 @@
-"""Publish the reviewed r4 wheel without changing any OTA channel pointer."""
+"""Publish the reviewed four-library 0.5.290 wheel without changing any OTA channel pointer."""
 import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
 from ota_release import R2Client
 
-SHA256 = "aaf8d7f16c0e183cdf0308026b10ae7f6f185155a9f6d2ecb2276b91ac3295b1"
-SIZE = 871727
-COMMIT = "f9ef055f01ae226a62243800fd44c085a5d0a4f9"
+SHA256 = "d0a32f2110322fad693db4d7e25d0e515533f598d11711512aefeaa29f5748b0"
+SIZE = 901818
 ACCOUNT = "4d94f3bcb89bc16989d5ea715eaac061"
 BUCKET = "dradar-cli-ota-production"
 
 
-def publish(wheel, receipt, store, client):
-    if wheel.name != 'dradar-0.5.289-py3-none-any.whl':
+def publish(wheel, receipt, store, client, *, source_commit):
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("Expected the actual full reviewed main commit")
+    if wheel.name != 'dradar-0.5.290-py3-none-any.whl':
         raise ValueError('Unexpected wheel filename')
     body = wheel.read_bytes()
     if len(body) != SIZE or hashlib.sha256(body).hexdigest() != SHA256:
@@ -46,7 +48,7 @@ def publish(wheel, receipt, store, client):
             raise RuntimeError('Public object digest/size mismatch')
     result = {'status': 'HTTP_200_VERIFIED', 'artifact': {'url': url,
               'sha256': SHA256, 'size_bytes': SIZE}, 'object_key': key,
-              'cli_commit': COMMIT, 'channel_pointer_changed': False}
+              'cli_commit': source_commit, 'channel_pointer_changed': False}
     receipt.write_text(json.dumps(result, indent=2) + '\n')
     return result
 
@@ -55,13 +57,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--wheel', type=Path, required=True)
     parser.add_argument('--receipt', type=Path, required=True)
+    parser.add_argument('--source-commit', required=True)
     args = parser.parse_args()
     store = R2Client(account_id=ACCOUNT, bucket=BUCKET,
         access_key_id=os.environ.get('DRADAR_OTA_R2_ACCESS_KEY_ID', ''),
         secret_access_key=os.environ.get('DRADAR_OTA_R2_SECRET_ACCESS_KEY', ''))
     try:
         with httpx.Client(follow_redirects=False, timeout=60) as client:
-            publish(args.wheel, args.receipt, store, client)
+            publish(args.wheel, args.receipt, store, client, source_commit=args.source_commit)
     finally:
         store.close()
 

@@ -1,0 +1,43 @@
+name: Build reviewed CLI wheel artifact
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: 0.9.7
+          enable-cache: false
+      - name: Build and verify the exact reviewed wheel
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"
+          build_venv="${RUNNER_TEMP}/dradar-wheel-build"
+          output_dir="${RUNNER_TEMP}/dradar-reviewed-wheel"
+          uv venv "${build_venv}" --python 3.13
+          uv pip install --python "${build_venv}/bin/python" --index-url https://pypi.org/simple -r release/ota/requirements-build.txt
+          "${build_venv}/bin/python" scripts/build_reviewed_cli_wheel.py --source-root . --output-dir "${output_dir}"
+          echo "WHEEL_FILE=${output_dir}/dradar-0.5.290-py3-none-any.whl" >> "${GITHUB_ENV}"
+      - name: Save the verified wheel as a real same-repository artifact
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dradar-cli-0.5.290-d0a32f2110322fad
+          path: ${{ env.WHEEL_FILE }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Report actual artifact identity
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          test -n "${ARTIFACT_ID}"
+          printf 'Verified wheel artifact ID: %s\nURL: %s\n' "${ARTIFACT_ID}" "${ARTIFACT_URL}"
