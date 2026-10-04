@@ -20,6 +20,7 @@ from .host_contract import (AUTH_RUNTIME, BILLING_MODE, CAPABILITY, CONFIG_VERSI
                            MODEL, PROVIDER, VERSION, EFFORTS, load_binding, private_json)
 from .runtime import CodexRuntime, RuntimeUnavailable, TaskNotReady
 from .results import Completion
+from .native_evidence import collection_safety
 
 TERMINAL={'completed','failed','interrupted'}
 
@@ -251,13 +252,14 @@ class HostCodexRuntime(CodexRuntime):
         if failure is not None:
             # Before barrier/ACK, propagate: no invented elapsed/start/outcome.
             if started is None:raise failure
-            return Completion('failed',True,completed_at=datetime.now(timezone.utc).isoformat(),
+            return Completion('failed',True,completed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
                 elapsed_ms=int((time.monotonic()-started)*1000),
                 failure={'code':'host_runtime_failed','message':'官方宿主运行失败，原成果及退出证据已保留'})
-        unchanged=collection.get('public_inputs_unchanged',collection.get('training_unchanged'))
-        if unchanged is not True or collection.get('unexpected_workspace_changes') or collection.get('missing_deliverables'):
+        try:
+            collection_safety(collection)
+            outcome=terminal
+        except ValueError:
             outcome='failed'
-        else:outcome=terminal
         files={}
         collected=folder/'collected'
         for name,target in [('patch','model.patch'),('runner_result','COLLECTION.json')]:
@@ -273,6 +275,6 @@ class HostCodexRuntime(CodexRuntime):
         if usage and terminal_event and all(type(usage.get(k))is int and usage[k]>=0 for k in ['inputTokens','outputTokens','totalTokens']):
             if usage['inputTokens']+usage['outputTokens']==usage['totalTokens']:
                 tokens={'input':usage['inputTokens'],'output':usage['outputTokens'],'total':usage['totalTokens'],'source':'official_app_server_terminal_usage','missing_reason':None}
-        return Completion(outcome,True,files,datetime.now(timezone.utc).isoformat(),
+        return Completion(outcome,True,files,datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
                           int((time.monotonic()-started)*1000),tokens,
                           None if outcome=='completed' else {'code':'host_turn_'+outcome,'message':'模型未正常完成或公共输入/成果不符合固定契约'})

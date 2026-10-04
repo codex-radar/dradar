@@ -12,7 +12,7 @@ from typing import Protocol
 from ..assignment_lock import lock
 from .client import Client, ProtocolError, TransportUnknown
 from .journal import Journal, JournalConflict
-from .protocol import envelope, assignment, owner, result_receipt
+from .protocol import envelope, assignment, owner, result_receipt, result_hash
 from .results import Completion, save_completion, upload_files, recover_completion
 from .runtime import TaskNotReady
 from .locks import exclusive
@@ -296,7 +296,11 @@ class Controller:
             saved = self.journal.execution(aid)
             if saved and saved["result_json"]:
                 result = json.loads(saved["result_json"])
-                a["outcome"] = result["outcome"]
+                if a.get('completion_correction'):
+                    self._accepted_correction(a, result)
+                    a['original_reported_outcome'] = result['outcome']
+                else:
+                    a["outcome"] = result["outcome"]
                 a["progress"] = {"elapsed_ms": result["elapsed_ms"], "tokens": result["tokens"]}
             elif aid in self._observed_start:
                 a["progress"] = {**(a.get("progress") or {}), "elapsed_ms": int((time.monotonic() - self._observed_start[aid]) * 1000)}
@@ -304,6 +308,23 @@ class Controller:
                 a["phase"] = self.phases[aid]
         snap['runtime_unavailable_tasks']=self.runtime_unavailable_tasks()
         return snap
+
+    def _accepted_correction(self, a: dict, original: dict):
+        """The authenticated accepted commitment supersedes display only."""
+        proof = a['completion_correction']
+        old = next((r for r in self.journal.requests() if r.operation == 'result:' + a['assignment_id']), None)
+        corrected = {**original, 'outcome': 'completed', 'failure': None}
+        expected = {'schema': 'codex-native-completion-correction/1',
+                    'original_request_id': old.request_id if old else None,
+                    'original_result_sha256': original['result_sha256'],
+                    'corrected_result_sha256': result_hash(corrected),
+                    'original_outcome': 'failed', 'accepted_outcome': 'completed'}
+        if (original['outcome'] != 'failed' or a.get('outcome') != 'completed'
+                or a.get('state') != 'submitted' or a.get('execution_id') != original['execution_id']
+                or a.get('result_sha256') != expected['corrected_result_sha256']
+                or not isinstance(proof, dict) or any(proof.get(k) != v for k, v in expected.items())):
+            raise ProtocolError('accepted correction differs from original frozen result')
+        return proof
 
     def _next(self, prefix: str, path: str, body: dict):
         pending = self.journal.pending_request(prefix)
@@ -415,6 +436,11 @@ class Controller:
             self.journal.save_result(a["assignment_id"], saved["execution_id"], recovered)
             saved = self.journal.execution(a["assignment_id"])
         payload = json.loads(saved["result_json"])
+        if a.get('completion_correction'):
+            self._accepted_correction(a, payload)
+            return None
+        if any(r.operation.startswith('completion-correction:' + a['assignment_id'] + ':') for r in self.journal.requests()):
+            raise ExecutionBlocked('explicit correction pending; replay supplement-result and preserve original failed request')
         self._phase(a["assignment_id"], "uploading")
         limit = (self.client._bootstrap or self.client.bootstrap()).get("limits", {}).get("max_result_bytes")
         if limit is not None and sum(f["size_bytes"] for f in payload["artifacts"]) > limit:

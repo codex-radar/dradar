@@ -151,6 +151,35 @@ class Journal:
                 return
             db.execute("UPDATE requests SET response_json=? WHERE operation=?", (raw, request.operation))
 
+    def prepare_correction(self, operation: str, path: str, body: dict) -> Request:
+        """Atomically bind one new ID to the outer and corrected result request.
+
+        Original requests and executions are never updated. A restart recovers
+        the same correction ID and exact body, including the original proof.
+        """
+        if not operation.startswith('completion-correction:') or not path.endswith('/result-correction'):
+            raise JournalConflict('dedicated correction namespace required')
+        if 'request_id' in body or 'request_id' in body['corrected_result']:
+            raise JournalConflict('correction request identity is journal owned')
+        supplied = json.loads(json.dumps(body, allow_nan=False))
+        with self._db() as db:
+            row = db.execute('SELECT * FROM requests WHERE operation=?', (operation,)).fetchone()
+            if row:
+                saved = Request(**dict(row))
+                previous = saved.body
+                rid = previous.pop('request_id')
+                if previous['corrected_result'].pop('request_id') != rid or saved.path != path or previous != supplied:
+                    raise JournalConflict('immutable completion correction conflict')
+                return saved
+            request_id = uuid.uuid4().hex
+            if request_id == supplied['original_result']['request_id']:
+                raise JournalConflict('correction must have a new request identity')
+            exact = {**supplied, 'request_id': request_id}
+            exact['corrected_result']['request_id'] = request_id
+            raw = json.dumps(exact, sort_keys=True, separators=(',', ':'), allow_nan=False)
+            db.execute('INSERT INTO requests VALUES (?,?,?,?,?,NULL)', (operation, request_id, 'POST', path, raw))
+            return Request(operation, request_id, 'POST', path, raw, None)
+
     def next_sequence(self, prefix: str) -> int:
         with self._db() as db:
             row = db.execute("SELECT value FROM metadata WHERE key=?", ("seq:" + prefix,)).fetchone()
