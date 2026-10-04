@@ -9,9 +9,9 @@ import sys
 import tomllib
 import zipfile
 
-VERSION = '0.5.294'
-SHA256 = '2118bb92594f5c78bbeec8dca16df42b25d050aeb8a5ed36c2782e89273f64d4'
-SIZE = 920791
+VERSION = '0.5.295'
+SHA256 = '95d0242e0b79341d4c6f253ac9f75b72997f3e6621639da7c2d21c2e38470d1d'
+SIZE = 923953
 BACKEND_VERSION = '1.32.4'
 FILENAME = f'dradar-{VERSION}-py3-none-any.whl'
 

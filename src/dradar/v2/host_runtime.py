@@ -18,7 +18,7 @@ import time
 
 from .host_contract import (AUTH_RUNTIME, BILLING_MODE, CAPABILITY, CONFIG_VERSION,
                            MODEL, PROVIDER, VERSION, EFFORTS, load_binding, private_json)
-from .runtime import CodexRuntime, RuntimeUnavailable
+from .runtime import CodexRuntime, RuntimeUnavailable, TaskNotReady
 from .results import Completion
 
 TERMINAL={'completed','failed','interrupted'}
@@ -104,10 +104,6 @@ class HostCodexRuntime(CodexRuntime):
             raise RuntimeUnavailable('host runtime uses exact preinstalled image binding; no alternate builder')
         self.binding_path=Path(host_runtime_binding).resolve(strict=True)
         self.binding=load_binding(self.binding_path,host_runtime_sha256)
-        from .host_contract import MIXED_SCHEMA
-        if self.binding['schema']==MIXED_SCHEMA:
-            from .mixed_pool import validate_public_roots
-            validate_public_roots(self.binding)
         journal.bind('host_runtime_binding_sha256',host_runtime_sha256)
         self.controller_factory=controller_factory
         self.controllers={}
@@ -115,18 +111,27 @@ class HostCodexRuntime(CodexRuntime):
         # managed file-auth runner is never called in this explicit mode.
         super().__init__(journal,tasks_root,managed_auth_config=self.binding_path)
 
+    def claim_task_candidates(self):
+        from .host_contract import MIXED_SCHEMA
+        if self.binding['schema']!=MIXED_SCHEMA:return None
+        return [{k:t[k] for k in ('benchmark','task_id','task_content_hash')} for t in self.binding['tasks']]
+
     def prepare(self,a):
         if set(a.get('runner') or {}) != {'agent','agent_version','agent_version_verified','auth_runtime','provider','billing_mode','est_minutes'}:
             raise RuntimeUnavailable('Server runner must retain exact seven-field contract')
         from .host_contract import MIXED_SCHEMA
         roots = None
         if self.binding['schema'] == MIXED_SCHEMA:
-            matches=[t for t in self.binding['tasks'] if (t['benchmark'],t['task_id']) == (a['task']['benchmark'],a['task']['task_id'])]
-            if len(matches)!=1 or matches[0]['task_content_hash']!=a['task']['task_content_hash']:
-                raise RuntimeUnavailable('fixed mixed source/task runtime binding missing')
-            from .mixed_pool import public_task_root
-            roots = public_task_root(matches[0])
-        prepared=super().prepare(a,**({'tasks_root':roots[0],'bundle_root':roots[1]} if roots else {}))
+            from .host_contract import selected_task_binding
+            try:task=selected_task_binding(self.binding,a['task'])
+            except (ValueError,KeyError,TypeError) as exc:raise TaskNotReady('runtime_binding_missing') from exc
+            from .mixed_pool import validate_selected_public_root
+            try:roots=validate_selected_public_root(task)
+            except (ValueError,OSError,KeyError,TypeError) as exc:raise TaskNotReady('task_inputs_unavailable') from exc
+        try:prepared=super().prepare(a,**({'tasks_root':roots[0],'bundle_root':roots[1]} if roots else {}))
+        except (RuntimeUnavailable,OSError) as exc:
+            if roots:raise TaskNotReady('task_inputs_unavailable') from exc
+            raise
         if roots:prepared['tasks_root']=str(roots[0])
         if any(prepared.get(k)!=v for k,v in {
             'agent':'codex','agent_version':VERSION,'agent_version_verified':True,
@@ -144,8 +149,20 @@ class HostCodexRuntime(CodexRuntime):
         task=matches[0]
         # Public collection code is owner-provided and digest-bound, never part
         # of a model patch or a Server command to execute on the host.
-        if hashlib.sha256(private_json(task['collector_path'])).hexdigest()!=task['collector_sha256']:
-            raise RuntimeUnavailable('fixed public collector binding mismatch')
+        try:
+            if hashlib.sha256(private_json(task['collector_path'])).hexdigest()!=task['collector_sha256']:
+                raise ValueError('fixed public collector binding mismatch')
+        except (ValueError,OSError) as exc:
+            if roots:raise TaskNotReady('collector_unavailable') from exc
+            raise RuntimeUnavailable('fixed public collector binding mismatch') from exc
+        if roots:
+            # Inspect only the leased task image, never pull/build unrelated images.
+            probe=subprocess.run(['docker','--context',self.binding['host']['docker_context'],'image','inspect',task['image_id'],'--format','{{.Id}}'],capture_output=True,text=True,timeout=10)
+            if probe.returncode:
+                if probe.stderr.strip().lower() in {'error: no such image: '+task['image_id'],'error response from daemon: no such image: '+task['image_id']}:
+                    raise TaskNotReady('image_unavailable')
+                raise RuntimeUnavailable('Docker image readiness unknown; preserve host safety stop')
+            if probe.stdout.strip()!=task['image_id']:raise TaskNotReady('image_unavailable')
         aid=prepared['assignment_id']
         folder=self.journal.root/'runtime'/aid/'host'
         folder.mkdir(parents=True,mode=0o700,exist_ok=False)

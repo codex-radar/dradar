@@ -14,6 +14,7 @@ from .client import Client, ProtocolError, TransportUnknown
 from .journal import Journal, JournalConflict
 from .protocol import envelope, assignment, owner, result_receipt
 from .results import Completion, save_completion, upload_files, recover_completion
+from .runtime import TaskNotReady
 from .locks import exclusive
 
 class Runtime(Protocol):
@@ -105,6 +106,37 @@ class Controller:
         if not self._locked:
             raise ExecutionBlocked("one controller lock per saved run is required")
 
+    def _task_candidates(self):
+        if not hasattr(self.runtime,'claim_task_candidates'):return None
+        candidates=self.runtime.claim_task_candidates()
+        if candidates is None:return None
+        from .mixed_pool import MEMBERS, MEMBER_HASHES
+        by={}
+        for t in candidates:
+            if not isinstance(t,dict) or set(t)!={'benchmark','task_id','task_content_hash'}:
+                raise ExecutionBlocked('exact runtime task candidate identity required')
+            key=(t['benchmark'],t['task_id'])
+            if key in by or MEMBER_HASHES.get(key)!=t['task_content_hash']:
+                raise ExecutionBlocked('runtime task candidate outside fixed64 scope')
+            if self.journal.value('runtime_unavailable:'+key[0]+':'+key[1]) is None:by[key]=t
+        return [by[(m['source_benchmark'],m['task_id'])] for m in MEMBERS if (m['source_benchmark'],m['task_id']) in by]
+
+    def _claim_body(self,slot):
+        body={'device_id':self.device_id,'slot_id':slot}
+        candidates=self._task_candidates()
+        if candidates is not None:
+            from .mixed_pool import CATALOG_VERSION,MEMBERS_SHA256
+            body['runtime_task_scope']={'catalog_version':CATALOG_VERSION,'members_sha256':MEMBERS_SHA256,'tasks':candidates}
+        return body
+
+    def runtime_unavailable_tasks(self):
+        from .mixed_pool import MEMBERS
+        rows=[]
+        for m in MEMBERS:
+            value=self.journal.value('runtime_unavailable:'+m['source_benchmark']+':'+m['task_id'])
+            if value:rows.append(json.loads(value))
+        return rows
+
     def initialize(self) -> dict:
         from ..harness_policy import reject_retired_combination
         reject_retired_combination(self.configuration['agent'],self.configuration['model'])
@@ -114,6 +146,12 @@ class Controller:
         if not self.launch_allowed:
             raise ExecutionBlocked("copied journal permits upload-only until original controller exit is confirmed")
         boot = self.client.bootstrap()
+        candidates=self._task_candidates()
+        if candidates is not None:
+            from .host_contract import PER_TASK_CAPABILITY,PER_TASK_POLICY
+            if PER_TASK_CAPABILITY not in boot.get('capabilities',[]) or boot.get('runtime_readiness_policy')!=PER_TASK_POLICY:
+                raise ExecutionBlocked('Server upgrade required: per-assignment runtime_task_scope claim filter; no unfiltered fallback')
+            if not candidates:raise ExecutionBlocked('no bound task candidates; preserve task-specific readiness evidence')
         limits = boot.get("limits", {})
         for field, key in (("total_count", "max_total_count"), ("concurrency", "max_concurrency")):
             cap = limits.get(key)
@@ -162,6 +200,14 @@ class Controller:
             minutes = runner['est_minutes']
             if minutes is not None and (type(minutes) not in (int,float) or not math.isfinite(minutes) or minutes < 0):
                 raise ProtocolError('invalid runner estimate')
+            # A versioned per-task Server must honor the exact durable claim mask.
+            for req in self.journal.requests():
+                original=(req.response or {}).get('assignment')
+                if req.operation.startswith('claim:') and original and original.get('assignment_id')==a['assignment_id']:
+                    candidate_scope=req.body.get('runtime_task_scope')
+                    identity={k:a['task'][k] for k in ('benchmark','task_id','task_content_hash')}
+                    if candidate_scope is not None and identity not in candidate_scope['tasks']:
+                        raise ProtocolError('Server assignment outside original runtime task candidate filter')
             keys = ('assignment_id','run_id','device_id','slot_id','work_key','lease_id','owner_epoch','task','runner')
             scope = {k:a[k] for k in keys}
             key = 'assignment_scope:' + a['assignment_id']
@@ -207,7 +253,7 @@ class Controller:
                     raise ProtocolError('authoritative release state not terminal and never-started')
                 self.journal.bind('release_reconciled:'+aid,'true')
                 self.blocked.pop(aid,None)
-                if req.body['reason'] == 'preflight_failed':
+                if req.body['reason'] == 'preflight_failed' and self.journal.value('task_unavailable:'+aid) is None:
                     self.blocked[aid] = 'preflight_failed'
                     self.shortfall_reason = 'local_error'
                     self.stop('local_error')
@@ -256,6 +302,7 @@ class Controller:
                 a["progress"] = {**(a.get("progress") or {}), "elapsed_ms": int((time.monotonic() - self._observed_start[aid]) * 1000)}
             if aid in self.phases:
                 a["phase"] = self.phases[aid]
+        snap['runtime_unavailable_tasks']=self.runtime_unavailable_tasks()
         return snap
 
     def _next(self, prefix: str, path: str, body: dict):
@@ -306,17 +353,30 @@ class Controller:
         try:
             prepared = self.runtime.prepare(current)
         except Exception as exc:
-            # Freeze this batch before a release network retry can expose an
-            # apparently free slot. The original release remains replayable.
-            self._stop_event.set()
-            self.accepting = False
-            self.journal.bind('local_stop','true')
-            self.journal.bind('local_interrupt','true')
+            # Task-only failures happen before controller/paid execution. Keep
+            # their exact release unresolved until confirmed; shared faults freeze.
+            task_local=(isinstance(exc,TaskNotReady) and current['state']=='leased'
+                        and current.get('execution_id') is None and current.get('started_at') is None
+                        and self.journal.execution(aid) is None
+                        and not any(r.operation=='start:'+aid for r in self.journal.requests())
+                        and not self.journal.audits(aid) and self._task_candidates() is not None)
+            if task_local:
+                task=current['task'];key='runtime_unavailable:'+task['benchmark']+':'+task['task_id']
+                if self.journal.value(key) is None:
+                    self.journal.bind(key,json.dumps({'benchmark':task['benchmark'],'task_id':task['task_id'],
+                        'task_content_hash':task['task_content_hash'],'reason':exc.code,'status':'not_ready_before_start'}))
+                self.journal.bind('task_unavailable:'+aid,exc.code)
+            else:
+                self._stop_event.set()
+                self.accepting = False
+                self.journal.bind('local_stop','true')
+                self.journal.bind('local_interrupt','true')
             if current["state"] == "leased":
                 req = self.journal.prepare(f"release:{aid}", f"/api/v2/assignments/{aid}/release", {**owner(current), "reason": "preflight_failed"})
                 reply = envelope(self.client.send(req), req.request_id)
                 if reply.get("status") != "released":
                     raise ProtocolError("preflight release not acknowledged")
+            if task_local:raise exc
             raise PreflightFailed("environment preparation failed before paid execution") from exc
         def authorize():
             with self.launch_guard():
@@ -457,6 +517,9 @@ class Controller:
                     self.blocked[aid] = 'assignment_mismatch'
                     self.shortfall_reason = 'local_error'
                     self.stop('local_error')
+                except TaskNotReady:
+                    if self.journal.value('release_reconciled:'+aid)!='true':
+                        self.blocked[aid]='task_runtime_unavailable'
                 except PreflightFailed:
                     self.blocked[aid] = "preflight_failed"
                     self.shortfall_reason = "local_error"
@@ -501,7 +564,7 @@ class Controller:
             for slot in range(self.configuration["concurrency"]):
                 if slot in occupied or now < self.retry_at.get(f"slot:{slot}", 0):
                     continue
-                req = self._next(f"claim:{slot}:", f"/api/v2/runs/{self.run_id}/claim", {"device_id": self.device_id, "slot_id": slot})
+                req = self._next(f"claim:{slot}:", f"/api/v2/runs/{self.run_id}/claim", self._claim_body(slot))
                 try:
                     reply = envelope(self.client.send(req), req.request_id)
                 except TransportUnknown as exc:
@@ -544,4 +607,4 @@ class Controller:
         return {"run": snap["run"], "accepting": self.accepting, "active_local": len(self.futures),
                 "blocked": dict(self.blocked), "unresolved": unresolved,
                 "settled": not unresolved and not self.futures and not self.blocked,
-                "shortfall_reason": self.shortfall_reason}
+                "shortfall_reason": self.shortfall_reason,"runtime_unavailable_tasks":self.runtime_unavailable_tasks()}

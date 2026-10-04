@@ -88,4 +88,5 @@ def run_view(snapshot: dict) -> dict:
     return {"run_id": run["run_id"], "state": run["state"], "requested": run["total_count"],
             "concurrency": run["concurrency"], "started": counts["started"], "submitted": counts["submitted"],
             "uncertain": counts["uncertain"], "shortfall": max(0, run["total_count"] - counts["started"]),
-            "tasks": [assignment_view(a) for a in snapshot["assignments"]]}
+            "tasks": [assignment_view(a) for a in snapshot["assignments"]],
+            "runtime_unavailable_tasks":snapshot.get("runtime_unavailable_tasks",[])}

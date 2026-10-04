@@ -106,12 +106,21 @@ Server权威score_version=radar-bench-v1，策略radar-bench-v1-last3-per-task-e
 完整混池binding通过后，CLI在声明mixed capability和run:create之前检查四个canonical source_root、四个原archive marker及全部68任务的regular instruction.md/task.toml可用性；任一缺失或symlink即停止新工作。这是公共资产就位预检；每个实际assignment仍在start前核原任务内容hash与collector，不把marker或目录存在当成全部68实际运行验收。
 
 
-## 当前首发64题（CLI0.5.294候选）
+## 历史CLI0.5.294完整64绑定（已正式发布s115；按题运行由下文295修正）
 
 用户已明确从当前领取、执行和统计成员移除四题：TB的heat-pump-warranty、intrastat-meldung、live-database-cutover及Science的protein-active-learning。当前固定成员为DeepSWE15/Pompeii16/TB14/Science19，共64题；四题原资料、历史成绩、账本与旧签名发行全部保留。CLI0.5.293原生服务适配保留离线候选，不作为本次首发依赖，不继续四题专项验收或模型试验。
 
 新工作沿用户采纳的007实际配置64成员（运行于既有Server024，非新019发行包）、source/task原内容hash、版本化来源/选择版本、原公开bundle/root及评分pin，当前catalog为dradar-four-library-deployment007-server024-20261004-config64，pool为radar-bench-final64-20261004，成员SHA为f75ff09b6117cd83d3ab6ea744fe379ac117676c042538d5df5e38489af27bc4；具体摘要从可信固定交付清单核对。不得只改数量64而继续68成员或再把四题加回。`dradar.codex_host_binding.v2` / `host-remote-0160-final64-v1`明确绑定完整64任务及四个公共根；无需四题native_services或native服务bootstrap能力。保留既有host0.160、Sol6.1五档、账号/预算/并发、租约start栅栏、on-request/user、外层隔离和成果上传协议；DS0 Server/grader无需ChatGPT账号，不复制Mac auth文件。
 
-当前64的目录、成员摘要、公开包与实际runtime绑定全部核对后才允许run:create；缺项/暂停/来源hash不符则阻断。原runtime64题资产可沿可信字节证明复用，仅从新绑定排除四题并采用权威新pin，不能删除或在原目录覆盖历史资产。65/68条绑定、四题assignment或旧68元数据不能进入新执行；数量64不是新增模型次数或预算。
+历史294要求当前64的目录、成员摘要、公开包与实际runtime绑定全部核对后才允许run:create（295不沿此全量环境门槛）；缺项/暂停/来源hash不符则阻断。原runtime64题资产可沿可信字节证明复用，仅从新绑定排除四题并采用权威新pin，不能删除或在原目录覆盖历史资产。65/68条绑定、四题assignment或旧68元数据不能进入新执行；数量64不是新增模型次数或预算。
 
 旧68题STATE只保留stop/progress/upload-only，严格核原catalog/memberSHA/source/task/bundle、run/device/lease/epoch和原结果hash，保留已有判分/NULL待结算；不能拿旧STATE重新create/claim/start/prepare/execute，也不将旧scope改写成64。按当前64新计划必须用新STATE。旧答卷仍可以历史查询与原成果上传；当前榜单/coverage/required_tasks沿实际64成员评分契约，coverage分母64、五档320格；Server批准64题的代码门槛仍需对应固定修正，CLI不重算成绩或把未跑题填零。生产服务、实际发布与正式安装状态分别据证，新候选不等于已发布或全64实机验收。
+
+
+## 当前按题运行绑定（CLI0.5.295候选；正式294/s115历史保留）
+
+当前64成员及原任务hash、四公共归档字节与评分口径不变。新mixed运行binding使用dradar.codex_host_binding.v2 / host-remote-0160-final64-per-task-v1：可信SHA绑定公共host和本机已有任务候选，tasks可为当前64的非空子集。领取前只核公共host/精确候选身份，未列出或未就位的无关任务/根/镜像不挡可用题；不把候选称作已完成实机验收。领取后只检查该题完整字段、来源marker/公共内容hash、collector、不可变本机镜像及原资源/依赖/隔离/官方host0.160；原实际start ACK与durable fence之后才能模型执行。
+
+Server须声明on-demand-v2-per-task-runtime-v1及runtime_readiness_policy={mode:per-assignment-v1,claim_filter:runtime-task-candidates-v1}。claim附runtime_task_scope（catalog_version、原64members_sha256及本机候选benchmark/task_id/task_content_hash），Server只在授权64集合与该子集交集中按既有均衡策略分配，实际选中题的Server私有grader与资源仍逐题验证。该字段仅收窄分配，不授权模型、次数、身份或放宽Server判分。旧Server不支持时精确提示升级，不发无过滤claim。Server全库runtime_verified不作为新模式的全部64就位证明或门槛；仅共享身份/授权/激活及实际选中题就位可开安全执行。
+
+明确的领取题binding/公共输入/collector/镜像缺项发生于任何controller/paid启动之前时，CLI只标该题not_ready_before_start，释放原never-started租约并确认确切owner/终态后复用其槽位；当前STATE后续候选排除此题、保留原因且其他题继续。释放ACK不明保留原durable请求，仍按原body/id重放，不跨slot占用或推定退出。公共host/auth/daemon异常、已开始执行、身份不符和物理清理未证仍走原安全停止/保成果。缺题不是模型失败或0分，不加积分、不覆盖判分/NULL待结算。修复该题环境后以新可信binding及新STATE恢复；旧STATE不改scope/fence/成果。完整64只表示库存和coverage分母，不要求全64下载/构建/执行或新增模型验收。

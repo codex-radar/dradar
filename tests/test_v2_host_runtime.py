@@ -208,7 +208,7 @@ def test_declared_schema_exposes_new_capability_without_changing_legacy(case,cap
     assert value['host_runtime']['capability']==CAPABILITY
     assert value['host_runtime']['version']=='0.160.0'
     assert value['host_runtime']['max_parallel']==2
-    assert __version__=='0.5.294'
+    assert __version__=='0.5.295'
     from dradar.gpt6 import GPT61_CODEX_VERSION
     assert GPT61_CODEX_VERSION=='0.159.2'
 

@@ -126,7 +126,7 @@ def test_schema_exposes64_without_native_first_release_dependency(capsys):
     assert main(['schema'])==0
     mixed=json.loads(capsys.readouterr().out)['host_runtime']['mixed_pool']
     assert mixed['task_count']==64 and mixed['members_sha256']==MEMBERS_SHA256
-    assert mixed['runtime_config_version']=='host-remote-0160-final64-v1'
+    assert mixed['runtime_config_version']=='host-remote-0160-final64-per-task-v1'
     assert 'on-demand-v2-native-services-v1' not in mixed['wire_capabilities']
 
 

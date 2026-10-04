@@ -30,7 +30,10 @@ SERVER_CONTRIBUTION_POLICY = {
 WIRE_CAPABILITIES = ('on-demand-v2', MODEL_CAPABILITY, AUTH_RUNTIME)
 MIXED_WIRE_CAPABILITIES = WIRE_CAPABILITIES + ('on-demand-v2-mixed-pool-v1',)
 MIXED_SCHEMA = 'dradar.codex_host_binding.v2'
-MIXED_CONFIG_VERSION = 'host-remote-0160-final64-v1'
+MIXED_CONFIG_VERSION = 'host-remote-0160-final64-per-task-v1'
+PER_TASK_CAPABILITY = 'on-demand-v2-per-task-runtime-v1'
+PER_TASK_POLICY = {'mode':'per-assignment-v1','claim_filter':'runtime-task-candidates-v1'}
+PER_TASK_WIRE_CAPABILITIES = MIXED_WIRE_CAPABILITIES + (PER_TASK_CAPABILITY,)
 SCHEMA = 'dradar.codex_host_binding.v1'
 CONFIG_VERSION = 'host-remote-0160-v1'
 BENCHMARK_POLICIES = {
@@ -106,7 +109,9 @@ def load_binding(path, expected_sha256):
     raw=private_json(path)
     if hashlib.sha256(raw).hexdigest()!=expected_sha256:
         raise ValueError('host runtime binding digest mismatch')
-    c=json.loads(raw)
+    return _validate_binding(json.loads(raw))
+
+def _validate_binding(c):
     if not isinstance(c,dict):raise ValueError('host runtime binding must be an object')
     mixed = c.get('schema') == MIXED_SCHEMA
     expected_schema = MIXED_SCHEMA if mixed else SCHEMA
@@ -131,6 +136,16 @@ def load_binding(path, expected_sha256):
         raise ValueError('immutable official egress image required')
     if not isinstance(c['tasks'],list):raise ValueError('explicit public task bindings required')
     seen=set()
+    if mixed:
+        from .mixed_pool import MEMBER_HASHES
+        for t in c['tasks']:
+            if not isinstance(t,dict):raise ValueError('public task binding object required')
+            key=(t.get('benchmark'),t.get('task_id'))
+            if key not in MEMBER_HASHES or key in seen or t.get('task_content_hash')!=MEMBER_HASHES[key]:
+                raise ValueError('duplicate or outside exact64 task binding identity')
+            seen.add(key)
+        if not seen:raise ValueError('at least one public task binding candidate required')
+        return c
     for t in c['tasks']:
         required={'benchmark','policy_id','task_id','task_content_hash','image_id','git_head','cpus','memory_bytes','agent_timeout_sec','official_task_timeout_sec','verifier_timeout_sec','executor_cli','executor_path','executor_home','public_files','collector_path','collector_sha256','deliverable_names'}
         if mixed:required = required | {'source_root'}
@@ -170,13 +185,22 @@ def load_binding(path, expected_sha256):
         names=t['deliverable_names']
         if not isinstance(names,list)or not names or len(set(names))!=len(names)or any(not re.fullmatch(r'[A-Za-z0-9_.-]+',n)or n in ['.','..']for n in names):
             raise ValueError('bounded output allowlist required')
-    if mixed:
-        from .mixed_pool import MEMBER_HASHES, SOURCES
-        if seen != set(MEMBER_HASHES):raise ValueError('complete exact64 runtime binding required')
-        roots = {b:{t['source_root'] for t in c['tasks'] if t['benchmark']==b} for b in SOURCES}
-        if any(len(r)!=1 for r in roots.values()) or len({next(iter(r)) for r in roots.values()})!=4:
-            raise ValueError('four distinct fixed source roots required')
     return c
+
+def selected_task_binding(binding,task):
+    """Validate the exact leased task only; unrelated runtime rows are deferred."""
+    matches=[t for t in binding['tasks'] if (t['benchmark'],t['task_id'])==(task['benchmark'],task['task_id'])]
+    if len(matches)!=1 or matches[0]['task_content_hash']!=task['task_content_hash']:
+        raise ValueError('selected task immutable runtime binding missing')
+    t=matches[0]
+    if binding['schema']==MIXED_SCHEMA:
+        required={'benchmark','policy_id','task_id','task_content_hash','image_id','git_head','cpus','memory_bytes','agent_timeout_sec','official_task_timeout_sec','verifier_timeout_sec','executor_cli','executor_path','executor_home','public_files','collector_path','collector_sha256','deliverable_names','source_root'}
+        if set(t)!=required:raise ValueError('selected task binding incomplete or extra fields')
+        absolute(t['source_root'])
+        # Reuse the unchanged full resource/path/collector validator for one row.
+        one={**binding,'schema':SCHEMA,'runtime_config_version':CONFIG_VERSION,'tasks':[{k:v for k,v in t.items() if k!='source_root'}]}
+        _validate_binding(one)
+    return t
 
 def validate_controller_config(c):
     # The controller is launched only by the installed adapter, not a Server URL

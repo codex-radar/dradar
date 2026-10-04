@@ -56,9 +56,9 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
     args = parser.parse_args(argv)
     if args.command == "schema":
         from .skill_install import packaged_skill
-        from .host_contract import AUTH_RUNTIME, CAPABILITY, CONFIG_VERSION, VERSION, BENCHMARK_POLICIES, EFFORTS, WIRE_CAPABILITIES, SERVER_CATALOG_VERSION, MIXED_SCHEMA, MIXED_CONFIG_VERSION, MIXED_WIRE_CAPABILITIES
+        from .host_contract import AUTH_RUNTIME, CAPABILITY, CONFIG_VERSION, VERSION, BENCHMARK_POLICIES, EFFORTS, WIRE_CAPABILITIES, SERVER_CATALOG_VERSION, MIXED_SCHEMA, MIXED_CONFIG_VERSION, MIXED_WIRE_CAPABILITIES, PER_TASK_WIRE_CAPABILITIES
         from .mixed_pool import POOL, MEMBERS_SHA256, is_historical_pool
-        emit({**SCHEMA,"local_commands":["schema","install-skill","host-approval"],"skill_sha256":hashlib.sha256(packaged_skill()).hexdigest(),"host_runtime":{"version":VERSION,"auth_runtime":AUTH_RUNTIME,"capability":CAPABILITY,"wire_capabilities":list(WIRE_CAPABILITIES),"server_catalog_version":SERVER_CATALOG_VERSION,"runtime_config_version":CONFIG_VERSION,"model":"gpt-6.1-sol","supported_efforts":list(EFFORTS),"live_validated_efforts":["low"],"max_parallel":2,"versioned_benchmark_policy_ids":BENCHMARK_POLICIES,"explicit_binding_required":True,"mixed_pool":{"benchmark":POOL,"members_sha256":MEMBERS_SHA256,"task_count":64,"binding_schema":MIXED_SCHEMA,"runtime_config_version":MIXED_CONFIG_VERSION,"wire_capabilities":list(MIXED_WIRE_CAPABILITIES),"live_validated":False}}})
+        emit({**SCHEMA,"local_commands":["schema","install-skill","host-approval"],"skill_sha256":hashlib.sha256(packaged_skill()).hexdigest(),"host_runtime":{"version":VERSION,"auth_runtime":AUTH_RUNTIME,"capability":CAPABILITY,"wire_capabilities":list(WIRE_CAPABILITIES),"server_catalog_version":SERVER_CATALOG_VERSION,"runtime_config_version":CONFIG_VERSION,"model":"gpt-6.1-sol","supported_efforts":list(EFFORTS),"live_validated_efforts":["low"],"max_parallel":2,"versioned_benchmark_policy_ids":BENCHMARK_POLICIES,"explicit_binding_required":True,"mixed_pool":{"benchmark":POOL,"members_sha256":MEMBERS_SHA256,"task_count":64,"readiness":"selected_assignment_only","binding_schema":MIXED_SCHEMA,"runtime_config_version":MIXED_CONFIG_VERSION,"wire_capabilities":list(PER_TASK_WIRE_CAPABILITIES),"live_validated":False}}})
         return 0
     if args.command == "install-skill":
         from .skill_install import install_skill
@@ -107,9 +107,7 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
             binding = load_binding(args.host_runtime_binding, args.host_runtime_sha256)
             from .host_contract import MIXED_SCHEMA
             if binding['schema'] == MIXED_SCHEMA:
-                from .mixed_pool import validate_public_roots
-                validate_public_roots(binding)
-                client.offer_bound_host_runtime(mixed=True)
+                client.offer_bound_host_runtime(mixed=True,per_task=True)
             else:
                 client.offer_bound_host_runtime()
         if args.command in {"catalog", "select", "run"}:
@@ -136,7 +134,7 @@ def main(argv=None, *, client_factory=Client, runtime_factory=CodexRuntime, poll
             selected = resolve(chosen, catalog)
             from .mixed_pool import POOL
             if args.command == 'run' and selected.benchmark == POOL and (not host or binding['schema'] != MIXED_SCHEMA):
-                raise RuntimeUnavailable('Current64 requires explicit complete four-source mixed host binding; no legacy fallback')
+                raise RuntimeUnavailable('Current64 requires explicit trusted per-task host binding; no legacy fallback')
             if host:
                 from .host_contract import require_server_library
                 require_server_library(bootstrap, selected.benchmark, selected.model, selected.effort)
