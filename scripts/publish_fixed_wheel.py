@@ -9,8 +9,8 @@ from pathlib import Path
 import httpx
 from ota_release import R2Client
 
-SHA256 = "7e237a52c13581ee73df4e53e8081550b9aed17114205e8c2b86eb1ef66bae7d"
-SIZE = 903099
+SHA256 = "8abe49231390e7fc2d491e27378a4951ab41b12e2bc7176273fea94dc2d43be7"
+SIZE = 903661
 ACCOUNT = "4d94f3bcb89bc16989d5ea715eaac061"
 BUCKET = "dradar-cli-ota-production"
 
