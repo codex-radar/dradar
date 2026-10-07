@@ -70,3 +70,100 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+
+  publish:
+    if: inputs.phase == 'publish' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/recursive-env-ghcr-109-20261007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Get same previously frozen and actually qualified archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREPARE_RUN: ${{ inputs.prepare_run_id }}
+          REVIEWED: ${{ inputs.reviewed_commit }}
+          ARCHIVE_SHA: ${{ inputs.archive_sha256 }}
+          MANIFEST: ${{ inputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$REVIEWED"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/recursive109-evidence"
+          gh run download "$PREPARE_RUN" --repo "$GITHUB_REPOSITORY" --name recursive-environment-109-frozen --dir "$RUNNER_TEMP/recursive109-evidence"
+          python3 images/claude-code-by-agents-recursive-delegation/check_qualified_archive.py
+      - name: Install official archive-copy tool without any image build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          skopeo --version
+      - name: Copy exact immutable manifests/config/layers to the one package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANIFEST: ${{ inputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$RUNNER_TEMP/ghcr-auth.json" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          skopeo copy --all --preserve-digests --authfile "$RUNNER_TEMP/ghcr-auth.json" "oci-archive:$RUNNER_TEMP/recursive109-evidence/candidate.oci.tar" "docker:$IMAGE:recursive-prepared-v1-${GITHUB_SHA}-amd64"
+          skopeo inspect --raw --authfile "$RUNNER_TEMP/ghcr-auth.json" "docker:$IMAGE:recursive-prepared-v1-${GITHUB_SHA}-amd64" > "$RUNNER_TEMP/recursive109-evidence/PUBLISHED_MANIFEST.json"
+          python3 - <<'PYCODE'
+          import os,json,hashlib,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'recursive109-evidence'
+          digest='sha256:'+hashlib.sha256((p/'PUBLISHED_MANIFEST.json').read_bytes()).hexdigest()
+          assert digest==os.environ['MANIFEST']
+          receipt={'image':os.environ['IMAGE'],'digest':digest,'publish_commit':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'manifest_preserved':True,'rebuild_after_validation':False,'copied_same_qualified_OCI_archive':True,'Codex_auth_answers_private_verifier_baked':False}
+          (p/'PUBLISH_RECEIPT.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          PYCODE
+          gh api orgs/codex-radar/packages/container/dradar-env-claude-code-by-agents-recursive-delegation > "$RUNNER_TEMP/recursive109-evidence/PACKAGE_METADATA.json"
+          rm "$RUNNER_TEMP/ghcr-auth.json"
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Sign same qualified digest
+        env:
+          MANIFEST: ${{ inputs.manifest_digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cosign sign --yes "$IMAGE@$MANIFEST"
+      - name: Preserve public release receipt without private qualification material
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recursive-environment-109-publication
+          path: |
+            ${{ runner.temp }}/recursive109-evidence/PUBLISH_RECEIPT.json
+            ${{ runner.temp }}/recursive109-evidence/PACKAGE_METADATA.json
+            ${{ runner.temp }}/recursive109-evidence/PUBLISHED_MANIFEST.json
+          if-no-files-found: warn
+          retention-days: 7
+  anonymous:
+    if: inputs.phase == 'anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/recursive-env-ghcr-109-20261007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Full anonymous pull of already qualified digest
+        env:
+          MANIFEST: ${{ inputs.manifest_digest }}
+          REVIEWED: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$REVIEWED"
+          python3 images/claude-code-by-agents-recursive-delegation/anonymous_pull.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recursive-environment-109-anonymous
+          path: ${{ runner.temp }}/recursive109-anonymous
+          if-no-files-found: error
+          retention-days: 7

