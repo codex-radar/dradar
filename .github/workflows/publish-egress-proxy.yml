@@ -1,4 +1,4 @@
-name: Prepare and publish exact qualified recursive environment
+name: Prepare and publish task004 exact qualified recursive environment
 on:
   workflow_dispatch:
     inputs:
@@ -27,7 +27,7 @@ env:
   IMAGE: ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation
 jobs:
   prepare:
-    if: inputs.phase == 'prepare' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/recursive-env-ghcr-109-20261007'
+    if: inputs.phase == 'prepare' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -72,7 +72,7 @@ jobs:
           retention-days: 7
 
   publish:
-    if: inputs.phase == 'publish' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/recursive-env-ghcr-109-20261007'
+    if: inputs.phase == 'publish' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -146,7 +146,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   anonymous:
-    if: inputs.phase == 'anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/recursive-env-ghcr-109-20261007'
+    if: inputs.phase == 'anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

