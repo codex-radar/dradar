@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           docker pull --platform linux/amd64 "$SOURCE"
           test "$(docker image inspect --format '{{.Id}}' "$SOURCE")" = "$EXPECTED_CONFIG"
-          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$SOURCE"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py --image "$SOURCE"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           mkdir -p evidence
           docker pull --platform linux/amd64 "$TARGET@$DIGEST"
-          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$TARGET@$DIGEST"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py --image "$TARGET@$DIGEST"
           cp copied-manifest.json evidence/
           docker image inspect "$TARGET@$DIGEST" > evidence/registry-image.json
           cp images/igel-persist-feature-schema/REAL_LOOP_PUBLIC.json evidence/
@@ -84,7 +84,7 @@ jobs:
           mkdir -p evidence
           docker pull --platform linux/amd64 "$TARGET@$DIGEST" | tee evidence/full-anonymous-pull.log
           test "$(docker image inspect --format '{{.Id}}' "$TARGET@$DIGEST")" = "$EXPECTED_CONFIG"
-          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$TARGET@$DIGEST"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py --image "$TARGET@$DIGEST"
           docker image inspect "$TARGET@$DIGEST" > evidence/anonymous-image.json
           test ! -e "$DOCKER_CONFIG/config.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
