@@ -1,0 +1,48 @@
+schema_version = "1.3"
+artifacts = ["/logs/artifacts/model.patch"]
+[task]
+name = "datacurve/cliffy-config-file-parsing"
+description = ""
+authors = []
+keywords = []
+[metadata]
+ext_id = "kh72088pg9vkc6peacnkc35yy9832jff"
+task_id = "cliffy-config-file-parsing"
+display_title = "Add config file parsing to Cliffy commands"
+display_description = "Add command-level config file loading, parsing, merging, and precedence handling."
+original_title = "Add Configuration File Support"
+category = "feature_request"
+language = "typescript"
+repository_url = "https://github.com/c4spar/cliffy"
+base_commit_hash = "132a437c40cffbdfbe474ca808c8debde59e2633"
+[verifier]
+network_mode = "no-network"
+environment_mode = "separate"
+timeout_sec = 1800.0
+
+[verifier.env]
+[verifier.environment]
+build_timeout_sec = 1800.0
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+
+[[verifier.collect]]
+command = "cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary 132a437c40cffbdfbe474ca808c8debde59e2633 HEAD > /logs/artifacts/model.patch"
+timeout_sec = 300.0
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 10800.0
+[environment]
+build_timeout_sec = 1800.0
+docker_image = "public.ecr.aws/d3j8x8q7/swe-bench-202605:kh72088pg9vkc6peacnkc35yy9832jff-v1.1"
+os = "linux"
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+mcp_servers = []
+
+[environment.env]
+[solution.env]

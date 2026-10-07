@@ -1,0 +1,48 @@
+schema_version = "1.3"
+artifacts = ["/logs/artifacts/model.patch"]
+[task]
+name = "datacurve/igel-persist-feature-schema"
+description = ""
+authors = []
+keywords = []
+[metadata]
+ext_id = "kh7brwh7cv23ggeshkz85ac5fx831x5k"
+task_id = "igel-persist-feature-schema"
+display_title = "Persist the fitted feature schema across evaluate, predict, serve, and export"
+display_description = "Persist and reuse the fitted feature schema so evaluation, prediction, serving, and export all apply the same canonicalized inputs."
+original_title = "Persist Training-Time Feature Schema and Duplicate-Column Canonicalization Across Evaluate, Predict, Serve, and Export"
+category = "feature_request"
+language = "python"
+repository_url = "https://github.com/nidhaloff/igel"
+base_commit_hash = "bf4544d6c86ab4ace21254cb38a011ce3e845700"
+[verifier]
+network_mode = "no-network"
+environment_mode = "separate"
+timeout_sec = 1800.0
+
+[verifier.env]
+[verifier.environment]
+build_timeout_sec = 1800.0
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+
+[[verifier.collect]]
+command = "cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary bf4544d6c86ab4ace21254cb38a011ce3e845700 HEAD > /logs/artifacts/model.patch"
+timeout_sec = 300.0
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 10800.0
+[environment]
+build_timeout_sec = 1800.0
+docker_image = "public.ecr.aws/d3j8x8q7/swe-bench-202605:kh7brwh7cv23ggeshkz85ac5fx831x5k-v1.1"
+os = "linux"
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+mcp_servers = []
+
+[environment.env]
+[solution.env]

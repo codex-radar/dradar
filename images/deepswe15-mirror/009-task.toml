@@ -1,0 +1,48 @@
+schema_version = "1.3"
+artifacts = ["/logs/artifacts/model.patch"]
+[task]
+name = "datacurve/mobly-grouped-test-barriers"
+description = ""
+authors = []
+keywords = []
+[metadata]
+ext_id = "kh74b2m0tjfn59vq8btqrj774s821570"
+task_id = "mobly-grouped-test-barriers"
+display_title = "Add grouped test phases with synchronized barriers"
+display_description = "Add grouped execution phases with explicit synchronization barriers and per-group setup and teardown."
+original_title = "Test Execution Phases with Explicit Barriers"
+category = "feature_request"
+language = "python"
+repository_url = "https://github.com/google/mobly"
+base_commit_hash = "ec052921917ef201e73cc8e275dc91c5706b345f"
+[verifier]
+network_mode = "no-network"
+environment_mode = "separate"
+timeout_sec = 1800.0
+
+[verifier.env]
+[verifier.environment]
+build_timeout_sec = 1800.0
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+
+[[verifier.collect]]
+command = "cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary ec052921917ef201e73cc8e275dc91c5706b345f HEAD > /logs/artifacts/model.patch"
+timeout_sec = 300.0
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 10800.0
+[environment]
+build_timeout_sec = 1800.0
+docker_image = "public.ecr.aws/d3j8x8q7/swe-bench-202605:kh74b2m0tjfn59vq8btqrj774s821570-v1.1"
+os = "linux"
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+mcp_servers = []
+
+[environment.env]
+[solution.env]
