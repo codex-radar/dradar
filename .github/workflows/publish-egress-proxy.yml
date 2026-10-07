@@ -81,15 +81,15 @@ jobs:
         run: |
           set -euo pipefail
           python3 "$PUBLIC_FILES/mirror.py" anonymous --root "$PUBLIC_FILES" --out "$RUNNER_TEMP/deepswe15-anonymous" --reviewed "$REVIEWED" --batch-hash "$BATCH_HASH"
+      - name: Stage only public receipts outside Docker data directories
+        if: always()
+        run: |
+          python3 "$PUBLIC_FILES/stage_receipts.py" "$RUNNER_TEMP/deepswe15-anonymous" "$RUNNER_TEMP/deepswe15-anonymous-public"
       - name: Preserve new anonymous receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: deepswe15-full-anonymous-pull
-          path: |
-            ${{ runner.temp }}/deepswe15-anonymous/*/*.json
-            ${{ runner.temp }}/deepswe15-anonymous/*/*.log
-            ${{ runner.temp }}/deepswe15-anonymous/*RECEIPT.json
-            ${{ runner.temp }}/deepswe15-anonymous/DOCKERD.log
+          path: ${{ runner.temp }}/deepswe15-anonymous-public/
           retention-days: 30
           if-no-files-found: warn
