@@ -3,6 +3,16 @@ name: Publish reviewed ABS environment pilot
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Publish once or verify the existing digest anonymously
+        required: true
+        default: publish
+        type: choice
+        options: [publish, verify_anonymous]
+      digest:
+        description: Existing published immutable digest for anonymous verification
+        required: false
+        type: string
       reviewed_commit:
         description: Exact reviewed ABS pilot branch commit
         required: true
@@ -20,7 +30,7 @@ env:
 
 jobs:
   publish:
-    if: github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/abs-env-ghcr-109-20261007'
+    if: inputs.operation != 'verify_anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/abs-env-ghcr-109-20261007'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -100,5 +110,40 @@ jobs:
         with:
           name: abs-environment-109-${{ github.sha }}
           path: ${{ runner.temp }}/abs109-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+  verify-anonymous:
+    if: inputs.operation == 'verify_anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/abs-env-ghcr-109-20261007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify source commit and perform an unauthenticated complete pull
+        env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          PUBLISHED_DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_SHA}" = "${REVIEWED_COMMIT}"
+          python3 images/abs-module-cache-flags/verify_anonymous_pull.py --digest "${PUBLISHED_DIGEST}"
+      - name: Preserve anonymous pull evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: abs-anonymous-pull-109-${{ github.sha }}
+          path: ${{ runner.temp }}/abs109-anonymous/*.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Preserve full anonymous pull log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: abs-anonymous-log-109-${{ github.sha }}
+          path: ${{ runner.temp }}/abs109-anonymous/ANONYMOUS_DOCKER_PULL.log
           if-no-files-found: warn
           retention-days: 7
