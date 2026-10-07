@@ -1,169 +1,149 @@
-name: Prepare and publish task004 exact qualified recursive environment
+name: Mirror qualified task004 original ECR image without rebuild
 on:
   workflow_dispatch:
     inputs:
       phase:
+        description: One package mirror, or separate full anonymous acceptance
         required: true
         type: choice
-        options: [prepare, publish, anonymous]
+        options: [mirror, anonymous]
       reviewed_commit:
+        description: Exact reviewed branch commit containing the new real qualification
         required: true
         type: string
-      prepare_run_id:
-        required: false
-        type: string
-      archive_sha256:
-        required: false
-        type: string
-      manifest_digest:
-        required: false
+      qualification_sha256:
+        description: SHA256 of immutable QUALIFICATION_PUBLIC.json
+        required: true
         type: string
 permissions:
   contents: read
+# Existing per-package serialization. Manager/129 separately owns the actual
+# cross-task shared publication lock/window; this group does not replace it.
 concurrency:
   group: ghcr-dradar-env-claude-code-by-agents-recursive-delegation
   cancel-in-progress: false
 env:
+  PUBLIC_FILES: images/claude-code-by-agents-recursive-delegation/official-mirror
+  SOURCE: public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e
   IMAGE: ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation
+  TAG: official-ecr-4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e-amd64-v1
+  MANIFEST: sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e
 jobs:
-  prepare:
-    if: inputs.phase == 'prepare' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
+  mirror:
+    if: inputs.phase == 'mirror' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007' && github.actor == 'SecurityMind'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - name: Check reviewed commit and public context
-        env:
-          REVIEWED: ${{ inputs.reviewed_commit }}
-        run: |
-          set -euo pipefail
-          test "$GITHUB_SHA" = "$REVIEWED"
-          test -z "$(git status --porcelain)"
-          python3 images/claude-code-by-agents-recursive-delegation/validate_context.py
-          mkdir -p "$RUNNER_TEMP/recursive109-evidence"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - name: Build ONCE to final OCI archive; do not push registry
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: images/claude-code-by-agents-recursive-delegation/context
-          platforms: linux/amd64
-          push: false
-          provenance: false
-          sbom: false
-          outputs: type=oci,dest=${{ runner.temp }}/recursive109-evidence/candidate.oci.tar
-      - name: Import exact config and layers for no-model content audit
-        run: |
-          set -euo pipefail
-          python3 images/claude-code-by-agents-recursive-delegation/oci_to_docker.py "$RUNNER_TEMP/recursive109-evidence/candidate.oci.tar" "$RUNNER_TEMP/candidate.docker.tar" "$RUNNER_TEMP/recursive109-evidence/FROZEN_ARTIFACT.json" dradar-recursive109:review
-          docker load --input "$RUNNER_TEMP/candidate.docker.tar"
-          rm "$RUNNER_TEMP/candidate.docker.tar"
-          python3 images/claude-code-by-agents-recursive-delegation/audit_image.py
-          cp images/claude-code-by-agents-recursive-delegation/oci_to_docker.py "$RUNNER_TEMP/recursive109-evidence/oci_to_docker.py"
-          cp images/claude-code-by-agents-recursive-delegation/PROVENANCE.json "$RUNNER_TEMP/recursive109-evidence/PROVENANCE.json"
-          cp images/claude-code-by-agents-recursive-delegation/SOURCE_IMAGE.json "$RUNNER_TEMP/recursive109-evidence/SOURCE_IMAGE.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: recursive-environment-109-frozen
-          path: ${{ runner.temp }}/recursive109-evidence
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
-
-  publish:
-    if: inputs.phase == 'publish' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     permissions:
       contents: read
-      actions: read
       packages: write
-      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Get same previously frozen and actually qualified archive
+      - name: Gate exact reviewed commit and new real-model qualification
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PREPARE_RUN: ${{ inputs.prepare_run_id }}
           REVIEWED: ${{ inputs.reviewed_commit }}
-          ARCHIVE_SHA: ${{ inputs.archive_sha256 }}
-          MANIFEST: ${{ inputs.manifest_digest }}
+          QUALIFICATION_SHA: ${{ inputs.qualification_sha256 }}
         run: |
           set -euo pipefail
-          test "$GITHUB_SHA" = "$REVIEWED"
           test -z "$(git status --porcelain)"
-          mkdir -p "$RUNNER_TEMP/recursive109-evidence"
-          gh run download "$PREPARE_RUN" --repo "$GITHUB_REPOSITORY" --name recursive-environment-109-frozen --dir "$RUNNER_TEMP/recursive109-evidence"
-          python3 images/claude-code-by-agents-recursive-delegation/check_qualified_archive.py
-      - name: Install official archive-copy tool without any image build
+          mkdir -p "$RUNNER_TEMP/official004-publication"
+          python3 "$PUBLIC_FILES/verify.py" gate "$PUBLIC_FILES" "$REVIEWED" "$QUALIFICATION_SHA" "$RUNNER_TEMP/official004-publication/GATE.json"
+      - name: Install registry copy tool; no image build or model preparation
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y skopeo
-          skopeo --version
-      - name: Copy exact immutable manifests/config/layers to the one package
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MANIFEST: ${{ inputs.manifest_digest }}
+          skopeo --version > "$RUNNER_TEMP/official004-publication/SKOPEO_VERSION.txt"
+      - name: Verify exact source raw manifest, config and all original rootfs IDs
         run: |
           set -euo pipefail
-          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$RUNNER_TEMP/ghcr-auth.json" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
-          skopeo copy --all --preserve-digests --authfile "$RUNNER_TEMP/ghcr-auth.json" "oci-archive:$RUNNER_TEMP/recursive109-evidence/candidate.oci.tar" "docker:$IMAGE:recursive-prepared-v1-${GITHUB_SHA}-amd64"
-          skopeo inspect --raw --authfile "$RUNNER_TEMP/ghcr-auth.json" "docker:$IMAGE:recursive-prepared-v1-${GITHUB_SHA}-amd64" > "$RUNNER_TEMP/recursive109-evidence/PUBLISHED_MANIFEST.json"
-          python3 - <<'PYCODE'
-          import os,json,hashlib,pathlib
-          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'recursive109-evidence'
-          digest='sha256:'+hashlib.sha256((p/'PUBLISHED_MANIFEST.json').read_bytes()).hexdigest()
-          assert digest==os.environ['MANIFEST']
-          receipt={'image':os.environ['IMAGE'],'digest':digest,'publish_commit':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'manifest_preserved':True,'rebuild_after_validation':False,'copied_same_qualified_OCI_archive':True,'Codex_auth_answers_private_verifier_baked':False}
-          (p/'PUBLISH_RECEIPT.json').write_text(json.dumps(receipt,indent=2)+'\n')
-          PYCODE
-          gh api orgs/codex-radar/packages/container/dradar-env-claude-code-by-agents-recursive-delegation > "$RUNNER_TEMP/recursive109-evidence/PACKAGE_METADATA.json"
-          rm "$RUNNER_TEMP/ghcr-auth.json"
-      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Sign same qualified digest
+          umask 077
+          printf '{"auths":{}}\n' > "$RUNNER_TEMP/official004-empty-auth.json"
+          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --raw "docker:$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json"
+          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --config --raw "docker:$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json"
+          python3 "$PUBLIC_FILES/verify.py" identity "$PUBLIC_FILES" "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json" "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json" "$RUNNER_TEMP/official004-publication/SOURCE_IDENTITY.json"
+      - name: Copy the same manifest/config/layers to only the authorized package
         env:
-          MANIFEST: ${{ inputs.manifest_digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cosign sign --yes "$IMAGE@$MANIFEST"
-      - name: Preserve public release receipt without private qualification material
+          set -euo pipefail
+          umask 077
+          auth="$RUNNER_TEMP/official004-ghcr-auth.json"
+          trap 'rm -f "$auth"' EXIT
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$auth" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          skopeo copy --all --preserve-digests --src-authfile "$RUNNER_TEMP/official004-empty-auth.json" --dest-authfile "$auth" "docker:$SOURCE" "docker:$IMAGE:$TAG"
+          skopeo inspect --authfile "$auth" --raw "docker:$IMAGE:$TAG" > "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json"
+          skopeo inspect --authfile "$auth" --config --raw "docker:$IMAGE@$MANIFEST" > "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json"
+          cmp "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json" "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json"
+          cmp "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json" "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json"
+          python3 "$PUBLIC_FILES/verify.py" identity "$PUBLIC_FILES" "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json" "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json" "$RUNNER_TEMP/official004-publication/MIRROR_IDENTITY.json"
+          gh api orgs/codex-radar/packages/container/dradar-env-claude-code-by-agents-recursive-delegation > "$RUNNER_TEMP/official004-package-metadata-raw.json"
+          python3 "$PUBLIC_FILES/verify.py" package "$RUNNER_TEMP/official004-package-metadata-raw.json" "$RUNNER_TEMP/official004-publication/PACKAGE_READBACK.json"
+          rm "$RUNNER_TEMP/official004-package-metadata-raw.json"
+      - name: Preserve only public identity and package-readback evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: recursive-environment-109-publication
+          name: task004-original-ecr-mirror-public-receipts
           path: |
-            ${{ runner.temp }}/recursive109-evidence/PUBLISH_RECEIPT.json
-            ${{ runner.temp }}/recursive109-evidence/PACKAGE_METADATA.json
-            ${{ runner.temp }}/recursive109-evidence/PUBLISHED_MANIFEST.json
+            ${{ runner.temp }}/official004-publication/GATE.json
+            ${{ runner.temp }}/official004-publication/SKOPEO_VERSION.txt
+            ${{ runner.temp }}/official004-publication/SOURCE_MANIFEST.json
+            ${{ runner.temp }}/official004-publication/SOURCE_IDENTITY.json
+            ${{ runner.temp }}/official004-publication/TARGET_MANIFEST.json
+            ${{ runner.temp }}/official004-publication/MIRROR_IDENTITY.json
+            ${{ runner.temp }}/official004-publication/PACKAGE_READBACK.json
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 14
   anonymous:
-    if: inputs.phase == 'anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007'
+    if: inputs.phase == 'anonymous' && github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/fresh64-004-recursive-20261007' && github.actor == 'SecurityMind'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Full anonymous pull of already qualified digest
+      - name: Gate same reviewed qualification before anonymous acceptance
         env:
-          MANIFEST: ${{ inputs.manifest_digest }}
           REVIEWED: ${{ inputs.reviewed_commit }}
+          QUALIFICATION_SHA: ${{ inputs.qualification_sha256 }}
         run: |
           set -euo pipefail
-          test "$GITHUB_SHA" = "$REVIEWED"
-          python3 images/claude-code-by-agents-recursive-delegation/anonymous_pull.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/official004-anonymous"
+          python3 "$PUBLIC_FILES/verify.py" gate "$PUBLIC_FILES" "$REVIEWED" "$QUALIFICATION_SHA" "$RUNNER_TEMP/official004-anonymous/GATE.json"
+      - name: Read actual Public visibility and repository connection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api orgs/codex-radar/packages/container/dradar-env-claude-code-by-agents-recursive-delegation > "$RUNNER_TEMP/official004-package-metadata-raw.json"
+          python3 "$PUBLIC_FILES/verify.py" package "$RUNNER_TEMP/official004-package-metadata-raw.json" "$RUNNER_TEMP/official004-anonymous/PACKAGE_PUBLIC_READBACK.json" --require-public
+          rm "$RUNNER_TEMP/official004-package-metadata-raw.json"
+      - name: Install registry-read tool
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+      - name: Full anonymous pull in a new empty Docker data root
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN DOCKER_AUTH_CONFIG REGISTRY_AUTH_FILE DOCKER_CONTEXT
+          python3 "$PUBLIC_FILES/anonymous_pull.py" "$PUBLIC_FILES" "$RUNNER_TEMP/official004-anonymous"
+      - name: Preserve only complete anonymous acceptance receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: recursive-environment-109-anonymous
-          path: ${{ runner.temp }}/recursive109-anonymous
-          if-no-files-found: error
-          retention-days: 7
+          name: task004-original-ecr-full-anonymous-public-receipts
+          path: |
+            ${{ runner.temp }}/official004-anonymous/GATE.json
+            ${{ runner.temp }}/official004-anonymous/PACKAGE_PUBLIC_READBACK.json
+            ${{ runner.temp }}/official004-anonymous/ANONYMOUS_PULL_RECEIPT.json
+            ${{ runner.temp }}/official004-anonymous/ANONYMOUS_DOCKER_PULL.log
+            ${{ runner.temp }}/official004-anonymous/ANONYMOUS_MANIFEST.json
+            ${{ runner.temp }}/official004-anonymous/ANONYMOUS_IDENTITY.json
+          if-no-files-found: warn
+          retention-days: 14
