@@ -60,8 +60,8 @@ jobs:
           set -euo pipefail
           umask 077
           printf '{"auths":{}}\n' > "$RUNNER_TEMP/official004-empty-auth.json"
-          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --raw "docker:$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json"
-          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --config --raw "docker:$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json"
+          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --raw "docker://$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json"
+          skopeo inspect --authfile "$RUNNER_TEMP/official004-empty-auth.json" --config --raw "docker://$SOURCE" > "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json"
           python3 "$PUBLIC_FILES/verify.py" identity "$PUBLIC_FILES" "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json" "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json" "$RUNNER_TEMP/official004-publication/SOURCE_IDENTITY.json"
       - name: Copy the same manifest/config/layers to only the authorized package
         env:
@@ -72,9 +72,9 @@ jobs:
           auth="$RUNNER_TEMP/official004-ghcr-auth.json"
           trap 'rm -f "$auth"' EXIT
           printf '%s' "$GH_TOKEN" | skopeo login --authfile "$auth" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
-          skopeo copy --all --preserve-digests --src-authfile "$RUNNER_TEMP/official004-empty-auth.json" --dest-authfile "$auth" "docker:$SOURCE" "docker:$IMAGE:$TAG"
-          skopeo inspect --authfile "$auth" --raw "docker:$IMAGE:$TAG" > "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json"
-          skopeo inspect --authfile "$auth" --config --raw "docker:$IMAGE@$MANIFEST" > "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json"
+          skopeo copy --all --preserve-digests --src-authfile "$RUNNER_TEMP/official004-empty-auth.json" --dest-authfile "$auth" "docker://$SOURCE" "docker://$IMAGE:$TAG"
+          skopeo inspect --authfile "$auth" --raw "docker://$IMAGE:$TAG" > "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json"
+          skopeo inspect --authfile "$auth" --config --raw "docker://$IMAGE@$MANIFEST" > "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json"
           cmp "$RUNNER_TEMP/official004-publication/SOURCE_MANIFEST.json" "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json"
           cmp "$RUNNER_TEMP/official004-publication/SOURCE_CONFIG.json" "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json"
           python3 "$PUBLIC_FILES/verify.py" identity "$PUBLIC_FILES" "$RUNNER_TEMP/official004-publication/TARGET_MANIFEST.json" "$RUNNER_TEMP/official004-publication/TARGET_CONFIG.json" "$RUNNER_TEMP/official004-publication/MIRROR_IDENTITY.json"

