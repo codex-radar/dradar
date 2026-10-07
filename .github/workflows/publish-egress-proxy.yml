@@ -1,124 +1,104 @@
-name: Publish egress proxy image
+name: Publish reviewed ABS environment pilot
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - docker/egress-proxy/**
-      - .github/workflows/publish-egress-proxy.yml
   workflow_dispatch:
+    inputs:
+      reviewed_commit:
+        description: Exact reviewed ABS pilot branch commit
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
+
+concurrency:
+  group: ghcr-dradar-env-abs-module-cache-flags
+  cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/codex-radar/dradar-egress-proxy
+  IMAGE: ghcr.io/codex-radar/dradar-env-abs-module-cache-flags
 
 jobs:
   publish:
+    if: github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/abs-env-ghcr-109-20261007'
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Build the native image for vulnerability scanning
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          context: docker/egress-proxy
-          load: true
+          persist-credentials: false
+      - name: Verify exact reviewed source and public context
+        env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_SHA}" = "${REVIEWED_COMMIT}"
+          test "$(git rev-parse HEAD)" = "${REVIEWED_COMMIT}"
+          test -z "$(git status --porcelain)"
+          python3 images/abs-module-cache-flags/validate_context.py
+          df -h "${RUNNER_TEMP}"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build the single amd64 environment locally on this GitHub runner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: images/abs-module-cache-flags/context
           platforms: linux/amd64
-          provenance: false
+          load: true
           push: false
+          provenance: false
           sbom: false
-          tags: dradar-egress-proxy:scan
-
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.74.0
-
-      - name: Scan fixable high and critical vulnerabilities
-        run: >-
-          trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1
-          dradar-egress-proxy:scan
-
-      - name: Sign in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+          tags: dradar-abs109:review
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - name: Check baseline, tools, source layers, and forbidden content without a model
+        run: python3 images/abs-module-cache-flags/audit_image.py
+      - name: Sign in with the repository's temporary GitHub token
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate image metadata
-        id: metadata
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=v1
-            type=sha,format=long
-
-      - name: Build and publish the multi-architecture image
+      - name: Push only the approved environment package
         id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
-          context: docker/egress-proxy
-          platforms: linux/amd64,linux/arm64
-          provenance: mode=max
+          context: images/abs-module-cache-flags/context
+          platforms: linux/amd64
           push: true
+          provenance: mode=min
           sbom: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
-
-      - name: Sign the immutable image digest
+          cache-to: type=inline
+          tags: ${{ env.IMAGE }}:abs-prepared-v1-${{ github.sha }}-amd64
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      - name: Sign and record the actual immutable digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-      # Volunteers should not need a GHCR login or a separately configured
-      # Docker-daemon proxy. Export both platform images as ordinary public
-      # GitHub release assets; the CLI downloads and verifies the matching
-      # archive over its normal HTTPS/proxy path, then uses `docker load`.
-      - name: Export portable image archives
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            source_ref="${IMAGE}@${DIGEST}"
-            portable_ref="${IMAGE}:release-${GITHUB_SHA}-${arch}"
-            docker pull --platform "linux/${arch}" "${source_ref}"
-            docker tag "${source_ref}" "${portable_ref}"
-            docker image inspect --format '{{.Id}}' "${portable_ref}" \
-              > "dist/dradar-egress-proxy-linux-${arch}.image-id"
-            docker save "${portable_ref}" \
-              | gzip -9 > "dist/dradar-egress-proxy-linux-${arch}.tar.gz"
-            # Removing the portable tag also removes the digest-only reference
-            # when both are the last references to the same platform image.
-            docker image rm "${portable_ref}"
-          done
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-
-      - name: Publish anonymous release assets
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          release_tag="egress-proxy-${GITHUB_SHA}"
-          gh release create "${release_tag}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "DRadar egress proxy ${GITHUB_SHA}" \
-            --notes "Signed multi-architecture Pier egress image. GHCR manifest: ${DIGEST}" \
-            --prerelease \
-            --latest=false
+          test -n "${DIGEST}"
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw > "${RUNNER_TEMP}/abs109-evidence/PUBLISHED_MANIFEST.json"
+          gh api orgs/codex-radar/packages/container/dradar-env-abs-module-cache-flags > "${RUNNER_TEMP}/abs109-evidence/PACKAGE_METADATA.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'abs109-evidence'
+          package=json.loads((p/'PACKAGE_METADATA.json').read_text())
+          receipt={'image':os.environ['IMAGE'],'digest':os.environ['DIGEST'],'commit':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'repository':os.environ['GITHUB_REPOSITORY'],'actor':os.environ['GITHUB_ACTOR'],'package_visibility':package.get('visibility'),'associated_repository':(package.get('repository') or {}).get('full_name'),'codex_baked':False,'model_calls':0,'anonymous_pull':'NOT_YET_VERIFIED'}
+          (p/'PUBLISH_RECEIPT.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          PY
+          printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
+          printf 'Only this package may be made public. Anonymous verification is a separate required step.\n' >> "${GITHUB_STEP_SUMMARY}"
+      - name: Preserve non-sensitive build and release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: abs-environment-109-${{ github.sha }}
+          path: ${{ runner.temp }}/abs109-evidence
+          if-no-files-found: warn
+          retention-days: 7

