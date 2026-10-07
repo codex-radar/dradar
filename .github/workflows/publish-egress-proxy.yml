@@ -1,124 +1,93 @@
-name: Publish egress proxy image
-
+name: Publish qualified fixed Igel environment
 on:
-  push:
-    branches: [main]
-    paths:
-      - docker/egress-proxy/**
-      - .github/workflows/publish-egress-proxy.yml
   workflow_dispatch:
-
+    inputs:
+      reviewed_commit:
+        required: true
+        type: string
 permissions:
-  contents: write
+  contents: read
   packages: write
-  id-token: write
-
 env:
-  IMAGE: ghcr.io/codex-radar/dradar-egress-proxy
-
+  SOURCE: public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140
+  EXPECTED_CONFIG: sha256:101639dde98c1b250116d94876cf186cbab102f844bbb3a78e38815cee78b389
+  TARGET: ghcr.io/codex-radar/dradar-env-igel-persist-feature-schema
 jobs:
   publish:
+    if: github.actor == 'SecurityMind' && github.sha == inputs.reviewed_commit
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Build the native image for vulnerability scanning
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: docker/egress-proxy
-          load: true
-          platforms: linux/amd64
-          provenance: false
-          push: false
-          sbom: false
-          tags: dradar-egress-proxy:scan
-
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.74.0
-
-      - name: Scan fixable high and critical vulnerabilities
-        run: >-
-          trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1
-          dradar-egress-proxy:scan
-
-      - name: Sign in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fetch the exact qualified official image
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$SOURCE"
+          test "$(docker image inspect --format '{{.Id}}' "$SOURCE")" = "$EXPECTED_CONFIG"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$SOURCE"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate image metadata
-        id: metadata
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=v1
-            type=sha,format=long
-
-      - name: Build and publish the multi-architecture image
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: docker/egress-proxy
-          platforms: linux/amd64,linux/arm64
-          provenance: mode=max
-          push: true
-          sbom: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
-
-      - name: Sign the immutable image digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-      # Volunteers should not need a GHCR login or a separately configured
-      # Docker-daemon proxy. Export both platform images as ordinary public
-      # GitHub release assets; the CLI downloads and verifies the matching
-      # archive over its normal HTTPS/proxy path, then uses `docker load`.
-      - name: Export portable image archives
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+      - name: Prepare the registry-copy tool on the CI host
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+          skopeo --version
+      - name: Copy original manifests and blobs with digests preserved
+        id: push
         run: |
           set -euo pipefail
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            source_ref="${IMAGE}@${DIGEST}"
-            portable_ref="${IMAGE}:release-${GITHUB_SHA}-${arch}"
-            docker pull --platform "linux/${arch}" "${source_ref}"
-            docker tag "${source_ref}" "${portable_ref}"
-            docker image inspect --format '{{.Id}}' "${portable_ref}" \
-              > "dist/dradar-egress-proxy-linux-${arch}.image-id"
-            docker save "${portable_ref}" \
-              | gzip -9 > "dist/dradar-egress-proxy-linux-${arch}.tar.gz"
-            # Removing the portable tag also removes the digest-only reference
-            # when both are the last references to the same platform image.
-            docker image rm "${portable_ref}"
-          done
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-
-      - name: Publish anonymous release assets
+          ref="$TARGET:fresh64-001-${GITHUB_SHA}-amd64"
+          task_auth_file="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+          skopeo copy --all --preserve-digests --dest-authfile "$task_auth_file" \
+            --digestfile copy.digest "docker://$SOURCE" "docker://$ref"
+          digest=$(tr -d '\r\n' < copy.digest)
+          test "$digest" = "${SOURCE##*@}"
+          skopeo inspect --raw --authfile "$task_auth_file" "docker://$TARGET@$digest" > copied-manifest.json
+          test "sha256:$(sha256sum copied-manifest.json | cut -d ' ' -f 1)" = "$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Record immutable identity
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
-          release_tag="egress-proxy-${GITHUB_SHA}"
-          gh release create "${release_tag}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "DRadar egress proxy ${GITHUB_SHA}" \
-            --notes "Signed multi-architecture Pier egress image. GHCR manifest: ${DIGEST}" \
-            --prerelease \
-            --latest=false
+          mkdir -p evidence
+          docker pull --platform linux/amd64 "$TARGET@$DIGEST"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$TARGET@$DIGEST"
+          cp copied-manifest.json evidence/
+          docker image inspect "$TARGET@$DIGEST" > evidence/registry-image.json
+          cp images/igel-persist-feature-schema/REAL_LOOP_PUBLIC.json evidence/
+          cp images/igel-persist-feature-schema/FIXED_IMAGE_PUBLIC.json evidence/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: igel-fixed-publication
+          path: evidence/
+  anonymous:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Download the complete public image with an empty Docker config
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$(mktemp -d)"
+          chmod 700 "$DOCKER_CONFIG"
+          test -z "$(docker image ls --quiet --no-trunc | grep -F "$EXPECTED_CONFIG" || true)"
+          test ! -e "$DOCKER_CONFIG/config.json"
+          mkdir -p evidence
+          docker pull --platform linux/amd64 "$TARGET@$DIGEST" | tee evidence/full-anonymous-pull.log
+          test "$(docker image inspect --format '{{.Id}}' "$TARGET@$DIGEST")" = "$EXPECTED_CONFIG"
+          python3 images/igel-persist-feature-schema/verify_fixed_image.py "$TARGET@$DIGEST"
+          docker image inspect "$TARGET@$DIGEST" > evidence/anonymous-image.json
+          test ! -e "$DOCKER_CONFIG/config.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: igel-full-anonymous-pull
+          path: evidence/
