@@ -124,7 +124,8 @@ def inspect(ref, auth, env):
 
 
 def base_identity(auth, env, public):
-    raw = run(["skopeo", "inspect", "--authfile", str(auth), "--raw", "docker://" + BASE_REF], env, 120)
+    # Skopeo's docker transport accepts a digest OR tag, unlike Dockerfile FROM.
+    raw = run(["skopeo", "inspect", "--authfile", str(auth), "--raw", "docker://" + BASE_REPO + "@" + BASE_INDEX], env, 120)
     require(sha(raw) == BASE_INDEX, "base index digest differs")
     index = json.loads(raw)
     platforms = [m for m in index["manifests"] if m.get("platform", {}).get("os") == "linux"
