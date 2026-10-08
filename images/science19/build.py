@@ -189,9 +189,11 @@ def anonymous(args, entry):
             require(image["Id"] == actual["config_digest"] and image["RootFS"]["Layers"] == actual["rootfs_diff_ids"], "complete pulled filesystem identity differs")
             probe_command = ("test ! -e /tests && test ! -e /solution && id && pwd" if role == "agent" else
                 "set -eu; test -f /tests/test.sh; id; pwd; stat -c '%u:%g:%a' /tests /tests/test.sh; if command -v python3 >/dev/null 2>&1; then python3 --version; else printf 'python3_not_available\\n'; fi; if command -v Rscript >/dev/null 2>&1; then Rscript --version; fi")
+            probe_command += "; printf '\\nDRADAR_RUNTIME_UID=%s\\nDRADAR_RUNTIME_GID=%s\\nDRADAR_RUNTIME_CWD=%s\\nDRADAR_RUNTIME_HOME=%s\\n' \"$(id -u)\" \"$(id -g)\" \"$(pwd)\" \"${HOME-}\""
             probe = run(docker + ["run", "--rm", "--network", "none", "--entrypoint", "sh", reference, "-c", probe_command], env=environment, timeout=60).decode()
             require(json.loads((config / "config.json").read_text()) == {} and json.loads(empty_auth.read_text()) == {"auths": {}}, "anonymous credentials changed")
             success = {"status": "FULL_ANONYMOUS_PULL_AND_NO_MODEL_ENV_PROBE_PASSED", "image_role": role, "number": args.number, "task_id": entry["task_id"], "target_image": reference, "image": actual, "empty_auth_config": True, "fresh_docker_state": True, "full_pull": True, "environment_probe": probe, "model_calls": 0, "official_grader_calls": 0, "run_id": os.environ["GITHUB_RUN_ID"]}
+            success["observed_runtime"] = parse_runtime(probe)
         finally:
             if daemon is not None:
                 pidfile = args.out / "dockerd.pid"
@@ -210,9 +212,51 @@ def anonymous(args, entry):
         write(args.out / "ANONYMOUS_RECEIPT.json", success)
 
 
+def parse_runtime(probe):
+    values = {}
+    for line in probe.splitlines():
+        if line.startswith("DRADAR_RUNTIME_"):
+            key, value = line.split("=", 1)
+            require(key not in values, "duplicate runtime observation")
+            values[key] = value
+    require(set(values) == {"DRADAR_RUNTIME_UID", "DRADAR_RUNTIME_GID", "DRADAR_RUNTIME_CWD", "DRADAR_RUNTIME_HOME"}, "runtime observation is incomplete")
+    return {"uid": int(values["DRADAR_RUNTIME_UID"]), "gid": int(values["DRADAR_RUNTIME_GID"]),
+            "cwd": values["DRADAR_RUNTIME_CWD"], "home": values["DRADAR_RUNTIME_HOME"], "home_observed": True}
+
+
+def runtime(args, entry):
+    """Only add missing UID/GID/HOME observations for already qualified images.
+
+    Full anonymous pull qualification is reused; this does not claim a new one.
+    The fresh hosted runner may download the immutable image to run the probe.
+    """
+    previous = args.out / "build-receipt"
+    run(["gh", "run", "download", args.build_run, "--repo", "codex-radar/dradar", "--name", "science19-build-" + args.number, "--dir", str(previous)], timeout=120)
+    receipt = json.loads((previous / "BUILD_RECEIPT.json").read_text())
+    source_run = json.loads(run(["gh", "api", "repos/codex-radar/dradar/actions/runs/" + args.build_run], timeout=90))
+    require(source_run["head_sha"] == args.build_reviewed and source_run["actor"]["login"] == "SecurityMind"
+            and source_run["head_branch"] == "codex/science19-official-build-20261008" and source_run["event"] == "workflow_dispatch", "runtime source build run differs")
+    require(receipt["ci_commit"] == args.build_reviewed and str(receipt["run_id"]) == args.build_run
+            and receipt["source_commit"] == entry["source_commit"] and receipt["task_id"] == entry["task_id"]
+            and receipt["task_content_hash"] == entry["task_content_hash"] and receipt["target_image"] == entry["target_image"]
+            and receipt["status"] == "BUILT_AND_PUSHED_PUBLIC_UNVERIFIED" and receipt.get("image_role", "agent") == "agent", "runtime image receipt differs")
+    environment = dict(os.environ)
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "DOCKER_AUTH_CONFIG", "REGISTRY_AUTH_FILE", "DOCKER_HOST", "DOCKER_CONTEXT"):
+        environment.pop(name, None)
+    config = args.out / "empty-docker-config"; config.mkdir(mode=0o700); (config / "config.json").write_text("{}\n")
+    environment["DOCKER_CONFIG"] = str(config)
+    reference = entry["target_image"] + "@" + receipt["image"]["digest"]
+    command = "set -eu; printf 'DRADAR_RUNTIME_UID=%s\\nDRADAR_RUNTIME_GID=%s\\nDRADAR_RUNTIME_CWD=%s\\nDRADAR_RUNTIME_HOME=%s\\n' \"$(id -u)\" \"$(id -g)\" \"$(pwd)\" \"${HOME-}\""
+    raw = run(["docker", "--config", str(config), "run", "--rm", "--platform", "linux/amd64", "--network", "none", "--entrypoint", "sh", reference, "-c", command], env=environment, timeout=1800).decode()
+    write(args.out / "RUNTIME_RECEIPT.json", {"status": "ORIGINAL_AGENT_RUNTIME_OBSERVED_NO_MODEL", "number": args.number,
+            "task_id": entry["task_id"], "target_image": reference, "observed_runtime": parse_runtime(raw),
+            "probe_stdout": raw, "full_anonymous_qualification_reused_from_run": "37712944168", "build_run": args.build_run,
+            "build_commit": args.build_reviewed, "probe_run": os.environ["GITHUB_RUN_ID"], "model_calls": 0, "official_grader_calls": 0})
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("build", "anonymous", "verifier-build", "verifier-anonymous"))
+    parser.add_argument("phase", choices=("build", "anonymous", "verifier-build", "verifier-anonymous", "runtime"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--reviewed", required=True)
@@ -224,7 +268,7 @@ def main():
     args.out = args.out.absolute(); args.out.mkdir(parents=True, exist_ok=False)
     try:
         _, entry = gate(args)
-        (build if args.phase in ("build", "verifier-build") else anonymous)(args, entry)
+        (runtime if args.phase == "runtime" else build if args.phase in ("build", "verifier-build") else anonymous)(args, entry)
     except BaseException as error:
         write(args.out / "FAILURE.json", {"phase": args.phase, "number": args.number, "error_type": type(error).__name__, "error": str(error), "model_calls": 0, "official_grader_calls": 0})
         raise

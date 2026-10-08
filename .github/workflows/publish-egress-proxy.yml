@@ -6,7 +6,7 @@ on:
         description: Build official Agent contexts, or independently verify public anonymous pulls
         required: true
         type: choice
-        options: [build, anonymous, verifier-build, verifier-anonymous]
+        options: [build, anonymous, verifier-build, verifier-anonymous, runtime]
       reviewed_commit:
         description: Exact reviewed isolated Science branch commit
         required: true
@@ -89,5 +89,6 @@ jobs:
             ${{ runner.temp }}/science-public-receipts/PUBLIC_PACKAGE.json
             ${{ runner.temp }}/science-public-receipts/DOCKERD.log
             ${{ runner.temp }}/science-public-receipts/DAEMON_EXIT.json
+            ${{ runner.temp }}/science-public-receipts/RUNTIME_RECEIPT.json
           retention-days: 30
           if-no-files-found: warn
