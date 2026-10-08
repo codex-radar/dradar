@@ -14,7 +14,7 @@ changed. The exact resulting image digests are bound only after successful sourc
 verification, CI build, public package readback and full anonymous fresh-state pull.
 
 Each fresh source-build tag includes the original source commit, original task
-content hash and reviewed CI commit. Existing versions are not replaced. The
+content hash, reviewed CI commit, run ID and attempt. Existing versions are not replaced. The
 source Dockerfiles and contexts stay byte exact; two explicit OCI metadata labels
 associate these source builds with the publishing repository and reviewed commit.
 The fixed source's Apache-2.0 LICENSE is preserved in each build receipt; upstream

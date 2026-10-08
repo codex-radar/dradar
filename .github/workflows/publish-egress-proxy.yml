@@ -28,7 +28,7 @@ jobs:
   science:
     if: github.repository == 'codex-radar/dradar' && github.ref == 'refs/heads/codex/science19-official-build-20261008' && github.actor == 'SecurityMind' && github.sha == inputs.reviewed_commit
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 135
     permissions:
       contents: read
       packages: write

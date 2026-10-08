@@ -106,7 +106,9 @@ def inspect(reference, out, env):
 
 def build(args, entry):
     context = source(entry, args.out)
-    tag = "agent-" + entry["source_commit"][:12] + "-" + entry["task_content_hash"][:12] + "-" + args.reviewed[:12]
+    tag = ("agent-" + entry["source_commit"][:12] + "-" + entry["task_content_hash"][:12]
+           + "-" + args.reviewed[:12] + "-" + os.environ["GITHUB_RUN_ID"]
+           + "-" + os.environ["GITHUB_RUN_ATTEMPT"])
     reference = entry["target_image"] + ":" + tag
     environment = dict(os.environ)
     # Source-build provenance metadata is explicit; no upstream prebuilt image
@@ -142,6 +144,7 @@ def anonymous(args, entry):
     require(not data.exists() and not executor.exists(), "fresh anonymous Docker roots required")
     docker = ["docker", "--host", "unix://" + str(socket), "--config", str(config)]
     daemon = None
+    success = None
     with (args.out / "DOCKERD.log").open("wb") as log:
         try:
             daemon = subprocess.Popen(["sudo", "-n", "dockerd", "--host", "unix://" + str(socket), "--data-root", str(data), "--exec-root", str(executor), "--pidfile", str(args.out / "dockerd.pid"), "--bridge=none", "--iptables=false", "--ip-masq=false", "--ip-forward=false", "--storage-driver=overlay2"], env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -166,12 +169,24 @@ def anonymous(args, entry):
             image = json.loads(run(docker + ["image", "inspect", reference], env=environment))[0]
             require(image["Id"] == actual["config_digest"] and image["RootFS"]["Layers"] == actual["rootfs_diff_ids"], "complete pulled filesystem identity differs")
             probe = run(docker + ["run", "--rm", "--network", "none", "--entrypoint", "sh", reference, "-c", "test ! -e /tests && test ! -e /solution && id && pwd"], env=environment, timeout=60).decode()
-            write(args.out / "ANONYMOUS_RECEIPT.json", {"status": "FULL_ANONYMOUS_PULL_AND_NO_MODEL_ENV_PROBE_PASSED", "number": args.number, "task_id": entry["task_id"], "target_image": reference, "image": actual, "empty_auth_config": True, "fresh_docker_state": True, "full_pull": True, "environment_probe": probe, "model_calls": 0, "official_grader_calls": 0, "run_id": os.environ["GITHUB_RUN_ID"]})
+            require(json.loads((config / "config.json").read_text()) == {} and json.loads(empty_auth.read_text()) == {"auths": {}}, "anonymous credentials changed")
+            success = {"status": "FULL_ANONYMOUS_PULL_AND_NO_MODEL_ENV_PROBE_PASSED", "number": args.number, "task_id": entry["task_id"], "target_image": reference, "image": actual, "empty_auth_config": True, "fresh_docker_state": True, "full_pull": True, "environment_probe": probe, "model_calls": 0, "official_grader_calls": 0, "run_id": os.environ["GITHUB_RUN_ID"]}
         finally:
             if daemon is not None:
-                run(["sudo", "-n", "kill", "-TERM", str(daemon.pid)], timeout=15)
-                daemon.wait(timeout=30)
-                write(args.out / "DAEMON_EXIT.json", {"pid": daemon.pid, "returncode": daemon.returncode, "physical_exit_confirmed": True})
+                pidfile = args.out / "dockerd.pid"
+                require(pidfile.is_file(), "owned daemon PID is unconfirmed")
+                pid = int(pidfile.read_text().strip())
+                cmdline = Path("/proc") / str(pid) / "cmdline"
+                if cmdline.exists():
+                    parts = cmdline.read_bytes().split(b"\0")
+                    require(b"--data-root" in parts and parts[parts.index(b"--data-root") + 1] == os.fsencode(data), "refuse to stop unrelated daemon")
+                    run(["sudo", "-n", "kill", "-TERM", str(pid)], env=environment, timeout=15)
+                daemon.wait(timeout=60)
+                require(not cmdline.exists(), "owned daemon physical exit is unconfirmed")
+                write(args.out / "DAEMON_EXIT.json", {"pid": pid, "returncode": daemon.returncode, "physical_exit_confirmed": True})
+    if success is not None:
+        success["daemon_exit_confirmed"] = True
+        write(args.out / "ANONYMOUS_RECEIPT.json", success)
 
 
 def main():
