@@ -43,23 +43,25 @@ def gate(args):
     require(len({e["task_id"] for e in batch["rows"]}) == 19, "duplicate Science task")
     for entry in batch["rows"]:
         require(entry["target_image"] == "ghcr.io/codex-radar/dradar-env-science-" + entry["task_id"], "Science image scope differs")
+        require(entry["target_verifier_image"] == "ghcr.io/codex-radar/dradar-verifier-science-" + entry["task_id"], "Science verifier scope differs")
         require(entry["source_commit"] == batch["source_commit"], "source commit differs")
     return batch, next(e for e in batch["rows"] if e["display_number"] == args.number)
 
 
-def source(entry, out):
+def source(entry, out, *, role="agent"):
     repo = out / "official-source"
     repo.mkdir()
     run(["git", "init", "--quiet", str(repo)])
     run(["git", "-C", str(repo), "remote", "add", "origin", "https://github.com/harbor-framework/terminal-bench-science.git"])
     run(["git", "-C", str(repo), "fetch", "--filter=blob:none", "--depth=1", "origin", entry["source_commit"]], timeout=600)
     task = entry["source_task_path"]
+    directory = "environment" if role == "agent" else "tests"
     run(["git", "-C", str(repo), "sparse-checkout", "init", "--no-cone"])
-    run(["git", "-C", str(repo), "sparse-checkout", "set", "--no-cone", "/LICENSE", "/" + task + "/environment/", "/" + task + "/task.toml", "/" + task + "/instruction.md"])
+    run(["git", "-C", str(repo), "sparse-checkout", "set", "--no-cone", "/LICENSE", "/" + task + "/" + directory + "/", "/" + task + "/task.toml", "/" + task + "/instruction.md"])
     run(["git", "-C", str(repo), "checkout", "--detach", entry["source_commit"]], timeout=600)
     require(run(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip() == entry["source_commit"], "actual source checkout differs")
-    context = repo / task / "environment"
-    listed = run(["git", "-C", str(repo), "ls-tree", "-r", "-z", entry["source_commit"], "--", task + "/environment"]).split(b"\0")
+    context = repo / task / directory
+    listed = run(["git", "-C", str(repo), "ls-tree", "-r", "-z", entry["source_commit"], "--", task + "/" + directory]).split(b"\0")
     expected = {}
     for raw in listed:
         if not raw:
@@ -77,7 +79,8 @@ def source(entry, out):
     require(actual_files == set(expected), "official build context has missing or extra files")
     require(sha((repo / task / "task.toml").read_bytes()) == entry["task_toml_sha256"], "original task config differs")
     require(sha((repo / task / "instruction.md").read_bytes()) == entry["statement_sha256"], "original statement differs")
-    require(sha((context / "Dockerfile").read_bytes()) == entry["dockerfile_sha256"], "original Dockerfile differs")
+    dockerfile_hash = entry["dockerfile_sha256"] if role == "agent" else entry["verifier_dockerfile_sha256"]
+    require(sha((context / "Dockerfile").read_bytes()) == dockerfile_hash, "original Dockerfile differs")
     digest = hashlib.sha256()
     for name in ("instruction.md", "task.toml"):
         data = (repo / task / name).read_bytes()
@@ -85,8 +88,9 @@ def source(entry, out):
     for name in sorted(expected):
         data = (context / name).read_bytes()
         digest.update(name.encode()); digest.update(data if b"\0" in data else data.replace(b"\r\n", b"\n"))
-    require(digest.hexdigest() == entry["task_content_hash"], "fixed DRadar original task content binding differs; do not silently replace task")
-    write(out / "SOURCE_RECEIPT.json", {"source_commit": entry["source_commit"], "task": entry["task_id"], "task_content_hash": digest.hexdigest(), "context": expected, "agent_context_only": True, "tests_solution_authoring_in_context": False})
+    if role == "agent":
+        require(digest.hexdigest() == entry["task_content_hash"], "fixed DRadar original task content binding differs; do not silently replace task")
+    write(out / "SOURCE_RECEIPT.json", {"source_commit": entry["source_commit"], "task": entry["task_id"], "task_content_hash": entry["task_content_hash"], "source_context_hash": digest.hexdigest(), "context": expected, "image_role": role, "build_context_directory": directory, "solution_authoring_in_context": False})
     (out / "UPSTREAM_LICENSE").write_bytes((repo / "LICENSE").read_bytes())
     return context
 
@@ -105,26 +109,31 @@ def inspect(reference, out, env):
 
 
 def build(args, entry):
-    context = source(entry, args.out)
-    tag = ("agent-" + entry["source_commit"][:12] + "-" + entry["task_content_hash"][:12]
+    role = "verifier" if args.phase == "verifier-build" else "agent"
+    context = source(entry, args.out, role=role)
+    tag = (role + "-" + entry["source_commit"][:12] + "-" + entry["task_content_hash"][:12]
            + "-" + args.reviewed[:12] + "-" + os.environ["GITHUB_RUN_ID"]
            + "-" + os.environ["GITHUB_RUN_ATTEMPT"])
-    reference = entry["target_image"] + ":" + tag
+    target = entry["target_image"] if role == "agent" else entry["target_verifier_image"]
+    reference = target + ":" + tag
     environment = dict(os.environ)
     # Source-build provenance metadata is explicit; no upstream prebuilt image
     # identity is claimed. Original Dockerfile and context remain byte exact.
     with (args.out / "BUILD.log").open("wb") as log:
-        proc = subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--provenance=false", "--sbom=false", "--push", "--metadata-file", str(args.out / "BUILD_METADATA.json"), "--file", str(context / "Dockerfile"), "--tag", reference, "--label", "org.opencontainers.image.source=https://github.com/codex-radar/dradar", "--label", "org.opencontainers.image.revision=" + args.reviewed, str(context)], env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=int(entry["build_timeout_sec"]))
+        proc = subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64", "--provenance=false", "--sbom=false", "--push", "--metadata-file", str(args.out / "BUILD_METADATA.json"), "--file", str(context / "Dockerfile"), "--tag", reference, "--label", "org.opencontainers.image.source=https://github.com/codex-radar/dradar", "--label", "org.opencontainers.image.revision=" + args.reviewed, str(context)], env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=int(entry["build_timeout_sec"] if role == "agent" else entry["verifier_build_budget_sec"]))
     require(proc.returncode == 0, "official-source Agent build failed; see preserved BUILD.log")
     image = inspect(reference, args.out, environment)
     metadata = json.loads((args.out / "BUILD_METADATA.json").read_text())
     require(metadata["containerimage.digest"] == image["digest"], "built and registry digest differ")
-    write(args.out / "BUILD_RECEIPT.json", {"status": "BUILT_AND_PUSHED_PUBLIC_UNVERIFIED", "number": entry["display_number"], "task_id": entry["task_id"], "task_content_hash": entry["task_content_hash"], "source_commit": entry["source_commit"], "image_kind": "official-source-build-not-upstream-prebuilt", "target_image": entry["target_image"], "tag": tag, "image": image, "ci_commit": args.reviewed, "run_id": os.environ["GITHUB_RUN_ID"], "added_metadata_labels": ["org.opencontainers.image.source", "org.opencontainers.image.revision"], "model_calls": 0, "official_grader_calls": 0})
+    write(args.out / "BUILD_RECEIPT.json", {"status": "BUILT_AND_PUSHED_PUBLIC_UNVERIFIED", "image_role": role, "number": entry["display_number"], "task_id": entry["task_id"], "task_content_hash": entry["task_content_hash"], "source_commit": entry["source_commit"], "image_kind": "official-source-build-not-upstream-prebuilt", "target_image": target, "tag": tag, "image": image, "ci_commit": args.reviewed, "run_id": os.environ["GITHUB_RUN_ID"], "added_metadata_labels": ["org.opencontainers.image.source", "org.opencontainers.image.revision"], "model_calls": 0, "official_grader_calls": 0})
 
 
 def anonymous(args, entry):
+    role = "verifier" if args.phase == "verifier-anonymous" else "agent"
+    build_phase = "verifier-build" if role == "verifier" else "build"
+    target = entry["target_image"] if role == "agent" else entry["target_verifier_image"]
     previous = args.out / "build-receipt"
-    run(["gh", "run", "download", args.build_run, "--repo", "codex-radar/dradar", "--name", "science19-build-" + args.number, "--dir", str(previous)], timeout=120)
+    run(["gh", "run", "download", args.build_run, "--repo", "codex-radar/dradar", "--name", "science19-" + build_phase + "-" + args.number, "--dir", str(previous)], timeout=120)
     receipt = json.loads((previous / "BUILD_RECEIPT.json").read_text())
     build_commit = args.build_reviewed or args.reviewed
     source_run = json.loads(run(["gh", "api", "repos/codex-radar/dradar/actions/runs/" + args.build_run], timeout=90))
@@ -134,10 +143,10 @@ def anonymous(args, entry):
             and receipt["source_commit"] == entry["source_commit"]
             and receipt["status"] == "BUILT_AND_PUSHED_PUBLIC_UNVERIFIED"
             and receipt["image_kind"] == "official-source-build-not-upstream-prebuilt"
-            and receipt["target_image"] == entry["target_image"]
+            and receipt.get("image_role", "agent") == role and receipt["target_image"] == target
             and receipt["number"] == args.number and receipt["task_id"] == entry["task_id"]
             and receipt["task_content_hash"] == entry["task_content_hash"], "build receipt binding differs")
-    package = json.loads(run(["gh", "api", "orgs/codex-radar/packages/container/" + entry["target_image"].split("/")[-1]], timeout=90))
+    package = json.loads(run(["gh", "api", "orgs/codex-radar/packages/container/" + target.split("/")[-1]], timeout=90))
     require(package["visibility"] == "public" and package.get("repository", {}).get("full_name") == "codex-radar/dradar", "package public visibility/repository association is unverified")
     write(args.out / "PUBLIC_PACKAGE.json", {k: package[k] for k in ("id", "name", "visibility", "html_url")})
     environment = dict(os.environ)
@@ -170,7 +179,7 @@ def anonymous(args, entry):
             else:
                 raise RuntimeError("anonymous daemon readiness timed out")
             require(not run(docker + ["image", "ls", "-aq"], env=environment).strip(), "anonymous Docker state is not empty")
-            reference = entry["target_image"] + "@" + receipt["image"]["digest"]
+            reference = target + "@" + receipt["image"]["digest"]
             actual = inspect(reference, args.out, environment)
             require(actual == receipt["image"], "anonymous manifest/config/complete rootfs differs")
             with (args.out / "ANONYMOUS_PULL.log").open("wb") as pull_log:
@@ -178,9 +187,11 @@ def anonymous(args, entry):
             require(pull.returncode == 0, "full anonymous pull failed")
             image = json.loads(run(docker + ["image", "inspect", reference], env=environment))[0]
             require(image["Id"] == actual["config_digest"] and image["RootFS"]["Layers"] == actual["rootfs_diff_ids"], "complete pulled filesystem identity differs")
-            probe = run(docker + ["run", "--rm", "--network", "none", "--entrypoint", "sh", reference, "-c", "test ! -e /tests && test ! -e /solution && id && pwd"], env=environment, timeout=60).decode()
+            probe_command = ("test ! -e /tests && test ! -e /solution && id && pwd" if role == "agent" else
+                "set -eu; test -f /tests/test.sh; id; pwd; stat -c '%u:%g:%a' /tests /tests/test.sh; if command -v python3 >/dev/null 2>&1; then python3 --version; else printf 'python3_not_available\\n'; fi; if command -v Rscript >/dev/null 2>&1; then Rscript --version; fi")
+            probe = run(docker + ["run", "--rm", "--network", "none", "--entrypoint", "sh", reference, "-c", probe_command], env=environment, timeout=60).decode()
             require(json.loads((config / "config.json").read_text()) == {} and json.loads(empty_auth.read_text()) == {"auths": {}}, "anonymous credentials changed")
-            success = {"status": "FULL_ANONYMOUS_PULL_AND_NO_MODEL_ENV_PROBE_PASSED", "number": args.number, "task_id": entry["task_id"], "target_image": reference, "image": actual, "empty_auth_config": True, "fresh_docker_state": True, "full_pull": True, "environment_probe": probe, "model_calls": 0, "official_grader_calls": 0, "run_id": os.environ["GITHUB_RUN_ID"]}
+            success = {"status": "FULL_ANONYMOUS_PULL_AND_NO_MODEL_ENV_PROBE_PASSED", "image_role": role, "number": args.number, "task_id": entry["task_id"], "target_image": reference, "image": actual, "empty_auth_config": True, "fresh_docker_state": True, "full_pull": True, "environment_probe": probe, "model_calls": 0, "official_grader_calls": 0, "run_id": os.environ["GITHUB_RUN_ID"]}
         finally:
             if daemon is not None:
                 pidfile = args.out / "dockerd.pid"
@@ -201,7 +212,7 @@ def anonymous(args, entry):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("build", "anonymous"))
+    parser.add_argument("phase", choices=("build", "anonymous", "verifier-build", "verifier-anonymous"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--reviewed", required=True)
@@ -213,7 +224,7 @@ def main():
     args.out = args.out.absolute(); args.out.mkdir(parents=True, exist_ok=False)
     try:
         _, entry = gate(args)
-        (build if args.phase == "build" else anonymous)(args, entry)
+        (build if args.phase in ("build", "verifier-build") else anonymous)(args, entry)
     except BaseException as error:
         write(args.out / "FAILURE.json", {"phase": args.phase, "number": args.number, "error_type": type(error).__name__, "error": str(error), "model_calls": 0, "official_grader_calls": 0})
         raise

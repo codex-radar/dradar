@@ -5,9 +5,12 @@ images are built from pinned official Science `environment/` Dockerfiles and
 their original contexts. Upstream does not declare prebuilt task images; these
 builds are not claimed as unchanged mirrors of an upstream prebuilt image.
 
-Only Agent environments are published here. Original `tests/` verifier contexts,
-solutions and authoring materials are excluded. The Server must run the original
-separate no-network verifier and preserve its task-specific privilege transitions.
+Agent and Verifier environments use separate image names and build contexts.
+Agent images contain only original `environment/` inputs. Verifier images contain
+only the fixed upstream public `tests/` context, and are used by the Server's
+independent no-network grading runtime. Public Agent recommendations return only
+the Agent image. Solutions and authoring contexts are excluded from both builds.
+The Server preserves the original Verifier's task-specific privilege transitions.
 No model, answer generation, grading, account or production operation occurs in
 this image workflow. Legal zero results and previous execution evidence are not
 changed. The exact resulting image digests are bound only after successful source

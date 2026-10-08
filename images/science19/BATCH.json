@@ -6,7 +6,7 @@
   "count": 19,
   "numbered_manifest_sha256": "516aa9dfc67edba4170a03f48eeed2c8451563ae753691da1015425adbc4eb7f",
   "image_kind": "official-source-build-not-upstream-prebuilt",
-  "agent_context_only": true,
+  "agent_context_only": false,
   "rows": [
     {
       "display_number": "046",
@@ -18,7 +18,15 @@
       "statement_sha256": "a5c4a974d08a03afa1f7b98abeeb2289059e79fa466d3096634e33c9a81f38fc",
       "dockerfile_sha256": "b175c093da23f4f18ac0473cb83e6bcf58f63c9ec59b1f321c0d49719910733c",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery",
-      "build_timeout_sec": 900.0
+      "build_timeout_sec": 900.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-eeg-erp-recovery",
+      "verifier_dockerfile_sha256": "5ba2f1f7eeb6fa93e5e6f72a7c4e003573c2acee8852567f7400873e7c4c1e33",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 240.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "047",
@@ -30,7 +38,15 @@
       "statement_sha256": "d1f1e45625b031ba6a637d1d6b5fbad0cdea33cd72a2529893d09ca520a478e1",
       "dockerfile_sha256": "43c600ea25068ab84f985094515cbf1a827f70ddcc63d1de3b10774f18c32762",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-ode-law-discovery",
+      "verifier_dockerfile_sha256": "0b4380be3f638dff4b79147a8919a42d6be87241e465e47a48fd0730b3fa1de0",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "048",
@@ -42,7 +58,15 @@
       "statement_sha256": "e75945db875bb8d9c9c712b86a484944a492fd99ab267d51bee237b37218bb7f",
       "dockerfile_sha256": "7ee575a0635a63feaf841849c4d794b87b7f70c53dae55ab7d0cd51a2f838593",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id",
-      "build_timeout_sec": 900.0
+      "build_timeout_sec": 900.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-koopman-mfg-id",
+      "verifier_dockerfile_sha256": "58946d1fc95bf07ecd9236a2067f1f8a36e731f6ace68feceb86107996511a17",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 600.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "049",
@@ -54,7 +78,17 @@
       "statement_sha256": "bb069ee36509b8f09f9f9134a7bb42d173425a5c72cc769a5abb7a5b1f3feada",
       "dockerfile_sha256": "d08ee3437794867d04ffc6ceb469c919a923672a3760ce2bea26a7415537517e",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis",
-      "build_timeout_sec": 1000.0
+      "build_timeout_sec": 1000.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-duan-thesis",
+      "verifier_dockerfile_sha256": "c6e8e9a372d0dd42cbd64d2071a2414805243731bc3119d201c85dbafbf14ae5",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 500.0,
+      "verifier_environment": {
+        "network_mode": "no-network",
+        "cpus": 1,
+        "memory_mb": 2048
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "050",
@@ -66,7 +100,15 @@
       "statement_sha256": "24262f8b933dd8aa3b4cd62e2bb2a9e2175ee640603525a20487287b87b0a68e",
       "dockerfile_sha256": "e12adb408a852169fc7ce871d81b6bbf69bbcd4972aa799e1391236a2b6903cc",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-neo-orbit-determination",
+      "verifier_dockerfile_sha256": "7f2bc0295dfd258c2b7864d0e28d5b9269ea79deaa69907063aabdb7051cfebe",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 120.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "051",
@@ -78,7 +120,15 @@
       "statement_sha256": "d496cf14cda317e7f099076f7447605793c74cd42bcf5a5cbc54726fae344108",
       "dockerfile_sha256": "8305fcc287baa34e94e98163ecb6044dd14ba245f3d55a9a9d704f2824b42853",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology",
-      "build_timeout_sec": 900.0
+      "build_timeout_sec": 900.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-mendota-ice-phenology",
+      "verifier_dockerfile_sha256": "c6c552c03d414ca387014cd821a2a5c443a87780771450d1784abb7a78103630",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 120.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "052",
@@ -90,7 +140,15 @@
       "statement_sha256": "5521139bf5296eb5bc9887faa7908a1d9484e1d4dd7906d6599b468a944f83e3",
       "dockerfile_sha256": "4b994ef16c8aba933595dcf2c5f2d8b18518eb5d3948fa8f2560c710e1de5b4d",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation",
-      "build_timeout_sec": 1200.0
+      "build_timeout_sec": 1200.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-cilia-segmentation",
+      "verifier_dockerfile_sha256": "846c25024408987adc2a2664aa3e8f46e1cb5f2d183861d84ef4e9a1ff58bc3c",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "053",
@@ -102,7 +160,15 @@
       "statement_sha256": "88c6db474d9eef6140aa47da9d53b24546b0bc307c468e4f7e4db76f0ef08033",
       "dockerfile_sha256": "b745f2da5533a9e469b16ec0a7314202ba10e69d4707240c94e0eb2b6c8ff019",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc",
-      "build_timeout_sec": 1200.0
+      "build_timeout_sec": 1200.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-ont-tn-qc",
+      "verifier_dockerfile_sha256": "c9e74fbd088273194f64a2462bee7da52e0cc6ab2da19f7e38c1a937eb577a15",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 600.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "054",
@@ -114,7 +180,15 @@
       "statement_sha256": "41b30fe53dc9ba594875b566b3398e964e55cebb9df05cc96b1b9c0a9a3d25d6",
       "dockerfile_sha256": "1b5211b4c4bcb4eeed3656f4618bf5bacc080f425e94e7396914c4834cdfd8fd",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa",
-      "build_timeout_sec": 1800.0
+      "build_timeout_sec": 1800.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-xrd-multiphase-qpa",
+      "verifier_dockerfile_sha256": "b75b40c0f0f18d682fcd7ed010a296cdb05d9d26be2aec491c21953060267c32",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "055",
@@ -126,7 +200,18 @@
       "statement_sha256": "22550611a53b169e9eafccd91421c1fc898a274dc47d1ce90b2b577f706fe620",
       "dockerfile_sha256": "0f2335b662fd2a48e054084d3345620184bbeca9b9ed2ec44ff29a6b195df44b",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-linked-cell-suppression",
+      "verifier_dockerfile_sha256": "e1d23db7090442466a4cd917caa60709ee9a8fb6c265556460404210675e2d8f",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 12000.0,
+      "verifier_environment": {
+        "network_mode": "no-network",
+        "cpus": 4,
+        "memory_mb": 8192,
+        "storage_mb": 4096
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "056",
@@ -138,7 +223,18 @@
       "statement_sha256": "c3edd1be672b557611fd59819a2151d56c6f8d4242cfbca86c84fb4393f4b7d8",
       "dockerfile_sha256": "b21c8d13cad39743e3e881d9890332e3563a2df87f37234d54e2078fb7484825",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-genomic-model-ranking",
+      "verifier_dockerfile_sha256": "83d48f24d68e31dfdb8bb0484ab93e4c71d80434b3ea644f88f720ffbec9dadd",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 120.0,
+      "verifier_environment": {
+        "network_mode": "no-network",
+        "cpus": 2,
+        "memory_mb": 4096,
+        "storage_mb": 2048
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "057",
@@ -150,7 +246,18 @@
       "statement_sha256": "f7c8e4921bbc80df35a17718c180ff2bd90b4386c16052c8b760f1565224bc34",
       "dockerfile_sha256": "1ba6425f992f86e625751df3474e0494934ef98eafee07da5e0bdfd3fb74749c",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-small-area-equivalence",
+      "verifier_dockerfile_sha256": "7ea8d5c9665a4ce69cb2d5752ae2370f61f8c078976dda8360cf6164082000c4",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 7200.0,
+      "verifier_environment": {
+        "network_mode": "no-network",
+        "cpus": 2,
+        "memory_mb": 8192,
+        "storage_mb": 10240
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "058",
@@ -162,7 +269,15 @@
       "statement_sha256": "6f1835e6801c8fae8b5f7581199f10968c126feecf6ade67abbaedcd5741f7c5",
       "dockerfile_sha256": "94826ffbd39a96a1e802c1b679836158d1cf09862bf573699a4cb7a6b031da12",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-diag-chipseq",
+      "verifier_dockerfile_sha256": "048d4033774e7c2738b6fa02cacaf05f0c6308b1dfd642b02a4b02a51791d9e4",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "059",
@@ -174,7 +289,15 @@
       "statement_sha256": "2ca2a014e1c47349907d6ea6ed55ab06cc9f6e55786290e8826d16435d9cfd1e",
       "dockerfile_sha256": "4d0e62a12dbb4bc787f87e24bc5da3fa8ef5e9bc618e73e6c37d5b721dfdee55",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation",
-      "build_timeout_sec": 6000.0
+      "build_timeout_sec": 6000.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-spatial-cell-annotation",
+      "verifier_dockerfile_sha256": "77003e2ad81187dac97f3101cc1c3f17ac6f4e41b80056ecd98f1084870f0c97",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "060",
@@ -186,7 +309,15 @@
       "statement_sha256": "8fd5b24ce87fc7dfa354e462448d70f3b7632557f328f3247e1fdd7016ed834a",
       "dockerfile_sha256": "77a827b1df30ee9c39e28eb29a5dd9ba2f678372d8f0728c33a61a931cacbaa3",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings",
-      "build_timeout_sec": 1200.0
+      "build_timeout_sec": 1200.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-ankle-mri-findings",
+      "verifier_dockerfile_sha256": "577746d2dac5ca0ecd964a461f85cf4fd23758948bd3252d5c174c3e85d629b7",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 120.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "061",
@@ -198,7 +329,15 @@
       "statement_sha256": "30b8f7673bd206ffd00e80515e96c61514192cf31e6fc55ca1aa163984c432cb",
       "dockerfile_sha256": "d6cea756abc1fe533ebddc8587ec49e0e6a2fd82099c359aa9f84dd9e79db75b",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction",
-      "build_timeout_sec": 1800.0
+      "build_timeout_sec": 1800.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-nanoindentation-property-extraction",
+      "verifier_dockerfile_sha256": "b75b40c0f0f18d682fcd7ed010a296cdb05d9d26be2aec491c21953060267c32",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 300.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "062",
@@ -210,7 +349,15 @@
       "statement_sha256": "d5ce6a0ca0a64e305a1b7cfcd4049e1dde6d5b2898120d19949fe5ed821f0e04",
       "dockerfile_sha256": "5c5a7e486089f6761d3882b8f8ac17fd05e6ad4314a3fd2c29211ed9bf40f7cc",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface",
-      "build_timeout_sec": 3000.0
+      "build_timeout_sec": 3000.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-tumor-immune-interface",
+      "verifier_dockerfile_sha256": "b11d7e9db29c33018af8b5448c88c9700d47e71fdad3d9e9c2b8ce916f0dc08c",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 600.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "063",
@@ -222,7 +369,15 @@
       "statement_sha256": "69f1e6c1e930df26ff529554e488309b1dd994a96fcbc1c663eb6361680271a1",
       "dockerfile_sha256": "6119be4aa995d9ee39b997c2b6b70db40ac876138b317755ef1728aa59567dc1",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification",
-      "build_timeout_sec": 3600.0
+      "build_timeout_sec": 3600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-supraglacial-lake-classification",
+      "verifier_dockerfile_sha256": "fcf6fa9c8de23a3121a319316d64fe4a0c3ed42ae31eba3f5dded20af02fa6e8",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 120.0,
+      "verifier_environment": {
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     },
     {
       "display_number": "064",
@@ -234,7 +389,19 @@
       "statement_sha256": "24a19ba689461e795af784e0e33bc6a50d03a53d4bf938c7f5919232853a167a",
       "dockerfile_sha256": "815144c30daf81355b6e0181ba2821a5b045afc60848c4e149e6e4a128559a32",
       "target_image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization",
-      "build_timeout_sec": 600.0
+      "build_timeout_sec": 600.0,
+      "target_verifier_image": "ghcr.io/codex-radar/dradar-verifier-science-guided-wave-localization",
+      "verifier_dockerfile_sha256": "799014e6e65483d2a1b6b0dd570f7485487e8f413d7961e7efcc7cdd303a6ea1",
+      "verifier_build_budget_sec": 6000,
+      "verifier_runtime_timeout_sec": 1800.0,
+      "verifier_environment": {
+        "cpus": 2,
+        "memory_mb": 4096,
+        "network_mode": "no-network"
+      },
+      "verifier_environment_mode": "separate"
     }
-  ]
+  ],
+  "verifier_build_budget_note": "Bounded image-preparation budget6000sec; not an invented official grader timeout. Grading keeps each original verifier.timeout_sec.",
+  "contexts_separate_by_image_role": true
 }
