@@ -1,0 +1,2412 @@
+{
+  "schema": "dradar.terminalbench14-official-mirror/1",
+  "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+  "rows": [
+    {
+      "task_id": "freecad-spring-clip",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
+      "config_digest": "sha256:cd01c16e6905c9a85e61ee619677e1d7245c76bfb70e941429f76107b70f3a3b",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a2318d6c47ec9cac5acc500c47c79602bcf953cec711a18bc898911a0984365b",
+          "size": 29126484
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0d56d98386a9a231fee4dcf145a261d9d12da39f1c5a5d3bbe09a1aa727febf8",
+          "size": 122676
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:30fe8036db79bfbab0cdf8d102dcfd22ee410944fed17b23851977246235b880",
+          "size": 6195270
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1b19c15ef8e221c4e8f2f5233ce6dcb27342ecf18997a0576cf301345df0b2ed",
+          "size": 521
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:51b5951dad11c47781e0b67c512ab7f1b148983b42cb5b8cbfb3ea6e8d28a602",
+          "size": 282
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:9a782d6d1eace15aadfa1d16eb83ad2abdea075c6c9e200247950571a3719e10",
+          "size": 3775
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:8b456163e45ffc9e8274e77e02d1a5a166f27e760db7314ea9ee89f5578090d6",
+          "size": 215
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e9e8562f12ed796758a0790bfccb45f2463190f4ba8696dac09a9f22b20e37e3",
+          "size": 683
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c1d339bd3cdc8184904ef6ed4e4685a7551020e738a57e9b8c27edead08b3461",
+          "size": 645
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:db3fc724910ed98f15e8511e8024faf769a34901595e617bd4c7ebd8b8b8fd29",
+          "size": 345
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:58f59d15ff51697b7043a3a99626b5bfca5515bbdf8d65c143bf4522b34e1340",
+          "size": 1046643720
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1742d11b066e9c4d5bec17ccee9dd73572d01569b2303229e03faa1558e991d4",
+          "size": 6373525
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5dfe35aaf05cdec6a6355dcfc0fd89bb9dca3516b2e2717ca23dbcbade13bfec",
+          "size": 316
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e8e00e3ee014ee7e3d5f5528577d1ae85c6bfcd014abbc9579929d00c9a51ce0",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:8e2ab394fabf557b00041a8f080b10b4e91c7027b7c174f095332c7ebb6501cb",
+        "sha256:438ed031efcca866beb4e473c78ec1551f819024b8be009c6dece520d024251f",
+        "sha256:c018a1aad765e016ebed0bd9cc8a194d07d6c305a34edc40a0279152d12afec3",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:f8663d67459687086c544dbc93d72803b1e6a3feb890cc80c08b6677a5cd714b",
+        "sha256:a818d59f8c76d35e153a3bb67f71ff8a5f343e425c0c6bd6cdffdbe37a710f09",
+        "sha256:e3b1db6d44c6ef20aabbe522341f5954aac0451cf85b165503c63cd1f7638e08",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:f9926f3598878d23a049ca0f2da6bb81b9637e4110206e8329680be8ea61f392",
+        "sha256:271be3d5c5cfb98757e3f86bcd96dd1f52cf9b1bf948b95c6d92d5c028a5a6aa",
+        "sha256:0f6514ac2db11b4afe5cc472016aead59b6706b253a029f668f81226fd261b96",
+        "sha256:cc176b242a57eb551b464691b8dec743af2429deebec4602e9296816df3c7c62",
+        "sha256:0ba6056daeb5ad37ed283e63545bf057b9e89d89ecb93ebf551eaeee49a28767",
+        "sha256:fd203579ac9394e3c6750c416379de4a996714c94700636917ee5ea31695b36f",
+        "sha256:3b40ef70123b968b0ce6409333484facc8c836cb30990303fd42cdaad3131b1c",
+        "sha256:ce0adbe3b52fbd3f0ca1b4267a4236322a8f77bc789be3be6147195f7a9316a4"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "freecad-spring-clip",
+        "org.opencontainers.image.created": "2024-09-23T16:05:37.063Z",
+        "org.opencontainers.image.description": "Rapid builds of small Conda-based containers using micromamba.",
+        "org.opencontainers.image.licenses": "Apache-2.0",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.title": "micromamba-docker",
+        "org.opencontainers.image.url": "https://github.com/mamba-org/micromamba-docker",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": "root",
+      "working_dir": "/app",
+      "compressed_layer_bytes": 1088468614,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "41650c4476f352c75e11f17a759902c8ffeb86a1469312b3e340b763db84ff2f",
+      "display_number": "032-env",
+      "original_display_number": "032",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:freecad-spring-clip-environment-857daa7d56e8af05@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
+      "target_image": "ghcr.io/codex-radar/dradar-env-freecad-spring-clip",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "freecad-spring-clip",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:3ebc4314228ce4d15270065a0924db0dea54ebd45aa4e05e8e1e1a257b1b9488",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:3ebc4314228ce4d15270065a0924db0dea54ebd45aa4e05e8e1e1a257b1b9488",
+      "config_digest": "sha256:70667b0f7d3f57d2c2430f6bbd6c052ff4e2f67c657425fda58843c81b32f25a",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a2318d6c47ec9cac5acc500c47c79602bcf953cec711a18bc898911a0984365b",
+          "size": 29126484
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0d56d98386a9a231fee4dcf145a261d9d12da39f1c5a5d3bbe09a1aa727febf8",
+          "size": 122676
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:30fe8036db79bfbab0cdf8d102dcfd22ee410944fed17b23851977246235b880",
+          "size": 6195270
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1b19c15ef8e221c4e8f2f5233ce6dcb27342ecf18997a0576cf301345df0b2ed",
+          "size": 521
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:51b5951dad11c47781e0b67c512ab7f1b148983b42cb5b8cbfb3ea6e8d28a602",
+          "size": 282
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:9a782d6d1eace15aadfa1d16eb83ad2abdea075c6c9e200247950571a3719e10",
+          "size": 3775
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:8b456163e45ffc9e8274e77e02d1a5a166f27e760db7314ea9ee89f5578090d6",
+          "size": 215
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e9e8562f12ed796758a0790bfccb45f2463190f4ba8696dac09a9f22b20e37e3",
+          "size": 683
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c1d339bd3cdc8184904ef6ed4e4685a7551020e738a57e9b8c27edead08b3461",
+          "size": 645
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:db3fc724910ed98f15e8511e8024faf769a34901595e617bd4c7ebd8b8b8fd29",
+          "size": 345
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7ca13a09b2f8d87a9394ce537374a3e44cbcfd5eeb3fb49a750480215af247ab",
+          "size": 963867143
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f1ef368ecf0532d1f09753be358fdd4f392b745dcb332772ff200d19c3c18a79",
+          "size": 78528001
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ee71fc5fa96742f4fa0a29cffa3e6451d1b556bc5e486848c622b715265b3351",
+          "size": 42422694
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:23314a74faa3f366b888e0ced98b7210e8199424ca1e6040029ceb87e99bfd53",
+          "size": 32765
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:854033008760279a1de75d920af141d79858790d55d42fba347cfcadce35e1cd",
+          "size": 36279
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:8ecfd32d04a0299a039fdce3eb7b53263e94b446d5900e5cbbfaf5efa7c810b4",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:8e2ab394fabf557b00041a8f080b10b4e91c7027b7c174f095332c7ebb6501cb",
+        "sha256:438ed031efcca866beb4e473c78ec1551f819024b8be009c6dece520d024251f",
+        "sha256:c018a1aad765e016ebed0bd9cc8a194d07d6c305a34edc40a0279152d12afec3",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:f8663d67459687086c544dbc93d72803b1e6a3feb890cc80c08b6677a5cd714b",
+        "sha256:a818d59f8c76d35e153a3bb67f71ff8a5f343e425c0c6bd6cdffdbe37a710f09",
+        "sha256:e3b1db6d44c6ef20aabbe522341f5954aac0451cf85b165503c63cd1f7638e08",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:f9926f3598878d23a049ca0f2da6bb81b9637e4110206e8329680be8ea61f392",
+        "sha256:271be3d5c5cfb98757e3f86bcd96dd1f52cf9b1bf948b95c6d92d5c028a5a6aa",
+        "sha256:0f6514ac2db11b4afe5cc472016aead59b6706b253a029f668f81226fd261b96",
+        "sha256:cc176b242a57eb551b464691b8dec743af2429deebec4602e9296816df3c7c62",
+        "sha256:9fa05ff6b51be71ceeadd62d9651e275f61eec3be21bfbc5c9e03edae1616996",
+        "sha256:6aae4eed477ad5915b80bb88e8d3db5cb99ecac412fae3ebaa8f278f07aa9f2b",
+        "sha256:6679a9b6534eb1189e06a8b460aa57e85fe88440d90cf14f9e87eeb0a22ea1ce",
+        "sha256:26089598b14db6d8a5656fe020b4926ce60aed27afa62d5b0e70dbceb327dd9b",
+        "sha256:b8c72ba5ebc02392438a7364f41e59f1fc124a277a8b8dd96af1abcd4cb33242",
+        "sha256:e38888cf338f680e07e2623968c9bab93e79eee875c8af47d1b359ff57af803a"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "freecad-spring-clip",
+        "org.opencontainers.image.created": "2024-09-23T16:05:37.063Z",
+        "org.opencontainers.image.description": "Rapid builds of small Conda-based containers using micromamba.",
+        "org.opencontainers.image.licenses": "Apache-2.0",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.title": "micromamba-docker",
+        "org.opencontainers.image.url": "https://github.com/mamba-org/micromamba-docker",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": "root",
+      "working_dir": "/tmp",
+      "compressed_layer_bytes": 1120337935,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "41650c4476f352c75e11f17a759902c8ffeb86a1469312b3e340b763db84ff2f",
+      "display_number": "032-verifier",
+      "original_display_number": "032",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:freecad-spring-clip-verifier-2303c306f4550661@sha256:3ebc4314228ce4d15270065a0924db0dea54ebd45aa4e05e8e1e1a257b1b9488",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-freecad-spring-clip",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "hof-topology-interpenetration",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e",
+      "config_digest": "sha256:69d7ef84844e55efc84ad221676245635fa27592b2dc3cadb3f1301cdc0ecfcd",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:817807f3c64e0b90b66edc7d90297f121cad2a7c2a3ee05a731557762f91e6c7",
+          "size": 29731993
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c2153229ea0f141d95f35c4a31acf563567ee9666c52632feffbff285e2b6628",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ba3bcab5d60243900158317bcabfe55b3fcdae0c74ef96e09e5fd0e18b942326",
+          "size": 27365360
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a1ebc8e9063336dcf383a4002a653ce73631e22d2b1648cbc81897f2cd298413",
+          "size": 4198480
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48386c0fc16c188ffd340173a8494f621980763a10ab41db0cf84f593ffc16f8",
+          "size": 12684
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:f2a7f072635332d307212e318e07284948b89f4167fce5c4d7c9cfb7590b74b6",
+        "sha256:3b9652c58cbb68752212e34f9db15f33eb8fe9d400f115a9974880904b5accc6",
+        "sha256:049aca98983e5e8f27b74f26ea7594d9201c3b8fc1ea7e0f718e4d666e490966",
+        "sha256:e559d8233c43ddb7900ca81179f817aabc93f1fb53c52219b1f5ab776f416b6b",
+        "sha256:1196e45c7d87aab02ca7794c94c0d7e1379f426edc4c7efac4bc251f3e6dc737"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "hof-topology-interpenetration",
+        "org.opencontainers.image.ref.name": "ubuntu",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 61308610,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "e7a03909a2685b5eee4579b5d083bfd2309d1b2d4bc11225138e8fe51689d513",
+      "display_number": "033-env",
+      "original_display_number": "033",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:hof-topology-interpenetration-environment-97d810c502498c4b@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e",
+      "target_image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "hof-topology-interpenetration",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:d9087f406a7ce12e410b392d15c07a57a33df20cdb5cd8b477694b80d6f4d91b",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:d9087f406a7ce12e410b392d15c07a57a33df20cdb5cd8b477694b80d6f4d91b",
+      "config_digest": "sha256:393f3c079b442047435ddd65ade60ef117522b3c7234facc1f878e6a7fd741d6",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:49ab8bf0e88feb3cae4d970acb1bb3327022ac78b779eb8a18b818eab7a30c38",
+          "size": 3533368
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ef70a9024e22aedb19869d2bf2b930e57eb8db3a230687e958179de39557377e",
+          "size": 16024085
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:beedf2b31e459595f82ccff162de5fa9d7ac5d57dd20c6faf671ad6e92ec85c9",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:262e655f6e515f1fcd95f172814c3808e6acc61dea9c2d1785d7580e0f550efa",
+          "size": 7991233
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:31507acf010087c09837ec17503c7daf7922611fbde4f7642702c9fadd188915",
+          "size": 1793
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:27ceb94c79100ca8a31f65ef9beb9beb82ae28095371a35c2c553fdef47eb11f",
+          "size": 116
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:b04faa200fd3e9f30040cf3c40ff77c01c85d517ddfb74b5fb3c27e71216e2a1",
+        "sha256:155a0d2cc3cb8d1948825bf4f73a22597780c8a87efc7e6927ba3b69840ac195",
+        "sha256:e976e5e29e2fe118de00b078e756776953e3345cd39ab2f8dcc48aa809f42305",
+        "sha256:e6a768689bfa4dfff39f0e9fe1afec3e4eed63315075af39caf32668c537f3c7",
+        "sha256:18cdeea6435795d9b930ebdd13acdb30295d287029922e160e8683de3e49967a",
+        "sha256:974475829e53cd287007792061fb0df08dbc6d6888d3f3639e09c2dbf6f02c8c"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "hof-topology-interpenetration",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 55783500,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "e7a03909a2685b5eee4579b5d083bfd2309d1b2d4bc11225138e8fe51689d513",
+      "display_number": "033-verifier",
+      "original_display_number": "033",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:hof-topology-interpenetration-verifier-4503ab4aabacc3de@sha256:d9087f406a7ce12e410b392d15c07a57a33df20cdb5cd8b477694b80d6f4d91b",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-hof-topology-interpenetration",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "interleaved-vigenere",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592",
+      "config_digest": "sha256:e5135f4d0da435f814ebf22f753c3ad5b9f5b89c9cb79a6834fb2214379021f5",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b49bd7092cb21494a45c14ba5420496c47895ad9f498a566e33001abef602db6",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6076440fee4e795f697c1741c7129f9f69d841648927be0777b601771d8b5c62",
+          "size": 12592717
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f0c6d815b1dcdf64254f71c3e1f1f84b5c90ee6ae98c6c1327c8d799d484f392",
+          "size": 249
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7c285c96e3fccd272cb88fc299189810cd3145ae79f97d367d40a7efd7ea0319",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:88899e8d991f70ca3e05a093db12061de40cb2e8c9e9f2b67ffa464dc4aaae59",
+          "size": 881969
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b521deb7c5c67bdfe2a62a985d4e7664a37a0c4442103e6dc37c00d249327433",
+          "size": 1714
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b36edfcfe9cea95601ca70fd701b668213a383ec7b25a7f68cac536f71d0bc12",
+          "size": 3685
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5c910305d2bd15672ab45f218446756c0728d3aaab853556982459ae1c76fa97",
+          "size": 537789
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:00c4d75818da250296a4bc04bcc249ff2357486f4ac3e1d78ed5f312f0e8a46b",
+        "sha256:a1ebb9a21a3bc86de67eddab559d893c4f28debc890e85fcc5ce117e7722fc6b",
+        "sha256:e33689ca3a6f3b22c2d5598a41d237413671ff8a8ec85062f6855174ca2db4f6",
+        "sha256:f31d7dd3fc03b1e01ba8d612a8fa9440a34ed50e796b67d731febcd4b856c905",
+        "sha256:a69f9dc14163a86382c095ab0c7f681743e23cecb8163403bd9cd383cff1a098",
+        "sha256:53d9c38ea7428917a19798999e3dfbfb715c26350870b274d2075e65b3b79cdc",
+        "sha256:2b1b41330d3a99086ace1d3d129999d5a5558d66424fc63efeedbc573d16de53",
+        "sha256:86cae4855bb97fcbeb43cfa1f51b558e66712ebb5de772c0c32bd872c9ba5cea"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "interleaved-vigenere",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 45784232,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "531f29f1182c68e29c120e8059d5d9174a287a7431df683fdbecb894692285ef",
+      "display_number": "034-env",
+      "original_display_number": "034",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:interleaved-vigenere-environment-9d9fa0a5aba4b859@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592",
+      "target_image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "interleaved-vigenere",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:bfe3a07dc06a39182f64dbb1d92af539340587f778409fe62bd82bfacb36f259",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:bfe3a07dc06a39182f64dbb1d92af539340587f778409fe62bd82bfacb36f259",
+      "config_digest": "sha256:fa8e8920abcc96ca2b61e13c37be92e1b880e25537c72835819ebebe22fd228e",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b49bd7092cb21494a45c14ba5420496c47895ad9f498a566e33001abef602db6",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6076440fee4e795f697c1741c7129f9f69d841648927be0777b601771d8b5c62",
+          "size": 12592717
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f0c6d815b1dcdf64254f71c3e1f1f84b5c90ee6ae98c6c1327c8d799d484f392",
+          "size": 249
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1d10154c83169a26f657d7878d73fe26cf4fde9eabf9d0619c0bb71de86ec567",
+          "size": 7658022
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:78aba2dafb9ac9d6403daf74a36ff04efece198a1778bec3e51ebda59dacc4db",
+          "size": 8312
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:224a3c32fdd9898887a18c97a422697cdfd7c74b7007edf099f1a02428ce7cea",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:00c4d75818da250296a4bc04bcc249ff2357486f4ac3e1d78ed5f312f0e8a46b",
+        "sha256:a1ebb9a21a3bc86de67eddab559d893c4f28debc890e85fcc5ce117e7722fc6b",
+        "sha256:e33689ca3a6f3b22c2d5598a41d237413671ff8a8ec85062f6855174ca2db4f6",
+        "sha256:911a8f9ad404ab444c044745934de49a1475022a5cb1ac7a4753921cfd785aff",
+        "sha256:df3762a05e50af65eda12c0a500c90dbe2792aaabea6d00ebaa4ff45a69a5f0a",
+        "sha256:4410f2c5904db608c46fe1cf5700f4c2a1592cecaf6a0f0ba2d465b6119ce160"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "interleaved-vigenere",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 52025409,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "531f29f1182c68e29c120e8059d5d9174a287a7431df683fdbecb894692285ef",
+      "display_number": "034-verifier",
+      "original_display_number": "034",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:interleaved-vigenere-verifier-16783c64c1923947@sha256:bfe3a07dc06a39182f64dbb1d92af539340587f778409fe62bd82bfacb36f259",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-interleaved-vigenere",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "sound-change-cascade",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61",
+      "config_digest": "sha256:aa95afb1f5e2cc4ca73becc5129f63d6909d45ca541bea74741f10e53f27f872",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a0d8783128af79059fe015e6313ce9e8fd7856b194e57f2d3c909b12a593bd2f",
+          "size": 1293920
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b79f58b3eb945fe861ace4fc38504483c5b100c794aa095b6c9f112ed9807aad",
+          "size": 12115893
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48579d87405c21ba2599e244fcf3a02e900dbf9b9103e4afd030fbe0c7f43b33",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:143f0624c64012774d6e209590d93776e807ad6a4d4b254df21568c4515651e6",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b5cdf55378465acc57fb345e7a94f11a5d506e198bef11c0e7419dcdcee9e6f7",
+          "size": 38668808
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0cb543c428a3547f299c2ad770cdce6e156a1492c9ae680fb90fe62ac5d4a1a4",
+          "size": 1681
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:979b38156fed5a5ca6e19a85a6aaa5b31bb800f9a705bfc59e93bd7763ad756d",
+          "size": 8484
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:ebad55931d5b35d9cf64ab801f5b6f4e96821c5fcd17f4109e5774b039114014",
+        "sha256:f19f6d6c86377e4b77a2a5b5d8f56e7ecb205193e6f6b68aa74f61e382427936",
+        "sha256:6fdca0968d0fffb99492a80150c0c18077f7452fe77b70e950c3aefaf85dfe54",
+        "sha256:83b2a2671564f0b52b6acbb7f23a907a38a743d838bea49b11da7c55c69f7f81",
+        "sha256:8047dae18a1301a29bf9a45e8a996220a6de33bc9b83d2f2e0abe3f7958fddee",
+        "sha256:1b8e9dcc73cb096d395d8ef8f633716ef6db49f689723d77a80680f8c5627575",
+        "sha256:5992db8982a67bc70efb5eb81c09714fe6bb7bac9013af25f16ab635001e6586"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "sound-change-cascade",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 81881787,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "0dacd25d881a3ac8e0f89f99a812b6fc39cbc93694aacda20dd56c9eca7b5128",
+      "display_number": "035-env",
+      "original_display_number": "035",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:sound-change-cascade-environment-55194a2779f3596e@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61",
+      "target_image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "sound-change-cascade",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:d5652b2c014fe8b3dc36ef4b23054bcf643504ff43d3526c3eeb9cacb5de9f6c",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:d5652b2c014fe8b3dc36ef4b23054bcf643504ff43d3526c3eeb9cacb5de9f6c",
+      "config_digest": "sha256:9e8aa0dc355f35becc3029e3eb968681127372882f9afe3eec3da5d42732fb7a",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a0d8783128af79059fe015e6313ce9e8fd7856b194e57f2d3c909b12a593bd2f",
+          "size": 1293920
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b79f58b3eb945fe861ace4fc38504483c5b100c794aa095b6c9f112ed9807aad",
+          "size": 12115893
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48579d87405c21ba2599e244fcf3a02e900dbf9b9103e4afd030fbe0c7f43b33",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:97160ab91a2b14283131eb8a153fff585537a2f62db79a001e9a42cf1240c811",
+          "size": 5071685
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:319bd45fec3d311c0facc14550a2e0e86b6c6004cdb7425ab2b334eda424f0ee",
+          "size": 21900395
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0fd9cbf782e1855da03977014473c36a724c3f70d38afe3ff6420f043aa36e57",
+          "size": 15558
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:fb51cf4bc5fd82491b27a3e76bf2db934f78a8e3e404eb210d55482fcde4be1b",
+          "size": 1714488
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0d5a8d02ad2553187fc4e734460413ae341ee8c23dee6d913dafb9efb7ecae89",
+          "size": 112
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:ebad55931d5b35d9cf64ab801f5b6f4e96821c5fcd17f4109e5774b039114014",
+        "sha256:f19f6d6c86377e4b77a2a5b5d8f56e7ecb205193e6f6b68aa74f61e382427936",
+        "sha256:6fdca0968d0fffb99492a80150c0c18077f7452fe77b70e950c3aefaf85dfe54",
+        "sha256:25bb5dd7aa5eb05d729e47db5f39bcaf4db12423f9b828274631f1513c395e9e",
+        "sha256:4882fd6249d3a92eae352d793fad3cf9a054ef4d1314a184dd3553c0524f5540",
+        "sha256:2dab780bdcef4b949b270fb5986d968ee43aa7cc5e2e606086f8b09a4ddcf145",
+        "sha256:c18f3cc7b3c2df611157bf13518aa8b99b42e5c27f063e0781aebdc5007b4571",
+        "sha256:5c530dd09445117d487cfac130d892725a89a6c10a4ede513b3caa7e4eb9c6a8"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "sound-change-cascade",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 71904959,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "0dacd25d881a3ac8e0f89f99a812b6fc39cbc93694aacda20dd56c9eca7b5128",
+      "display_number": "035-verifier",
+      "original_display_number": "035",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:sound-change-cascade-verifier-46b541ccb17a88b9@sha256:d5652b2c014fe8b3dc36ef4b23054bcf643504ff43d3526c3eeb9cacb5de9f6c",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-sound-change-cascade",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 0
+    },
+    {
+      "task_id": "mvcc-lsm-compaction",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f",
+      "config_digest": "sha256:14687a2813bf182e2cbaa1db0fab7ae6b504c3fdb4978fa9e2666bf83339e844",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0926a8eb0e608a5c6888d1cd5594184bdf3ed3aa311dba5b42a547caefdc6f2e",
+          "size": 29752807
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1bbc982ed2f45a056e06371d41a0320bbe144068d34de4afd64c7cdcf58c7e9e",
+          "size": 118155744
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:67da04d1451bcdb5bb8bfecb83ed0002dc95312b7bb3a61b2a81e0781f1386d3",
+          "size": 5018
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+        "sha256:9ee10291a41f47a720e363368c6ccc2551222f0dae7a088004bda763dc723b7f",
+        "sha256:2c194a8d216f57da18a6b48f39ed4ec245ffafeb7bf76a9b7e235043c7834908",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "mvcc-lsm-compaction",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 147913601,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "212700691340b57961b8a09f12d4cf0439676a593527c000e6d9882da7f16d9e",
+      "display_number": "036-env",
+      "original_display_number": "036",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:mvcc-lsm-compaction-environment-3a74f5fdb94f7d43@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f",
+      "target_image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "mvcc-lsm-compaction",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:d65f351fece158955ff26b320988f1349c54aaeae607e34064495fc4ab7fd1d9",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:d65f351fece158955ff26b320988f1349c54aaeae607e34064495fc4ab7fd1d9",
+      "config_digest": "sha256:2c024fa4a7514a3bcf4b87c75c006cd980f0a17ad99e7f6da108da6584cc451e",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:614c31a05d4beee99ff7e358793f7cd53b86bbb67ab3a3b98dc10a45d8f663ea",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e2150cc9512d4a7ea612c972b9ca30a7d083b460a63bdb32f8fa4681c2c89c0b",
+          "size": 13671299
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7521c97de7b02121aa73793ddba8d39157dc91997c2aee58564249a1b9f39a1c",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:12ccdc2aa98a8109fc9e6107dfeb514a12848901b6bf7d39d512c56975bb7ec5",
+          "size": 96272650
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:008e74fd511ea66308928a6e12fd44cdbbd092174af2ca1245736cff0bde2b99",
+          "size": 7548850
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e1a0871ab2e68558ae4f2b0a834e173f12958d11067429294b14fdc89dd7e5ce",
+          "size": 9326
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c9e92c17f9dc14abb4da8b83719a9ebe0ec5569ee840c64f1f0185149afbdd14",
+          "size": 202
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:23a322e58bac2c848cf3accce5a2ae02847433e8f014f731c82cb7d0b1fe84bf",
+        "sha256:835f4630cfa74f4bd2c6abd748da53d5b1319009947839b5c78fe198075bb7eb",
+        "sha256:98bdd8b9915aeab4c23a1110f1ed14b3d9bb2869800e8af8ef238d7b9ebbf55e",
+        "sha256:23d5d713d24b159c479d26f2f487ad604dd97675add4f14cb24e69bb6b2f3443",
+        "sha256:e72b9dd2085deebd614c30039a95ed7cb027d1137277581c5131bbec631b4b7d",
+        "sha256:ef234401b59d9cbb85d125f15fa3975642e1cbfce90b5d62030d9154067be3a8",
+        "sha256:736055bfbc7fbbc89104eb9e996162cbcb44ee6279258f5ed36c4abbbfe7e260"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "mvcc-lsm-compaction",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 149268593,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "212700691340b57961b8a09f12d4cf0439676a593527c000e6d9882da7f16d9e",
+      "display_number": "036-verifier",
+      "original_display_number": "036",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:mvcc-lsm-compaction-verifier-1cb69b730abb8ada@sha256:d65f351fece158955ff26b320988f1349c54aaeae607e34064495fc4ab7fd1d9",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-mvcc-lsm-compaction",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "cad-model",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c",
+      "config_digest": "sha256:022fe1f4e16bb21025f89a392dad0b45fcc09e1cdf7e811fd141e50a89de8694",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a0d8783128af79059fe015e6313ce9e8fd7856b194e57f2d3c909b12a593bd2f",
+          "size": 1293920
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b79f58b3eb945fe861ace4fc38504483c5b100c794aa095b6c9f112ed9807aad",
+          "size": 12115893
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48579d87405c21ba2599e244fcf3a02e900dbf9b9103e4afd030fbe0c7f43b33",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c823001f1c204c06b39f702d2e177b632dd60ac38138204259b660f0c25dc227",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:82df30f90af0948f481e4078518300ca975b2b140c4a7277e0dec25648e43557",
+          "size": 128498
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:ebad55931d5b35d9cf64ab801f5b6f4e96821c5fcd17f4109e5774b039114014",
+        "sha256:f19f6d6c86377e4b77a2a5b5d8f56e7ecb205193e6f6b68aa74f61e382427936",
+        "sha256:6fdca0968d0fffb99492a80150c0c18077f7452fe77b70e950c3aefaf85dfe54",
+        "sha256:2b388485acf7d1d3374c6ce255d5edc78fbe28149c1403f96ef9e21857505ff1",
+        "sha256:c8cd59e25de031f2d08e00ad00339a059b1d016a2f2b82496226b5f217458935"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "cad-model",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 43331312,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "5fb17bc9810c01ddec8b5e52fa48c18eb4b09b5c35e11ad6bd5554a8007e1039",
+      "display_number": "037-env",
+      "original_display_number": "037",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:cad-model-environment-db08203ec880d2cc@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c",
+      "target_image": "ghcr.io/codex-radar/dradar-env-cad-model",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "cad-model",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:7d38bc61497dffd5be75b554385d59ac71996b89fb23aa80b5bcf4f4e6cc40ec",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:7d38bc61497dffd5be75b554385d59ac71996b89fb23aa80b5bcf4f4e6cc40ec",
+      "config_digest": "sha256:625a4f4de01773743d8017db3628e0a6836740b9cb50369191c45167348cf58c",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b49bd7092cb21494a45c14ba5420496c47895ad9f498a566e33001abef602db6",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6076440fee4e795f697c1741c7129f9f69d841648927be0777b601771d8b5c62",
+          "size": 12592717
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f0c6d815b1dcdf64254f71c3e1f1f84b5c90ee6ae98c6c1327c8d799d484f392",
+          "size": 249
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5602d813d5d53098c3cae27dc77e81c23ae9b855404dad96c8795eccc8aab32f",
+          "size": 2289597
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:fee45d4394d77edca2040a131dd4bc65b2eeb8236c40bee925c873a8a2edc90e",
+          "size": 21900383
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f52b2c0c15827b2c870b865bbb253372658f259e80b88d4ba428df1e17152e8c",
+          "size": 87126442
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:36cc2bd4befde0672c1f67332a603d40652d078100fae91fa2507b81108c7aef",
+          "size": 2230
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:502f264d425c0648afe7c43729930258222a69cf320482e5ecea670dff0e1929",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:00c4d75818da250296a4bc04bcc249ff2357486f4ac3e1d78ed5f312f0e8a46b",
+        "sha256:a1ebb9a21a3bc86de67eddab559d893c4f28debc890e85fcc5ce117e7722fc6b",
+        "sha256:e33689ca3a6f3b22c2d5598a41d237413671ff8a8ec85062f6855174ca2db4f6",
+        "sha256:ffc9393442eaeaa55fffff92c3ba4408e476fa93e6acacd84378e79fe5a4f1ad",
+        "sha256:54fc66fb10544af2891a422c3b17ca9cd94994dbe7f8d355648680839fd877ee",
+        "sha256:d4438765cd75a9a64636ce6a2785519b0f10838fac2648406baa89d527f044ce",
+        "sha256:962a6b03e3f8b6e84e94d1913e18be597266d3ca518541a5ab434677b135b479",
+        "sha256:42f08aaee8178ab3613150295c636dd67e9d685c60637419f3aac97ab6ab8c09"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "cad-model",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 155677727,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "5fb17bc9810c01ddec8b5e52fa48c18eb4b09b5c35e11ad6bd5554a8007e1039",
+      "display_number": "037-verifier",
+      "original_display_number": "037",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:cad-model-verifier-0cf09c47914ff3da@sha256:7d38bc61497dffd5be75b554385d59ac71996b89fb23aa80b5bcf4f4e6cc40ec",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-cad-model",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "wal-recovery-ordering",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657",
+      "config_digest": "sha256:d25383db096b75dbc49df49a4585ef007d035c11f5f348604eaeef08e66acac2",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4",
+          "size": 28236252
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1019bb5834114590693b1f4f92671390d54c95d53917d7a5733106b6109ccd68",
+          "size": 3517902
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4bba476d8c6bc56b6dc7bac565e077cf2ba37b45b2e14a123b2c8adf5fd38c98",
+          "size": 12505597
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3fc9d9ab5045181fbd49d1d30a2dbad144172d4c3c141f70117ddb0b918d8357",
+          "size": 248
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e344cbc243004390bac8f09275a412dbdaa55db060094e979f8732b6f32b8b66",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3d5addb693f7ebe5f74201b743ff09292951751a19753fa75308711c38e7f59d",
+          "size": 5211
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:0da811fd3ed46c38cea69079fa395a3d715dbdbdd5c8177107c450bf6332bbfa",
+        "sha256:e161022e15feb3a83c8d77e7e3ec1d79a00a5f8e72e3918b0784e7226bed1337",
+        "sha256:9e252bfbaecd1c8b6e99d89f027437b41bff4a351f60b825a6198ce12bb4a473",
+        "sha256:82f7b847f70975214b6b73f100ebdc64c70c10dfdaf8243766c7780682fa6819",
+        "sha256:6cbc310a37eefb270ec5e4ac4252a69cf860cbdfe74ff37666a02054a893a1ff",
+        "sha256:a9dfea94d2b12613e8a2aadb25d8c13f59fbac5c3dab77947dcee50d70bc9673"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "wal-recovery-ordering",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 44265303,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "7ebf24dcde274d3359ca74a398cd9547ed1adc14cf7dd1bcd8a516650490ff43",
+      "display_number": "038-env",
+      "original_display_number": "038",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:wal-recovery-ordering-environment-4b8e041ddc112263@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657",
+      "target_image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "wal-recovery-ordering",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:f053156f29885278a914665f9320541b78fbb971001d5bb5d5d3b72eccc45d11",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:f053156f29885278a914665f9320541b78fbb971001d5bb5d5d3b72eccc45d11",
+      "config_digest": "sha256:9bfb883ce0af4d4d3c52be22dd5687729ccf4f6e6ae6a7d31cf082681674e997",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4",
+          "size": 28236252
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1019bb5834114590693b1f4f92671390d54c95d53917d7a5733106b6109ccd68",
+          "size": 3517902
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4bba476d8c6bc56b6dc7bac565e077cf2ba37b45b2e14a123b2c8adf5fd38c98",
+          "size": 12505597
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3fc9d9ab5045181fbd49d1d30a2dbad144172d4c3c141f70117ddb0b918d8357",
+          "size": 248
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:40fbd2ee061345c7bf98734509dc61756c9100f7cbb6fed70d5db93338a6e303",
+          "size": 8899796
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:8e0f070c82550cf8cd750c9d191a03abcf68b73fcab12fced830937e2bdf653f",
+          "size": 27725
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e43f75033d9c3a8e4fee223d8e857df687b89cfe1c893371ca2e5ff83a9fd993",
+          "size": 92
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:0da811fd3ed46c38cea69079fa395a3d715dbdbdd5c8177107c450bf6332bbfa",
+        "sha256:e161022e15feb3a83c8d77e7e3ec1d79a00a5f8e72e3918b0784e7226bed1337",
+        "sha256:9e252bfbaecd1c8b6e99d89f027437b41bff4a351f60b825a6198ce12bb4a473",
+        "sha256:82f7b847f70975214b6b73f100ebdc64c70c10dfdaf8243766c7780682fa6819",
+        "sha256:c80478f210f1ba94e071ef410727cd3753916e969638d57582bf09db5c77dabe",
+        "sha256:102efe2cb84060f91d09f80aa2917388fdef87af4bc38a95eaff267d959f6840",
+        "sha256:b15fc5755d559cbb595fbda8eaf4b847f18167ffa2a446ff10e4e6360d43bf6f"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "wal-recovery-ordering",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 53187612,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "7ebf24dcde274d3359ca74a398cd9547ed1adc14cf7dd1bcd8a516650490ff43",
+      "display_number": "038-verifier",
+      "original_display_number": "038",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:wal-recovery-ordering-verifier-9652d9f57fa673d2@sha256:f053156f29885278a914665f9320541b78fbb971001d5bb5d5d3b72eccc45d11",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-wal-recovery-ordering",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "satb-audio-transcription",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56",
+      "config_digest": "sha256:f88164075410cc135dfe2902d36d6b3c8a7a5a5a758782fd5303d88d4018547a",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0926a8eb0e608a5c6888d1cd5594184bdf3ed3aa311dba5b42a547caefdc6f2e",
+          "size": 29752807
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1e115c147c44f8592cb2f9e4211ed110cae5d77879f08938b7c82544fe6f0a1b",
+          "size": 193670294
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:71a1befd0193be212b08258b78b4ddfc51ddb14b5d1b57c97696150de498b1c3",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e0b1344c84820239f4233b083fe8893e41aff6a8c21b610df0262fd85580bb1b",
+          "size": 114
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e440218cfa7c35be1a85e2f4e6324c3832f9afdedf9985a1864eafd67d7de584",
+          "size": 2382369
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+        "sha256:32343842d2f0aef4bed2e5a76229a65e996c4296199b5e4dfd9ccea55e1dcf33",
+        "sha256:450a3237fdb80a1341ae6fa5bbcb700c1c29f2d45df7df73b2bdfafeb98d1988",
+        "sha256:92816110385a7b2a65cce3dc7871bca2f30e02af6d5974a2582013c03b39018f",
+        "sha256:c778d166754d8617bde6c603d10d8c53dda4de56ee70a588bbd475b9274eca16"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "satb-audio-transcription",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 225805677,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "0e6a47693e5d551f21096d52787e244a562d2cc0cf393a6238a05fef3ed269ea",
+      "display_number": "039-env",
+      "original_display_number": "039",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:satb-audio-transcription-environment-61476d1957ff1e72@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56",
+      "target_image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "satb-audio-transcription",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:f3833c50b415010b2682ab2060e2241c92e3f55b4689a4013f0f97c9c84d2b08",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:f3833c50b415010b2682ab2060e2241c92e3f55b4689a4013f0f97c9c84d2b08",
+      "config_digest": "sha256:2ca5953f25e7534c0192bde4f3e038c60b1fd568bcad37fcff6b96824a227b15",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b49bd7092cb21494a45c14ba5420496c47895ad9f498a566e33001abef602db6",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6076440fee4e795f697c1741c7129f9f69d841648927be0777b601771d8b5c62",
+          "size": 12592717
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f0c6d815b1dcdf64254f71c3e1f1f84b5c90ee6ae98c6c1327c8d799d484f392",
+          "size": 249
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c86cc7c580fb0acbe2a2b29285d01d7f1cc8fcc792e0a5576211a4de60d2de32",
+          "size": 2431341
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5f04236403e1dd904d7131daa0b5d4eb15b6275a5c10ed719dd5bc14d6b20118",
+          "size": 21900375
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:058e71cf1cbf5b004e13ceec02f30b53d666c86358d6a974dc58a41980f667e1",
+          "size": 7318390
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:47c0f472f4016638dae71bd15b58bf97537607477560fa2763d5b3fe0363557b",
+          "size": 16746
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:bf47c53baa987141a5355c5c6cdb7268eac15adb6e255654b0eead23d9277fc9",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:00c4d75818da250296a4bc04bcc249ff2357486f4ac3e1d78ed5f312f0e8a46b",
+        "sha256:a1ebb9a21a3bc86de67eddab559d893c4f28debc890e85fcc5ce117e7722fc6b",
+        "sha256:e33689ca3a6f3b22c2d5598a41d237413671ff8a8ec85062f6855174ca2db4f6",
+        "sha256:9c8fa8e677c07bf664ddc8138f406bf32f81e695e663b6f449ef3ce3436b8954",
+        "sha256:bb0e8337c22846335f2e27d69f711ca38c2cc657a1cdfb36e5dbb6e8fa290efb",
+        "sha256:6040599cbb80603db4254f276d62a89f36d3f3eca320abeb4d74807d995e2bf7",
+        "sha256:7f0d1d5f38ceb5d2af348f697e66301a1dadcf08ae2c2d4025a3560fec400977",
+        "sha256:2b49f2fd19449f40d6b41888562bcb6416ef24b3c8ce3b17a2c20fc187375148"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "satb-audio-transcription",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 76025927,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "0e6a47693e5d551f21096d52787e244a562d2cc0cf393a6238a05fef3ed269ea",
+      "display_number": "039-verifier",
+      "original_display_number": "039",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:satb-audio-transcription-verifier-9b454531ac2baac4@sha256:f3833c50b415010b2682ab2060e2241c92e3f55b4689a4013f0f97c9c84d2b08",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-satb-audio-transcription",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "sglang-qwen-burst",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75",
+      "config_digest": "sha256:b5900b17b825c0bd995afefde2e1166929903a7620cd4fcb90b42b178970319c",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a0d8783128af79059fe015e6313ce9e8fd7856b194e57f2d3c909b12a593bd2f",
+          "size": 1293920
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b79f58b3eb945fe861ace4fc38504483c5b100c794aa095b6c9f112ed9807aad",
+          "size": 12115893
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48579d87405c21ba2599e244fcf3a02e900dbf9b9103e4afd030fbe0c7f43b33",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:413462bddfc02aa3d8818ae9084b2c21d68c66b9f76dc37cf3a8e4468f6bb4ea",
+          "size": 372184508
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:ebad55931d5b35d9cf64ab801f5b6f4e96821c5fcd17f4109e5774b039114014",
+        "sha256:f19f6d6c86377e4b77a2a5b5d8f56e7ecb205193e6f6b68aa74f61e382427936",
+        "sha256:6fdca0968d0fffb99492a80150c0c18077f7452fe77b70e950c3aefaf85dfe54",
+        "sha256:f7618019b96b4f6d5b83717dcfc5f5b3e35a35d11c997f251bef378fa405428e",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "sglang-qwen-burst",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app/sglang",
+      "compressed_layer_bytes": 415387261,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "2feec3fdb73449fc99682bafd757c64c0afdd112a61d8a7be2ce1e0fe474a222",
+      "display_number": "040-env",
+      "original_display_number": "040",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:sglang-qwen-burst-environment-d4290738d466a0c9@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75",
+      "target_image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "sglang-qwen-burst",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:28823a1f27df2d0bc48043a28e0b03e0b16e7847424faf286e7b4658ab3552de",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:28823a1f27df2d0bc48043a28e0b03e0b16e7847424faf286e7b4658ab3552de",
+      "config_digest": "sha256:87e83bad9b3d3f1f7676c4c574c586235fc2d3e50a5c9daee2b5b4025c4a4a4e",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a0d8783128af79059fe015e6313ce9e8fd7856b194e57f2d3c909b12a593bd2f",
+          "size": 1293920
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b79f58b3eb945fe861ace4fc38504483c5b100c794aa095b6c9f112ed9807aad",
+          "size": 12115893
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:48579d87405c21ba2599e244fcf3a02e900dbf9b9103e4afd030fbe0c7f43b33",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:413462bddfc02aa3d8818ae9084b2c21d68c66b9f76dc37cf3a8e4468f6bb4ea",
+          "size": 372184508
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6e78de6a8efa515aca20cd9571f714225280bce88ad848e3c6f9b2d1f6cf6054",
+          "size": 21900395
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:66f5f667f9980b36cf03d9f904f7977ab98666425a442c9ae51e81d05a29e8dc",
+          "size": 5764258
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4b87b1a951e564bdd5dd32e790083153d5eafece70a48f3a49cd194e00aa532e",
+          "size": 5266
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:ebad55931d5b35d9cf64ab801f5b6f4e96821c5fcd17f4109e5774b039114014",
+        "sha256:f19f6d6c86377e4b77a2a5b5d8f56e7ecb205193e6f6b68aa74f61e382427936",
+        "sha256:6fdca0968d0fffb99492a80150c0c18077f7452fe77b70e950c3aefaf85dfe54",
+        "sha256:f7618019b96b4f6d5b83717dcfc5f5b3e35a35d11c997f251bef378fa405428e",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:3e29db871f7474aaef31e846dd30529d9426619dcc5385a1439dbc4905ebd1c8",
+        "sha256:0a658583e35f71b8f1a30216836a9e4a240d961e8818fcd8667cc12565b39624",
+        "sha256:0f9f717ae406a7d2961b6f49e7a918ef66eb23d6f4b3da34ffa280559ff3f648"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "sglang-qwen-burst",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 443057180,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "2feec3fdb73449fc99682bafd757c64c0afdd112a61d8a7be2ce1e0fe474a222",
+      "display_number": "040-verifier",
+      "original_display_number": "040",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:sglang-qwen-burst-verifier-eaa673d0eed14722@sha256:28823a1f27df2d0bc48043a28e0b03e0b16e7847424faf286e7b4658ab3552de",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-sglang-qwen-burst",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 1
+    },
+    {
+      "task_id": "risk-scorer-replay",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9",
+      "config_digest": "sha256:7749cfceef907e1b22ece3371ed41938678b66f16276673406eff7da080399ff",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:614c31a05d4beee99ff7e358793f7cd53b86bbb67ab3a3b98dc10a45d8f663ea",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e2150cc9512d4a7ea612c972b9ca30a7d083b460a63bdb32f8fa4681c2c89c0b",
+          "size": 13671299
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7521c97de7b02121aa73793ddba8d39157dc91997c2aee58564249a1b9f39a1c",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:aa84ad9447d14e0c38d940f6bdaa6e807dd3140e706ea6c7ce16290a0f6a3c7c",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3a06ee9ce12704a1a1ba9d98d2b3ca9dae67c63d76e0a01c84256c6f18ba71d5",
+          "size": 5477
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:adf90b8ef91cc070845b6eacc2c504349a10152abe1943d3a72e0804ad434967",
+          "size": 412213
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:191feb90c311a6f0265a5761a951ce168c0142ca387026daa4ff8e0dba08509c",
+          "size": 414123
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:23a322e58bac2c848cf3accce5a2ae02847433e8f014f731c82cb7d0b1fe84bf",
+        "sha256:835f4630cfa74f4bd2c6abd748da53d5b1319009947839b5c78fe198075bb7eb",
+        "sha256:98bdd8b9915aeab4c23a1110f1ed14b3d9bb2869800e8af8ef238d7b9ebbf55e",
+        "sha256:33167c39947e458766eb1eae33fc294f172cd4f78f9f8678fc3dd092cebc197b",
+        "sha256:6dbb6be0003d163695957c137d6e085decac6c488e4ed30069ed7a22bbfe6eab",
+        "sha256:0aa95a161540317c68414166b9e3119b5fab101722de5fe6d2043e7f897ec9c2",
+        "sha256:304eab1e178fe2afd239882786e22d65dc39150b7923e81a26382a8e0acdae10"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "risk-scorer-replay",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": "nobody",
+      "working_dir": "/app",
+      "compressed_layer_bytes": 46269471,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ca3feabd1ec080cda62871064cb2082e6d9e5a8bdadc092d1bf09951ada60ed2",
+      "display_number": "041-env",
+      "original_display_number": "041",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:risk-scorer-replay-environment-d17e46d0dc017f4b@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9",
+      "target_image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "risk-scorer-replay",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:ad52052aad1904dc5dd90705374344403e1293b38d666c3546095ac0963a9831",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:ad52052aad1904dc5dd90705374344403e1293b38d666c3546095ac0963a9831",
+      "config_digest": "sha256:a970169fb5e37d8e0ebee0fe2f14062490b837a76b0dcc0c34fab56b723554dc",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a8ac7f6c67abc236e4c745052c404112b8fab6fe8ac3a329d1ef3b867ad67c71",
+          "size": 28232655
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:614c31a05d4beee99ff7e358793f7cd53b86bbb67ab3a3b98dc10a45d8f663ea",
+          "size": 3533361
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e2150cc9512d4a7ea612c972b9ca30a7d083b460a63bdb32f8fa4681c2c89c0b",
+          "size": 13671299
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7521c97de7b02121aa73793ddba8d39157dc91997c2aee58564249a1b9f39a1c",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:2cac6ef9a7c33b62df061cc8837cd0c537c6cf13d770bfd9b205746958779c7b",
+          "size": 66468943
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:981534fdcf91b10f7dba35d48a46d736e3ccc83fa82460369986b77a449b6629",
+          "size": 9856388
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:60d07697e1e958e69bb8c6c0a014134227e397dbbc9420ee32a7d1e35f50a0bc",
+          "size": 10325
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:94977b6f300624b9ddc3259515f60684edacb2eb70844dd71177b73ac3fa87fe",
+          "size": 96068
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:01319ab1a78750c39d042863b3ecd00215d94fbdaaef72f118e8ebfe70c29e4d",
+          "size": 93
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
+        "sha256:23a322e58bac2c848cf3accce5a2ae02847433e8f014f731c82cb7d0b1fe84bf",
+        "sha256:835f4630cfa74f4bd2c6abd748da53d5b1319009947839b5c78fe198075bb7eb",
+        "sha256:98bdd8b9915aeab4c23a1110f1ed14b3d9bb2869800e8af8ef238d7b9ebbf55e",
+        "sha256:5c29c6a544c6f6203f434b268013ae3b54eef6b9be3eeb3686c620be45a2c23d",
+        "sha256:47a5d147fe2e18d8eadb88dbcd0f12c2a93ae51572c84a5b2d8e98ebdf6f287a",
+        "sha256:8b4d6cdc5b607d07078691568cac968c9e04275f2de3fcccaea5405f3e9dbbe7",
+        "sha256:699114d296e823df26db0c5d22abd3d077bd44acd903e885165eff9453efe5b5",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:121bc34244a18c8169a3fe3ebbee7bb480474e150499b1524e12841f1fac5027"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "risk-scorer-replay",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 121869414,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ca3feabd1ec080cda62871064cb2082e6d9e5a8bdadc092d1bf09951ada60ed2",
+      "display_number": "041-verifier",
+      "original_display_number": "041",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:risk-scorer-replay-verifier-d5f329d7aa3d21c7@sha256:ad52052aad1904dc5dd90705374344403e1293b38d666c3546095ac0963a9831",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-risk-scorer-replay",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "embedding-drift-monitor",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183",
+      "config_digest": "sha256:752bd02468ebe50f3e25d88477cdadbf859816b592c3416d6de971f5bfe29344",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0926a8eb0e608a5c6888d1cd5594184bdf3ed3aa311dba5b42a547caefdc6f2e",
+          "size": 29752807
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:cff33dd86fb47a388c09cb89c3d361570b883dbce4829bcec9ec8269706ae40b",
+          "size": 67841671
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:bf4dcb0eab81870d63ac5c4a9fda8d418e74eef913d24da61f1f41f02a0de7de",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:618d12e0b8d280797a8bc65c9c90243ba81c68491bd8795d1de70c52a07acda3",
+          "size": 754935
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+        "sha256:efec481845b33dcef3cb9a2fbb1542ceee5eb75d64f8b92791793f29a5a2d281",
+        "sha256:4f338a9bf52893ceef72c273145d187d874fe6acc20fdfa2a2a0675ebf8c7a32",
+        "sha256:d5697e4e4dabf6a13e1b8d1a5e563b63a8f920cfab39fb49bed4d745b85da5d9"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "embedding-drift-monitor",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 98349506,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ce5f9bf84e6ceef5976456d492b7f43c182304425d66ccfb8f883a5fa6bf8573",
+      "display_number": "042-env",
+      "original_display_number": "042",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:embedding-drift-monitor-environment-64921d5ad388b5f3@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183",
+      "target_image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "embedding-drift-monitor",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:5f3c5824b551cda5165408736d1b58d072ff260bb97e9e39d19d274a5fccfdac",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:5f3c5824b551cda5165408736d1b58d072ff260bb97e9e39d19d274a5fccfdac",
+      "config_digest": "sha256:c92d45c1f0f3e1fc50162697791095b8e0b151ed8ec31aa1be60dcc621b0766f",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0926a8eb0e608a5c6888d1cd5594184bdf3ed3aa311dba5b42a547caefdc6f2e",
+          "size": 29752807
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0d977243284a866c780c5e00ac978aba816d16fb78d47e0d6d3e57f36972f5d9",
+          "size": 22494124
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:23f1555c26a445b000c9e8ad6482a8a3216d691fb1402058e56ff1dff910e078",
+          "size": 72426369
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:93d4b50e8a1652139608f0fc58220377adfaf27832d9813705d8b8b849cb0f79",
+          "size": 7255
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:df8ad4f15555b8be10edcd6dc059a79b738b85fba0fd363a0992ca826ca79a1d",
+          "size": 136
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+        "sha256:68fcaf21cb6542014bd051740d6e937efb6791db3d916e6bf1f0b4e6bdf12dc4",
+        "sha256:76469356f51504adbe2c11d6425b0a194904640afe54173158ee8de0e433b67a",
+        "sha256:420056866d98812ff314074b5074ed61fe4df9ef453537ae1e5ee1320f54c8ba",
+        "sha256:e624cb38a95e452b2a7e41ec50ee41168ae1c84a1fc0ec95692149a4382ff9e5"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "embedding-drift-monitor",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 124680691,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ce5f9bf84e6ceef5976456d492b7f43c182304425d66ccfb8f883a5fa6bf8573",
+      "display_number": "042-verifier",
+      "original_display_number": "042",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:embedding-drift-monitor-verifier-ba6079d4e153d027@sha256:5f3c5824b551cda5165408736d1b58d072ff260bb97e9e39d19d274a5fccfdac",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-embedding-drift-monitor",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "atrx-vep-crispr",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de",
+      "config_digest": "sha256:3b7abacf80231dfa41b60f72ba96df2469ebdcb515bfc152838b27febb74bbe9",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:87e1b7cce0233772f3a18c08fa0e287c519b474afbfcd87ed023faad834cadb9",
+          "size": 1293904
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c86306e32cd038ae40a4d1b8258a046618be19d6ef5280bb62a89960fecbf796",
+          "size": 14446518
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a14578096edaf2dfd831b7865bfcc6d174e32bdeec920d1a66e11cab6269d7fa",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:67fd0e7e6c9c5b6ba15c4a6e897ee8f262fa5bd62682a3ff29671ad344fec1c6",
+          "size": 476201307
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:eda65a5840aa2002b456de11fe9629f8db1eaa98f7671bf8add681d8f8d52db4",
+          "size": 21897405
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:2769be188e940426517845b787806f7a3a504308b0cdc9ef13e7d1cdeb20f50c",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:1c04422a0384a9380adbb128c34d88aee384535d18ea9bba5d4b85871f58ad82",
+          "size": 64788411
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e5f55c7f18e6fd1a24c7027fc6547b9fbdb2225661d9c2cfb9d008c4a726b3fa",
+          "size": 63845132
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:d733b984605d6e3d74430396ba4226fc8ce21e224327a1870127b6e2fbc39376",
+          "size": 5635887
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:3077d73e91e85d4b414497c637c5daaf95b238aea0e5c254b4408cb1678e1867",
+        "sha256:99dd0251c41dae18863990241cd40c973d6619290e6aeb4545088b7958ec849e",
+        "sha256:34d8e1a7bf9edb9961a4b10d30ea5ce382418c37c752860b7bd9a2ced8253d39",
+        "sha256:0433aefbb27927b583ad7f3209f15625f9f76700cd68e4b1f35dc3cf8cb3d8f4",
+        "sha256:e48210300f03d245387cdde61ba8b3deb13b150114637e9448058dff04a881a5",
+        "sha256:41d85301cb1044d90ecd7c0101382a01b394d813d584349c6a12cef5548832d7",
+        "sha256:5f810860bedf2e1ca2786b9ff6300c9106fbe4d447ee08f3e47490e4b24b573b",
+        "sha256:2778ec5aec5ee5875a2f04d99b1c8e35d7aa19b40943e70c066fbb6ad7af0622",
+        "sha256:6cdb0456a15081decd0779ee802c3212106a8530094fefc5f2cb793915c1a659"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "atrx-vep-crispr",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 677901565,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "53e7c9d486cbaa83e8f9bed2b993e064711522fedf1d359466bba11796a9da46",
+      "display_number": "043-env",
+      "original_display_number": "043",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:atrx-vep-crispr-environment-942b2c3a7def0a2e@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de",
+      "target_image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "atrx-vep-crispr",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:935ef7ba68b484c20b48857a4b086e10076897b003819c2c3356fae2f28a46f3",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:935ef7ba68b484c20b48857a4b086e10076897b003819c2c3356fae2f28a46f3",
+      "config_digest": "sha256:d5258ba288ecc81c8b5f73d365c89056da65246a71ac1c73789e3b602742027a",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:87e1b7cce0233772f3a18c08fa0e287c519b474afbfcd87ed023faad834cadb9",
+          "size": 1293904
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c86306e32cd038ae40a4d1b8258a046618be19d6ef5280bb62a89960fecbf796",
+          "size": 14446518
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a14578096edaf2dfd831b7865bfcc6d174e32bdeec920d1a66e11cab6269d7fa",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a748add66160e6a947e7ee5a7ca7b27a903134b4c0137bdbc296b60f1cb7316d",
+          "size": 476205989
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:2856e3cde1a014fd349de420f2be63de1eb6e42170b6a2c65a31689f2a0ae1dc",
+          "size": 21897405
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:0650ed88c8a0a4172ee34e64cbb330e235235c8c331e9efb8326ec13395be5a4",
+          "size": 1477555
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:05f4f4f4ee23a00f6e725c01472212ed905ee8bc1b82320fccbfe523483b7e7b",
+          "size": 64802130
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:835df6a2cd2bf70b9376c8e08393e360fb43e8258b59237624d8805ddc7ac024",
+          "size": 63848724
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:180bfd3d379c91c4d17d057ec11ee5e52605cc9607da3f1ff27b9fce77a49b06",
+          "size": 5635884
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:92b869945ffceb185321c21275626077b650a7c0b8d530ac00b1114f84b812d9",
+          "size": 113
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:3077d73e91e85d4b414497c637c5daaf95b238aea0e5c254b4408cb1678e1867",
+        "sha256:99dd0251c41dae18863990241cd40c973d6619290e6aeb4545088b7958ec849e",
+        "sha256:34d8e1a7bf9edb9961a4b10d30ea5ce382418c37c752860b7bd9a2ced8253d39",
+        "sha256:cf809689d2e5b87683331593b053d861d3a1275382e1741e3afe83812a498d1a",
+        "sha256:4d7b63ee07c0882ddf22347e390496a9287ae2f6f2b66ee10e046c170a677fa6",
+        "sha256:19169fe5241028c5490440b795eebb17d684a7fd00ebcc4361020267a1ce6b0a",
+        "sha256:b6784005228602f1b95f174430b29f7f0301bd5a9b7ac154a86791d79379f5a4",
+        "sha256:7325a89e70247183098d2eafaf7c610ca279a46bb3dffa72cbd65eb9031106d7",
+        "sha256:54468f572546019a01817c0df69eaf74f28c42611e32a8018a8f491d03dcabf9",
+        "sha256:bc64a82abac6028a56c5a6f5a7dc944cb03f4903f959baed2a640c6e5f5b8d61"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "atrx-vep-crispr",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 679401130,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "53e7c9d486cbaa83e8f9bed2b993e064711522fedf1d359466bba11796a9da46",
+      "display_number": "043-verifier",
+      "original_display_number": "043",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:atrx-vep-crispr-verifier-4727aa67ef5af0f2@sha256:935ef7ba68b484c20b48857a4b086e10076897b003819c2c3356fae2f28a46f3",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-atrx-vep-crispr",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "react-lead-form",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0",
+      "config_digest": "sha256:69c35055c2d0a04693d67a6a7f2d03846471b7553e80a0a9297641ce14ec33a4",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4",
+          "size": 28236252
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582",
+          "size": 3308
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f",
+          "size": 41422030
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2",
+          "size": 1712673
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31",
+          "size": 447
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:eaf30c9bce7c4fa24daf6353d15f739f79e876a6842842045d4277bc6a110674",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:f55bf2753f16af4d981c49c9242e029c4d1212c9f5677111295f2e3c0605bddf",
+          "size": 619094
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5777080a2300fcb836b3d088d487db0cde48a0b5077a82b3ff88226f46ccb1ad",
+          "size": 30589
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:83b33d7f9e489bc032d1c1761bcf126591be94be633f5baabb85ec14adb4f349",
+          "size": 50074750
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:5f952c7effbe6570fa5a13c38af2c5743242eda060901976ce46ecf3609b25a0",
+          "size": 6387
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:0da811fd3ed46c38cea69079fa395a3d715dbdbdd5c8177107c450bf6332bbfa",
+        "sha256:4337a9b79b842bfe58037ff8e3040c28e8e3366009befe7bc70694869e6ad9a1",
+        "sha256:631e9f799a80c48d29ea547226d4c97b5c4e4698baadbae796fbcb67b1cbdcba",
+        "sha256:f991bccee0f1f8f692280d0e1f83f48001576c08d33c53d6a1463d5062a6ff18",
+        "sha256:d592f6b23cfaeb0a7d534376e0d4a3a32255df78a9feda01e3a6a015bada66d5",
+        "sha256:e62c501f3a2a4718d3d52e2609d06b7a77f9ea4adb6726d74d4b5eee64c3aa11",
+        "sha256:2f100bcd8f22603851a80c1ae95db30765e7d8b835afc1ce249d23c1f12248dc",
+        "sha256:d2951d77d4229f2366d6b9114e871255cf0157d3fcfc0858134199f955648eb7",
+        "sha256:251ca4f829f8cd7a8682b8c16d7d3e5c64d35f5c14a6a3b85c8fcdfcabc73081",
+        "sha256:79c169aef9f8b85beb9cc9a3f13b08a8b69d0129e0b955e060ba4bf4b638f928"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "react-lead-form",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 122105623,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ba0cc14aa877aa122939741f5c96f4f6f4d7115b7e72c4539864212c72b457a0",
+      "display_number": "044-env",
+      "original_display_number": "044",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:react-lead-form-environment-0c310f9153d5acfe@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0",
+      "target_image": "ghcr.io/codex-radar/dradar-env-react-lead-form",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "react-lead-form",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:e754f993d14cf7270a99d777cd546910ec8f3677530fadb9c4e6ddaf31922ee2",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:e754f993d14cf7270a99d777cd546910ec8f3677530fadb9c4e6ddaf31922ee2",
+      "config_digest": "sha256:b8be0ac0d7e8ecd85f2bff0971cc8454944120d34c23ea4992c40a687bd9ca67",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4",
+          "size": 28236252
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582",
+          "size": 3308
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f",
+          "size": 41422030
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2",
+          "size": 1712673
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31",
+          "size": 447
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:eaf30c9bce7c4fa24daf6353d15f739f79e876a6842842045d4277bc6a110674",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:505353e8ab6bede84b3f3eddcc9b7daadec118db7d6bc7cb6f47b579dcddb0a8",
+          "size": 30589
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:3eae1d1d4255bcda20fb76deff33e38c8075ce44101230e0e21b24f21a54cb0d",
+          "size": 50074522
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:50f17f2f3cd8b03503ce83eccd79fe10696a6fa8952fa787fe23b5c3dfc51e0b",
+          "size": 41086
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:0da811fd3ed46c38cea69079fa395a3d715dbdbdd5c8177107c450bf6332bbfa",
+        "sha256:4337a9b79b842bfe58037ff8e3040c28e8e3366009befe7bc70694869e6ad9a1",
+        "sha256:631e9f799a80c48d29ea547226d4c97b5c4e4698baadbae796fbcb67b1cbdcba",
+        "sha256:f991bccee0f1f8f692280d0e1f83f48001576c08d33c53d6a1463d5062a6ff18",
+        "sha256:d592f6b23cfaeb0a7d534376e0d4a3a32255df78a9feda01e3a6a015bada66d5",
+        "sha256:e62c501f3a2a4718d3d52e2609d06b7a77f9ea4adb6726d74d4b5eee64c3aa11",
+        "sha256:427c26fe0cad927ad4989efa70870d27fd783de374417f4c3faa7be09d744bf2",
+        "sha256:f098bdc7b6ea6c685cd8936e712320fc973344d274cdc465def61bed6157d50a",
+        "sha256:270d8a3691e4d29e76549c8f6eaf7769a38d654552e2277b53077d13be36ef73",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "react-lead-form",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 121521032,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "ba0cc14aa877aa122939741f5c96f4f6f4d7115b7e72c4539864212c72b457a0",
+      "display_number": "044-verifier",
+      "original_display_number": "044",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:react-lead-form-verifier-ea3260a28fc75f28@sha256:e754f993d14cf7270a99d777cd546910ec8f3677530fadb9c4e6ddaf31922ee2",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-react-lead-form",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "batched-eval-parity",
+      "kind": "environment",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47",
+      "config_digest": "sha256:a061e44bf26c4599296fbdbcbc093984fee13e9588ff504a3c7b3cb76bb5c22c",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:87e1b7cce0233772f3a18c08fa0e287c519b474afbfcd87ed023faad834cadb9",
+          "size": 1293904
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c86306e32cd038ae40a4d1b8258a046618be19d6ef5280bb62a89960fecbf796",
+          "size": 14446518
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a14578096edaf2dfd831b7865bfcc6d174e32bdeec920d1a66e11cab6269d7fa",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:506c80b97d15124affe43ffa8b0405c226b71ff02d4fc5cfd88ae2590479c8c5",
+          "size": 93
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c9da423b29851fecdb22b6e08c7e92d4baef78e1fb80a287ec598006e7ea22d4",
+          "size": 26544887
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:68b0dc318be068dffb96a0400489ef68ac7d64d61eb7a26bf8c43db51d7d9c2d",
+          "size": 12767
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:d7c674e0ca3c36e2e7d397db2564b65b9a09287ccd2e7978ee2147e3218aea9b",
+          "size": 1461
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:97fc9721137308e518a8d329c70f8fd3f2059e82558caa2185f0128b0da997c0",
+          "size": 13311
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:3077d73e91e85d4b414497c637c5daaf95b238aea0e5c254b4408cb1678e1867",
+        "sha256:99dd0251c41dae18863990241cd40c973d6619290e6aeb4545088b7958ec849e",
+        "sha256:34d8e1a7bf9edb9961a4b10d30ea5ce382418c37c752860b7bd9a2ced8253d39",
+        "sha256:4c3790832c9ebf4ce0ea3ac3725da9eda6094c4eb4a2239d89e26c3de3955b01",
+        "sha256:82de458e2bb1882fddf43e6d0a43be8c83a438ee16acbcb8d1007875a44b718e",
+        "sha256:87636c29390ce08ef9c48d8188de3c01aad39a2868ca785dda35edaed1b6b404",
+        "sha256:ca01a11e00be7c910e998742bc53c176ec3d6613637e2a0566e789db1125b444",
+        "sha256:732f810c5d2d0aa3055c9d6eaad2f44465273632a071ae1f83a144a03e0d0b31"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "environment",
+        "org.harborframework.terminal-bench.task": "batched-eval-parity",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": "/app",
+      "compressed_layer_bytes": 72105849,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "154dcb412305228caf54b2c48afd7ba35752ac1e395933109ebee721f4a9f3cf",
+      "display_number": "045-env",
+      "original_display_number": "045",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:batched-eval-parity-environment-00a2f89ac64b1a55@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47",
+      "target_image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    },
+    {
+      "task_id": "batched-eval-parity",
+      "kind": "verifier",
+      "source_reference": "docker.io/harborframework/terminal-bench@sha256:ed22ecd4714d6f9455421cca5278b43a1421a2a35e5479d8d663671a5b1c84b3",
+      "status": "SOURCE_QUALIFIED",
+      "source_digest": "sha256:ed22ecd4714d6f9455421cca5278b43a1421a2a35e5479d8d663671a5b1c84b3",
+      "config_digest": "sha256:f0c9a74018849a66823d94ea21c45d93e7732b901d98520340c3a35626b8ee1b",
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:87e1b7cce0233772f3a18c08fa0e287c519b474afbfcd87ed023faad834cadb9",
+          "size": 1293904
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:c86306e32cd038ae40a4d1b8258a046618be19d6ef5280bb62a89960fecbf796",
+          "size": 14446518
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a14578096edaf2dfd831b7865bfcc6d174e32bdeec920d1a66e11cab6269d7fa",
+          "size": 250
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:980fb9f8709e7b696849a1b3a28fd4f02624ff5e0de7ce229bcd1965a68a64b1",
+          "size": 5071729
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:66d9d68802d8c89741d41f147b1d0000fe14080e5f9932d2a39336bbcc2b21a3",
+          "size": 21900391
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:7d69d79caa71b38a88eca81b4fe482ba2cb36a70745b19eb3760fd6b851a6f29",
+          "size": 40090186
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:2087bc232aa381c8bf14c79969655817846f5065c5e241d2be0fb761ca860ca6",
+          "size": 15623
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:b8db1f9bb7312454718afcd144ccb5648fb3a39284639b4cc5a871be5fc1a6a4",
+          "size": 1461
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:d6354e6e355ec9fe0117be9ff95cd155bad193b1731c955c32b46483df7b9df3",
+          "size": 152
+        }
+      ],
+      "rootfs_diff_ids": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:3077d73e91e85d4b414497c637c5daaf95b238aea0e5c254b4408cb1678e1867",
+        "sha256:99dd0251c41dae18863990241cd40c973d6619290e6aeb4545088b7958ec849e",
+        "sha256:34d8e1a7bf9edb9961a4b10d30ea5ce382418c37c752860b7bd9a2ced8253d39",
+        "sha256:105675c1866f4c6eaa738b19ba5e8a45071c07d72f71ebadce3257a0ba9a88de",
+        "sha256:47528e30f13f4958123f47f9456a4de47697b31da386165c594004df22005bf4",
+        "sha256:fb02a974ffdbf365d62c940b77b05944e5e44c6424da6bcb1f3ab73e3946ca68",
+        "sha256:75516bca12ce283f7249ebde9d07ce2e4fa27e920b70e043260af79a28061ba3",
+        "sha256:644c81a85985b3c2748b7b2a439ba6f77c1f642c9b17bd13aac589ea6ffa05f5",
+        "sha256:8882d72ae951d3d071217d4d272072561c3c4fc23695b6bf10c7ba6f287bb529"
+      ],
+      "platform": "linux/amd64",
+      "labels": {
+        "org.harborframework.terminal-bench.role": "verifier",
+        "org.harborframework.terminal-bench.task": "batched-eval-parity",
+        "org.opencontainers.image.revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "org.opencontainers.image.source": "https://github.com/harbor-framework/terminal-bench",
+        "org.opencontainers.image.version": "v4.0.0"
+      },
+      "default_user": null,
+      "working_dir": null,
+      "compressed_layer_bytes": 112612872,
+      "full_layers_pulled": false,
+      "model_calls": 0,
+      "grader_calls": 0,
+      "original_task_content_hash": "154dcb412305228caf54b2c48afd7ba35752ac1e395933109ebee721f4a9f3cf",
+      "display_number": "045-verifier",
+      "original_display_number": "045",
+      "source_registry": "docker.io/harborframework/terminal-bench",
+      "original_official_pinned_ref": "harborframework/terminal-bench:batched-eval-parity-verifier-4ec557b03f34f592@sha256:ed22ecd4714d6f9455421cca5278b43a1421a2a35e5479d8d663671a5b1c84b3",
+      "target_image": "ghcr.io/codex-radar/dradar-verifier-batched-eval-parity",
+      "target_tag": "tb4-v4.0.0-official-20261008",
+      "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "anonymous_group": 2
+    }
+  ],
+  "task_count": 14,
+  "image_count": 28,
+  "source_release_manifest_sha256": "35930574da44fe4e90f6741562a9596cdbf02d2b64d639b6c2b7ab2582a4b0e6",
+  "source_images_rebuilt": false,
+  "prior_packages_not_deleted": true
+}
