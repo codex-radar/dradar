@@ -26,7 +26,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ghcr-environment-publication
+  # Keep the shared registry-writer fence. Read-only immutable-image probes use
+  # their own run group so they cannot cancel another publisher's pending run.
+  group: ${{ (inputs.phase == 'build' || inputs.phase == 'verifier-build') && 'ghcr-environment-publication' || format('ghcr-science19-observation-{0}', github.run_id) }}
   cancel-in-progress: false
 jobs:
   science:
