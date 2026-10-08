@@ -126,7 +126,17 @@ def anonymous(args, entry):
     previous = args.out / "build-receipt"
     run(["gh", "run", "download", args.build_run, "--repo", "codex-radar/dradar", "--name", "science19-build-" + args.number, "--dir", str(previous)], timeout=120)
     receipt = json.loads((previous / "BUILD_RECEIPT.json").read_text())
-    require(receipt["ci_commit"] == args.reviewed and receipt["task_id"] == entry["task_id"] and receipt["task_content_hash"] == entry["task_content_hash"], "build receipt binding differs")
+    build_commit = args.build_reviewed or args.reviewed
+    source_run = json.loads(run(["gh", "api", "repos/codex-radar/dradar/actions/runs/" + args.build_run], timeout=90))
+    require(source_run["head_sha"] == build_commit and source_run["head_branch"] == "codex/science19-official-build-20261008"
+            and source_run["actor"]["login"] == "SecurityMind" and source_run["event"] == "workflow_dispatch", "actual source build run binding differs")
+    require(receipt["ci_commit"] == build_commit and str(receipt["run_id"]) == args.build_run
+            and receipt["source_commit"] == entry["source_commit"]
+            and receipt["status"] == "BUILT_AND_PUSHED_PUBLIC_UNVERIFIED"
+            and receipt["image_kind"] == "official-source-build-not-upstream-prebuilt"
+            and receipt["target_image"] == entry["target_image"]
+            and receipt["number"] == args.number and receipt["task_id"] == entry["task_id"]
+            and receipt["task_content_hash"] == entry["task_content_hash"], "build receipt binding differs")
     package = json.loads(run(["gh", "api", "orgs/codex-radar/packages/container/" + entry["target_image"].split("/")[-1]], timeout=90))
     require(package["visibility"] == "public" and package.get("repository", {}).get("full_name") == "codex-radar/dradar", "package public visibility/repository association is unverified")
     write(args.out / "PUBLIC_PACKAGE.json", {k: package[k] for k in ("id", "name", "visibility", "html_url")})
@@ -198,6 +208,7 @@ def main():
     parser.add_argument("--batch-hash", required=True)
     parser.add_argument("--number", required=True)
     parser.add_argument("--build-run", default="")
+    parser.add_argument("--build-reviewed", default="")
     args = parser.parse_args()
     args.out = args.out.absolute(); args.out.mkdir(parents=True, exist_ok=False)
     try:

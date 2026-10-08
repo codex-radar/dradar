@@ -19,6 +19,10 @@ on:
         description: Previous successful build run for anonymous verification
         required: false
         type: string
+      build_commit:
+        description: Exact original build commit, if anonymous verifier code advanced
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -61,10 +65,11 @@ jobs:
           REVIEWED: ${{ inputs.reviewed_commit }}
           BATCH_HASH: ${{ inputs.batch_sha256 }}
           BUILD_RUN: ${{ inputs.build_run }}
+          BUILD_COMMIT: ${{ inputs.build_commit }}
           NUMBER: ${{ matrix.number }}
         run: |
           set -euo pipefail
-          python3 images/science19/build.py "$PHASE" --root images/science19 --out "$RUNNER_TEMP/science-public-receipts" --reviewed "$REVIEWED" --batch-hash "$BATCH_HASH" --number "$NUMBER" --build-run "$BUILD_RUN"
+          python3 images/science19/build.py "$PHASE" --root images/science19 --out "$RUNNER_TEMP/science-public-receipts" --reviewed "$REVIEWED" --batch-hash "$BATCH_HASH" --number "$NUMBER" --build-run "$BUILD_RUN" --build-reviewed "$BUILD_COMMIT"
       - name: Preserve only public source-build or verification receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
