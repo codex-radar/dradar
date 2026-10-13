@@ -9,12 +9,22 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import uuid
 
 class JournalConflict(RuntimeError):
     pass
+
+def retryable_claim_receipt(request: Request, value: dict | None) -> bool:
+    """Only an explicit no-allocation single-task retry is nonterminal."""
+    return (request.operation == 'claim:single' and request.method == 'POST'
+            and re.fullmatch(r'/api/v2/single/runs/[A-Za-z0-9_-]+/claim', request.path) is not None
+            and isinstance(value, dict) and value.get('schema_version') == 2
+            and value.get('request_id') == request.request_id
+            and value.get('status') == 'retry' and value.get('reason') == 'temporarily_unavailable'
+            and 'assignment' not in value and 'error' not in value)
 
 @dataclass(frozen=True)
 class Request:
@@ -134,7 +144,13 @@ class Journal:
             row = db.execute("SELECT * FROM requests WHERE operation=?", (request.operation,)).fetchone()
             if row is None or Request(**dict(row)).body_json != request.body_json:
                 raise JournalConflict("request was not durably prepared")
-            if row["response_json"] is not None:
+            old = json.loads(row['response_json']) if row['response_json'] is not None else None
+            if retryable_claim_receipt(request, old):
+                # Preserve the first temporary observation, including pre-upgrade
+                # cached retries, before advancing this exact request's receipt.
+                db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)',
+                           ('claim-retry:' + request.request_id, row['response_json']))
+            elif row['response_json'] is not None:
                 # Replay observations can advance without granting new authorization.
                 # Retain the first receipt; compare immutable scope/status strictly.
                 def identity(value):
@@ -149,6 +165,9 @@ class Journal:
                 if identity(json.loads(row["response_json"])) != identity(response):
                     raise JournalConflict("receipt identity changed for original request")
                 return
+            if retryable_claim_receipt(request, response):
+                db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)',
+                           ('claim-retry:' + request.request_id, raw))
             db.execute("UPDATE requests SET response_json=? WHERE operation=?", (raw, request.operation))
 
     def prepare_correction(self, operation: str, path: str, body: dict) -> Request:

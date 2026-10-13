@@ -10,7 +10,7 @@ import hashlib
 import json
 from urllib.parse import urlsplit
 import httpx
-from .journal import Journal, Request
+from .journal import Journal, Request, retryable_claim_receipt
 
 class TransportUnknown(RuntimeError):
     """The server may have accepted the request; preserve it for replay."""
@@ -120,7 +120,7 @@ class Client:
             # A previous ACK may have arrived since this caller read its copy.
             if (prepared.request_id, prepared.body_json, prepared.path, prepared.method) != (request.request_id, request.body_json, request.path, request.method):
                 raise ProtocolError("request is not the durable original")
-        if prepared.response is not None:
+        if prepared.response is not None and not retryable_claim_receipt(prepared, prepared.response):
             return prepared.response
         try:
             response = self.http.request(request.method, _path(request.path),
