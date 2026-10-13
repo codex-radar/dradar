@@ -68,3 +68,38 @@ def test_other_operation_retry_is_not_reopened(tmp_path):
     value={'schema_version':2,'server_time':'now','request_id':req.request_id,'status':'retry','reason':'temporarily_unavailable'}
     j.acknowledge(req,value)
     with pytest.raises(JournalConflict):j.acknowledge(req,{**value,'status':'started'})
+
+@pytest.mark.parametrize('allocated_before_stop',[False,True])
+def test_pending_retry_and_failed_stop_never_claim_or_prepare_after_local_stop(tmp_path,allocated_before_stop):
+    from dradar.single.job import Job, JobBlocked, stop
+    j=Journal(tmp_path);run=j.identity('run');j.bind('configuration',json.dumps({'benchmark':'synthetic','model':'synthetic-model','effort':'low','agent':'codex'}))
+    a={'assignment_id':'a','run_id':run,'lease_id':'l','work_key':'w','owner_epoch':1,'execution_id':None,'state':'leased',
+       'task':{'benchmark':'synthetic','model':'synthetic-model','effort':'low','task_id':'t','task_content_hash':'a'*64,'task_commit':'b'*40},'runner':{'agent':'codex'}}
+    calls=[];prepared=[];allocated=[allocated_before_stop]
+    def server(req):
+        calls.append(req.url.path)
+        if req.url.path.endswith('/stop'):raise httpx.ConnectError('stop not delivered',request=req)
+        if req.url.path.endswith('/claim'):
+            allocated[0]=True
+            return httpx.Response(200,json={**receipt(req,'claimed'),'assignment':a})
+        return httpx.Response(200,json={'schema_version':2,'server_time':'now',
+            'run':{'run_id':run,'state':'active','benchmark':'synthetic','model':'synthetic-model','effort':'low','agent':'codex'},
+            'assignments':[a] if allocated[0] else []})
+    c=client(tmp_path,server);job=Job(c,runtime=type('Runtime',(),{'prepare':lambda self,a:prepared.append(a)})())
+    pending=j.prepare('claim:single',f'/api/v2/single/runs/{run}/claim',{})  # first retry ACK lost
+    with pytest.raises(TransportUnknown):stop(c)
+    assert j.value('local_stop')=='true'
+    with pytest.raises(JobBlocked):Job(c,job.runtime).run()
+    with pytest.raises(JobBlocked):job.claim()
+    assert not any(path.endswith('/claim') for path in calls) and not prepared
+    assert allocated[0]==allocated_before_stop and j.pending_request('claim:single').request_id==pending.request_id
+    c.close()
+
+def test_stopped_original_execution_can_still_upload_without_claim(tmp_path,monkeypatch):
+    from dradar.single.job import Job
+    c=client(tmp_path,lambda _:pytest.fail('unexpected network'))
+    job=Job(c);c.journal.bind('local_stop','true');c.journal.begin_execution('a','e')
+    monkeypatch.setattr(job,'snapshot',lambda:{'run':{'state':'stopped'},'assignments':[{'assignment_id':'a'}]})
+    monkeypatch.setattr(job,'upload',lambda a:{'status':'original_upload'})
+    assert job.run()=={'status':'original_upload'}
+    c.close()

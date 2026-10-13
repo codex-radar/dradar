@@ -86,8 +86,11 @@ class Job:
 
     def claim(self):
         # Always the same request, including busy/restart/lost ACK. No refill.
-        request = self.journal.prepare('claim:single', f'{PREFIX}/runs/{self.run_id}/claim', {})
-        value = envelope(self.client.send(request), request.request_id)
+        # Retry replay can now allocate. Serialize it with the durable local
+        # stop barrier, including pending requests whose first ACK was lost.
+        with self.launch_guard():
+            request = self.journal.prepare('claim:single', f'{PREFIX}/runs/{self.run_id}/claim', {})
+            value = envelope(self.client.send(request), request.request_id)
         if value.get('status') == 'claimed':
             self.checked(value.get('assignment'))
         elif value.get('status') not in ('retry', 'no_work', 'stop'):
@@ -172,7 +175,7 @@ class Job:
 
     def run(self):
         # Reconcile pending claim even if inventory already shows its commit.
-        if self.journal.pending_request('claim:single'):
+        if self.journal.value('local_stop') != 'true' and self.journal.pending_request('claim:single'):
             self.claim()
         snap = self.snapshot()
         if not snap['assignments']:
@@ -186,6 +189,8 @@ class Job:
         aid = a['assignment_id']
         if self.journal.execution(aid):
             return self.upload(a)
+        if self.journal.value('local_stop') == 'true':
+            raise JobBlocked('Stopped task cannot prepare or start; original evidence retained')
         if a['state'] == 'running':
             raise JobBlocked('Server start committed without local launch fence; execution unknown, no automatic relaunch')
         if a['state'] not in ('leased', 'running'):
