@@ -1,0 +1,10 @@
+{
+  "schema": "dradar.release-pair/1",
+  "release": "recovery-pair-r1-20261013",
+  "CLI_version": "0.5.299",
+  "Server_version": "0.1.2.post74",
+  "protocol": "single-task-v1",
+  "reviewed_CLI_commit": "b6836b343e438a43ef3b8f9743a42f941f4a83ec",
+  "reviewed_Server_commit": "a212c9e1f6bc2aad42d5cf69df5134429fefd943",
+  "resume_paused_runs": false
+}

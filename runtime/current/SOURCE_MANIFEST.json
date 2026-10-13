@@ -1,6 +1,6 @@
 {
   "project_version": "2026.10.13",
-  "component_version": "0.5.298+single.2",
+  "component_version": "0.5.299",
   "files": [
     {
       "path": "scrub.py",
@@ -9,8 +9,8 @@
     },
     {
       "path": "__init__.py",
-      "size": 33,
-      "sha256": "b607df2c8d6604ceb68d799e4f30b097de71b1370c6cf670d428f1a9d6f9f06e"
+      "size": 24,
+      "sha256": "5703c7628275f93384be3d0cf1b7199beb3c2b9bb0d855642e62dfee7d4279bd"
     },
     {
       "path": "assignment_lock.py",
@@ -69,8 +69,8 @@
     },
     {
       "path": "single/job.py",
-      "size": 12812,
-      "sha256": "4c3874d7dde24dfd4215af2949a136be9262da971c68245a721005122b17dc02"
+      "size": 13207,
+      "sha256": "2ad44922440b7c312a1bdd6364fcc1e9eea09371ef909178967a8cf1f16bc535"
     },
     {
       "path": "single/__main__.py",
@@ -79,8 +79,8 @@
     },
     {
       "path": "v2/client.py",
-      "size": 8858,
-      "sha256": "baad1ab692489be68b9aaf7c9dc3ad96e04e13ff78aca7e1d6aac17cc3d37ad4"
+      "size": 8944,
+      "sha256": "ed49e9e8183741966cc371f927771ad83cee753299e20077ba8aabb012ab73f1"
     },
     {
       "path": "v2/host_runtime.py",
@@ -159,8 +159,8 @@
     },
     {
       "path": "v2/journal.py",
-      "size": 12812,
-      "sha256": "c012c5f6088a17b16bcd8a28245b929b01f35cfe0ffa78cb3e0a40746a1f67a3"
+      "size": 14139,
+      "sha256": "0fe33f4fc4c8f548d310de78983a592c3780b527db5192f8711f564ce0128cfc"
     },
     {
       "path": "v2/skill_install.py",
@@ -172,5 +172,6 @@
       "size": 795,
       "sha256": "054efc40ba7b92b1d148a569703586e7b7c5c0ea39381096cf68e3d43c143144"
     }
-  ]
+  ],
+  "release_pair": "recovery-pair-r1-20261013"
 }
