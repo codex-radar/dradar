@@ -44,3 +44,21 @@ dist/
 *.swo
 .idea/
 .vscode/
+
+# Local evidence, historical copies and generated output stay outside source sync.
+/.artifacts/
+/artifacts/
+/.worktrees/
+/.runtime/
+/evidence/
+/output/
+/backups/
+/logs/
+/.tmp-*
+/__preview-*.html
+*.py[cod]
+node_modules/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+/release/wheels/

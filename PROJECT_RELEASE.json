@@ -1,0 +1,35 @@
+{
+  "schema": "dradar.project-release/1",
+  "version": "2026.10.13",
+  "git_tag": "v2026.10.13",
+  "repository": "codex-radar/dradar",
+  "base_commit": "374726ed89a8af534a2c78a551d1afb8735c66e2",
+  "scope": "fixed source release; no production deployment or task execution",
+  "repositories": [
+    {
+      "repository": "codex-radar/dradar",
+      "ref": "refs/tags/v2026.10.13"
+    },
+    {
+      "repository": "codex-radar/dradar-server",
+      "ref": "refs/tags/v2026.10.13"
+    },
+    {
+      "repository": "codex-radar/dradar-web",
+      "ref": "refs/tags/v2026.10.13"
+    },
+    {
+      "repository": "codex-radar/pin-server",
+      "ref": "refs/tags/v2026.10.13"
+    },
+    {
+      "repository": "SecurityMind/claudecoderadar",
+      "ref": "refs/tags/v2026.10.13"
+    },
+    {
+      "repository": "SecurityMind/codex-reset-radar",
+      "ref": "refs/tags/v2026.10.13"
+    }
+  ],
+  "runtime_source": "runtime/current"
+}

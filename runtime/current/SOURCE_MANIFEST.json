@@ -1,0 +1,177 @@
+{
+  "project_version": "2026.10.13",
+  "component_version": "0.5.299",
+  "files": [
+    {
+      "path": "scrub.py",
+      "size": 11661,
+      "sha256": "98ac59a1ce8b7d10050c31fce084a259aa2f5851c03c4c555aef4b12e8843a0e"
+    },
+    {
+      "path": "__init__.py",
+      "size": 24,
+      "sha256": "5703c7628275f93384be3d0cf1b7199beb3c2b9bb0d855642e62dfee7d4279bd"
+    },
+    {
+      "path": "assignment_lock.py",
+      "size": 1734,
+      "sha256": "64db53660534f6c412e62baa3e7b8c25a720b764f7c9a86e7e4fd301bc4bd521"
+    },
+    {
+      "path": "harness_policy.py",
+      "size": 3845,
+      "sha256": "786628c79a53c43635d5d45a73934867866fde4eab2b6cb70fe2023167e15382"
+    },
+    {
+      "path": "manifest.py",
+      "size": 1666,
+      "sha256": "eb60bf3dc221512da895d9b7fbb09aeba28ab911accb3d579bcd8e1c57b1ca99"
+    },
+    {
+      "path": "launcher.py",
+      "size": 74,
+      "sha256": "6118ff1d91df3178519005aa1ef9d5990b9a27ae1c1d2ee35f13a6b4a842479f"
+    },
+    {
+      "path": "gpt6.py",
+      "size": 996,
+      "sha256": "6872df4de8179a2669a4ab5a8d226f3fac7b5451179e4645f0df36d064b4c761"
+    },
+    {
+      "path": "local_config.py",
+      "size": 7245,
+      "sha256": "4aa948868bd3d26c737ee6b33249de9ccc0de6eee77394c208c74c8c498106e1"
+    },
+    {
+      "path": "__main__.py",
+      "size": 52,
+      "sha256": "c1554a8e837884415f2bb1e626ab5b874c0adb9efbe15c6cc56647e9c7877959"
+    },
+    {
+      "path": "single/client.py",
+      "size": 1776,
+      "sha256": "5d78b13813b6ceed3ea7dbf0d21d9a45e651ca99e6b08a22ac989c0271e37e9a"
+    },
+    {
+      "path": "single/__init__.py",
+      "size": 132,
+      "sha256": "dc353997007a53754d9081c0c3ca0939dc22aa1f5118fc68b9e9e0d80d8a660f"
+    },
+    {
+      "path": "single/commands.py",
+      "size": 7292,
+      "sha256": "28d124f223624c7e55dcd6cf75085ab19530be50b732b250ae555d908ea2826b"
+    },
+    {
+      "path": "single/runtime.py",
+      "size": 139,
+      "sha256": "3f4c0323e89ba95785845bb61e7514056a7da914402ed64682c0c3b0bd32a7ff"
+    },
+    {
+      "path": "single/job.py",
+      "size": 13207,
+      "sha256": "2ad44922440b7c312a1bdd6364fcc1e9eea09371ef909178967a8cf1f16bc535"
+    },
+    {
+      "path": "single/__main__.py",
+      "size": 52,
+      "sha256": "4e465770bedf8d493f3bf5659261f81429ac2cc7ab3bfe7cdcd6ec25a5c547ae"
+    },
+    {
+      "path": "v2/client.py",
+      "size": 8944,
+      "sha256": "ed49e9e8183741966cc371f927771ad83cee753299e20077ba8aabb012ab73f1"
+    },
+    {
+      "path": "v2/host_runtime.py",
+      "size": 18218,
+      "sha256": "1cc00e3ffa0c206203a45f7c8f6e14f7b57eaf6da4af63a9b6e5dba1063c580f"
+    },
+    {
+      "path": "v2/mixed_pool.py",
+      "size": 2698,
+      "sha256": "1609bda5602ea5a6be5021562bd5062c64e6765948befa54f1c0f589bb319161"
+    },
+    {
+      "path": "v2/__init__.py",
+      "size": 71,
+      "sha256": "6e2994f28f8a3a822982583fc1972183924bf989c598d43dbdfc61bc3acfbf88"
+    },
+    {
+      "path": "v2/host_contract.py",
+      "size": 12115,
+      "sha256": "432d38168bcf77b889ef9d7399006833d9162ba396cdf23cedbcc2f988d6c344"
+    },
+    {
+      "path": "v2/native_evidence.py",
+      "size": 6581,
+      "sha256": "552397ef5fd162c5ecc09fe86e601fc72ad9d55a92e8c8ac9b096b959dc0f136"
+    },
+    {
+      "path": "v2/artifacts.py",
+      "size": 5313,
+      "sha256": "861c2c4918107e707c7d5bac7ccd0f099e105e86f653b1eb7c9e1d418ac8cc54"
+    },
+    {
+      "path": "v2/final64_contract.json",
+      "size": 24343,
+      "sha256": "8bb924c3cdd5e02782d972a5d249398ec7d9d67c660354d450f3cf7e927a3dbe"
+    },
+    {
+      "path": "v2/runtime.py",
+      "size": 5371,
+      "sha256": "89e0aa7aab2afb57255ebaef00e2a0d7c8bab44dacfdb3063421dd0ebe98bcb2"
+    },
+    {
+      "path": "v2/locks.py",
+      "size": 824,
+      "sha256": "a59a7c5e9b64e541a6f64a6367523a29662c53b6838b6fff353395a4b0164201"
+    },
+    {
+      "path": "v2/protocol.py",
+      "size": 3257,
+      "sha256": "2c8569b04a3732ea28a2c19bbc6be8d185667cfba3dcaf51b9aa609e6f9da03f"
+    },
+    {
+      "path": "v2/host_auth_store.py",
+      "size": 1118,
+      "sha256": "327ba3f8f50b0d4a9c130761de60bde5b45fb3fe1391e90aa7599c32715c87a9"
+    },
+    {
+      "path": "v2/package_check.py",
+      "size": 4650,
+      "sha256": "69581f3e4ad133837ff5a3ce1f19b0202abb25bfb6a6359681a4ccd709973503"
+    },
+    {
+      "path": "v2/task_git.py",
+      "size": 381,
+      "sha256": "4bec8b85f854ae3b575d7a44df322475a34657d229454e07bbac24747c92258c"
+    },
+    {
+      "path": "v2/results.py",
+      "size": 6904,
+      "sha256": "14b6804cfdc45327f4faf015c7986d710db061bd568c79ebaa38d3cc6bb297f8"
+    },
+    {
+      "path": "v2/host_controller.py",
+      "size": 38524,
+      "sha256": "b9b8a52be9bd9347eb5e432aa42353d24e511fac75f07296208219b71b06940e"
+    },
+    {
+      "path": "v2/journal.py",
+      "size": 14139,
+      "sha256": "0fe33f4fc4c8f548d310de78983a592c3780b527db5192f8711f564ce0128cfc"
+    },
+    {
+      "path": "v2/skill_install.py",
+      "size": 316,
+      "sha256": "fc1cb477dab62dc40505ac173f87038aa061d951bbd94a83d67b30d7d82197b2"
+    },
+    {
+      "path": "v2/skill/SKILL.md",
+      "size": 795,
+      "sha256": "054efc40ba7b92b1d148a569703586e7b7c5c0ea39381096cf68e3d43c143144"
+    }
+  ],
+  "release_pair": "recovery-pair-r1-20261013"
+}
