@@ -196,7 +196,8 @@ class HostCodexRuntime(CodexRuntime):
             auth=controller.request({'op':'account:status'})
             if auth.get('account_type')!='chatgpt':
                 raise RuntimeUnavailable('official user device login required in dedicated host; no credential fallback')
-            prepared={**prepared,'host_folder':str(folder),'host_preflight':status}
+            prepared={**prepared,'host_folder':str(folder),'host_preflight':status,
+                      'agent_timeout_sec':cfg['agent_timeout_sec']}
             self.controllers[aid]=controller
             return prepared
         except BaseException:
@@ -225,6 +226,7 @@ class HostCodexRuntime(CodexRuntime):
             if 'error' in response or 'result' not in response:
                 raise RuntimeUnavailable('official single turn rejected; no automatic retry')
             turn=response['result']['turn']['id']
+            terminal_deadline=started+prepared['agent_timeout_sec']+60
             while True:
                 batch=controller.request({'op':'events'}).get('events',[])
                 for e in batch:
@@ -250,9 +252,13 @@ class HostCodexRuntime(CodexRuntime):
                             p=e['params']
                             if p.get('threadId')==thread and p.get('turnId')==turn:usage=p['tokenUsage']['total']
                     break
+                now=time.monotonic()
+                if now>=terminal_deadline:
+                    raise RuntimeUnavailable('official terminal deadline exceeded; retain original evidence')
                 if self.journal.value('local_interrupt')=='true' and not interrupted:
-                    controller.request({'op':'rpc','method':'turn/interrupt','params':{'threadId':thread,'turnId':turn}})
+                    terminal_deadline=min(terminal_deadline,now+60)
                     interrupted=True
+                    controller.request({'op':'rpc','method':'turn/interrupt','params':{'threadId':thread,'turnId':turn}})
                 time.sleep(.2)
             collection=controller.request({'op':'collect'})
             (folder/'public-events.json').write_text(json.dumps(events)+'\n')

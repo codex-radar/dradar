@@ -84,8 +84,8 @@
     },
     {
       "path": "v2/host_runtime.py",
-      "size": 18218,
-      "sha256": "1cc00e3ffa0c206203a45f7c8f6e14f7b57eaf6da4af63a9b6e5dba1063c580f"
+      "size": 18615,
+      "sha256": "da4dc826022a1f21f133efcd6e4f3bee2d62711f9b43dec8aa08483cc3080ba5"
     },
     {
       "path": "v2/mixed_pool.py",
