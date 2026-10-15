@@ -178,5 +178,7 @@
       "sha256": "1c2b3721b83b3ecded0599778041978f50957efd92ac4246b82fc7a402c497a2"
     }
   ],
-  "release_pair": "recovery-pair-r1-20261013"
+  "release_pair": "recovery-pair-r1-20261013",
+  "current_release_file": "RELEASE_CORE_CHAIN.json",
+  "release_pair_note": "Historical recovery-pair receipt; use current_release_file for this release."
 }
