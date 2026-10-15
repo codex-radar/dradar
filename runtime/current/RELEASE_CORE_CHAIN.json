@@ -1,0 +1,14 @@
+{
+  "schema": "dradar.core_chain_release.v1",
+  "release": "core-chain-193-20261015",
+  "cli": "0.5.300",
+  "server": "0.1.2.post83",
+  "protocol_version": 2,
+  "resume_old_batches": false,
+  "reviewed_logic_parent": "d6067e484e4f8397f05e32012f42915f7522f316",
+  "scope": [
+    "terminal deadline",
+    "durable current-parent collection ACK recovery"
+  ],
+  "pro_patch_request": "0ee5a424e15e4cbaab6a7a38c53d82db"
+}
