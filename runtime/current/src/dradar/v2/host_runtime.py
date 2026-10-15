@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 
 from .host_contract import (AUTH_RUNTIME, BILLING_MODE, CAPABILITY, CONFIG_VERSION,
@@ -22,6 +23,7 @@ from .host_contract import (AUTH_RUNTIME, BILLING_MODE, CAPABILITY, CONFIG_VERSI
 from .runtime import CodexRuntime, RuntimeUnavailable, TaskNotReady
 from .results import Completion
 from .native_evidence import collection_safety
+from .host_collection import persist_once, json_bytes, recover_collection
 
 TERMINAL={'completed','failed','interrupted'}
 
@@ -189,14 +191,17 @@ class HostCodexRuntime(CodexRuntime):
              'runtime_config_version':self.binding['runtime_config_version'],
              'container_name':'dradar-host-'+hashlib.sha256(str(folder).encode()).hexdigest()[:24],
              'journal_root':str(self.journal.root),'assignment_id':aid,
-             'execution_id':self.journal.identity('execution:'+aid)}
+             'execution_id':self.journal.identity('execution:'+aid),
+             'collection_nonce':uuid.uuid4().hex}
         controller=self.controller_factory(cfg,folder)
         try:
             status=controller.start()
             auth=controller.request({'op':'account:status'})
             if auth.get('account_type')!='chatgpt':
                 raise RuntimeUnavailable('official user device login required in dedicated host; no credential fallback')
-            prepared={**prepared,'host_folder':str(folder),'host_preflight':status}
+            prepared={**prepared,'host_folder':str(folder),'host_preflight':status,
+                      'agent_timeout_sec':cfg['agent_timeout_sec'],
+                      'host_collection_binding':json.loads(json.dumps(cfg))}
             self.controllers[aid]=controller
             return prepared
         except BaseException:
@@ -211,6 +216,20 @@ class HostCodexRuntime(CodexRuntime):
         folder=Path(prepared['host_folder']);events=[];usage=None;started=None
         thread=prepared['host_preflight']['no_model_thread_preflight']['thread_id']
         turn=None;collection=None;terminal=None;interrupted=False;failure=None
+        collect_request=None;collect_attempted=False;collect_ack=False;recovered=False
+        receipt_digest=None
+        error_key='host_collect_first_error:'+aid+':'+execution_id
+        def retain_error(exc,phase):
+            # Local-only evidence: never alter original requests or public events.
+            if self.journal.value(error_key) is None:
+                self.journal.bind(error_key,json_bytes({
+                    'code':'host_runtime_failed','phase':phase,
+                    'type':type(exc).__module__+'.'+type(exc).__qualname__,
+                    'message':str(exc),'repr':repr(exc),
+                    'traceback':''.join(traceback.format_exception(type(exc),exc,exc.__traceback__)),
+                    'assignment_id':aid,'execution_id':execution_id,
+                    'thread_id':thread,'turn_id':turn,'request':collect_request,
+                    'successful_collect_ack_received':collect_ack}).decode())
         try:
             # The inherited scheduler verifies fresh lease/start ACK and writes
             # its one-use launch fence before this permission reaches app-server.
@@ -225,6 +244,7 @@ class HostCodexRuntime(CodexRuntime):
             if 'error' in response or 'result' not in response:
                 raise RuntimeUnavailable('official single turn rejected; no automatic retry')
             turn=response['result']['turn']['id']
+            terminal_deadline=started+prepared['agent_timeout_sec']+60
             while True:
                 batch=controller.request({'op':'events'}).get('events',[])
                 for e in batch:
@@ -250,30 +270,97 @@ class HostCodexRuntime(CodexRuntime):
                             p=e['params']
                             if p.get('threadId')==thread and p.get('turnId')==turn:usage=p['tokenUsage']['total']
                     break
+                now=time.monotonic()
+                if now>=terminal_deadline:
+                    raise RuntimeUnavailable('official terminal deadline exceeded; retain original evidence')
                 if self.journal.value('local_interrupt')=='true' and not interrupted:
-                    controller.request({'op':'rpc','method':'turn/interrupt','params':{'threadId':thread,'turnId':turn}})
+                    terminal_deadline=min(terminal_deadline,now+60)
                     interrupted=True
+                    controller.request({'op':'rpc','method':'turn/interrupt','params':{'threadId':thread,'turnId':turn}})
                 time.sleep(.2)
-            collection=controller.request({'op':'collect'})
-            (folder/'public-events.json').write_text(json.dumps(events)+'\n')
+            collect_request={'op':'collect'}
+            persist_once(folder/'COLLECT-REQUEST.json',json_bytes({
+                'assignment_id':aid,'execution_id':execution_id,
+                'thread_id':thread,'turn_id':turn,'request':collect_request}))
+            collect_attempted=True
+            collection=controller.request(collect_request)
+            collect_ack=True
         except BaseException as exc:
             if isinstance(exc,KeyboardInterrupt):
                 interrupted=True
                 self.journal.bind('local_interrupt','true')
             failure=exc
+            if collect_request is not None:retain_error(exc,'collect')
         finally:
             # SIGTERM/owned-stop preserve uncollected containers. Absence must
             # be independently proved before scheduler can free/upload the slot.
-            closed=controller.close()
-            (folder/'CLEANUP.json').write_text(json.dumps(closed,sort_keys=True)+'\n')
+            try:
+                closed=controller.close()
+                persist_once(folder/'CLEANUP.json',json_bytes(closed))
+            except BaseException as close_error:
+                if collect_request is not None:
+                    retain_error(failure or close_error,'collect' if failure else 'close')
+                    blocked=RuntimeUnavailable('owned exit/cleanup receipt unknown; retain fence')
+                    blocked.add_note('cleanup error: '+repr(close_error))
+                    raise blocked from (failure or close_error)
+                raise
         if closed.get('native_app_server_reaped') is not True or closed.get('created_containers_absent') is not True or closed.get('owned_container_names_absent') is not True:
             raise RuntimeUnavailable('physical exit or artifact collection unknown; retain fence')
-        if failure is not None:
+        if failure is not None and collect_request is not None:
+            try:
+                # No recovery for rejection, malformed ACK, cancellation, or
+                # a collection that was never invoked by this live parent.
+                if (not collect_attempted or collect_ack
+                        or not isinstance(failure,(TimeoutError,ConnectionError))
+                        or terminal!='completed'):
+                    raise ValueError('not a completed current collect transport-loss window')
+                fence=self.journal.execution(aid)
+                if (not fence or fence['execution_id']!=execution_id
+                        or fence['state']!='launch_fenced'
+                        or fence['result_json'] is not None):
+                    raise ValueError('original unsaved execution fence required')
+                cfg=prepared['host_collection_binding']
+                expected={'assignment_id':aid,'execution_id':execution_id,
+                          'benchmark':prepared['benchmark_id'],
+                          'task_id':prepared['task_id'],
+                          'task_content_hash':prepared['task_content_hash'],
+                          'model':prepared['model'],'effort':prepared['effort']}
+                if any(cfg.get(key)!=value for key,value in expected.items()):
+                    raise ValueError('parent collection binding mismatch')
+                collection,receipt_digest=recover_collection(
+                    folder,cfg,thread,turn,
+                    prepared['host_preflight']['task_container_id'],events,closed)
+                recovered=True
+            except Exception as verification_error:
+                blocked=RuntimeUnavailable('collect ACK unknown and durable recovery unverified; retain fence')
+                blocked.add_note('recovery check: '+repr(verification_error))
+                raise blocked from failure
+        if failure is not None and not recovered:
             # Before barrier/ACK, propagate: no invented elapsed/start/outcome.
             if started is None:raise failure
             return Completion('interrupted' if interrupted else 'failed',True,completed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
                 elapsed_ms=int((time.monotonic()-started)*1000),
                 failure={'code':'host_runtime_failed','message':'官方宿主运行失败，原成果及退出证据已保留'})
+        try:
+            persist_once(folder/'public-events.json',(json.dumps(events)+'\n').encode())
+        except Exception as event_error:
+            retain_error(event_error,'public_events')
+            blocked=RuntimeUnavailable('public event persistence failed; original collection retained; retain fence')
+            blocked.add_note('event persistence error: '+repr(event_error))
+            raise blocked from (failure or event_error)
+        if recovered:
+            self.journal.bind('host_collect_recovery:'+aid+':'+execution_id,json_bytes({
+                'schema':'dradar.host_collect_recovery.v1',
+                'state':'collection_and_events_verified',
+                'source':'controller_durable_receipt',
+                'receipt_file':'COLLECT-RECEIPT.json','receipt_sha256':receipt_digest,
+                'successful_collect_ack_received':False,
+                'assignment_id':aid,'execution_id':execution_id,
+                'thread_id':thread,'turn_id':turn,
+                'request':collect_request,'first_error_key':error_key,
+                'exit_proofs':{key:closed[key] for key in (
+                    'native_app_server_reaped','created_containers_absent',
+                    'owned_container_names_absent')}}).decode())
         try:
             collection_safety(collection)
             outcome=terminal

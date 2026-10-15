@@ -1,5 +1,16 @@
 # Current installed CLI source
 
+## Current release target
+
+Build `runtime/current` for CLI **0.5.300** / Server **0.1.2.post83**.
+The paired target is `RELEASE_CORE_CHAIN.json`, identified by
+`SOURCE_MANIFEST.json.current_release_file`. Its schema and values are identical
+in both repositories. `RELEASE_PAIR.json` and the manifest `release_pair` field
+are retained historical receipts, not current version selectors. Deployment
+status is established by the installed runtime and production readback.
+
+## Historical source and release records
+
 This directory records the installed single-task CLI used by the current server
 environment. Every package file was matched byte-for-byte to a local source file
 and the installed-file SHA-256 inventory on 2026-10-13. The independent and native

@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 import websockets
 from dradar.v2.host_contract import validate_controller_config, confirmed_absence, validate_host_version
 from dradar.v2.host_auth_store import host_auth_store
+from dradar.v2.host_collection import persist_collection
 C=validate_controller_config(json.loads(Path(sys.argv[1]).read_text()));OUT=Path(C['evidence_dir']);HOME=Path(C['host_home'])
 D=['docker','--context',C['docker_context']];NAME=C['container_name'];PNAME=NAME+'-official-egress'
 PROXY=C['proxy_image_id']
@@ -175,6 +176,7 @@ async def main():
     elif method=='turn/completed':
      p=obj.get('params',{});t=p.get('turn',{});owned_turns[p.get('threadId')]=t.get('id');events.append({'method':method,'threadId':p.get('threadId'),'turnId':t.get('id'),'status':t.get('status'),'error_code':(t.get('error')or{}).get('code')});report['last_turn_status']=t.get('status');report['last_turn_error']=sanitized_error((t.get('error')or{}).get('message')) if t.get('error') else None
      if deadline_task:deadline_task.cancel();deadline_task=None
+     report.update(model_terminal_thread_id=p.get('threadId'),model_terminal_turn_id=t.get('id'))
      report['status']='MODEL_TURN_TERMINAL';save();note({'model_turn_terminal':t.get('status'),'task':C['task'],'error':report['last_turn_error']})
     elif method=='item/completed':
      item=obj.get('params',{}).get('item',{})
@@ -303,18 +305,19 @@ async def main():
      if method=='thread/start' and 'result'in ans:owned_threads.add(ans['result']['thread']['id'])
     elif op=='collect':
      if report.get('last_turn_status') not in ['completed','interrupted','failed']:raise RuntimeError('owned model turn must be terminal before collection')
+     if report.get('collection_attempted') is True:raise RuntimeError('original collection already attempted; no second collect')
+     report['collection_attempted']=True
      code=Path(C['collector_path']).read_bytes()
      if hashlib.sha256(code).hexdigest()!=C['collector_sha256']:raise RuntimeError('fixed public collector hash mismatch')
      result=await remote_exec(['python','-c',code.decode()])
      if result['exitCode']!=0:raise RuntimeError('public collector failed: '+result['stderr'][:400])
      collected=json.loads(result['stdout']);patch=base64.b64decode(collected.pop('patch_base64'))
      if hashlib.sha256(patch).hexdigest()!=collected['patch_sha256']:raise RuntimeError('collected patch hash mismatch')
-     destination=OUT/'collected';destination.mkdir(exist_ok=True);(destination/'model.patch').write_bytes(patch)
-     for name,data in collected.pop('deliverables_base64',{}).items():
-      if name not in C['deliverable_names']:raise RuntimeError('unexpected deliverable')
-      (destination/name).write_bytes(base64.b64decode(data))
+     deliverables={name:base64.b64decode(data) for name,data in collected.pop('deliverables_base64',{}).items()}
      collected.update(task=C['task'],container_id=report['task_container_id'],model_turn_status=report['last_turn_status'],model_turn_error=report.get('last_turn_error'),model='gpt-6.1-sol',reasoning=C['effort'],agent_timeout_sec=C['agent_timeout_sec'],official_task_timeout_sec=C['official_task_timeout_sec'],verifier_timeout_sec=C['verifier_timeout_sec'],grading_done=False)
-     (destination/'COLLECTION.json').write_text(json.dumps(collected,indent=2)+'\n');report['collected_manifest']=str(destination/'COLLECTION.json');save();ans=collected
+     digest=persist_collection(OUT,C,report,req,collected,patch,deliverables)
+     report.update(collected_manifest=str(OUT/'collected'/'COLLECTION.json'),collection_receipt_sha256=digest)
+     save();ans=collected
     elif op=='approval:respond':
      obj=req['response']
      if obj.get('id') not in approval_requests or 'method'in obj or obj.get('result',{}).get('decision') not in ['accept','decline']:raise RuntimeError('exact outstanding approval and single-use decision required')
@@ -428,7 +431,7 @@ async def main():
    await child.wait()
   for task in [reader_task,stderr_task]:
    if task:task.cancel()
-  preserve=bool(turn_used and not report.get('collected_manifest'));retained=[]
+  preserve=bool(turn_used and not report.get('collection_receipt_sha256'));retained=[]
   for cid in reversed(created):
    if preserve and cid==report.get('task_container_id'):
     subprocess.run(D+['stop','-t','5',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);retained.append(cid)

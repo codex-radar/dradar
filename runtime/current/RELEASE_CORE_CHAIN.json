@@ -1,0 +1,13 @@
+{
+  "schema": "dradar.release-pair/1",
+  "release": "core-chain-193-20261015",
+  "CLI_version": "0.5.300",
+  "Server_version": "0.1.2.post83",
+  "protocol": "single-task-v1",
+  "resume_paused_runs": false,
+  "scope": [
+    "bounded host terminal wait",
+    "current-parent durable collection recovery",
+    "owner-only ungraded execution history and bound task hash"
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "project_version": "2026.10.13",
-  "component_version": "0.5.299",
+  "component_version": "0.5.300",
   "files": [
     {
       "path": "scrub.py",
@@ -10,7 +10,7 @@
     {
       "path": "__init__.py",
       "size": 24,
-      "sha256": "5703c7628275f93384be3d0cf1b7199beb3c2b9bb0d855642e62dfee7d4279bd"
+      "sha256": "a37309fcd9441f5797252959287729d518847a9e776dbeefa94f2a229f1ed80d"
     },
     {
       "path": "assignment_lock.py",
@@ -84,8 +84,8 @@
     },
     {
       "path": "v2/host_runtime.py",
-      "size": 18218,
-      "sha256": "1cc00e3ffa0c206203a45f7c8f6e14f7b57eaf6da4af63a9b6e5dba1063c580f"
+      "size": 23727,
+      "sha256": "0891df133f6cb240a3358cdc0d5d722244d4f74df041aabe9e1b515e98418be0"
     },
     {
       "path": "v2/mixed_pool.py",
@@ -154,8 +154,8 @@
     },
     {
       "path": "v2/host_controller.py",
-      "size": 38524,
-      "sha256": "b9b8a52be9bd9347eb5e432aa42353d24e511fac75f07296208219b71b06940e"
+      "size": 38681,
+      "sha256": "2c58764772e9dcc8432303a54a642b80714186932e7ff8d2a8d0720605917130"
     },
     {
       "path": "v2/journal.py",
@@ -171,7 +171,14 @@
       "path": "v2/skill/SKILL.md",
       "size": 795,
       "sha256": "054efc40ba7b92b1d148a569703586e7b7c5c0ea39381096cf68e3d43c143144"
+    },
+    {
+      "path": "v2/host_collection.py",
+      "size": 10568,
+      "sha256": "1c2b3721b83b3ecded0599778041978f50957efd92ac4246b82fc7a402c497a2"
     }
   ],
-  "release_pair": "recovery-pair-r1-20261013"
+  "release_pair": "recovery-pair-r1-20261013",
+  "current_release_file": "RELEASE_CORE_CHAIN.json",
+  "release_pair_note": "Historical recovery-pair receipt; use current_release_file for this release."
 }
