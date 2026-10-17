@@ -15,6 +15,7 @@ import hashlib,json,os,pathlib,stat
 root=pathlib.Path('/app');assert root.resolve()==root
 digest=hashlib.sha256();count=0
 for directory,dirs,files in os.walk(root,followlinks=False):
+ dirs.sort()
  for name in sorted(dirs+files):
   p=pathlib.Path(directory)/name;s=p.lstat();row=[str(p.relative_to(root)),stat.S_IFMT(s.st_mode),stat.S_IMODE(s.st_mode)]
   if p.is_symlink():row.append(os.readlink(p))
