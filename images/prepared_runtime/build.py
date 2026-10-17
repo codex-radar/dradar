@@ -10,6 +10,22 @@ import time
 
 NODE='docker.io/library/node@sha256:efd0ab5780c2d9ab1f0f869571a00d5edb17793bff4cce4a2792e3eb0ffc7562'
 NODE_VERSION='v22.23.3'
+TREE=r'''
+import hashlib,json,os,pathlib,stat
+root=pathlib.Path('/app');assert root.resolve()==root
+digest=hashlib.sha256();count=0
+for directory,dirs,files in os.walk(root,followlinks=False):
+ for name in sorted(dirs+files):
+  p=pathlib.Path(directory)/name;s=p.lstat();row=[str(p.relative_to(root)),stat.S_IFMT(s.st_mode),stat.S_IMODE(s.st_mode)]
+  if p.is_symlink():row.append(os.readlink(p))
+  elif p.is_file():
+   h=hashlib.sha256()
+   with p.open('rb') as f:
+    for part in iter(lambda:f.read(1024*1024),b''):h.update(part)
+   row.extend([s.st_size,h.hexdigest()])
+  digest.update((json.dumps(row,separators=(',',':'))+'\n').encode());count+=1
+print(json.dumps({'content_and_modes_sha256':digest.hexdigest(),'entries':count}))
+'''
 PROBE=r'''
 import json,os,shutil,ssl,subprocess,sys,tempfile
 assert sys.version_info>=(3,10),sys.version
@@ -45,11 +61,17 @@ def dockerfile(row):
     lines+=['FROM '+row['source_image'],'USER 0:0']
     if row['install_python_or_ca']:
         lines += ['RUN apt-get update && apt-get install -y --no-install-recommends --no-upgrade python3 ca-certificates']
+    if row.get('restore_default_ca_link'):
+        lines += ['RUN mkdir -p /usr/lib/ssl && test ! -e /usr/lib/ssl/cert.pem && test ! -L /usr/lib/ssl/cert.pem && ln -s /etc/ssl/certs/ca-certificates.crt /usr/lib/ssl/cert.pem']
     if row['install_node']:
         lines += ['COPY --from=node_tools /usr/local/bin/node /opt/dradar-node/bin/node',
             'COPY --from=node_tools /usr/local/lib/node_modules/npm /opt/dradar-node/lib/node_modules/npm',
             'RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /opt/dradar-node/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /opt/dradar-node/bin/npx',
             'ENV PATH="/opt/dradar-node/bin:${PATH}"']
+    if row.get('prepare_project_owner'):
+        uid=row['runtime']['uid'];gid=row['runtime']['gid']
+        assert row['runtime']['cwd']=='/app' and uid==65534 and gid==65534
+        lines+=['RUN test ! -L /app && chown -R 65534:65534 /app']
     # Keep the image's declared user string and inherited cwd/HOME/entrypoint.
     lines+=['USER '+(row['original_user'] or '0:0')]
     return '\n'.join(lines)+'\n'
@@ -85,6 +107,9 @@ def main():
             assert info['Architecture']=='amd64' and info['Os']=='linux'
             assert row['source_image'] in info['RepoDigests']
             assert info['Config'].get('User','')==row['original_user']
+            if row.get('prepare_project_owner'):
+                record['source_project']=json.loads(run(['docker','run','--rm','--network','none',
+                    '--entrypoint','python3',row['source_image'],'-c',TREE],output=out/'SOURCE_PROJECT',timeout=90))
             text=dockerfile(row);(out/'Dockerfile').write_text(text)
             tag=row['source_image'].split('@')[0]+':deps210-'+args.reviewed
             run(['docker','buildx','build','--platform','linux/amd64','--provenance=false','--load',
@@ -107,6 +132,10 @@ def main():
         if row['git_required']:
             run(['docker','run','--rm','--network','none','--entrypoint','git',candidate,'--version'],output=out/'GIT',timeout=30)
         config=json.loads(run(['docker','image','inspect',candidate]))[0]
+        if row.get('prepare_project_owner'):
+            record['prepared_project']=json.loads(run(['docker','run','--rm','--network','none',
+                '--entrypoint','python3',candidate,'-c',TREE],output=out/'PREPARED_PROJECT',timeout=90))
+            if args.phase=='build':assert record['prepared_project']==record['source_project'],'Original project bytes or modes changed'
         if args.phase=='build':
             assert config['RootFS']['Layers'][:len(info['RootFS']['Layers'])]==info['RootFS']['Layers']
             for key in ('WorkingDir','Entrypoint','Cmd'):

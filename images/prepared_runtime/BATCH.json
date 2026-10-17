@@ -273,7 +273,8 @@
       "install_node": true,
       "install_python_or_ca": false,
       "git_required": false,
-      "audit_sha256": "d43977cf48c941294a2239c85518ffe464fff3ae8c09e56c9f6533f323709104"
+      "audit_sha256": "d43977cf48c941294a2239c85518ffe464fff3ae8c09e56c9f6533f323709104",
+      "prepare_project_owner": true
     },
     {
       "number": "027",
@@ -513,7 +514,8 @@
       "install_node": true,
       "install_python_or_ca": true,
       "git_required": false,
-      "audit_sha256": "ed801d1dff91b1ca950827715d268b6abbd44cad438fcf62470f7a4b6c637765"
+      "audit_sha256": "ed801d1dff91b1ca950827715d268b6abbd44cad438fcf62470f7a4b6c637765",
+      "restore_default_ca_link": true
     },
     {
       "number": "035",

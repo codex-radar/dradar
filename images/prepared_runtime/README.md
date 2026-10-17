@@ -14,6 +14,11 @@ Missing Node/npm comes from the Linux amd64 manifest of official Node 22.23.3,
 React keeps its existing Node/npm. React and Duan install Python and system roots
 with the image's signed official package manager, without upgrading installed
 packages. Build receipts retain the installed package versions and config.
+The Duan base has a packaged root bundle but lacks OpenSSL's default cert.pem
+link; its dependency layer restores that link to the same system bundle. The
+nonroot risk-scorer base's project is not writable by its declared execution
+identity; only that project's ownership is prepared for UID/GID 65534, with its
+file bytes and modes independently compared before and after the build.
 
 The explicit workflow is confined to the reviewed branch, actor, repository,
 batch SHA256 and full source commit, with two parallel jobs and the existing
