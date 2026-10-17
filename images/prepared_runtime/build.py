@@ -133,6 +133,15 @@ def main():
         if row['git_required']:
             run(['docker','run','--rm','--network','none','--entrypoint','git',candidate,'--version'],output=out/'GIT',timeout=30)
         config=json.loads(run(['docker','image','inspect',candidate]))[0]
+        labels=config['Config'].get('Labels') or {}
+        assert labels.get('com.codexradar.source-image')==row['source_image']
+        assert labels.get('com.codexradar.preparation-schema')=='dradar.prepared-runtime-image/1'
+        image_commit=labels.get('org.opencontainers.image.revision','')
+        assert re.fullmatch('[0-9a-f]{40}',image_commit)
+        record['image_build_source_commit']=image_commit
+        if args.phase=='accept':
+            record['acceptance_source_commit']=args.reviewed
+            record['source_commit']=image_commit
         if row.get('prepare_project_owner'):
             record['prepared_project']=json.loads(run(['docker','run','--rm','--network','none',
                 '--entrypoint','python3',candidate,'-c',TREE],output=out/'PREPARED_PROJECT',timeout=90))
