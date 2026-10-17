@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import time
+import uuid
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 
@@ -88,13 +89,11 @@ def perform(row,candidate,out):
             '--manifest-sha256',descriptors['collector']['manifest_sha256']],out/'VERIFY_COLLECTOR')
         command(prefix+['python3','/dradar-qa-ca7/helper.py','verify-tools',
             '--manifest-sha256',descriptors['ca7']['manifest_sha256']],out/'VERIFY_CA7')
-        command(prefix+['python3','/dradar-qa-ca7/helper.py','prepare-ca',
-            '--manifest-sha256',descriptors['ca7']['manifest_sha256'],
-            '--task-contract-sha256',binding['task_contract_sha256'],
-            '--project-dir',row['runtime']['cwd'],'--output','/dradar-evidence/ca-preflight'],out/'PREPARE_CA',timeout=150)
         if execution_fixture is not None:
+            eid=uuid.uuid4().hex
             prepared=command(prefix+['python3','/dradar-qa-execution/execution.py','prepare',
                 '--manifest-sha256',execution['tool']['manifest_sha256'],
+                '--execution-id',eid,
                 '--recommendation','/dradar-qa-execution/recommendation.json',
                 '--mapping','/dradar-qa-execution/mapping.json',
                 '--image-inspect','/dradar-qa-execution/image-inspect.json',
@@ -102,16 +101,28 @@ def perform(row,candidate,out):
                 '--output','/dradar-evidence/execution-environment.json'],out/'PREPARE_EXECUTION',timeout=60)
             result['candidate_execution_contract_fixture']=json.loads(prepared)
             result['candidate_execution_revision']=revision
+            result['candidate_execution_id']=eid
+        command(prefix+['python3','/dradar-qa-ca7/helper.py','prepare-ca',
+            '--manifest-sha256',descriptors['ca7']['manifest_sha256'],
+            '--task-contract-sha256',binding['task_contract_sha256'],
+            '--project-dir',row['runtime']['cwd'],'--output','/dradar-evidence/ca-preflight'],out/'PREPARE_CA',timeout=150)
         # Run the normal public model-tool installation as the declared user.
-        command(prefix+['npm','install','--prefix','/dradar-evidence/codex','--cache',
-            '/dradar-evidence/npm-cache','--no-audit','--no-fund','@openai/codex@latest'],out/'PREPARE_CODEX',timeout=360)
-        codex='/dradar-evidence/codex/node_modules/.bin/codex'
-        # These parse/start the real installed tool, but never execute a prompt.
-        result['codex_version']=command(prefix+['env','CODEX_HOME=/dradar-evidence/codex-home',
-            codex,'--version'],out/'CODEX_VERSION',timeout=30).decode().strip()
-        command(prefix+['env','CODEX_HOME=/dradar-evidence/codex-home',codex,'exec','--help'],out/'CODEX_EXEC_HELP',timeout=30)
-        result['codex_executable']=codex
-        result['model_start_boundary']='Real installed Codex executable and exec argument parser, no prompt/model invocation'
+        reuse_path=Path(__file__).with_name('MODEL_TOOL_BOUNDARY_REUSE.json')
+        reuse=json.loads(reuse_path.read_bytes()).get(candidate) if reuse_path.exists() else None
+        if reuse:
+            result['reused_model_tool_boundary']=reuse
+            result['codex_version']=reuse['codex_version']
+            result['codex_version_source']='Prior actual normal preparation on this identical immutable image; no model'
+        else:
+            command(prefix+['npm','install','--prefix','/dradar-evidence/codex','--cache',
+                '/dradar-evidence/npm-cache','--no-audit','--no-fund','@openai/codex@latest'],out/'PREPARE_CODEX',timeout=360)
+            codex='/dradar-evidence/codex/node_modules/.bin/codex'
+            # These parse/start the real installed tool, but never execute a prompt.
+            result['codex_version']=command(prefix+['env','CODEX_HOME=/dradar-evidence/codex-home',
+                codex,'--version'],out/'CODEX_VERSION',timeout=30).decode().strip()
+            command(prefix+['env','CODEX_HOME=/dradar-evidence/codex-home',codex,'exec','--help'],out/'CODEX_EXEC_HELP',timeout=30)
+            result['codex_executable']=codex
+            result['model_start_boundary']='Real installed Codex executable and exec argument parser, no prompt/model invocation'
         result.update(status='PUBLIC_PREPARATION_BOUNDARY_PASSED_NO_MODEL',finished_at=time.time())
     except BaseException as exc:
         result.update(status='FIRST_ERROR_PRESERVED',error=repr(exc),finished_at=time.time());raise

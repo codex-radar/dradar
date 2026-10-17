@@ -75,13 +75,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-igel-persist-feature-schema@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140",
       "image_id": "sha256:101639dde98c1b250116d94876cf186cbab102f844bbb3a78e38815cee78b389",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -95,10 +95,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -179,13 +179,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
       "image_id": "sha256:e7c68c97eb9f18aed2ec3721046fe7be264c73e29095e77fe5812c0407fa7cf2",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -199,10 +199,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -283,13 +283,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
       "image_id": "sha256:24d48828a38a60d1a9773b464d25cb25ca94f0fa9a214b08faf2fde8446c2f75",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -303,10 +303,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -387,13 +387,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e",
       "image_id": "sha256:73e04e06af4e2cebace3c75797360454378b40662764f8899e6d8c1ee9aa9991",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -407,10 +407,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -491,13 +491,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-ts-pattern-match-each@sha256:4c4584bdfdbd898b90f3c1c011236056bc9ed82319680cca865fd9f2ca1a5126",
       "image_id": "sha256:124bef38bc78b9c5f90281d0d41f6eea3401d8e3fed896fdcc9e990280826b55",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -511,10 +511,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -595,13 +595,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-csstree-shorthand-expansion-compression@sha256:df2cc59d679c908f8f13f68fc59231a5d6f0c2bcec4b7b26fdf9489eb824a8b2",
       "image_id": "sha256:b7c28e35319169c239008fa8694667820a0de4fd95c77700d560276356bae723",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -615,10 +615,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -699,13 +699,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-aiomonitor-task-snapshots-diff@sha256:e0c8b4e4044d5831693b4f6a6da483b255a889b71376574fba9e3c93d36ceb7c",
       "image_id": "sha256:ff01634858b933ede36a2a772380b8aee962d1cbf5792de84037df9bbf8c43ea",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -719,10 +719,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -803,13 +803,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-anko-typed-variable-bindings@sha256:4fb704fd8dff600f6d028c20ae4aca5e1261968bb615bb41c01a111dd371255b",
       "image_id": "sha256:fae4d5c53b6f4ef38ed98b6dd1efb3f577bedafa749e775f38643231330799e6",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -823,10 +823,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -907,13 +907,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-mobly-grouped-test-barriers@sha256:e7f48723e4bf9244cbe5206fdcb204456383c31f43c5a16da98efadda057998f",
       "image_id": "sha256:119119622ebad57330a4195dc423c204aeada00fdad4838acce9a502b1304a0a",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -927,10 +927,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1011,13 +1011,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-superjson-error-stack-serialization@sha256:ada56382a90fbe2dd01bde0f685a1bbd0ceac556f7b802199e60dbbca6e76387",
       "image_id": "sha256:ce61756508753ab6b8ac8415dc13f22fa335546dcf027f9f9c146c1f7be57f82",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1031,10 +1031,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1115,13 +1115,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-dateutil-rfc5545-timezone-interop@sha256:ac1167c4badd5db3e8058572e4ae9f09c391a7a6c6801b46ce7f7b12d8c6b77f",
       "image_id": "sha256:62be7b6ee60809bcd7330937e0d81ad19fc746a8464fee02c5ee49680c2fc907",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1135,10 +1135,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1219,13 +1219,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-abs-module-cache-flags@sha256:3a4d47f5281269305343c83729836ac2f3172811aee72681e472a4196178eda1",
       "image_id": "sha256:85f743fa1c3b772abbac100056350657e771a10196c31512f68fc4dc114c19cd",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1239,10 +1239,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1323,13 +1323,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-updo-policy-alerting@sha256:91b20a45b0445cf1bb97a96b9749c2caad0c4747de538c6df700c48e1a88cf54",
       "image_id": "sha256:8bc827b802390131b0a9b4c77d30b12b4ac9802f8582baa7687f675e282e5bcc",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1343,10 +1343,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1427,13 +1427,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-httpx-streaming-json-iteration@sha256:47d0af14d988caa7d22b14312be2c3ee4e9ac799a5679bd83d19f298d346749d",
       "image_id": "sha256:6a1a4c89b26c0be7e26b760ce8b310b7cc68f930cce462efaaa3b2633a254955",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1447,10 +1447,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1531,13 +1531,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-cliffy-config-file-parsing@sha256:0a8dd8f1270ec4bb88efadad3021762e1d07274f686276c8a484d26a00bd91b5",
       "image_id": "sha256:ce8dc2764d2013dd2b30c304d1218bda1791661d2b0ee193664ea651d039de17",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1551,10 +1551,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1670,13 +1670,13 @@
       "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
       "image_id": "sha256:282b290eff92b95689f074c4e3cc29d6e9603e687bfc8c0eefac80bfb85317f8",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1690,10 +1690,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1788,13 +1788,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-freecad-spring-clip@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
       "image_id": "sha256:cd01c16e6905c9a85e61ee619677e1d7245c76bfb70e941429f76107b70f3a3b",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1808,10 +1808,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -1904,13 +1904,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:703a1d73aad5901de080e2209b967f55f998bc1c5f44d9cb48ddc4c4dda16477",
       "image_id": "sha256:0a04e3000a4f061a27e256ba2f2193639c877782ac1bce5f32402ba762c57d97",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -1924,10 +1924,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2021,13 +2021,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:a86489b59a2adcc5c7150f8705793419ad89b1ffc010fff93247cedec8b93b81",
       "image_id": "sha256:2d1d2014c6cfc265a1a82dd129512308ad43f0864da1af35e0c8c853cd910725",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2041,10 +2041,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2138,13 +2138,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:6d4107950bc9f78016622171a969ddbe454b04e5e7336e241577c4be7ec25dff",
       "image_id": "sha256:f0ec13ce32926c01701921f46de6cb31cf3a665f2f4130604e653f0e0345da65",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2158,10 +2158,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2267,13 +2267,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:2fa4e6dc39f739ce9e8bb3a1926d69090dd7c6fd82e25cc8408b2740d9e04ba4",
       "image_id": "sha256:ef33f33a4b17ef46cdf65c923a935ed35d36d3c2cb819b945e5efd1edede7c8f",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2287,10 +2287,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2383,13 +2383,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:dc401ec7c1c9c79fb7b39acf7990270c93900a0ad6503599e5e68f052dc9b714",
       "image_id": "sha256:a0c15d452d218c0624a5716bbbee34e13a74e7764a3d633d228caba4a4d54088",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2403,10 +2403,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2499,13 +2499,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:9c8aa4168e0b829a9317247e2775ba7d5386ad1a57f29b56b6651e3994a06689",
       "image_id": "sha256:b6b25c8d130b7ef37075b5fa1b28edb62ca05033af9347e963911ae5031948e2",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2519,10 +2519,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2615,13 +2615,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:df4c045c02c5fc3d595e6fb8fbca111bd597fcecd7ee09701969073dcd3bdad6",
       "image_id": "sha256:42492c55c930c6fa8ca5bd8f58b9ab7edd214c28b7fee87945b68c06db118af5",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2635,10 +2635,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2732,13 +2732,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:b5de5cdadd71a98d333323b7bf42414d3a07c1a64cdb8e8318c988ced747fa73",
       "image_id": "sha256:cd8503ad261c919d46bdecbcc38e86ad1ce55e2fe0e0d117f2349c25e2746719",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app/sglang",
         "gid": 0,
@@ -2752,10 +2752,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2848,13 +2848,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:6949831e0f9c7e1ab0d176e438edb0eaf885c2516049faec9c5864837e21699e",
       "image_id": "sha256:ac5836e343385511e27af70d2a6f3b43487d089d620a2d3a7cdad0afb8ecc673",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 65534,
@@ -2868,10 +2868,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -2965,13 +2965,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:bfc4b52282e74f6befcdb392d444d9be86fdef470c38e2b831eefc8bbdf1e84a",
       "image_id": "sha256:122979f798cbca6c58710af7d8bc108f86a4719788d860789c2dc955c0acfe57",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -2985,10 +2985,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3081,13 +3081,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:80b26c0b30f1283b3d80edddff8dcdead23f14fc466e4b503b436c5b766610d1",
       "image_id": "sha256:009181788f64194a63e87d0d7f6f69572bf9a1ab7b437babd5a8803fab4b6c4c",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3101,10 +3101,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3215,13 +3215,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:f8bc6dc8140dd1f6c570979f7e85557191440022b813194b073e5dede6f25908",
       "image_id": "sha256:422ddc6a1ef03230c26dd4068917f96b54424c697f550587f5a1692d541a47fe",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3235,10 +3235,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3331,13 +3331,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:c747a8764e4786d9110e3dd39b91cd40a39cc693441fcca3b880119bca75f0cf",
       "image_id": "sha256:5286b7aa4c6bde2c989e32ee12b648126fd04bb85ec17d93b89d50fcecee1d03",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3351,10 +3351,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3446,13 +3446,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:608428b0f8b9d867369e824333ba6b6d2aa9906a7efa910c6bef61a5c4452c39",
       "image_id": "sha256:c80936ef6cefd59408e90444a05d0b6911a969621d26774124433fe5d0b26985",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3466,10 +3466,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3561,13 +3561,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:0338f3f847ca39e79911c18009702f5aa434fd49f2fc86d9db331ffe6660b037",
       "image_id": "sha256:d0f802037b75cd1dedee936395fa5a31c5a04563104bf47b0338da3ae3f41333",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/",
         "gid": 0,
@@ -3581,10 +3581,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3674,13 +3674,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:883c6e22895ba01286538a042065c8045a1f83c82ae387e238a0237c382c18e3",
       "image_id": "sha256:a1db25a9135a874f26be875e39a3a523198ce971a090cf78546c6153087fe3db",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3694,10 +3694,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3787,13 +3787,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:aeec28462978f363394fb61913538aa564072166e17d90d0c6d97e3ef0bd44d3",
       "image_id": "sha256:d741b24ac976e209d129660054f3fa5680ad0a30487533d0779ac352161b6a30",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/root",
         "gid": 0,
@@ -3807,10 +3807,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -3900,13 +3900,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:bc587719be09361742cd677eb08c974f34d1054dd0fb037c4cb7260192f4fd55",
       "image_id": "sha256:f61b6c84f85a045ea24919d16555897f1bc7198abc25ea711b0f8495f8cb2b08",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -3920,10 +3920,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4013,13 +4013,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:d95a7e291e1c1f28f8d3e49d80d3394d57e63c867329561fc2ea58b00b313387",
       "image_id": "sha256:2d75bca0d5ed6043872b412e4f4e2ced3debbeb14dddfc631d2e775d6dd77116",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4033,10 +4033,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4130,13 +4130,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:404c5bd74e3965fcf5cf1b3ac12ca51dec543bd61d38f4024b9682b171876960",
       "image_id": "sha256:fd51708259c52252d32663783b16b3f0f623fc54f0e2327d0d339678d0038aef",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/root",
         "gid": 0,
@@ -4150,10 +4150,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4243,13 +4243,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:7344ba26ee9c6cf367689980be15970c6ca51e046ac38825f24cd4a1647bd4f7",
       "image_id": "sha256:aad71dc5f928b5d0c1f2293efacb5c454fed793ed96490fb81b29e576e069f84",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4263,10 +4263,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4356,13 +4356,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:9135e3bdc6274dfae35af616ee7efd3b204a3baaafc2b3ebb12ea0e5887c83e5",
       "image_id": "sha256:58057d8d05f3eab878016334a85e9995672937aaef227f039e75051803c159ca",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/workspace",
         "gid": 0,
@@ -4376,10 +4376,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4469,13 +4469,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:9513061c6eb8c60e47cbb88422d4b5ad404f8e3afd4c17aba00b6093bbac1e44",
       "image_id": "sha256:d3bb5477f8fabf173ce9ac7753bd3b5e2f7786f3a77ae65df47c6d4fc04c8435",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4489,10 +4489,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4584,13 +4584,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:8af78dccb3ba6cf854a0e6c2000a30a27a0ee050f898ea3d0fe95986181d6993",
       "image_id": "sha256:851a9d9fa23b27295d867fba55862c1a30b384bd9bd4a33622e9747fca1e18cb",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4604,10 +4604,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4699,13 +4699,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:7e57d7df373edcbf81964b3764a9396112a9386899d8f2633387f51a171e7b27",
       "image_id": "sha256:83b3a449aa6ea995c1bd8f0e4b6865068f41ad52e55ba5b8b8ca00d07fddc5d8",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4719,10 +4719,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4814,13 +4814,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:0db18075714676298158e0ab7ebfc62b6c29be914c878f1c7f95a46f1470584e",
       "image_id": "sha256:8ab174430539fef97d913c981d468eb8246af8841e9caa4167ae392182d5a014",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -4834,10 +4834,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -4927,13 +4927,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:433ecbc2c59fa3ec1905fc6c72f50971e6aaf0de668cd00f2f451b25347557d4",
       "image_id": "sha256:01824a0331cb0d81c06ac502d0d2c7eaaeadb89487499f2446ab85840248556f",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/root",
         "gid": 0,
@@ -4947,10 +4947,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -5040,13 +5040,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:e12b24caaa95315ec8aa821e6e63e163474579a64927299419701088919c65e7",
       "image_id": "sha256:f726a0e08f8c3972612767c7a908a43ce5efd99e62f19e5f7c9378666a89f738",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -5060,10 +5060,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -5153,13 +5153,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:5ca9c29c4772ed835711207e64512924b25a1bbcc67d22b49ced235c69eaef49",
       "image_id": "sha256:1d9b8c3cb5e6a10be8053c5aa823baff77f0827f0cbef6b07677ee75217e2245",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/workspace",
         "gid": 0,
@@ -5173,10 +5173,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -5270,13 +5270,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:94c6b577582877a30a95bf58ea2a4630c29867091e82a40250d33546ecea2c22",
       "image_id": "sha256:3abf63b2cf33730e23688d975ab6b67474a6d6a1a4c4d42112ce0f7530542d99",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/root",
         "gid": 0,
@@ -5290,10 +5290,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -5383,13 +5383,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:40392ed7e19277aa144fbc3a16e39dcda82cae7fe26e76328ccf3e2ff432727b",
       "image_id": "sha256:8899f7c4b8304ec0981ce50025eaf0a279607c513c3d3d990f1f4ac96894a4ac",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/root",
         "gid": 0,
@@ -5403,10 +5403,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
@@ -5496,13 +5496,13 @@
       "image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:3264823b631a94995e32aab54e424b4e56343e86bb28a0810f9ebe8f0d189cc7",
       "image_id": "sha256:99f6a2603baf2dfbd3ac4cc20e87413d8a5d20487bc454295b0c0ce079b2469e",
       "mapping": {
-        "sha256": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+        "sha256": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
         "size_bytes": 65418,
-        "url": "/api/v2/agent/execution-environments/78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253.json"
+        "url": "/api/v2/agent/execution-environments/ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54.json"
       },
       "metadata_field": "execution_environment",
       "os": "linux",
-      "revision": "78a8b7ebf53f6d7783ad7928a608cfd213df1915095ecf11287d6c52c7c55253",
+      "revision": "ee61cc4e52d2add7abe30de8634167bb2849190521a24ac41dda6a7521e99a54",
       "runtime": {
         "cwd": "/app",
         "gid": 0,
@@ -5516,10 +5516,10 @@
           "Python >=3.10 standard library"
         ],
         "entrypoint": "python3 execution.py",
-        "manifest_sha256": "b52407300721c61b6a4ba165640aabcb91e1a8f7b91dca40a5d560d6ee1ad225",
-        "sha256": "80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d",
-        "size_bytes": 3648,
-        "url": "/api/v2/agent/helpers/execution/80ac6d87a0cdb7c26242dae3ea2b8b03fab4a256ba7f0eb152dc4919a206723d.tar.gz",
+        "manifest_sha256": "4e3ff7446f763479a3e70cad631a86645799b20fc90a566cde02b16ea9c2caa0",
+        "sha256": "989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2",
+        "size_bytes": 3772,
+        "url": "/api/v2/agent/helpers/execution/989f95658b86ad641b31fa87719f80294732239123bc00e050ad3e58d10b3fa2.tar.gz",
         "version": "1.0.0"
       }
     }
