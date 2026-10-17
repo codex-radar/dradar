@@ -38,6 +38,27 @@ def perform(row,candidate,out):
     current=out/'current';ca7=out/'ca7'
     download_helper(descriptors['collector'],current,out/'DOWNLOAD_COLLECTOR')
     download_helper(descriptors['ca7'],ca7,out/'DOWNLOAD_CA7')
+    fixture_root=Path(__file__).with_name('execution_candidate')
+    execution_fixture=None
+    if fixture_root.exists():
+        # This is an explicitly isolated, unpublished contract fixture. The
+        # original collector and CA7 above still come from their formal URLs.
+        execution_fixture=json.loads((fixture_root/'FIXTURE_RECOMMENDATIONS.json').read_bytes())[row['number']]
+        execution=execution_fixture['execution_environment']
+        revision=execution['revision'];mapping=fixture_root/'assets/maps'/(revision+'.json')
+        assert sha(mapping.read_bytes())==revision and execution['image']==candidate
+        execution_tools=out/'execution-tools';execution_tools.mkdir()
+        archive_path=fixture_root/'assets'/('execution-'+execution['tool']['sha256']+'.tar.gz')
+        raw=archive_path.read_bytes();assert sha(raw)==execution['tool']['sha256']
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            for item in archive.getmembers():assert item.isfile() and '/' not in item.name
+            archive.extractall(execution_tools,filter='data')
+        (execution_tools/'mapping.json').write_bytes(mapping.read_bytes())
+        (execution_tools/'recommendation.json').write_text(json.dumps(execution_fixture))
+        inspection=command(['docker','image','inspect',candidate],out/'EXECUTION_IMAGE_INSPECT')
+        (execution_tools/'image-inspect.json').write_bytes(inspection)
+        execution_tools.chmod(0o755)
+        for p in execution_tools.iterdir():p.chmod(0o644)
     evidence=out/'evidence';evidence.mkdir();evidence.chmod(0o700)
     uid=row['runtime']['uid'];gid=row['runtime']['gid']
     command(['sudo','-n','chown',str(uid)+':'+str(gid),str(evidence)],out/'OWN_EVIDENCE')
@@ -49,12 +70,14 @@ def perform(row,candidate,out):
         'prepared_candidate_not_yet_formal_reference':True,'started_at':time.time()}
     created=False
     try:
-        command(['docker','create','--name',name,'--cpus','1','--memory','1g','--pids-limit','256',
+        create=['docker','create','--name',name,'--cpus','1','--memory','1g','--pids-limit','256',
             '--label','dradar.ticket=210',
             '--mount','type=bind,src='+str(current.resolve())+',dst=/dradar-qa-current,readonly',
             '--mount','type=bind,src='+str(ca7.resolve())+',dst=/dradar-qa-ca7,readonly',
-            '--mount','type=bind,src='+str(evidence.resolve())+',dst=/dradar-evidence',
-            '--entrypoint','sleep',candidate,'infinity'],out/'CREATE')
+            '--mount','type=bind,src='+str(evidence.resolve())+',dst=/dradar-evidence']
+        if execution_fixture is not None:
+            create+=['--mount','type=bind,src='+str(execution_tools.resolve())+',dst=/dradar-qa-execution,readonly']
+        command(create+['--entrypoint','sleep',candidate,'infinity'],out/'CREATE')
         created=True;command(['docker','start',name],out/'START')
         prefix=['docker','exec','--user',str(uid)+':'+str(gid),'--workdir',row['runtime']['cwd'],name]
         observed=json.loads(command(prefix+['python3','-c',
@@ -69,6 +92,16 @@ def perform(row,candidate,out):
             '--manifest-sha256',descriptors['ca7']['manifest_sha256'],
             '--task-contract-sha256',binding['task_contract_sha256'],
             '--project-dir',row['runtime']['cwd'],'--output','/dradar-evidence/ca-preflight'],out/'PREPARE_CA',timeout=150)
+        if execution_fixture is not None:
+            prepared=command(prefix+['python3','/dradar-qa-execution/execution.py','prepare',
+                '--manifest-sha256',execution['tool']['manifest_sha256'],
+                '--recommendation','/dradar-qa-execution/recommendation.json',
+                '--mapping','/dradar-qa-execution/mapping.json',
+                '--image-inspect','/dradar-qa-execution/image-inspect.json',
+                '--image-inspect-sha256',sha(inspection),
+                '--output','/dradar-evidence/execution-environment.json'],out/'PREPARE_EXECUTION',timeout=60)
+            result['candidate_execution_contract_fixture']=json.loads(prepared)
+            result['candidate_execution_revision']=revision
         # Run the normal public model-tool installation as the declared user.
         command(prefix+['npm','install','--prefix','/dradar-evidence/codex','--cache',
             '/dradar-evidence/npm-cache','--no-audit','--no-fund','@openai/codex@latest'],out/'PREPARE_CODEX',timeout=360)

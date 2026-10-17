@@ -70,6 +70,7 @@ jobs:
             ${{ runner.temp }}/dependency-receipt/outer/*.json
             ${{ runner.temp }}/dependency-receipt/outer/*.stdout
             ${{ runner.temp }}/dependency-receipt/outer/*.stderr
+            ${{ runner.temp }}/dependency-receipt/outer/evidence/execution-environment.json
             ${{ runner.temp }}/dependency-receipt/outer/evidence/ca-preflight/CA_PREFLIGHT.json
             ${{ runner.temp }}/dependency-receipt/outer/evidence/codex/package-lock.json
           if-no-files-found: error
