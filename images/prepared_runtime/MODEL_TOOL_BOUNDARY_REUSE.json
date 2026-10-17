@@ -1,0 +1,23 @@
+{
+  "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:aeec28462978f363394fb61913538aa564072166e17d90d0c6d97e3ef0bd44d3": {
+    "codex_version": "codex-cli 0.163.0",
+    "run_id": 38997443663,
+    "source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+    "receipt_sha256": "aab7ba55f0cf5cfe3e8d96c5b3f3a304be8eedff6f66c03f6b165e3791abf5a9",
+    "scope": "actual normal installation + executable/exec help on the same immutable image, no prompt/model; unaffected by new execution-id binding"
+  },
+  "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:6949831e0f9c7e1ab0d176e438edb0eaf885c2516049faec9c5864837e21699e": {
+    "codex_version": "codex-cli 0.163.0",
+    "run_id": 38997443663,
+    "source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+    "receipt_sha256": "4bc5b2d72c42f1caf6999fe60267bcf19853c2ca72c3dba645fe318ceeef5dbe",
+    "scope": "actual normal installation + executable/exec help on the same immutable image, no prompt/model; unaffected by new execution-id binding"
+  },
+  "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:f8bc6dc8140dd1f6c570979f7e85557191440022b813194b073e5dede6f25908": {
+    "codex_version": "codex-cli 0.163.0",
+    "run_id": 38997443663,
+    "source_commit": "bb80030562dc8ab0226f206caf93941444c86a23",
+    "receipt_sha256": "227eabb59a907605a60473c117d7ae4ade82c1a2023e750c570171baf5833d12",
+    "scope": "actual normal installation + executable/exec help on the same immutable image, no prompt/model; unaffected by new execution-id binding"
+  }
+}

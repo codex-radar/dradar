@@ -1,0 +1,650 @@
+{
+  "libraries": {
+    "deepswe": {
+      "collector": {
+        "version": "1.0.8",
+        "sha256": "3a6d8a2113e597c1332d2f6b4e50aa3238cd8c791553b845622554175bac7110",
+        "size_bytes": 20480,
+        "manifest_sha256": "7ae6d1ac58dabf585e990690167b68bf1fc801d135f86013735fc7e5ecc5ed8d",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/deepswe/3a6d8a2113e597c1332d2f6b4e50aa3238cd8c791553b845622554175bac7110.tar.gz"
+      },
+      "ca7": {
+        "version": "1.0.7",
+        "sha256": "a7c0addc44abe3c8da37153eb0d09acb706d253939dd959201e80ee48c97241d",
+        "size_bytes": 21276,
+        "manifest_sha256": "68d4bf48667b2dd6246f257a2a3812f40d6fdfa74c1cf5d10a28a5982f95c8ea",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/deepswe/a7c0addc44abe3c8da37153eb0d09acb706d253939dd959201e80ee48c97241d.tar.gz"
+      }
+    },
+    "pompeii": {
+      "collector": {
+        "version": "1.0.8",
+        "sha256": "c5838c8b2fa8d6ec14e8f6af0b1ee5a0d8edc1c4871c54cb5b57b39d5f66a122",
+        "size_bytes": 21133,
+        "manifest_sha256": "2e19778876ed401a3e8ac416c26aef0ff6d0525f119f44c2cdec7711afc6574e",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/pompeii/c5838c8b2fa8d6ec14e8f6af0b1ee5a0d8edc1c4871c54cb5b57b39d5f66a122.tar.gz"
+      },
+      "ca7": {
+        "version": "1.0.7",
+        "sha256": "1c875083b297071b0d692dccddb00f0d9bc009c7c317d114975abe026ee8ff95",
+        "size_bytes": 21884,
+        "manifest_sha256": "461972e6a506be93e7343b3f017702e1c8116f21ca7edbaabfc73a82bbd54dd6",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/pompeii/1c875083b297071b0d692dccddb00f0d9bc009c7c317d114975abe026ee8ff95.tar.gz"
+      }
+    },
+    "tb4": {
+      "collector": {
+        "version": "1.0.8",
+        "sha256": "9f17c3ccbab6f8a410211ee53b3435215b7e5c65316abfb9268648678e5f5003",
+        "size_bytes": 22877,
+        "manifest_sha256": "f4041afb653df605c848661fef4d4aa1d96daab5747eb8d5904c0de4f98d0935",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/tb4/9f17c3ccbab6f8a410211ee53b3435215b7e5c65316abfb9268648678e5f5003.tar.gz"
+      },
+      "ca7": {
+        "version": "1.0.7",
+        "sha256": "0e4e495f2d53b9c5a83ca4a190b9350e104386ae6482a0ac92ba0bab3c3fa835",
+        "size_bytes": 23692,
+        "manifest_sha256": "42c8022373a9e1825787d40e236f4318eb96a4315f50be508c2ceff4dd6f1626",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/tb4/0e4e495f2d53b9c5a83ca4a190b9350e104386ae6482a0ac92ba0bab3c3fa835.tar.gz"
+      }
+    },
+    "science": {
+      "collector": {
+        "version": "1.0.8",
+        "sha256": "ebe0c9315e2558da49973fc2e405dc646544bdcf6511bd33c3f87a9cd717a468",
+        "size_bytes": 23952,
+        "manifest_sha256": "deedcb3fd4cb692b8f6e41e31f9fc03089d4c395d51ca3328cf99be833968ba0",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/science/ebe0c9315e2558da49973fc2e405dc646544bdcf6511bd33c3f87a9cd717a468.tar.gz"
+      },
+      "ca7": {
+        "version": "1.0.7",
+        "sha256": "68924973771c44c964ac3fb7d4eb01c617ab063a9206690d367613b888780bce",
+        "size_bytes": 24667,
+        "manifest_sha256": "6d45f3a6ed8833504f2c533a07d5edb2e9d92160ff1b17383abde51b162dc9ee",
+        "dependencies": [
+          "Python >=3.10 standard library",
+          "bash/git only for original DeepSWE/Pompeii git collection"
+        ],
+        "entrypoint": "python3 helper.py",
+        "url": "/api/v2/agent/helpers/science/68924973771c44c964ac3fb7d4eb01c617ab063a9206690d367613b888780bce.tar.gz"
+      }
+    }
+  },
+  "images": {
+    "001": {
+      "library": "deepswe",
+      "task_contract_sha256": "2337c97a913b04405c58b4f26d76c7037cdbb836b406b0f46e1724310a62aa95",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "igel-persist-feature-schema",
+        "task_content_hash": "74eb5d622e1af229331c3d5664baeb793faff9eebc7992c8727103f120b72f20",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-igel-persist-feature-schema@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140"
+      }
+    },
+    "002": {
+      "library": "deepswe",
+      "task_contract_sha256": "3df4302704871f8554485ff92e4b7c8961b3d7234acab0aee5da6982a9de2c76",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "kombu-virtual-queue-dead-lettering",
+        "task_content_hash": "537d0b215f10e989b9852baee73decc031b49e1db295634f78b01731548230ad",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483"
+      }
+    },
+    "003": {
+      "library": "deepswe",
+      "task_contract_sha256": "196b425e16aa8188094256dade59daba21ce63b6c7f4f4587a2a4d7cf6c3ec05",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "bandit-interprocedural-taint-checks",
+        "task_content_hash": "b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1"
+      }
+    },
+    "004": {
+      "library": "deepswe",
+      "task_contract_sha256": "7659f9572f99da96760ac450e0bdc7c140406571f61de19c51b57d2dc11d33b5",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "claude-code-by-agents-recursive-delegation",
+        "task_content_hash": "3e53cab7147406640ec161513862b8d02c3701ee794581855243e84a1393947a",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e"
+      }
+    },
+    "005": {
+      "library": "deepswe",
+      "task_contract_sha256": "c39064004e1eec57c30fb234fb97c7b0860f66b527573ce47f5df7020093a52e",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "ts-pattern-match-each",
+        "task_content_hash": "aab444013661fbc73f4b7e972d33d19fae42747d4498b791a624acc10523fe98",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-ts-pattern-match-each@sha256:4c4584bdfdbd898b90f3c1c011236056bc9ed82319680cca865fd9f2ca1a5126"
+      }
+    },
+    "006": {
+      "library": "deepswe",
+      "task_contract_sha256": "6d6f866ad130c07303693ab7e6bf725c140981a2ca9fcc68fd70f7b3d5b7e3b4",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "csstree-shorthand-expansion-compression",
+        "task_content_hash": "dbd9c9f731d1df65768330a4662dc78dde669d8cd025612ce64339488f724a24",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-csstree-shorthand-expansion-compression@sha256:df2cc59d679c908f8f13f68fc59231a5d6f0c2bcec4b7b26fdf9489eb824a8b2"
+      }
+    },
+    "007": {
+      "library": "deepswe",
+      "task_contract_sha256": "61ce8486cd50cccf1969e42a68783dff4638ef38fdb65226f08081b00700db33",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "aiomonitor-task-snapshots-diff",
+        "task_content_hash": "de53c49bb4ff8baa02d5db9310893413792e923b69643eb5fd254cf53ff7307a",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-aiomonitor-task-snapshots-diff@sha256:e0c8b4e4044d5831693b4f6a6da483b255a889b71376574fba9e3c93d36ceb7c"
+      }
+    },
+    "008": {
+      "library": "deepswe",
+      "task_contract_sha256": "37799599eef531062864cd54d82269d7662b148b8d99f5642239729d256ae18c",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "anko-typed-variable-bindings",
+        "task_content_hash": "def19fffd57190b635c2ee19c2233dfd7434e9b8751a6140bd0a9fa60ec1bd87",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-anko-typed-variable-bindings@sha256:4fb704fd8dff600f6d028c20ae4aca5e1261968bb615bb41c01a111dd371255b"
+      }
+    },
+    "009": {
+      "library": "deepswe",
+      "task_contract_sha256": "88558fc9c4b907e616e38cf9e02df012b98520fd241f470561b4b250c407c5a6",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "mobly-grouped-test-barriers",
+        "task_content_hash": "5c2681190e9c1316bead539be3b27585fe3e3c34ea3f77005b5da159c5a4ab81",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-mobly-grouped-test-barriers@sha256:e7f48723e4bf9244cbe5206fdcb204456383c31f43c5a16da98efadda057998f"
+      }
+    },
+    "010": {
+      "library": "deepswe",
+      "task_contract_sha256": "d32714af0a10add6d4618a4581aac9d3796b43fa332a8a90b44c808e6d14119c",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "superjson-error-stack-serialization",
+        "task_content_hash": "41d12ea88d2962c8bd38471e6e937151280404dceec5f435e94b171603fcec64",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-superjson-error-stack-serialization@sha256:ada56382a90fbe2dd01bde0f685a1bbd0ceac556f7b802199e60dbbca6e76387"
+      }
+    },
+    "011": {
+      "library": "deepswe",
+      "task_contract_sha256": "285b9247c313973e5695ab543ab4137360e56f1ed7c71ef50207739f23d8b27c",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "dateutil-rfc5545-timezone-interop",
+        "task_content_hash": "43db08e1e5bda8fe61842e8b02001a2e21515a0e132305fc7809cd1077da7c2d",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-dateutil-rfc5545-timezone-interop@sha256:ac1167c4badd5db3e8058572e4ae9f09c391a7a6c6801b46ce7f7b12d8c6b77f"
+      }
+    },
+    "012": {
+      "library": "deepswe",
+      "task_contract_sha256": "2a57e6defbddb1f76179851218de922f2f567e16fc5fd6365c0d581877b00163",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "abs-module-cache-flags",
+        "task_content_hash": "824aa73cb818925ac845732e712f34c35144833a6197435572d0f29395457a9a",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-abs-module-cache-flags@sha256:3a4d47f5281269305343c83729836ac2f3172811aee72681e472a4196178eda1"
+      }
+    },
+    "013": {
+      "library": "deepswe",
+      "task_contract_sha256": "ac08a1840dddbf11a112f78c08b978fdec2f650183dd179ab3272623940de517",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "updo-policy-alerting",
+        "task_content_hash": "5cd97eab5a7f851fadae55608379cd34943dee8cfe3fea15c48c98ba5968c0de",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-updo-policy-alerting@sha256:91b20a45b0445cf1bb97a96b9749c2caad0c4747de538c6df700c48e1a88cf54"
+      }
+    },
+    "014": {
+      "library": "deepswe",
+      "task_contract_sha256": "2d2b459d5d192cba3ff46f06229029bbea844ceb395c4c2db70ac3ddbfa5502b",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "httpx-streaming-json-iteration",
+        "task_content_hash": "0c33857574b2a345950c140642eeefd406c02983884f931c655c88fd40a437b2",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-httpx-streaming-json-iteration@sha256:47d0af14d988caa7d22b14312be2c3ee4e9ac799a5679bd83d19f298d346749d"
+      }
+    },
+    "015": {
+      "library": "deepswe",
+      "task_contract_sha256": "2aa04c6e21904b9c66763fa7c938d7634aeecaa2641a5f71ae5bbe6b44aef5c7",
+      "original_task": {
+        "benchmark": "deepswe15-20261003-v4",
+        "task_id": "cliffy-config-file-parsing",
+        "task_content_hash": "481c17c44e6eac22d2c0749a3b6979e8dce25adf32f2cbf503ae63290551d4d0",
+        "source_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+        "image": "ghcr.io/codex-radar/dradar-env-cliffy-config-file-parsing@sha256:0a8dd8f1270ec4bb88efadad3021762e1d07274f686276c8a484d26a00bd91b5"
+      }
+    },
+    "016": {
+      "library": "pompeii",
+      "task_contract_sha256": "01af18a232e3e8c172d4790b9b73a71c4d3c661a9eccef215138384500af210f",
+      "original_task": {
+        "benchmark": "pompeii16-20261003-v2",
+        "task_id": "pompeii-adjacency-rp-002",
+        "task_content_hash": "55d00b1d5abc195ebf61a9e47d99ccadf9d06004c8ad6371ee1a9279f9c8bd4a",
+        "source_kind": "dradar_adapted_repair_dataset",
+        "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+        "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738"
+      }
+    },
+    "017": {
+      "library": "tb4",
+      "task_contract_sha256": "956cda7cde5baa2513a11ec0f78ea2a429c471f63ab98363b351fc9a055c4d80",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "freecad-spring-clip",
+        "task_content_hash": "41650c4476f352c75e11f17a759902c8ffeb86a1469312b3e340b763db84ff2f",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-freecad-spring-clip@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7"
+      }
+    },
+    "018": {
+      "library": "tb4",
+      "task_contract_sha256": "331638d506d3cd76f919dff79dd72b77c3f4c36f9c42aa36f0efbc3d2d2efd8c",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "hof-topology-interpenetration",
+        "task_content_hash": "e7a03909a2685b5eee4579b5d083bfd2309d1b2d4bc11225138e8fe51689d513",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e"
+      }
+    },
+    "019": {
+      "library": "tb4",
+      "task_contract_sha256": "8753f52d423fbe2ff7eeee41c010e34f8c5aa3c7d8e81bf54c1233348dc74016",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "interleaved-vigenere",
+        "task_content_hash": "531f29f1182c68e29c120e8059d5d9174a287a7431df683fdbecb894692285ef",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592"
+      }
+    },
+    "020": {
+      "library": "tb4",
+      "task_contract_sha256": "85ae14d0a818082f3d15b5624733a59e6c485604556c84c13480caceaba8cd75",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "sound-change-cascade",
+        "task_content_hash": "0dacd25d881a3ac8e0f89f99a812b6fc39cbc93694aacda20dd56c9eca7b5128",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61"
+      }
+    },
+    "021": {
+      "library": "tb4",
+      "task_contract_sha256": "ff902a9f4c3a52c2b35709454a58da4dd9c6afded8fee1d41f36edb3a19ffaf9",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "mvcc-lsm-compaction",
+        "task_content_hash": "212700691340b57961b8a09f12d4cf0439676a593527c000e6d9882da7f16d9e",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f"
+      }
+    },
+    "022": {
+      "library": "tb4",
+      "task_contract_sha256": "988df6b101a16e8ffe7993d4efede26ca63c5e5511b55e5f3fb9872028fc012a",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "cad-model",
+        "task_content_hash": "5fb17bc9810c01ddec8b5e52fa48c18eb4b09b5c35e11ad6bd5554a8007e1039",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c"
+      }
+    },
+    "023": {
+      "library": "tb4",
+      "task_contract_sha256": "f61a34891893e56d91ec83e1350c562a5702088bc5e358fafa3477e05e24632f",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "wal-recovery-ordering",
+        "task_content_hash": "7ebf24dcde274d3359ca74a398cd9547ed1adc14cf7dd1bcd8a516650490ff43",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657"
+      }
+    },
+    "024": {
+      "library": "tb4",
+      "task_contract_sha256": "73e724ddadaafaf57c5bcbe7abf2794d45846863e35ee8272235f5425b2d3f2f",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "satb-audio-transcription",
+        "task_content_hash": "0e6a47693e5d551f21096d52787e244a562d2cc0cf393a6238a05fef3ed269ea",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56"
+      }
+    },
+    "025": {
+      "library": "tb4",
+      "task_contract_sha256": "f5d9052d6a3871c597f17dc314652dc68aa0b9168720a457fc46c5c02f51aa66",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "sglang-qwen-burst",
+        "task_content_hash": "2feec3fdb73449fc99682bafd757c64c0afdd112a61d8a7be2ce1e0fe474a222",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75"
+      }
+    },
+    "026": {
+      "library": "tb4",
+      "task_contract_sha256": "0d4e5b9111f7e3546af13b3a1dc2d84649e3bc4ba94d2375831fa7daa3ac6c8b",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "risk-scorer-replay",
+        "task_content_hash": "ca3feabd1ec080cda62871064cb2082e6d9e5a8bdadc092d1bf09951ada60ed2",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9"
+      }
+    },
+    "027": {
+      "library": "tb4",
+      "task_contract_sha256": "d420b20858e7f4bddccfa75c5e34bffe43c1bc5bafbfeb4471278caeb9bf9aaf",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "embedding-drift-monitor",
+        "task_content_hash": "ce5f9bf84e6ceef5976456d492b7f43c182304425d66ccfb8f883a5fa6bf8573",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183"
+      }
+    },
+    "028": {
+      "library": "tb4",
+      "task_contract_sha256": "2557468b0c61fa9170ff55c25bf2ccc8cfccff67343c9e0ad1df0564c0e98c86",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "atrx-vep-crispr",
+        "task_content_hash": "53e7c9d486cbaa83e8f9bed2b993e064711522fedf1d359466bba11796a9da46",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de"
+      }
+    },
+    "029": {
+      "library": "tb4",
+      "task_contract_sha256": "13d1aede6f319082a3bf6c08070283f43ab20c758d1a949c1d372d33b5c330c7",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "react-lead-form",
+        "task_content_hash": "ba0cc14aa877aa122939741f5c96f4f6f4d7115b7e72c4539864212c72b457a0",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0"
+      }
+    },
+    "030": {
+      "library": "tb4",
+      "task_contract_sha256": "23eb199701bdd207f7555608063a3abe579b024afd4e93ce9de4d2e289e2148f",
+      "original_task": {
+        "benchmark": "tb4-selected14-20261004-config64",
+        "task_id": "batched-eval-parity",
+        "task_content_hash": "154dcb412305228caf54b2c48afd7ba35752ac1e395933109ebee721f4a9f3cf",
+        "source_commit": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+        "image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47"
+      }
+    },
+    "031": {
+      "library": "science",
+      "task_contract_sha256": "c4a4106cbffaafe0171b409428caf2391f1c489b4b8870362da34eb6ca0c76d4",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "eeg-erp-recovery",
+        "task_content_hash": "ca7e820619788fc4f7fa527ef2c232a56d8fead4defc3a11f49f459ee5ec89d1",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:3cffaec5adbf52dba691791cdfcb001b66defb6407b93c88721d70087ef92109"
+      }
+    },
+    "032": {
+      "library": "science",
+      "task_contract_sha256": "8d6da2ddd1fc1771389ede5e0b40cdd392360c4af9ed03f57802d93296442a1c",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "ode-law-discovery",
+        "task_content_hash": "88f2e63af47b65508dbfb3c35e955bb9d8f71695ab0a69491f2c6e7a0576974b",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:00ee4980912068585dd634bed9fd8869a2be3791aa67fd5aa3c793fb34cd13f3"
+      }
+    },
+    "033": {
+      "library": "science",
+      "task_contract_sha256": "99e205005fc13cba2aaeaaa7fe62b879259c936abd142728d1cc497f604f4caa",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "koopman-mfg-id",
+        "task_content_hash": "c642a0e4f777833635b7ee4fa71c87efbb152bb41be1415e80435555cc4a0efb",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:f475cad061554556b737cec1d5421580fb4b57fbeb1cd268c6137267d4971689"
+      }
+    },
+    "034": {
+      "library": "science",
+      "task_contract_sha256": "1ab8e3f03749797b398f82c8ce8ff0230a5d09be562846552cdfdaaaaf1cfa64",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "duan-thesis",
+        "task_content_hash": "27f527cc66ea0d307f7d6821a9ba70f57055cb3d2a5f245a4b0f0f1d68eec46b",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:95d657e13e48be4eef8028a4139b3552cb86d6d9e2dd0caabf7ae278190ffec0"
+      }
+    },
+    "035": {
+      "library": "science",
+      "task_contract_sha256": "7cce89c866ca4f46763d0102441fdc4cc1ff9d54c06e89ca52c6b2456b69e8af",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "neo-orbit-determination",
+        "task_content_hash": "0c956f98adf799e93baf87ae15afaac605c33804a26e487674691142e5703c3e",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:c59382e04bad7249e422ccc292801d13dfbf3e48a384238f2fd095c3d209dc19"
+      }
+    },
+    "036": {
+      "library": "science",
+      "task_contract_sha256": "369fa052c273b02711918f629e267aada63af0867314898716a2d5f42af5fc5d",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "mendota-ice-phenology",
+        "task_content_hash": "618fb0102aece6fc1d4f6b2bf8bceced62ac10cdd3df981345bdd40e77e79890",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:5b89bce9c705a233a4bc9b569a9f29a8b99402d1025e7b5ee611cb3cb7988874"
+      }
+    },
+    "037": {
+      "library": "science",
+      "task_contract_sha256": "d9f74002b4217b3bd4f5d7208ab7c50458202797363d6509e5e575b6513b1f66",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "cilia-segmentation",
+        "task_content_hash": "a8a0ca207250c1ad47acb0fda831ae4535fbae7a292de65590d2097304b6a1cd",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:a162b1e200989fd34a7544f6e1a3e51754eb6f6e5382bbcae7800c11ce5fef8f"
+      }
+    },
+    "038": {
+      "library": "science",
+      "task_contract_sha256": "2b8d387ad9b270bb27ef5f668e72f655128471ebb70c72eeab1b4c738b48d85d",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "ont-tn-qc",
+        "task_content_hash": "84302f6c50e4fbd9c093c43cb15aa6a138e0a4634b82e6ca423fa3ab84af89b6",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:c00438486dafc86dde500df6314898488de977b01e36e9e91f90df1826789938"
+      }
+    },
+    "039": {
+      "library": "science",
+      "task_contract_sha256": "0616521d0f65eed2097b19e57ec85818cd9b265231f63f6494709eed47a7fd44",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "xrd-multiphase-qpa",
+        "task_content_hash": "04df66e5b67612c1cd0d3cb9f80ec021eb9bacbe1e5e58ba78d51eda3077079b",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:096809f7a910c09fb22f548a8354e43bdf4da7b9d9b1016b7dfa522690260453"
+      }
+    },
+    "040": {
+      "library": "science",
+      "task_contract_sha256": "4ee4dd8debab886696a26fccd32bc36497ee097e3088f9c0a811c5403376eca3",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "linked-cell-suppression",
+        "task_content_hash": "418b79b8c2a248cd698489a153909bc920f258c252e4a9842795d05c0916fb95",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:a730a77e8bb76eb4a304bcb1738bbddf062f27c5c98aaee0803376ec01633a8c"
+      }
+    },
+    "041": {
+      "library": "science",
+      "task_contract_sha256": "f1271c72818e55bc9b73d5c53e2d62b121ff3301c5ef725a4ef2a7cd6b3ae633",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "genomic-model-ranking",
+        "task_content_hash": "95e905029879f8bcde32f2f6caf86737cd0b5ca8adefc9fdad2d3a2b58072dc2",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:cb62b0fc6bed7f1faccf70dfe0a3cec2e172256acde65f5f072c449764ac0705"
+      }
+    },
+    "042": {
+      "library": "science",
+      "task_contract_sha256": "cab2d69edc7a2f4dcd9edf70124587ae4f9524e09ec1945606eab9b974adb393",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "small-area-equivalence",
+        "task_content_hash": "654eb73a9ef378aef6552dcc1f014cde41514972628ede1eaaa9f912d81c4c6b",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:9d8b4418a627e6341bf7f369b3a7752cb2ab76f47ee7c0eb33954c734a881e71"
+      }
+    },
+    "043": {
+      "library": "science",
+      "task_contract_sha256": "bba928bcb081d24936bf7dd481fc10c3719f0c59da461c847fb73b0cdf11bdee",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "diag-chipseq",
+        "task_content_hash": "ca1a9951c08c0735581d1dd0ce3031c8617a5dc4fbb16ff7b719c1f7b4d99f10",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:bc8a030fb342148e92afd64c30246c194697562b577a767ceabb36427a5ef0e8"
+      }
+    },
+    "044": {
+      "library": "science",
+      "task_contract_sha256": "2d7675653c32981d7365ff3770d9d6f13bf3cd89280dd19267cca6b8c517b0a4",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "spatial-cell-annotation",
+        "task_content_hash": "5149d85d7c5e9b2fbad334f949fdeb767018766a1f80736f51c725a0e3beba55",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:15930b38664334e8ce9471684423e43981211c464572ecdbcca9b00665d78264"
+      }
+    },
+    "045": {
+      "library": "science",
+      "task_contract_sha256": "5bcd3b0c4495a592536460c5c30e1fa70e1424ff0f77a5a35effa60de25375aa",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "ankle-mri-findings",
+        "task_content_hash": "14c850f664a11f9e794dfb8eb0c8b7789e5282a80528c88ed6b59f8dcb681a29",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:9768158ab4af781011f3e8acee62f363aa88c29018191e243617a9ab85dc44c9"
+      }
+    },
+    "046": {
+      "library": "science",
+      "task_contract_sha256": "b7594d8a0f78b898b12d1e25d8e7ec450fefa8901d2056fa4c47b73103575fa6",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "nanoindentation-property-extraction",
+        "task_content_hash": "e9d35e72c1b87190adbbfc4ddc8886ba0c31bd200426d94fe262e3c032cc87d5",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:f03b8cd4ed03eac9495f7d7b8c6cee2e49c3cae288fbf1451d424d4205492e06"
+      }
+    },
+    "047": {
+      "library": "science",
+      "task_contract_sha256": "206c9017e41bf8f4c5f3ee8d58175a1db9b436df819369e9c883a494b3bbc8cd",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "tumor-immune-interface",
+        "task_content_hash": "1dfb5717f204c4f36aad4e4596ec6cce5f524e720e4b7d1e5c9ff0160e9ef3c0",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:a78d067a54d447128c3c73610e335f13e40b7260c7d3dbacebc084708225ef82"
+      }
+    },
+    "048": {
+      "library": "science",
+      "task_contract_sha256": "d82d8e51e3e07954c6e667087585c2a95c58228e084c2eef30a071a5e5380fe6",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "supraglacial-lake-classification",
+        "task_content_hash": "49df97d46c8115b6cd96f12c48939b02f2a0928214f32a2497057587bedabf16",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:10d3401017874df7ff0d4aad6c2aaca9d9b4cecb8a9c7dd325e9fbdc45658d32"
+      }
+    },
+    "049": {
+      "library": "science",
+      "task_contract_sha256": "eb12dac73739f3e5942f37c8d1ea48da69fab2a7f176db96116a460bb032566e",
+      "original_task": {
+        "benchmark": "science-selected19-20261004-config64",
+        "task_id": "guided-wave-localization",
+        "task_content_hash": "d312aaad621cdfb65b1eac094cb098dcce6f6582f9e06a855c94e6e89a2284bf",
+        "source_commit": "f81afac4f11048e77a15dfc8fb1dbfb897fea0ce",
+        "image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:e8807297eaee5b8f5795c5410a13e1ad6168aeb78ac702379e4b0e04f466a803"
+      }
+    }
+  }
+}

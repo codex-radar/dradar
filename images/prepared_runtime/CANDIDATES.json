@@ -1,0 +1,198 @@
+{
+  "schema": "dradar.prepared-runtime-published-map/1",
+  "complete": true,
+  "images": {
+    "037": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:404c5bd74e3965fcf5cf1b3ac12ca51dec543bd61d38f4024b9682b171876960",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "3531c98a8a9acd0bb8e1b4a5bc5db84634e620288a70e38306c12942ab72c632",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:a162b1e200989fd34a7544f6e1a3e51754eb6f6e5382bbcae7800c11ce5fef8f"
+    },
+    "043": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:0db18075714676298158e0ab7ebfc62b6c29be914c878f1c7f95a46f1470584e",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "a36c62dcbf8e2240410a44bb2f69cd9fbaac4ee9263b5333d6f3af3709cfbd22",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:bc8a030fb342148e92afd64c30246c194697562b577a767ceabb36427a5ef0e8"
+    },
+    "031": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:608428b0f8b9d867369e824333ba6b6d2aa9906a7efa910c6bef61a5c4452c39",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "a42da6168f15960b4153704d5467e1905357c8f17b0ad887f1a0b9d5e4cbe2d6",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:3cffaec5adbf52dba691791cdfcb001b66defb6407b93c88721d70087ef92109"
+    },
+    "041": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:8af78dccb3ba6cf854a0e6c2000a30a27a0ee050f898ea3d0fe95986181d6993",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "76e4b3b22ca686cee99660349e0d1f82870b9bf9e0c6ee83e17df7e263f6291c",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:cb62b0fc6bed7f1faccf70dfe0a3cec2e172256acde65f5f072c449764ac0705"
+    },
+    "049": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:3264823b631a94995e32aab54e424b4e56343e86bb28a0810f9ebe8f0d189cc7",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "b83f8dddc216f5dadca9a9f35917e8145e5f28c0fc7c80c88068f08c729e9ce2",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:e8807297eaee5b8f5795c5410a13e1ad6168aeb78ac702379e4b0e04f466a803"
+    },
+    "033": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:883c6e22895ba01286538a042065c8045a1f83c82ae387e238a0237c382c18e3",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "a06ef86bc5ae5508d5927cdfd88c2ded6ac364acd8f5dbb21e468cf33661e0fd",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:f475cad061554556b737cec1d5421580fb4b57fbeb1cd268c6137267d4971689"
+    },
+    "040": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:9513061c6eb8c60e47cbb88422d4b5ad404f8e3afd4c17aba00b6093bbac1e44",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "f3573f968ab58393075cea34d1ce4978405284ae5543f5206e6d919f4a715e67",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:a730a77e8bb76eb4a304bcb1738bbddf062f27c5c98aaee0803376ec01633a8c"
+    },
+    "036": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:d95a7e291e1c1f28f8d3e49d80d3394d57e63c867329561fc2ea58b00b313387",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "9c3653d5571ebd2ae0c4f6f028fdf4173c6d16e42cc8a9b7228e4ea4b6e8af1d",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:5b89bce9c705a233a4bc9b569a9f29a8b99402d1025e7b5ee611cb3cb7988874"
+    },
+    "046": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:5ca9c29c4772ed835711207e64512924b25a1bbcc67d22b49ced235c69eaef49",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "8ef4c6eef46bdf9bb01a933fffae10cabc4fbd82ef6ad3b761d0e64381c2d3cf",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:f03b8cd4ed03eac9495f7d7b8c6cee2e49c3cae288fbf1451d424d4205492e06"
+    },
+    "035": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:bc587719be09361742cd677eb08c974f34d1054dd0fb037c4cb7260192f4fd55",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "1a55d1f21f64b244eb7783a80d0b66e4af23e41a1d414f7f24e8cd0682a88181",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:c59382e04bad7249e422ccc292801d13dfbf3e48a384238f2fd095c3d209dc19"
+    },
+    "032": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:0338f3f847ca39e79911c18009702f5aa434fd49f2fc86d9db331ffe6660b037",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "628b44c1066e50f9eea3d1edda933f0de395b3242f652952b8707316516158e7",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:00ee4980912068585dd634bed9fd8869a2be3791aa67fd5aa3c793fb34cd13f3"
+    },
+    "038": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:7344ba26ee9c6cf367689980be15970c6ca51e046ac38825f24cd4a1647bd4f7",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "04300dad79ea7184252bddeda72d418497a17d1c734647a5cbc79bb16e4f014b",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:c00438486dafc86dde500df6314898488de977b01e36e9e91f90df1826789938"
+    },
+    "042": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:7e57d7df373edcbf81964b3764a9396112a9386899d8f2633387f51a171e7b27",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "3e099e61b7de824a38cba755fdae81d1d04c43b8f61dd98d2e9fbbeec5e594ce",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:9d8b4418a627e6341bf7f369b3a7752cb2ab76f47ee7c0eb33954c734a881e71"
+    },
+    "044": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:433ecbc2c59fa3ec1905fc6c72f50971e6aaf0de668cd00f2f451b25347557d4",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "c749807934056a6903acc5363d62010078164202ed14c392f71f5a36cf1e1d80",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:15930b38664334e8ce9471684423e43981211c464572ecdbcca9b00665d78264"
+    },
+    "048": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:40392ed7e19277aa144fbc3a16e39dcda82cae7fe26e76328ccf3e2ff432727b",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "0f9b0f4547e7fd90cbe966c186ba4ca9d7cdb2f692f3926e28797dee17c31cc1",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:10d3401017874df7ff0d4aad6c2aaca9d9b4cecb8a9c7dd325e9fbdc45658d32"
+    },
+    "047": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:94c6b577582877a30a95bf58ea2a4630c29867091e82a40250d33546ecea2c22",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "bb728826f6a983324d03156131c4793f42b625079938fe449121a627aa3119b2",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:a78d067a54d447128c3c73610e335f13e40b7260c7d3dbacebc084708225ef82"
+    },
+    "039": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:9135e3bdc6274dfae35af616ee7efd3b204a3baaafc2b3ebb12ea0e5887c83e5",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "65900ea264ac31baba49bab6260e6ec9d26cb195b1742b7e52301196355e59ca",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:096809f7a910c09fb22f548a8354e43bdf4da7b9d9b1016b7dfa522690260453"
+    },
+    "028": {
+      "image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:80b26c0b30f1283b3d80edddff8dcdead23f14fc466e4b503b436c5b766610d1",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "b228a504b9b447fbd3df4d05da8206818c29f840fbc40324320ee2fd18536499",
+      "source_image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de"
+    },
+    "030": {
+      "image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:c747a8764e4786d9110e3dd39b91cd40a39cc693441fcca3b880119bca75f0cf",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "fa9711eca235e280fa067eb36096ca2949bcf522c9cc65c8753655fd8ab1287e",
+      "source_image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47"
+    },
+    "022": {
+      "image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:dc401ec7c1c9c79fb7b39acf7990270c93900a0ad6503599e5e68f052dc9b714",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "347f0004b81ed0db513b5fbd2f4b35081e0ef20ebbc7da34156a3e20df8eecd8",
+      "source_image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c"
+    },
+    "027": {
+      "image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:bfc4b52282e74f6befcdb392d444d9be86fdef470c38e2b831eefc8bbdf1e84a",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "46f62f050ca0803c758c95b201af419c29b6b347035511963e5883e797af3c38",
+      "source_image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183"
+    },
+    "018": {
+      "image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:703a1d73aad5901de080e2209b967f55f998bc1c5f44d9cb48ddc4c4dda16477",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "666c8bca49c488798e07db5a7ec807982447f5718880e22c98c311d0b44206bf",
+      "source_image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e"
+    },
+    "019": {
+      "image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:a86489b59a2adcc5c7150f8705793419ad89b1ffc010fff93247cedec8b93b81",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "85770ef67ce82dcc513b1c42a2dd230af25bed09bab97ee986a1feec86af9688",
+      "source_image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592"
+    },
+    "021": {
+      "image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:2fa4e6dc39f739ce9e8bb3a1926d69090dd7c6fd82e25cc8408b2740d9e04ba4",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "7ebbd1883c381d2524dca0b8ef71873c121d660e665feb20dda6048f3a2fc29a",
+      "source_image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f"
+    },
+    "029": {
+      "image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:f8bc6dc8140dd1f6c570979f7e85557191440022b813194b073e5dede6f25908",
+      "build_source_commit": "bb80030562dc8ab0226f206caf93941444c86a23",
+      "receipt_sha256": "b00433dde850045d941c412d7e6a390c328fedb3be592cbb2c649c12c2ce4102",
+      "source_image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0"
+    },
+    "026": {
+      "image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:6949831e0f9c7e1ab0d176e438edb0eaf885c2516049faec9c5864837e21699e",
+      "build_source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+      "receipt_sha256": "02315833b5b01a4bdcfceb945a652bd0dd2f8ba824cc6ab58b34c5f5c7489bc2",
+      "source_image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9"
+    },
+    "024": {
+      "image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:df4c045c02c5fc3d595e6fb8fbca111bd597fcecd7ee09701969073dcd3bdad6",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "3928399d4ade043369758420936fe72a35be49fb5119a1d96feb12adac893f4c",
+      "source_image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56"
+    },
+    "025": {
+      "image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:b5de5cdadd71a98d333323b7bf42414d3a07c1a64cdb8e8318c988ced747fa73",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "f06f8e8aed73e9631ec7e8f984616a4472d80eeafcae3c6073df31b1fba29a43",
+      "source_image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75"
+    },
+    "020": {
+      "image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:6d4107950bc9f78016622171a969ddbe454b04e5e7336e241577c4be7ec25dff",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "7676880402f0bd79a8d7286b103e739bc76d0685d53b1ef99e80db95b596e5ab",
+      "source_image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61"
+    },
+    "023": {
+      "image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:9c8aa4168e0b829a9317247e2775ba7d5386ad1a57f29b56b6651e3994a06689",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "0e8accd2a6e718eb497ca281dc2a73ebbeffc35e6cb3a634730ebef2aab04a04",
+      "source_image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657"
+    },
+    "045": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:e12b24caaa95315ec8aa821e6e63e163474579a64927299419701088919c65e7",
+      "build_source_commit": "88a4842a8159029b31a8219c2d4f9826c6afa3e4",
+      "receipt_sha256": "790dff051c739b518e3872df04a0d1d94b67d9f70bb7aecc8b85ebf0d53cb97a",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:9768158ab4af781011f3e8acee62f363aa88c29018191e243617a9ab85dc44c9"
+    },
+    "034": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:aeec28462978f363394fb61913538aa564072166e17d90d0c6d97e3ef0bd44d3",
+      "build_source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+      "receipt_sha256": "77ce2c9be1b37cc31322b64ae15007bbb53db896ac30f528bb333622d2372ac8",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:95d657e13e48be4eef8028a4139b3552cb86d6d9e2dd0caabf7ae278190ffec0"
+    }
+  }
+}
