@@ -1,0 +1,1661 @@
+{
+  "schema": "dradar.prepared-runtime-build-batch/1",
+  "source_server_commit": "b319184b5c2c523d011bb19de654c2cd74847163",
+  "count": 32,
+  "task_count": 64,
+  "source_image_count": 49,
+  "rows": [
+    {
+      "number": "018",
+      "source_image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "hof-topology-interpenetration",
+          "task_content_hash": "e7a03909a2685b5eee4579b5d083bfd2309d1b2d4bc11225138e8fe51689d513",
+          "image": "ghcr.io/codex-radar/dradar-env-hof-topology-interpenetration@sha256:5b3fd0b5ff13696137fd4350ad75d5f63cf7a1ab70c57b1bd33aa87b296eea5e",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "e05c4fc488744d8a96a1fd675ad3bf0e8f7dbec0ee8afc61ca468b4294667551"
+    },
+    {
+      "number": "019",
+      "source_image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "interleaved-vigenere",
+          "task_content_hash": "531f29f1182c68e29c120e8059d5d9174a287a7431df683fdbecb894692285ef",
+          "image": "ghcr.io/codex-radar/dradar-env-interleaved-vigenere@sha256:683e32f166cb4698c641bf45cb7efbeb631e879d8d5143bc6cdf799f16d4b592",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "6c268cf9ff471a10ce39b8fa649cb9d43c403a70db0ede28c9393d24adffa7d3"
+    },
+    {
+      "number": "020",
+      "source_image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "sound-change-cascade",
+          "task_content_hash": "0dacd25d881a3ac8e0f89f99a812b6fc39cbc93694aacda20dd56c9eca7b5128",
+          "image": "ghcr.io/codex-radar/dradar-env-sound-change-cascade@sha256:fdc4c21a9e32df1a756e43db9550d74c43be866470653e82d069d50a3d297b61",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "35e4a6e2ea75bed984f1f02a5a8e0330eba915c0e4543284e49506f44c22e59e"
+    },
+    {
+      "number": "021",
+      "source_image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "mvcc-lsm-compaction",
+          "task_content_hash": "212700691340b57961b8a09f12d4cf0439676a593527c000e6d9882da7f16d9e",
+          "image": "ghcr.io/codex-radar/dradar-env-mvcc-lsm-compaction@sha256:4f86b06046a0d4def8b779cf0f3ed0ac61165e3cd8ef9ae82d89a8075888bd7f",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "8c36d07cde9798671376ca69fe824ab367f4dabeb4afa6b545ebf061665933b4"
+    },
+    {
+      "number": "022",
+      "source_image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "cad-model",
+          "task_content_hash": "5fb17bc9810c01ddec8b5e52fa48c18eb4b09b5c35e11ad6bd5554a8007e1039",
+          "image": "ghcr.io/codex-radar/dradar-env-cad-model@sha256:988e1ff362f361ceb1fc93e99cafc1d90f5b6c5d8fed13a5695c23b3669a127c",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "a7b69ed10af0bf158d4891c4b5f18cfd8c4e996df885db0dbb661bf5faced103"
+    },
+    {
+      "number": "023",
+      "source_image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "wal-recovery-ordering",
+          "task_content_hash": "7ebf24dcde274d3359ca74a398cd9547ed1adc14cf7dd1bcd8a516650490ff43",
+          "image": "ghcr.io/codex-radar/dradar-env-wal-recovery-ordering@sha256:71d215eab08bf95f60d828a5328d7bc1424b4a048ebf6551027267a651396657",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "502b21603daed479b19a6af1843eee6e90a826addda4ac2a3aba1a993e5da728"
+    },
+    {
+      "number": "024",
+      "source_image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "satb-audio-transcription",
+          "task_content_hash": "0e6a47693e5d551f21096d52787e244a562d2cc0cf393a6238a05fef3ed269ea",
+          "image": "ghcr.io/codex-radar/dradar-env-satb-audio-transcription@sha256:818f600ce1ab17d3a537e69ac848c268dc40cf21086a054f495e77fe4c4e4e56",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "ab58fc493304e65700304a3d40aa6ca6a4a3fbe307759a46a58f6baf784c9c7b"
+    },
+    {
+      "number": "025",
+      "source_image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "sglang-qwen-burst",
+          "task_content_hash": "2feec3fdb73449fc99682bafd757c64c0afdd112a61d8a7be2ce1e0fe474a222",
+          "image": "ghcr.io/codex-radar/dradar-env-sglang-qwen-burst@sha256:7b089021e0e2970de1131b570e6666a358527e80d10e9b95cbf4720c9bb3bc75",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app/sglang",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app/sglang",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "26c366c4e30cd04bf30989410c32170941b9b3f612e403a6947dab3ad76d3a0b"
+    },
+    {
+      "number": "026",
+      "source_image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "risk-scorer-replay",
+          "task_content_hash": "ca3feabd1ec080cda62871064cb2082e6d9e5a8bdadc092d1bf09951ada60ed2",
+          "image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9",
+          "runtime": {
+            "uid": 65534,
+            "gid": 65534,
+            "cwd": "/app",
+            "home": "/tmp",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 65534,
+        "gid": 65534,
+        "cwd": "/app",
+        "home": "/tmp"
+      },
+      "original_user": "nobody",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "d43977cf48c941294a2239c85518ffe464fff3ae8c09e56c9f6533f323709104"
+    },
+    {
+      "number": "027",
+      "source_image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "embedding-drift-monitor",
+          "task_content_hash": "ce5f9bf84e6ceef5976456d492b7f43c182304425d66ccfb8f883a5fa6bf8573",
+          "image": "ghcr.io/codex-radar/dradar-env-embedding-drift-monitor@sha256:02e1353b0893a2fa43f88a58141e91d6558a3f0ab013ab9c4007c47bd47f5183",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "7565a8f804bd692c1ea118a5c54583f8dc8e42a588728b1d8e2d9f793fc4520a"
+    },
+    {
+      "number": "028",
+      "source_image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "atrx-vep-crispr",
+          "task_content_hash": "53e7c9d486cbaa83e8f9bed2b993e064711522fedf1d359466bba11796a9da46",
+          "image": "ghcr.io/codex-radar/dradar-env-atrx-vep-crispr@sha256:2879e29fdb7a997c4dd32e12b026a9f95f17670e4b5619b52c62b3cdbb5a71de",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "6dd5659b1001caf34f8b45fea661c68f076e67ad57a6178b7a64c75d296526fa"
+    },
+    {
+      "number": "029",
+      "source_image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "react-lead-form",
+          "task_content_hash": "ba0cc14aa877aa122939741f5c96f4f6f4d7115b7e72c4539864212c72b457a0",
+          "image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": true,
+      "git_required": false,
+      "audit_sha256": "79bc73197fd4c3e66ee931a98ab9c5afefcb6b82711ed0eacd0ae8f11105b60b"
+    },
+    {
+      "number": "030",
+      "source_image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "batched-eval-parity",
+          "task_content_hash": "154dcb412305228caf54b2c48afd7ba35752ac1e395933109ebee721f4a9f3cf",
+          "image": "ghcr.io/codex-radar/dradar-env-batched-eval-parity@sha256:73e931f5311398037c2230a4aa1a179fde8619942ecdaa9d98f4fdea548dba47",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "6b48395d8ed0646afcbe3d25c963e424ce921880f8180d838907c0581d551f7e"
+    },
+    {
+      "number": "031",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:3cffaec5adbf52dba691791cdfcb001b66defb6407b93c88721d70087ef92109",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "eeg-erp-recovery",
+          "task_content_hash": "ca7e820619788fc4f7fa527ef2c232a56d8fead4defc3a11f49f459ee5ec89d1",
+          "image": "ghcr.io/codex-radar/dradar-env-science-eeg-erp-recovery@sha256:3cffaec5adbf52dba691791cdfcb001b66defb6407b93c88721d70087ef92109",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "3cee7fdda6083ffa50610be059a7c459b51ef9ba680af7fd593e711728e3e110"
+    },
+    {
+      "number": "032",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:00ee4980912068585dd634bed9fd8869a2be3791aa67fd5aa3c793fb34cd13f3",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "ode-law-discovery",
+          "task_content_hash": "88f2e63af47b65508dbfb3c35e955bb9d8f71695ab0a69491f2c6e7a0576974b",
+          "image": "ghcr.io/codex-radar/dradar-env-science-ode-law-discovery@sha256:00ee4980912068585dd634bed9fd8869a2be3791aa67fd5aa3c793fb34cd13f3",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "d7658eb3cf37f89fe24a3d3ff84be5ed879363d875ec5d0c702aaa6e129beb51"
+    },
+    {
+      "number": "033",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:f475cad061554556b737cec1d5421580fb4b57fbeb1cd268c6137267d4971689",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "koopman-mfg-id",
+          "task_content_hash": "c642a0e4f777833635b7ee4fa71c87efbb152bb41be1415e80435555cc4a0efb",
+          "image": "ghcr.io/codex-radar/dradar-env-science-koopman-mfg-id@sha256:f475cad061554556b737cec1d5421580fb4b57fbeb1cd268c6137267d4971689",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "824beadf1869632162b85aed2f1fef391b5ad90495c652281580f44ae6dbe072"
+    },
+    {
+      "number": "034",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:95d657e13e48be4eef8028a4139b3552cb86d6d9e2dd0caabf7ae278190ffec0",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "duan-thesis",
+          "task_content_hash": "27f527cc66ea0d307f7d6821a9ba70f57055cb3d2a5f245a4b0f0f1d68eec46b",
+          "image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:95d657e13e48be4eef8028a4139b3552cb86d6d9e2dd0caabf7ae278190ffec0",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/root",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/root",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": true,
+      "git_required": false,
+      "audit_sha256": "ed801d1dff91b1ca950827715d268b6abbd44cad438fcf62470f7a4b6c637765"
+    },
+    {
+      "number": "035",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:c59382e04bad7249e422ccc292801d13dfbf3e48a384238f2fd095c3d209dc19",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "neo-orbit-determination",
+          "task_content_hash": "0c956f98adf799e93baf87ae15afaac605c33804a26e487674691142e5703c3e",
+          "image": "ghcr.io/codex-radar/dradar-env-science-neo-orbit-determination@sha256:c59382e04bad7249e422ccc292801d13dfbf3e48a384238f2fd095c3d209dc19",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "f8ada13d8f36eb9e4cb4d87f7c983668e9dc0c4c23fbd0c6b2253726ed34b641"
+    },
+    {
+      "number": "036",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:5b89bce9c705a233a4bc9b569a9f29a8b99402d1025e7b5ee611cb3cb7988874",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "mendota-ice-phenology",
+          "task_content_hash": "618fb0102aece6fc1d4f6b2bf8bceced62ac10cdd3df981345bdd40e77e79890",
+          "image": "ghcr.io/codex-radar/dradar-env-science-mendota-ice-phenology@sha256:5b89bce9c705a233a4bc9b569a9f29a8b99402d1025e7b5ee611cb3cb7988874",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "9f8448348a4b81264a20f88e723c58eadf606a66ab8c27e7ce82e7d8c156fa98"
+    },
+    {
+      "number": "037",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:a162b1e200989fd34a7544f6e1a3e51754eb6f6e5382bbcae7800c11ce5fef8f",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "cilia-segmentation",
+          "task_content_hash": "a8a0ca207250c1ad47acb0fda831ae4535fbae7a292de65590d2097304b6a1cd",
+          "image": "ghcr.io/codex-radar/dradar-env-science-cilia-segmentation@sha256:a162b1e200989fd34a7544f6e1a3e51754eb6f6e5382bbcae7800c11ce5fef8f",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/root",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/root",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "a3bf58d9a905ee60eb598cbbdb7aeb809438c5d48c7d7ee6a85ba5299e0da46e"
+    },
+    {
+      "number": "038",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:c00438486dafc86dde500df6314898488de977b01e36e9e91f90df1826789938",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "ont-tn-qc",
+          "task_content_hash": "84302f6c50e4fbd9c093c43cb15aa6a138e0a4634b82e6ca423fa3ab84af89b6",
+          "image": "ghcr.io/codex-radar/dradar-env-science-ont-tn-qc@sha256:c00438486dafc86dde500df6314898488de977b01e36e9e91f90df1826789938",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "ef1c78bab9f4e799a105c0b57cd45b3a316ce70540761084dee1db2ac46d3eef"
+    },
+    {
+      "number": "039",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:096809f7a910c09fb22f548a8354e43bdf4da7b9d9b1016b7dfa522690260453",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "xrd-multiphase-qpa",
+          "task_content_hash": "04df66e5b67612c1cd0d3cb9f80ec021eb9bacbe1e5e58ba78d51eda3077079b",
+          "image": "ghcr.io/codex-radar/dradar-env-science-xrd-multiphase-qpa@sha256:096809f7a910c09fb22f548a8354e43bdf4da7b9d9b1016b7dfa522690260453",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/workspace",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/workspace",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "079101685f82da42dbbb58633c44da83a6b5112330ab645e062e59ba2657b3c1"
+    },
+    {
+      "number": "040",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:a730a77e8bb76eb4a304bcb1738bbddf062f27c5c98aaee0803376ec01633a8c",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "linked-cell-suppression",
+          "task_content_hash": "418b79b8c2a248cd698489a153909bc920f258c252e4a9842795d05c0916fb95",
+          "image": "ghcr.io/codex-radar/dradar-env-science-linked-cell-suppression@sha256:a730a77e8bb76eb4a304bcb1738bbddf062f27c5c98aaee0803376ec01633a8c",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "dd20fdde1c981782cff070efa7bce2b8221c94b88c1035712fdc778675a89873"
+    },
+    {
+      "number": "041",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:cb62b0fc6bed7f1faccf70dfe0a3cec2e172256acde65f5f072c449764ac0705",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "genomic-model-ranking",
+          "task_content_hash": "95e905029879f8bcde32f2f6caf86737cd0b5ca8adefc9fdad2d3a2b58072dc2",
+          "image": "ghcr.io/codex-radar/dradar-env-science-genomic-model-ranking@sha256:cb62b0fc6bed7f1faccf70dfe0a3cec2e172256acde65f5f072c449764ac0705",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "1748a393bc1276ece6cd32bf17202e18bdc4dcf5c80c89bc7fa62f7c45228c59"
+    },
+    {
+      "number": "042",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:9d8b4418a627e6341bf7f369b3a7752cb2ab76f47ee7c0eb33954c734a881e71",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "small-area-equivalence",
+          "task_content_hash": "654eb73a9ef378aef6552dcc1f014cde41514972628ede1eaaa9f912d81c4c6b",
+          "image": "ghcr.io/codex-radar/dradar-env-science-small-area-equivalence@sha256:9d8b4418a627e6341bf7f369b3a7752cb2ab76f47ee7c0eb33954c734a881e71",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "c562b61aee3bcebdb49dfabbf2b083ef1aca8535118e2f0fa5e54eeb319deb36"
+    },
+    {
+      "number": "043",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:bc8a030fb342148e92afd64c30246c194697562b577a767ceabb36427a5ef0e8",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "diag-chipseq",
+          "task_content_hash": "ca1a9951c08c0735581d1dd0ce3031c8617a5dc4fbb16ff7b719c1f7b4d99f10",
+          "image": "ghcr.io/codex-radar/dradar-env-science-diag-chipseq@sha256:bc8a030fb342148e92afd64c30246c194697562b577a767ceabb36427a5ef0e8",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "111a4ef502282b5ad9f909e4aa05175904d9cdb1df7bd7d2faf8d636f5a72bdf"
+    },
+    {
+      "number": "044",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:15930b38664334e8ce9471684423e43981211c464572ecdbcca9b00665d78264",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "spatial-cell-annotation",
+          "task_content_hash": "5149d85d7c5e9b2fbad334f949fdeb767018766a1f80736f51c725a0e3beba55",
+          "image": "ghcr.io/codex-radar/dradar-env-science-spatial-cell-annotation@sha256:15930b38664334e8ce9471684423e43981211c464572ecdbcca9b00665d78264",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/root",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/root",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "c1912f70dd0c089bbbec0ae69d566ac8c33ba8852d89004208d28c4d77c8919b"
+    },
+    {
+      "number": "045",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:9768158ab4af781011f3e8acee62f363aa88c29018191e243617a9ab85dc44c9",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "ankle-mri-findings",
+          "task_content_hash": "14c850f664a11f9e794dfb8eb0c8b7789e5282a80528c88ed6b59f8dcb681a29",
+          "image": "ghcr.io/codex-radar/dradar-env-science-ankle-mri-findings@sha256:9768158ab4af781011f3e8acee62f363aa88c29018191e243617a9ab85dc44c9",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "d5b2340272f6377ec7c91148a03b420fcf043ba9e0bf94831479bf2a5f6d9e16"
+    },
+    {
+      "number": "046",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:f03b8cd4ed03eac9495f7d7b8c6cee2e49c3cae288fbf1451d424d4205492e06",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "nanoindentation-property-extraction",
+          "task_content_hash": "e9d35e72c1b87190adbbfc4ddc8886ba0c31bd200426d94fe262e3c032cc87d5",
+          "image": "ghcr.io/codex-radar/dradar-env-science-nanoindentation-property-extraction@sha256:f03b8cd4ed03eac9495f7d7b8c6cee2e49c3cae288fbf1451d424d4205492e06",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/workspace",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/workspace",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "f7a1b20f436de4d3a4145f8f3de99b3025aa6431e5d9f04264952eafa8030c4b"
+    },
+    {
+      "number": "047",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:a78d067a54d447128c3c73610e335f13e40b7260c7d3dbacebc084708225ef82",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "tumor-immune-interface",
+          "task_content_hash": "1dfb5717f204c4f36aad4e4596ec6cce5f524e720e4b7d1e5c9ff0160e9ef3c0",
+          "image": "ghcr.io/codex-radar/dradar-env-science-tumor-immune-interface@sha256:a78d067a54d447128c3c73610e335f13e40b7260c7d3dbacebc084708225ef82",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/root",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/root",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "7373f949adad3dfba85d89a25dbdfe4f8f702b46e25a643964bd56941495e715"
+    },
+    {
+      "number": "048",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:10d3401017874df7ff0d4aad6c2aaca9d9b4cecb8a9c7dd325e9fbdc45658d32",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "supraglacial-lake-classification",
+          "task_content_hash": "49df97d46c8115b6cd96f12c48939b02f2a0928214f32a2497057587bedabf16",
+          "image": "ghcr.io/codex-radar/dradar-env-science-supraglacial-lake-classification@sha256:10d3401017874df7ff0d4aad6c2aaca9d9b4cecb8a9c7dd325e9fbdc45658d32",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/root",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/root",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "70cad9b330ca2173a649f4469e321177bc21fb5bba4a5d62abd0478b528efc0c"
+    },
+    {
+      "number": "049",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:e8807297eaee5b8f5795c5410a13e1ad6168aeb78ac702379e4b0e04f466a803",
+      "tasks": [
+        {
+          "library": "science",
+          "task_id": "guided-wave-localization",
+          "task_content_hash": "d312aaad621cdfb65b1eac094cb098dcce6f6582f9e06a855c94e6e89a2284bf",
+          "image": "ghcr.io/codex-radar/dradar-env-science-guided-wave-localization@sha256:e8807297eaee5b8f5795c5410a13e1ad6168aeb78ac702379e4b0e04f466a803",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": true,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "530704b0f2097a51a05e34952f2491a3f4221b193d8b93d65469f64de27ca287"
+    }
+  ],
+  "unchanged_rows": [
+    {
+      "number": "001",
+      "source_image": "ghcr.io/codex-radar/dradar-env-igel-persist-feature-schema@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "igel-persist-feature-schema",
+          "task_content_hash": "74eb5d622e1af229331c3d5664baeb793faff9eebc7992c8727103f120b72f20",
+          "image": "ghcr.io/codex-radar/dradar-env-igel-persist-feature-schema@sha256:434ed4187abdb6948dec6434ab4a354d11a19955ebcc706a605ebc6e2470c140",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "3bafc6fe70c8582e2ea1531b874d54835387494455d8f4221e8527aac117e718"
+    },
+    {
+      "number": "002",
+      "source_image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "kombu-virtual-queue-dead-lettering",
+          "task_content_hash": "537d0b215f10e989b9852baee73decc031b49e1db295634f78b01731548230ad",
+          "image": "ghcr.io/codex-radar/dradar-env-kombu-virtual-queue-dead-lettering@sha256:5eb0511f22a9a89db4bdf19383d3a9e6c18793c17e28cbb1c4244756ff7bb483",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "66387c5c2952ef017ee608189c4db07b7bfac4e3dfdca724de04304d8b5cfc7c"
+    },
+    {
+      "number": "003",
+      "source_image": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "bandit-interprocedural-taint-checks",
+          "task_content_hash": "b4e8e9392feb48bbffab8dccc9c7dbb1ee085deefac350fc52ac1765a2b3347f",
+          "image": "ghcr.io/codex-radar/dradar-env-bandit-interprocedural-taint-checks@sha256:7207179b09db76a8a3864b9e69c5fdf10e0d41a5bba242854216f18aa90ac7b1",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "45481451f594f70db8e9c4a609150f4460a8fccc6eed7e82d53a4d519352003a"
+    },
+    {
+      "number": "004",
+      "source_image": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "claude-code-by-agents-recursive-delegation",
+          "task_content_hash": "3e53cab7147406640ec161513862b8d02c3701ee794581855243e84a1393947a",
+          "image": "ghcr.io/codex-radar/dradar-env-claude-code-by-agents-recursive-delegation@sha256:4baf10f1e66f9ab4d82991e538c13620c387c862974ec36dd5bd5d52f635920e",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "c73f8c4217bd51cf0cf2600c9925f3cee9d7b107ee2bf831e24519e59315f41b"
+    },
+    {
+      "number": "005",
+      "source_image": "ghcr.io/codex-radar/dradar-env-ts-pattern-match-each@sha256:4c4584bdfdbd898b90f3c1c011236056bc9ed82319680cca865fd9f2ca1a5126",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "ts-pattern-match-each",
+          "task_content_hash": "aab444013661fbc73f4b7e972d33d19fae42747d4498b791a624acc10523fe98",
+          "image": "ghcr.io/codex-radar/dradar-env-ts-pattern-match-each@sha256:4c4584bdfdbd898b90f3c1c011236056bc9ed82319680cca865fd9f2ca1a5126",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "93d16eb38787c7340c22a1e171a97b5aa8df3ef99a1756fd077023c3bb3a9cc0"
+    },
+    {
+      "number": "006",
+      "source_image": "ghcr.io/codex-radar/dradar-env-csstree-shorthand-expansion-compression@sha256:df2cc59d679c908f8f13f68fc59231a5d6f0c2bcec4b7b26fdf9489eb824a8b2",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "csstree-shorthand-expansion-compression",
+          "task_content_hash": "dbd9c9f731d1df65768330a4662dc78dde669d8cd025612ce64339488f724a24",
+          "image": "ghcr.io/codex-radar/dradar-env-csstree-shorthand-expansion-compression@sha256:df2cc59d679c908f8f13f68fc59231a5d6f0c2bcec4b7b26fdf9489eb824a8b2",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "f2720e3fe5fad185b9584f60f3b8e9eb6bd0b8b3ba49e58837389150fd021033"
+    },
+    {
+      "number": "007",
+      "source_image": "ghcr.io/codex-radar/dradar-env-aiomonitor-task-snapshots-diff@sha256:e0c8b4e4044d5831693b4f6a6da483b255a889b71376574fba9e3c93d36ceb7c",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "aiomonitor-task-snapshots-diff",
+          "task_content_hash": "de53c49bb4ff8baa02d5db9310893413792e923b69643eb5fd254cf53ff7307a",
+          "image": "ghcr.io/codex-radar/dradar-env-aiomonitor-task-snapshots-diff@sha256:e0c8b4e4044d5831693b4f6a6da483b255a889b71376574fba9e3c93d36ceb7c",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "a5d891e4dc7c17cf9e070065763a8a88686cd5b64c25bf7d2490cad22e87fe84"
+    },
+    {
+      "number": "008",
+      "source_image": "ghcr.io/codex-radar/dradar-env-anko-typed-variable-bindings@sha256:4fb704fd8dff600f6d028c20ae4aca5e1261968bb615bb41c01a111dd371255b",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "anko-typed-variable-bindings",
+          "task_content_hash": "def19fffd57190b635c2ee19c2233dfd7434e9b8751a6140bd0a9fa60ec1bd87",
+          "image": "ghcr.io/codex-radar/dradar-env-anko-typed-variable-bindings@sha256:4fb704fd8dff600f6d028c20ae4aca5e1261968bb615bb41c01a111dd371255b",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "61493f4138560040525aa342cd660727c8b0bed2bf8bc59133f58a47c5fe056b"
+    },
+    {
+      "number": "009",
+      "source_image": "ghcr.io/codex-radar/dradar-env-mobly-grouped-test-barriers@sha256:e7f48723e4bf9244cbe5206fdcb204456383c31f43c5a16da98efadda057998f",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "mobly-grouped-test-barriers",
+          "task_content_hash": "5c2681190e9c1316bead539be3b27585fe3e3c34ea3f77005b5da159c5a4ab81",
+          "image": "ghcr.io/codex-radar/dradar-env-mobly-grouped-test-barriers@sha256:e7f48723e4bf9244cbe5206fdcb204456383c31f43c5a16da98efadda057998f",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "d64ef5a54dfc8ecabacf11c29ddbd77f4e59fa3ac51b681e422bc07cb6246431"
+    },
+    {
+      "number": "010",
+      "source_image": "ghcr.io/codex-radar/dradar-env-superjson-error-stack-serialization@sha256:ada56382a90fbe2dd01bde0f685a1bbd0ceac556f7b802199e60dbbca6e76387",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "superjson-error-stack-serialization",
+          "task_content_hash": "41d12ea88d2962c8bd38471e6e937151280404dceec5f435e94b171603fcec64",
+          "image": "ghcr.io/codex-radar/dradar-env-superjson-error-stack-serialization@sha256:ada56382a90fbe2dd01bde0f685a1bbd0ceac556f7b802199e60dbbca6e76387",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "ed242d6eb61c12da3337308713fdd8df7873d88c60dddfbdc64307ea6d6bb7e3"
+    },
+    {
+      "number": "011",
+      "source_image": "ghcr.io/codex-radar/dradar-env-dateutil-rfc5545-timezone-interop@sha256:ac1167c4badd5db3e8058572e4ae9f09c391a7a6c6801b46ce7f7b12d8c6b77f",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "dateutil-rfc5545-timezone-interop",
+          "task_content_hash": "43db08e1e5bda8fe61842e8b02001a2e21515a0e132305fc7809cd1077da7c2d",
+          "image": "ghcr.io/codex-radar/dradar-env-dateutil-rfc5545-timezone-interop@sha256:ac1167c4badd5db3e8058572e4ae9f09c391a7a6c6801b46ce7f7b12d8c6b77f",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "a153302c2b089be0e9aff840ebc05292e0e7f8ef77bd4ecb3f7c5d9406127307"
+    },
+    {
+      "number": "012",
+      "source_image": "ghcr.io/codex-radar/dradar-env-abs-module-cache-flags@sha256:3a4d47f5281269305343c83729836ac2f3172811aee72681e472a4196178eda1",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "abs-module-cache-flags",
+          "task_content_hash": "824aa73cb818925ac845732e712f34c35144833a6197435572d0f29395457a9a",
+          "image": "ghcr.io/codex-radar/dradar-env-abs-module-cache-flags@sha256:3a4d47f5281269305343c83729836ac2f3172811aee72681e472a4196178eda1",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "d8387932c389e149cf2b968a29011457ea3a4b25486dbe222771ff0c4c06b044"
+    },
+    {
+      "number": "013",
+      "source_image": "ghcr.io/codex-radar/dradar-env-updo-policy-alerting@sha256:91b20a45b0445cf1bb97a96b9749c2caad0c4747de538c6df700c48e1a88cf54",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "updo-policy-alerting",
+          "task_content_hash": "5cd97eab5a7f851fadae55608379cd34943dee8cfe3fea15c48c98ba5968c0de",
+          "image": "ghcr.io/codex-radar/dradar-env-updo-policy-alerting@sha256:91b20a45b0445cf1bb97a96b9749c2caad0c4747de538c6df700c48e1a88cf54",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "7fdc1e5c759a85312c98d53f81d98e7285317688028f0af39456aaf55021afd7"
+    },
+    {
+      "number": "014",
+      "source_image": "ghcr.io/codex-radar/dradar-env-httpx-streaming-json-iteration@sha256:47d0af14d988caa7d22b14312be2c3ee4e9ac799a5679bd83d19f298d346749d",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "httpx-streaming-json-iteration",
+          "task_content_hash": "0c33857574b2a345950c140642eeefd406c02983884f931c655c88fd40a437b2",
+          "image": "ghcr.io/codex-radar/dradar-env-httpx-streaming-json-iteration@sha256:47d0af14d988caa7d22b14312be2c3ee4e9ac799a5679bd83d19f298d346749d",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "7827edeb17c323c187da1c9564bda6ad44dbec2fa92ae226ef3ad1363dc1ed57"
+    },
+    {
+      "number": "015",
+      "source_image": "ghcr.io/codex-radar/dradar-env-cliffy-config-file-parsing@sha256:0a8dd8f1270ec4bb88efadad3021762e1d07274f686276c8a484d26a00bd91b5",
+      "tasks": [
+        {
+          "library": "deepswe",
+          "task_id": "cliffy-config-file-parsing",
+          "task_content_hash": "481c17c44e6eac22d2c0749a3b6979e8dce25adf32f2cbf503ae63290551d4d0",
+          "image": "ghcr.io/codex-radar/dradar-env-cliffy-config-file-parsing@sha256:0a8dd8f1270ec4bb88efadad3021762e1d07274f686276c8a484d26a00bd91b5",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root"
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "dc25366980c91842ab1baaf61a0daca4ee032363bf367d83583cfb9c2865aa37"
+    },
+    {
+      "number": "016",
+      "source_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "tasks": [
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-002",
+          "task_content_hash": "55d00b1d5abc195ebf61a9e47d99ccadf9d06004c8ad6371ee1a9279f9c8bd4a",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-005",
+          "task_content_hash": "f90e6506a9b087b982d3b5b8e9061fb0fca28711449fda44f87c2acc77a0fff9",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-013",
+          "task_content_hash": "c52802d442d3005812b1134ac3d842734758f08bf8ff939da98f63f8b0f5be68",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-014",
+          "task_content_hash": "0159f74b1bd807f935a5d9e68855d4e8f902c436d5ae4261f6e2c7d166e1a418",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-016",
+          "task_content_hash": "0abaa6c5782c0980dcd314e709677c38fb7abd40f15f806068cd2b449eadb1a7",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-019",
+          "task_content_hash": "067911d4256783e1ccbd7ab589249a5fb749d5e6f6cb12771bc0251b7d76405a",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-025",
+          "task_content_hash": "28b6444e1a849793e41a9f7e4d93b054692ec5183d6b875df8fd76ca41276915",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-029",
+          "task_content_hash": "5ccf0250b2a40f73e08aad334a63a4c2378b62d4bd755945b058c7088db06b22",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-040",
+          "task_content_hash": "1d29537843b927f48e5a62ce2d5f3162c237eacb90aa5d213ef7741c973f52cc",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-042",
+          "task_content_hash": "02751a3106c43fd68651dbedc3835b2a845bfa6b9c33a1b45b7e1175e67b308c",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-044",
+          "task_content_hash": "27cebe2f5f7dcc0d663ffe58e5e457db4d3829914fb54a85670c659f9836eabe",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-060",
+          "task_content_hash": "bba5d9a008c37bd6916e57de969e1bfafa059229dc275929b06b8463655a8f51",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-069",
+          "task_content_hash": "7978af2d44b997ad1cbbf832a151b3f95e1830d98c8658e50e526dbf51b977f9",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-071",
+          "task_content_hash": "314ce1b839ce6e2a30a0ee840673b3fecca39f7665ddf87a2e2f744721f8c2bb",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-083",
+          "task_content_hash": "350a26e6aa12d71aed8d1c2d1b517fa8aee910cd87374412b55270afcb98ec8f",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        },
+        {
+          "library": "pompeii",
+          "task_id": "pompeii-adjacency-rp-086",
+          "task_content_hash": "68e7076930eacd8d82e9707b17a4032f1e05f9887743b0fa19a87bb30b2e6cab",
+          "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": true,
+      "audit_sha256": "04fea3d5969763ffb609900a9613b0abe54054c2ea6e705f13531c2181b5e801"
+    },
+    {
+      "number": "017",
+      "source_image": "ghcr.io/codex-radar/dradar-env-freecad-spring-clip@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
+      "tasks": [
+        {
+          "library": "tb4",
+          "task_id": "freecad-spring-clip",
+          "task_content_hash": "41650c4476f352c75e11f17a759902c8ffeb86a1469312b3e340b763db84ff2f",
+          "image": "ghcr.io/codex-radar/dradar-env-freecad-spring-clip@sha256:a0106585542716d3114bffe1dc0e492536ab032d3f2be45f0c4789ad8bae78f7",
+          "runtime": {
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/app",
+            "home": "/root",
+            "home_observed": true
+          }
+        }
+      ],
+      "runtime": {
+        "uid": 0,
+        "gid": 0,
+        "cwd": "/app",
+        "home": "/root"
+      },
+      "original_user": "root",
+      "install_node": false,
+      "install_python_or_ca": false,
+      "git_required": false,
+      "audit_sha256": "2931700761f6931d228a00d8cb8f54f5642a1213b48f3cd3b49612965aed0f5f"
+    }
+  ]
+}
