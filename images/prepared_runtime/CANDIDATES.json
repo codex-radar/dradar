@@ -1,0 +1,24 @@
+{
+  "schema": "dradar.prepared-runtime-published-map/1",
+  "complete": false,
+  "images": {
+    "029": {
+      "image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:f8bc6dc8140dd1f6c570979f7e85557191440022b813194b073e5dede6f25908",
+      "build_source_commit": "bb80030562dc8ab0226f206caf93941444c86a23",
+      "receipt_sha256": "b00433dde850045d941c412d7e6a390c328fedb3be592cbb2c649c12c2ce4102",
+      "source_image": "ghcr.io/codex-radar/dradar-env-react-lead-form@sha256:df7f7d6faa482b2988767cfaa82a101ffbd7602ae33ee7a2ce505d46bb5362e0"
+    },
+    "026": {
+      "image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:6949831e0f9c7e1ab0d176e438edb0eaf885c2516049faec9c5864837e21699e",
+      "build_source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+      "receipt_sha256": "02315833b5b01a4bdcfceb945a652bd0dd2f8ba824cc6ab58b34c5f5c7489bc2",
+      "source_image": "ghcr.io/codex-radar/dradar-env-risk-scorer-replay@sha256:70ddcc08fd13a993f6bf38198ec63033f93a88d00ebf7d5aeee0e121a006bcf9"
+    },
+    "034": {
+      "image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:aeec28462978f363394fb61913538aa564072166e17d90d0c6d97e3ef0bd44d3",
+      "build_source_commit": "86006f8649fb6d09eaf681afa2db9734525b4574",
+      "receipt_sha256": "77ce2c9be1b37cc31322b64ae15007bbb53db896ac30f528bb333622d2372ac8",
+      "source_image": "ghcr.io/codex-radar/dradar-env-science-duan-thesis@sha256:95d657e13e48be4eef8028a4139b3552cb86d6d9e2dd0caabf7ae278190ffec0"
+    }
+  }
+}

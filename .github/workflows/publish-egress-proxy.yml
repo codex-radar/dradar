@@ -62,5 +62,14 @@ jobs:
         if: always()
         with:
           name: prepared-${{ inputs.phase }}-${{ matrix.number }}
-          path: ${{ runner.temp }}/dependency-receipt/
+          path: |
+            ${{ runner.temp }}/dependency-receipt/*.json
+            ${{ runner.temp }}/dependency-receipt/*.stdout
+            ${{ runner.temp }}/dependency-receipt/*.stderr
+            ${{ runner.temp }}/dependency-receipt/Dockerfile
+            ${{ runner.temp }}/dependency-receipt/outer/*.json
+            ${{ runner.temp }}/dependency-receipt/outer/*.stdout
+            ${{ runner.temp }}/dependency-receipt/outer/*.stderr
+            ${{ runner.temp }}/dependency-receipt/outer/evidence/ca-preflight/CA_PREFLIGHT.json
+            ${{ runner.temp }}/dependency-receipt/outer/evidence/codex/package-lock.json
           if-no-files-found: error

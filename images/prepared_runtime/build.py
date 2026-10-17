@@ -121,6 +121,9 @@ def main():
                 '--tag',tag,str(out)],output=out/'BUILD',timeout=2400)
             candidate=tag
         else:
+            if not args.candidate:
+                mapping=json.loads((root/'CANDIDATES.json').read_bytes())
+                args.candidate=mapping['images'][row['number']]['image']
             assert args.candidate.startswith(row['source_image'].split('@')[0]+'@sha256:')
             assert re.fullmatch(r'ghcr\.io/codex-radar/[a-z0-9-]+@sha256:[0-9a-f]{64}',args.candidate)
             candidate=args.candidate
@@ -170,6 +173,10 @@ def main():
             probe=probe,image_id=config['Id'],repo_digests=config.get('RepoDigests',[]),
             manifest=json.loads(manifest),dockerfile_sha256=hashlib.sha256(dockerfile(row).encode()).hexdigest(),
             finished_at=time.time())
+        if args.phase=='accept':
+            from outer_accept import perform
+            record['outer_preparation']=perform(row,candidate,out/'outer')
+            record['status']='PUBLIC_PREPARATION_BOUNDARY_VERIFIED_NO_MODEL'
         write(out/'RECEIPT.json',record)
     except BaseException as exc:
         record.update(status='FAILED_FIRST_ERROR_PRESERVED',error=repr(exc),finished_at=time.time())
