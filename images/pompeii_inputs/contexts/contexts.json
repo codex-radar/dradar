@@ -1,0 +1,1177 @@
+{
+  "schema": "dradar.pompeii-image-contexts/1",
+  "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+  "task_count": 16,
+  "rows": [
+    {
+      "task_id": "pompeii-adjacency-rp-002",
+      "task_content_hash": "55d00b1d5abc195ebf61a9e47d99ccadf9d06004c8ad6371ee1a9279f9c8bd4a",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 880,
+          "sha256": "51fab7831dbfefe3be8eeed1a5384c41858baf71486b03887b4134e0fbafff2e"
+        },
+        {
+          "path": "question.png",
+          "bytes": 218796,
+          "sha256": "81c8941799eae8a0dcb1d4cbb9b8dedd5e776ce3bc4f9ef75af9a3114124b4e7"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-005",
+      "task_content_hash": "f90e6506a9b087b982d3b5b8e9061fb0fca28711449fda44f87c2acc77a0fff9",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 1032,
+          "sha256": "16b99ae16520ef43ec8f37ac9eb01246cffa5d15874a9bcf809fbb92f95cb027"
+        },
+        {
+          "path": "question.png",
+          "bytes": 279920,
+          "sha256": "b128d8621c7fd005e3c5ad07b343ee93c86b0057bf610cc3eeee3b2a252b1070"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-013",
+      "task_content_hash": "c52802d442d3005812b1134ac3d842734758f08bf8ff939da98f63f8b0f5be68",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 842,
+          "sha256": "547af33a23a8007f3e8120eb21bc38f6525098da1ae43586401723d30ccc8af5"
+        },
+        {
+          "path": "question.png",
+          "bytes": 232149,
+          "sha256": "e9cac6fa7cb557df500d1089a9ed675a4085f9a939cf9a7abd8f3d159e80c3ee"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-014",
+      "task_content_hash": "0159f74b1bd807f935a5d9e68855d4e8f902c436d5ae4261f6e2c7d166e1a418",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 727,
+          "sha256": "400632f6452826fb176ac9fb143ce7a529056d67b92a43fda4cca0e01cfe3c3f"
+        },
+        {
+          "path": "question.png",
+          "bytes": 151269,
+          "sha256": "fbe98a276071cb5ff82b67d33b054c83e0f399efa89fd41e6f93694ce789a2d3"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-016",
+      "task_content_hash": "0abaa6c5782c0980dcd314e709677c38fb7abd40f15f806068cd2b449eadb1a7",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 765,
+          "sha256": "d000aae402927280540b603158d3f54c95604f5135ce540cdd6a75a397eefae4"
+        },
+        {
+          "path": "question.png",
+          "bytes": 166405,
+          "sha256": "44dee985926f0cc17fc77ad01b00b67561258585c1e89b7adc30df247bbc4048"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-019",
+      "task_content_hash": "067911d4256783e1ccbd7ab589249a5fb749d5e6f6cb12771bc0251b7d76405a",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 880,
+          "sha256": "51fab7831dbfefe3be8eeed1a5384c41858baf71486b03887b4134e0fbafff2e"
+        },
+        {
+          "path": "question.png",
+          "bytes": 219884,
+          "sha256": "9a507d30967a1628c0fc496865d035a166303e6a493d09b75d6ccc7c13562d5d"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-025",
+      "task_content_hash": "28b6444e1a849793e41a9f7e4d93b054692ec5183d6b875df8fd76ca41276915",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 918,
+          "sha256": "b7c93ecac05e236d067c105b234072b944f86cbb5b92913c22a982c57f18424c"
+        },
+        {
+          "path": "question.png",
+          "bytes": 381114,
+          "sha256": "8daa5a7f28d2e589a6d041de717b57bdc18762ebd165c52523d004afa508410c"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-029",
+      "task_content_hash": "5ccf0250b2a40f73e08aad334a63a4c2378b62d4bd755945b058c7088db06b22",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 804,
+          "sha256": "fbbc7d4359fe4338931e97a8c4ce6513738be3c2add56dd262b5766685cbf5f8"
+        },
+        {
+          "path": "question.png",
+          "bytes": 154393,
+          "sha256": "1228f966b5938bb30e04e9fe37fc6d3ad59217be83b41e24992beafd00309d0b"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-040",
+      "task_content_hash": "1d29537843b927f48e5a62ce2d5f3162c237eacb90aa5d213ef7741c973f52cc",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 956,
+          "sha256": "bf98b38a6c87d9ab6aaa67bcf69d9f9666477832dd4b3e3829c3f28fc3addf5c"
+        },
+        {
+          "path": "question.png",
+          "bytes": 279909,
+          "sha256": "7d5e430b74c371bf1e8c221c6e8080a0e7b486d0567ff012486e27ecf83e3c44"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-042",
+      "task_content_hash": "02751a3106c43fd68651dbedc3835b2a845bfa6b9c33a1b45b7e1175e67b308c",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 918,
+          "sha256": "b7c93ecac05e236d067c105b234072b944f86cbb5b92913c22a982c57f18424c"
+        },
+        {
+          "path": "question.png",
+          "bytes": 135695,
+          "sha256": "453262d2a5231506a0cd7910be3e20066d6d67641b057efd2007d42360cdb1e4"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-044",
+      "task_content_hash": "27cebe2f5f7dcc0d663ffe58e5e457db4d3829914fb54a85670c659f9836eabe",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 842,
+          "sha256": "547af33a23a8007f3e8120eb21bc38f6525098da1ae43586401723d30ccc8af5"
+        },
+        {
+          "path": "question.png",
+          "bytes": 213175,
+          "sha256": "ed1719274e07ca2cff2274835f9f9a3612df08d3a124195067cc61d3b74bbfb6"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-060",
+      "task_content_hash": "bba5d9a008c37bd6916e57de969e1bfafa059229dc275929b06b8463655a8f51",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 842,
+          "sha256": "547af33a23a8007f3e8120eb21bc38f6525098da1ae43586401723d30ccc8af5"
+        },
+        {
+          "path": "question.png",
+          "bytes": 166625,
+          "sha256": "e277d83edbe497acb13c581be6b26618ab331542c3397b4ca72cea3fc39d6777"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-069",
+      "task_content_hash": "7978af2d44b997ad1cbbf832a151b3f95e1830d98c8658e50e526dbf51b977f9",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 956,
+          "sha256": "bf98b38a6c87d9ab6aaa67bcf69d9f9666477832dd4b3e3829c3f28fc3addf5c"
+        },
+        {
+          "path": "question.png",
+          "bytes": 249477,
+          "sha256": "4545c0161b75db8a5c69d8b35b8c92877778b7b9ee0eba94f27a33765def808a"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-071",
+      "task_content_hash": "314ce1b839ce6e2a30a0ee840673b3fecca39f7665ddf87a2e2f744721f8c2bb",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 804,
+          "sha256": "fbbc7d4359fe4338931e97a8c4ce6513738be3c2add56dd262b5766685cbf5f8"
+        },
+        {
+          "path": "question.png",
+          "bytes": 210308,
+          "sha256": "d848b25e4a34ef95bb1a148c4d9979520211c7f8b846d09f8f03e7d7b8332138"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-083",
+      "task_content_hash": "350a26e6aa12d71aed8d1c2d1b517fa8aee910cd87374412b55270afcb98ec8f",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 765,
+          "sha256": "d000aae402927280540b603158d3f54c95604f5135ce540cdd6a75a397eefae4"
+        },
+        {
+          "path": "question.png",
+          "bytes": 120484,
+          "sha256": "7b4f8e70855ef2996c5832a2fee3d7bf41f308fa3248e218f993aa32cbe53152"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    },
+    {
+      "task_id": "pompeii-adjacency-rp-086",
+      "task_content_hash": "68e7076930eacd8d82e9707b17a4032f1e05f9887743b0fa19a87bb30b2e6cab",
+      "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+      "base_image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 755,
+          "sha256": "ff710ebbc07d557a73b148155e73675327d8e89650b94f2d96091ca38e4b298e"
+        },
+        {
+          "path": "model_answer.json",
+          "bytes": 14,
+          "sha256": "c88127a5952a663dc94738a573f5ad6b0499171bc52f0f496518ff25fcd86825"
+        },
+        {
+          "path": "output_schema.json",
+          "bytes": 727,
+          "sha256": "400632f6452826fb176ac9fb143ce7a529056d67b92a43fda4cca0e01cfe3c3f"
+        },
+        {
+          "path": "question.png",
+          "bytes": 166579,
+          "sha256": "56752685d9fd91cc51e57c627749acb1596da620a331a915779e35dfed1f9610"
+        },
+        {
+          "path": "reference/README.md",
+          "bytes": 204,
+          "sha256": "80122959f377a414c292364ba91b18a5e63a22867141d83267bd80d9b490359a"
+        },
+        {
+          "path": "reference/output_schema.json",
+          "bytes": 994,
+          "sha256": "65e6da6afe47077fae05294d4576b509bfd810ea03646729870fe41146e6a59b"
+        },
+        {
+          "path": "reference/reference_answer.json",
+          "bytes": 724,
+          "sha256": "23f9c5f4ce2a4a3a11c9a02b8d08e9ac661ec18f25d2637ea04066cc6ab3a836"
+        },
+        {
+          "path": "reference/reference_answer_graph.png",
+          "bytes": 64514,
+          "sha256": "b250e123f7c8fa103df92c190570afd16ba758ee83c8cd95f56468d5a808ef78"
+        },
+        {
+          "path": "reference/reference_prompt.txt",
+          "bytes": 561,
+          "sha256": "1afcaf8cfd8236579ad3db70791b1324721f1959a57436bb401b129a108a2d5e"
+        },
+        {
+          "path": "reference/reference_question.png",
+          "bytes": 453183,
+          "sha256": "581b6e2f570fb87e9bec60428b63c360ff4ea06a89bc37db372a20e979a9561c"
+        }
+      ],
+      "context_files": [
+        ".dockerignore",
+        "Dockerfile",
+        "app/README.md",
+        "app/model_answer.json",
+        "app/output_schema.json",
+        "app/question.png",
+        "app/reference/README.md",
+        "app/reference/output_schema.json",
+        "app/reference/reference_answer.json",
+        "app/reference/reference_answer_graph.png",
+        "app/reference/reference_prompt.txt",
+        "app/reference/reference_question.png"
+      ],
+      "dockerfile_sha256": "bcd4802dff7136f719374d109d2da131276bc0032209bce34f14b995aa786134"
+    }
+  ],
+  "built": false,
+  "published": false
+}
