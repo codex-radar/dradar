@@ -1,0 +1,130 @@
+[
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "0159f74b1bd807f935a5d9e68855d4e8f902c436d5ae4261f6e2c7d166e1a418",
+    "task_id": "pompeii-adjacency-rp-014"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "02751a3106c43fd68651dbedc3835b2a845bfa6b9c33a1b45b7e1175e67b308c",
+    "task_id": "pompeii-adjacency-rp-042"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "067911d4256783e1ccbd7ab589249a5fb749d5e6f6cb12771bc0251b7d76405a",
+    "task_id": "pompeii-adjacency-rp-019"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "0abaa6c5782c0980dcd314e709677c38fb7abd40f15f806068cd2b449eadb1a7",
+    "task_id": "pompeii-adjacency-rp-016"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "1d29537843b927f48e5a62ce2d5f3162c237eacb90aa5d213ef7741c973f52cc",
+    "task_id": "pompeii-adjacency-rp-040"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "27cebe2f5f7dcc0d663ffe58e5e457db4d3829914fb54a85670c659f9836eabe",
+    "task_id": "pompeii-adjacency-rp-044"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "28b6444e1a849793e41a9f7e4d93b054692ec5183d6b875df8fd76ca41276915",
+    "task_id": "pompeii-adjacency-rp-025"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "314ce1b839ce6e2a30a0ee840673b3fecca39f7665ddf87a2e2f744721f8c2bb",
+    "task_id": "pompeii-adjacency-rp-071"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "350a26e6aa12d71aed8d1c2d1b517fa8aee910cd87374412b55270afcb98ec8f",
+    "task_id": "pompeii-adjacency-rp-083"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "55d00b1d5abc195ebf61a9e47d99ccadf9d06004c8ad6371ee1a9279f9c8bd4a",
+    "task_id": "pompeii-adjacency-rp-002"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "5ccf0250b2a40f73e08aad334a63a4c2378b62d4bd755945b058c7088db06b22",
+    "task_id": "pompeii-adjacency-rp-029"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "68e7076930eacd8d82e9707b17a4032f1e05f9887743b0fa19a87bb30b2e6cab",
+    "task_id": "pompeii-adjacency-rp-086"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "7978af2d44b997ad1cbbf832a151b3f95e1830d98c8658e50e526dbf51b977f9",
+    "task_id": "pompeii-adjacency-rp-069"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "bba5d9a008c37bd6916e57de969e1bfafa059229dc275929b06b8463655a8f51",
+    "task_id": "pompeii-adjacency-rp-060"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "c52802d442d3005812b1134ac3d842734758f08bf8ff939da98f63f8b0f5be68",
+    "task_id": "pompeii-adjacency-rp-013"
+  },
+  {
+    "benchmark": "pompeii16-20261003-v2",
+    "image": "ghcr.io/codex-radar/dradar-pompeii-runtime@sha256:6fcfa035ff6d70316ca74f44d2444e694e46dd367b44731cb5d036aead825738",
+    "source_bundle_sha256": "f7bad307ac3127e63f17acf2cb59555a057e9afb616216365aa30217e0e733a3",
+    "source_kind": "dradar_adapted_repair_dataset",
+    "task_content_hash": "f90e6506a9b087b982d3b5b8e9061fb0fca28711449fda44f87c2acc77a0fff9",
+    "task_id": "pompeii-adjacency-rp-005"
+  }
+]
