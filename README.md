@@ -961,12 +961,31 @@ profile。这样可以提高任务资源而不改变其他项目正在使用的�
 ## 开发
 
 ```bash
-uv venv
-uv pip install -q --no-deps . --python .venv/bin/python
-uv pip install -q pytest httpx --python .venv/bin/python
-.venv/bin/pytest tests/
+uv venv --python 3.12
+uv pip install -q '.[dev,host-codex]' --python .venv/bin/python
+PYTHONUTF8=1 .venv/bin/python - <<'PY'
+import os
+import subprocess
+import sys
+import tempfile
+
+with tempfile.TemporaryDirectory(prefix="dradar-tests-") as home:
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/"],
+        env={**os.environ, "DRADAR_HOME": home},
+    )
+raise SystemExit(result.returncode)
+PY
 ```
 
-开发测试推荐非 editable 安装。macOS 可能给 `uv` 创建的 `.venv` 设置 hidden 标志，导致
-Python 跳过 editable 安装依赖的 `.pth`。非 editable 安装会把包文件真正复制到
-`site-packages`；修改 `src/` 后要重新执行第一条 `uv pip install`，避免测试到旧代码。
+`dev` 提供 pytest，并在 Python 3.12 及以上安装可选的 `datacurve-pier`；
+`host-codex` 提供测试所需的 `websockets==15.0.1`。每次启动 pytest 前都设置新的
+临时 `DRADAR_HOME`，使收集测试时导入的模块也不会使用真实的 DRadar 配置。
+
+`tests/conftest.py` 会把根目录的 `src/` 放在导入路径最前面，因此测试使用当前源码，
+不依赖 editable 安装，也不会误测 `site-packages` 中的旧副本。这套根目录测试不代表
+`runtime/current` 的覆盖范围；包元数据或依赖变更后需重新安装。
+
+`.github/workflows/tests.yml` 在每次 PR 和推送到 `main` 时运行完整的 `tests/`，
+矩阵为 Ubuntu、macOS、Windows 和 Python 3.11、3.12。普通测试不启用需要隔离 PID
+命名空间的 `DRADAR_FLEET_PROC_TEST`。必需检查由维护者在仓库规则中配置。
